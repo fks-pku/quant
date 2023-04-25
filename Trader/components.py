@@ -25,26 +25,25 @@ class Stock:
                 commision: float = 3e-4,
                 ):
         self.code = code
-        self.history_trading_info = history_trading_info
-        self.history_research_docs = history_research_docs
-        self.history_financial_reports = history_financial_reports
         self.commision = commision
         self.slippage = slippage
 
         # 当前持仓状态
-        self.current_info = None
+        self.cost = 0
         self.num = 0
 
-    def caculate_holding_value(self):
-        current_sell_orders = self.current_info.sell_orders
-        sell_1_price = current_sell_orders[0][0]
-        return sell_1_price * self.num
+    def get_value(self):
+        return self.cost * self.num
 
-    def update_trading_info(self,
-                            t: datetime,
-                            trading_info_query_func):
-        """更新证券价格当前信息"""
-        current_info = trading_info_query_func(self.code, t)
+    def get_trading_info(self,
+                         start_time: datetime,
+                         end_time: datetime,
+                         query_api: int = 1):
+        """更新证券价格当前信息, return DataFrame"""
+
+        # 实现具体function
+        # current_info = trading_info_query_api(self.code, start_time, end_time, query_api)
+        current_info = None
         return current_info
 
 
@@ -60,9 +59,6 @@ class Account:
         self.cash = initial_capital
         self.stocks = stocks
         self.broker_name = broker_name
-
-
-
 
 class SingleTrader:
     def __init__(self,
@@ -87,13 +83,13 @@ class SingleTrader:
     def buy(self,
             account: Account,
             code: str,
-            stock: Stock,
             num: int,
             target_price: float,
+            bid_ask_info: pd.DataFrame,
             is_backtest: bool = True,
             ):
-        current_stock = [i for i in account.stocks if stock.code == i.code]
-
+        current_stock = [i for i in account.stocks if code == i.code]
+        assert len(current_stock) <= 1
 
         total_comission_spend = 0.0
         total_slippage_spend = 0.0
@@ -104,11 +100,11 @@ class SingleTrader:
                 stock = current_stock[0]
             else:
                 stock = Stock(code)
-            stock.update_trading_info(t, query_api)
 
-            current_info = stock.current_info
             # 尝试购买
-            current_sell_orders = current_info.sell_orders
+            # bid ask info = (t, buy1, buy2, buy3, buy4, buy5, sell1, sell2, sell3, sell4, sell5,
+            #                buy_num1, buy_num2, buy_num3, buy_num4, buy_num5, 
+
             for offer in current_sell_orders:
                 sell_price, sell_num = offer
                 if target_price > sell_price and num > 0:
