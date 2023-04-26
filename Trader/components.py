@@ -103,7 +103,7 @@ class SingleTrader:
 
             # 尝试购买
             # bid ask info = (t, buy1, buy2, buy3, buy4, buy5, sell1, sell2, sell3, sell4, sell5,
-            #                buy_num1, buy_num2, buy_num3, buy_num4, buy_num5, 
+            #                buy_num1, buy_num2, buy_num3, buy_num4, buy_num5,
 
             for offer in current_sell_orders:
                 sell_price, sell_num = offer
