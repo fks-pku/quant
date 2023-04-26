@@ -15,17 +15,15 @@ class BasicTradingInfo:
         self.buy_orders = buy_orders
         self.sell_orders = sell_orders
 
+
 class Stock:
     def __int__(self,
                 code: str,
-                history_trading_info: Optional[pd.DataFrame],
-                history_research_docs: Optional[(datetime, str)],
-                history_financial_reports: Optional[(datetime, str)],
                 slippage: float = 5e-3,
-                commision: float = 3e-4,
+                commission: float = 3e-4,
                 ):
         self.code = code
-        self.commision = commision
+        self.commission = commission
         self.slippage = slippage
 
         # 当前持仓状态
@@ -47,18 +45,17 @@ class Stock:
         return current_info
 
 
-
-
 class Account:
     def __int__(self,
                 initial_capital: float = 10000.0,
                 broker_name: str = 'default',
-                stocks: Optional[set[Stock]] = set(),
+                stocks: Optional[dict[str,Stock]] = dict(),
                 ):
         self.total_value = initial_capital
         self.cash = initial_capital
         self.stocks = stocks
         self.broker_name = broker_name
+
 
 class SingleTrader:
     def __init__(self,
@@ -66,7 +63,6 @@ class SingleTrader:
                  ):
         self.accounts = set()
         self.total_cash, self.total_equity = self.get_cash_and_holding_value()
-
 
     def get_cash_and_holding_value(self):
         total_cash = 0.0
@@ -84,101 +80,69 @@ class SingleTrader:
             account: Account,
             code: str,
             num: int,
-            target_price: float,
-            bid_ask_info: pd.DataFrame,
+            bid_ask_info: dict[(str, float)],
             is_backtest: bool = True,
+            target_price: float = None
             ):
-        current_stock = [i for i in account.stocks if code == i.code]
-        assert len(current_stock) <= 1
+        stock_cost = 0.0
+        slippage_cost = 0.0
+        commission_cost = 0.0
+        transfer_cost = 0
+        stock = account.stocks.get(code, Stock(code))
 
-        total_comission_spend = 0.0
-        total_slippage_spend = 0.0
-        total_cash_spend = 0.0
-        total_buy_num = 0
         if is_backtest:
-            if current_stock:
-                stock = current_stock[0]
-            else:
-                stock = Stock(code)
+            available_num = bid_ask_info['volume']
+            avg_price = (bid_ask_info['open'] + bid_ask_info['close']) / 2.0
+            buy_num = min(num, available_num)
 
-            # 尝试购买
-            # bid ask info = (t, buy1, buy2, buy3, buy4, buy5, sell1, sell2, sell3, sell4, sell5,
-            #                buy_num1, buy_num2, buy_num3, buy_num4, buy_num5,
+            stock_cost = buy_num * avg_price
+            slippage_cost = buy_num * avg_price * stock.slippage
+            commission_cost = buy_num * avg_price * stock.commission
+            transfer_cost = 5  # 单笔5元
+            total_cost = stock_cost + slippage_cost + commission_cost + transfer_cost
 
-            for offer in current_sell_orders:
-                sell_price, sell_num = offer
-                if target_price > sell_price and num > 0:
-                    buy_num = min(num, sell_num)
-                    cash_need = buy_num * sell_price
-                    slippage_need = buy_num * sell_price * stock.slippage
-                    comission_need = buy_num * stock.commision
+            available_cash = account.cash
+            if available_cash >= total_cost:
+                account.cash -= total_cost
 
-                    if account.cash >= cash_need + slippage_need + comission_need + 5:
-                        account.cash -= cash_need + slippage_need + comission_need
-                        num -= buy_num
-                        stock.num += buy_num
-
-                        total_buy_num += buy_num
-                        total_cash_spend += cash_need
-                        total_slippage_spend += slippage_need
-                        total_comission_spend += comission_need
-            # 手续费
-            total_comission_spend += 5
-            account.cash -= 5
-
-            if not current_stock and total_buy_num > 0:
-                account.stocks.add(stock)
-
+                previous_cost, previous_num = stock.cost, stock.num
+                stock.cost, stock.num = (previous_cost*previous_num + total_cost) / (previous_num + buy_num), \
+                    previous_num + buy_num
+        else:
+            assert target_price > 0
 
     def sell(self,
              account: Account,
              code: str,
-             t: datetime,
              num: int,
-             target_price: float,
-             query_api: int = 0,
+             bid_ask_info: dict[(str, float)],
              is_backtest: bool = True,
+             target_price: float = None
              ):
-        current_stock = [stock for stock in account.stocks if stock.code == code]
-        assert current_stock
+        stock_cash = 0.0
+        slippage_cost = 0.0
+        commission_cost = 0.0
+        transfer_cost = 0
+        assert code in account.stocks
+        stock = account.stocks[code]
+        assert num <= stock.num
 
-        total_comission_spend = 0.0
-        total_slippage_spend = 0.0
-        total_cash_spend = 0.0
-        total_buy_num = 0
         if is_backtest:
-            if current_stock:
-                stock = current_stock[0]
-            else:
-                stock = Stock(code)
-            stock.update_trading_info(t, query_api)
+            available_num = bid_ask_info['volume']
+            avg_price = (bid_ask_info['open'] + bid_ask_info['close']) / 2.0
+            sell_num = min(num, available_num)
 
-            current_info = stock.current_info
-            # 尝试购买
-            current_sell_orders = current_info.sell_orders
-            for offer in current_sell_orders:
-                sell_price, sell_num = offer
-                if target_price > sell_price and num > 0:
-                    buy_num = min(num, sell_num)
-                    cash_need = buy_num * sell_price
-                    slippage_need = buy_num * sell_price * stock.slippage
-                    comission_need = buy_num * stock.commision
+            stock_cash = sell_num * avg_price
+            slippage_cost = sell_num * avg_price * stock.slippage
+            commission_cost = sell_num * avg_price * stock.commission
+            transfer_cost = 5  # 单笔5元
+            total_cash = stock_cash - slippage_cost - commission_cost - transfer_cost
 
-                    if account.cash >= cash_need + slippage_need + comission_need + 5:
-                        account.cash -= cash_need + slippage_need + comission_need
-                        num -= buy_num
-                        stock.num += buy_num
-
-                        total_buy_num += buy_num
-                        total_cash_spend += cash_need
-                        total_slippage_spend += slippage_need
-                        total_comission_spend += comission_need
-            # 手续费
-            total_comission_spend += 5
-            account.cash -= 5
-
-            if not current_stock and total_buy_num > 0:
-                account.stocks.add(stock)
+            account.cash += total_cash
+            previous_cost, previous_num = stock.cost, stock.num
+            stock.num = previous_num - sell_num
+        else:
+            assert target_price > 0
 
 
 
