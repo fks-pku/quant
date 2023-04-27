@@ -15,6 +15,24 @@ class BasicTradingInfo:
         self.buy_orders = buy_orders
         self.sell_orders = sell_orders
 
+class SingleTradeLog:
+    def __init__(self,
+                 t: datetime,
+                 side: str,
+                 code: str,
+                 target_price: float,
+                 achieve_price: float,
+                 slippage_cost: float = 0.0,
+                 commission_cost: float = 0.0,
+                 transfer_cost: float = 0.0):
+        self.t = t
+        self.side = side
+        self.code = code
+        self.target_price = target_price
+        self.achive_price = achieve_price
+        self.slippage_cost = slippage_cost
+        self.commission_cost = commission_cost
+        self.transfer_cost = transfer_cost
 
 class Stock:
     def __int__(self,
@@ -77,6 +95,7 @@ class SingleTrader:
         return total_cash, total_equity
 
     def buy(self,
+            t: datetime,
             account: Account,
             code: str,
             num: int,
@@ -84,15 +103,12 @@ class SingleTrader:
             is_backtest: bool = True,
             target_price: float = None
             ):
-        stock_cost = 0.0
-        slippage_cost = 0.0
-        commission_cost = 0.0
-        transfer_cost = 0
         stock = account.stocks.get(code, Stock(code))
-
+        trade_log = None
         if is_backtest:
             available_num = bid_ask_info['volume']
             avg_price = (bid_ask_info['open'] + bid_ask_info['close']) / 2.0
+            achive_price = avg_price * (1+stock.slippage)
             buy_num = min(num, available_num)
 
             stock_cost = buy_num * avg_price
@@ -108,10 +124,16 @@ class SingleTrader:
                 previous_cost, previous_num = stock.cost, stock.num
                 stock.cost, stock.num = (previous_cost*previous_num + total_cost) / (previous_num + buy_num), \
                     previous_num + buy_num
+
+                trade_log = SingleTradeLog(t,"buy",code,target_price,achive_price,slippage_cost,commission_cost,
+                                           transfer_cost)
         else:
             assert target_price > 0
+        return trade_log
+
 
     def sell(self,
+             t: datetime,
              account: Account,
              code: str,
              num: int,
@@ -126,7 +148,7 @@ class SingleTrader:
         assert code in account.stocks
         stock = account.stocks[code]
         assert num <= stock.num
-
+        trade_log = None
         if is_backtest:
             available_num = bid_ask_info['volume']
             avg_price = (bid_ask_info['open'] + bid_ask_info['close']) / 2.0
@@ -134,6 +156,7 @@ class SingleTrader:
 
             stock_cash = sell_num * avg_price
             slippage_cost = sell_num * avg_price * stock.slippage
+            achieve_price = avg_price * (1-stock.slippage)
             commission_cost = sell_num * avg_price * stock.commission
             transfer_cost = 5  # 单笔5元
             total_cash = stock_cash - slippage_cost - commission_cost - transfer_cost
@@ -141,8 +164,13 @@ class SingleTrader:
             account.cash += total_cash
             previous_cost, previous_num = stock.cost, stock.num
             stock.num = previous_num - sell_num
+
+            trade_log = SingleTradeLog(t, "sell", code, target_price,
+                                       achieve_price, slippage_cost, commission_cost,
+                                       transfer_cost)
         else:
             assert target_price > 0
+        return trade_log
 
 
 
