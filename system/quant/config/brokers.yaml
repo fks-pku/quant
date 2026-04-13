@@ -1,0 +1,19 @@
+# Broker credentials (gitignored - do not commit)
+
+alpha_vantage:
+  api_key: "YOUR_API_KEY_HERE"
+
+futu:
+  host: "127.0.0.1"
+  port: 11111
+  market: HK
+
+ibkr:
+  host: "127.0.0.1"
+  port: 7497
+  client_id: 1
+
+alpaca:
+  api_key: "YOUR_API_KEY"
+  secret_key: "YOUR_SECRET_KEY"
+  paper: true
