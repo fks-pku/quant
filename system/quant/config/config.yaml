@@ -1,0 +1,77 @@
+system:
+  mode: paper
+  log_level: INFO
+  data_dir: ./data
+  start_date: "2025-01-01"
+  end_date: "2025-12-31"
+  initial_cash: 100000
+  currency: USD
+
+markets:
+  US:
+    timezone: America/New_York
+    open_hour: 9
+    open_minute: 30
+    close_hour: 16
+    close_minute: 0
+  HK:
+    timezone: Asia/Hong_Kong
+    open_hour: 9
+    open_minute: 30
+    close_hour: 16
+    close_minute: 0
+
+data:
+  providers:
+    - yahoo
+    - alpha_vantage
+    - futu
+  default_timeframe: 5m
+  cache_enabled: true
+  cache_ttl_minutes: 5
+
+execution:
+  brokers:
+    - paper
+  default_order_type: MARKET
+  slippage_bps: 5
+  max_retries: 3
+
+risk:
+  max_position_pct: 0.05
+  max_sector_pct: 0.25
+  max_daily_loss_pct: 0.02
+  max_leverage: 1.5
+  max_orders_minute: 30
+
+scheduler:
+  jobs:
+    - name: open_rebalance
+      trigger: market_open
+      offset_minutes: 5
+    - name: intraday_check
+      trigger: intraday
+      interval_minutes: 15
+    - name: close_exit
+      trigger: market_close
+      offset_minutes: 10
+
+strategies:
+  - name: MomentumEOD
+    enabled: true
+    symbols:
+      - AAPL
+      - GOOGL
+      - MSFT
+      - AMZN
+      - TSLA
+  - name: MeanReversion1m
+    enabled: false
+    symbols:
+      - SPY
+      - QQQ
+  - name: DualThrust
+    enabled: false
+    symbols:
+      - ES
+      - NQ

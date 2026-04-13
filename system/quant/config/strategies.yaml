@@ -1,0 +1,27 @@
+strategies:
+  MomentumEOD:
+    top_n: 5
+    symbols:
+      - AAPL
+      - GOOGL
+      - MSFT
+      - AMZN
+      - TSLA
+      - SPY
+
+  MeanReversion1m:
+    rsi_period: 14
+    oversold_threshold: 30.0
+    overbought_threshold: 70.0
+    symbols:
+      - SPY
+      - QQQ
+      - AAPL
+
+  DualThrust:
+    lookback_period: 5
+    k_value: 0.5
+    symbols:
+      - ES
+      - NQ
+      - YM
