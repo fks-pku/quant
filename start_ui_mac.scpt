@@ -20,8 +20,8 @@ set frontendRunning to do shell script "lsof -i :3000 2>/dev/null | grep LISTEN 
 
 if frontendRunning is "0" then
     -- Start frontend
-    do shell script "cd " & quoted form of quantDir & "/frontend && npm start &"
-    delay 3
+    do shell script "cd " & quoted form of quantDir & "/frontend && nohup npm start > /tmp/frontend.log 2>&1 &"
+    delay 10
 end if
 
 -- Open browser
