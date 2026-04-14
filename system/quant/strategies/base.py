@@ -1,6 +1,7 @@
 """Base abstract class for trading strategies."""
 
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -29,6 +30,10 @@ class Strategy(ABC):
         self.context = context
         self._load_data()
 
+    def on_before_trading(self, context: "Context", trading_date: date) -> None:
+        """Called before market opens for the trading date."""
+        pass
+
     def on_data(self, context: "Context", data: Any) -> None:
         """Called on each bar/quote of data."""
         pass
@@ -40,6 +45,10 @@ class Strategy(ABC):
 
     def on_order_rejected(self, context: "Context", order: Any, reason: str) -> None:
         """Called when an order is rejected."""
+        pass
+
+    def on_after_trading(self, context: "Context", trading_date: date) -> None:
+        """Called after market closes for the trading date."""
         pass
 
     def on_stop(self, context: "Context") -> None:

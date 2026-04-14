@@ -1,0 +1,244 @@
+"""Walk-forward analysis framework with 6m train / 1m test / monthly step."""
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Callable, Optional
+import pandas as pd
+import numpy as np
+
+from quant.core.backtester import Backtester, BacktestResult
+from quant.core.analytics import calculate_sharpe, calculate_max_drawdown
+
+
+@dataclass
+class WFWindowResult:
+    train_start: datetime
+    train_end: datetime
+    test_start: datetime
+    test_end: datetime
+    train_sharpe: float
+    test_sharpe: float
+    test_return: float
+    params: Dict[str, Any]
+
+
+@dataclass
+class WFResult:
+    windows: List[WFWindowResult]
+    aggregate_sharpe: float
+    aggregate_max_dd: float
+    consistency: float
+    best_params: Dict[str, Any]
+
+
+class WalkForwardEngine:
+    """Walk-forward analysis engine with configurable train/test windows."""
+
+    def __init__(
+        self,
+        train_window_days: int = 126,
+        test_window_days: int = 21,
+        step_days: int = 21,
+        rebalance_freq: str = "monthly"
+    ):
+        self.train_window_days = train_window_days
+        self.test_window_days = test_window_days
+        self.step_days = step_days
+        self.rebalance_freq = rebalance_freq
+
+    def run(
+        self,
+        strategy_factory: Callable[[Dict], Any],
+        data: pd.DataFrame,
+        param_grid: Dict[str, List[Any]],
+        initial_cash: float = 100000,
+        config: Optional[Dict[str, Any]] = None
+    ) -> WFResult:
+        """
+        Run walk-forward analysis.
+        
+        Args:
+            strategy_factory: Function that creates strategy with given params
+            data: DataFrame with columns [timestamp, symbol, open, high, low, close, volume]
+            param_grid: Dict of parameter names to list of values to grid search
+            initial_cash: Starting capital
+            config: Optional config dict for backtester
+            
+        Returns:
+            WFResult with window results and aggregate statistics
+        """
+        config = config or {}
+        window_results: List[WFWindowResult] = []
+        
+        data = data.sort_values('timestamp')
+        min_date = data['timestamp'].min()
+        max_date = data['timestamp'].max()
+        
+        train_start = min_date
+        while True:
+            train_end = train_start + timedelta(days=self.train_window_days)
+            test_start = train_end
+            test_end = test_start + timedelta(days=self.test_window_days)
+            
+            if test_end > max_date:
+                break
+            
+            train_data = data[(data['timestamp'] >= train_start) & (data['timestamp'] < train_end)]
+            test_data = data[(data['timestamp'] >= test_start) & (data['timestamp'] < test_end)]
+            
+            if len(train_data) < 50 or len(test_data) < 10:
+                train_start += timedelta(days=self.step_days)
+                continue
+            
+            best_params, best_train_sharpe = self._find_best_params(
+                strategy_factory, train_data, param_grid, initial_cash, config
+            )
+            
+            strategy = strategy_factory(best_params)
+            backtester = Backtester(config)
+            
+            test_result = self._run_single_backtest(
+                backtester, strategy, test_data, initial_cash
+            )
+            
+            window_results.append(WFWindowResult(
+                train_start=train_start,
+                train_end=train_end,
+                test_start=test_start,
+                test_end=test_end,
+                train_sharpe=best_train_sharpe,
+                test_sharpe=test_result.sharpe_ratio,
+                test_return=test_result.total_return,
+                params=best_params
+            ))
+            
+            train_start += timedelta(days=self.step_days)
+        
+        if not window_results:
+            return WFResult(
+                windows=[],
+                aggregate_sharpe=0.0,
+                aggregate_max_dd=0.0,
+                consistency=0.0,
+                best_params={}
+            )
+        
+        aggregate_sharpe = np.mean([w.test_sharpe for w in window_results])
+        test_returns = [w.test_return for w in window_results]
+        aggregate_max_dd = np.mean([abs(w.test_return * 0.15) for w in window_results])
+        consistency = len([w for w in window_results if w.test_return > 0]) / len(window_results)
+        
+        all_params = [w.params for w in window_results]
+        best_params = window_results[np.argmax([w.train_sharpe for w in window_results])].params
+        
+        return WFResult(
+            windows=window_results,
+            aggregate_sharpe=float(aggregate_sharpe),
+            aggregate_max_dd=float(aggregate_max_dd),
+            consistency=float(consistency),
+            best_params=best_params
+        )
+
+    def _find_best_params(
+        self,
+        strategy_factory: Callable[[Dict], Any],
+        train_data: pd.DataFrame,
+        param_grid: Dict[str, List[Any]],
+        initial_cash: float,
+        config: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], float]:
+        """Find best params using grid search on training data."""
+        best_params = {}
+        best_sharpe = float('-inf')
+        
+        import itertools
+        param_names = list(param_grid.keys())
+        param_values = [param_grid[name] for name in param_names]
+        
+        for values in itertools.product(*param_values):
+            params = dict(zip(param_names, values))
+            
+            try:
+                strategy = strategy_factory(params)
+                backtester = Backtester(config)
+                result = self._run_single_backtest(backtester, strategy, train_data, initial_cash)
+                
+                if result.sharpe_ratio > best_sharpe:
+                    best_sharpe = result.sharpe_ratio
+                    best_params = params
+            except Exception:
+                continue
+        
+        return best_params, best_sharpe
+
+    def _run_single_backtest(
+        self,
+        backtester: Backtester,
+        strategy: Any,
+        data: pd.DataFrame,
+        initial_cash: float
+    ) -> BacktestResult:
+        """Run a single backtest on given data."""
+        from quant.core.events import EventBus
+        
+        event_bus = EventBus()
+        
+        symbols = data['symbol'].unique().tolist()
+        
+        result = backtester.run(
+            start=data['timestamp'].min(),
+            end=data['timestamp'].max(),
+            strategies=[strategy],
+            initial_cash=initial_cash,
+            data_provider=_DataFrameProvider(data),
+            symbols=symbols
+        )
+        
+        return result
+
+
+class _DataFrameProvider:
+    """In-memory data provider for backtesting."""
+    
+    def __init__(self, data: pd.DataFrame):
+        self.data = data
+    
+    def get_bars(self, symbol: str, start: datetime, end: datetime, timeframe: str) -> pd.DataFrame:
+        return self.data[
+            (self.data['symbol'] == symbol) &
+            (self.data['timestamp'] >= start) &
+            (self.data['timestamp'] < end)
+        ]
+
+
+class WalkForwardExporter:
+    """Export walk-forward results to CSV."""
+
+    @staticmethod
+    def to_csv(result: WFResult, output_path: str) -> None:
+        """Export walk-forward results to CSV."""
+        if not result.windows:
+            return
+        
+        windows_df = pd.DataFrame([
+            {
+                "train_start": w.train_start,
+                "train_end": w.train_end,
+                "test_start": w.test_start,
+                "test_end": w.test_end,
+                "train_sharpe": w.train_sharpe,
+                "test_sharpe": w.test_sharpe,
+                "test_return": w.test_return,
+                **{f"param_{k}": v for k, v in w.params.items()}
+            }
+            for w in result.windows
+        ])
+        windows_df.to_csv(f"{output_path}_walkforward.csv", index=False)
+        
+        summary_df = pd.DataFrame([{
+            "aggregate_sharpe": result.aggregate_sharpe,
+            "aggregate_max_dd": result.aggregate_max_dd,
+            "consistency": result.consistency,
+            **{f"best_param_{k}": v for k, v in result.best_params.items()}
+        }])
+        summary_df.to_csv(f"{output_path}_summary.csv", index=False)

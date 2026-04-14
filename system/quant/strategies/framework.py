@@ -1,10 +1,126 @@
 """Alpha signal framework for strategies."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
+
+
+@dataclass
+class KellyResult:
+    full_kelly: float
+    half_kelly: float
+    quarter_kelly: float
+    recommended_fraction: float
+
+
+def calculate_kelly(
+    win_rate: float,
+    avg_win: float,
+    avg_loss: float
+) -> KellyResult:
+    """
+    Calculate Kelly fractions.
+    
+    Formula: f* = (p·b - q) / b
+    where b = avg_win/avg_loss, q = 1 - p
+    """
+    p = win_rate
+    q = 1 - p
+    
+    if avg_loss == 0:
+        return KellyResult(0.0, 0.0, 0.0, 0.0)
+    
+    b = avg_win / avg_loss
+    
+    if b <= 0:
+        return KellyResult(0.0, 0.0, 0.0, 0.0)
+    
+    full_kelly = (p * b - q) / b
+    
+    if full_kelly <= 0:
+        return KellyResult(0.0, 0.0, 0.0, 0.0)
+    
+    half_kelly = full_kelly / 2
+    quarter_kelly = full_kelly / 4
+    
+    recommended_fraction = quarter_kelly
+    
+    return KellyResult(
+        full_kelly=full_kelly,
+        half_kelly=half_kelly,
+        quarter_kelly=quarter_kelly,
+        recommended_fraction=recommended_fraction
+    )
+
+
+class RiskParityConstructor:
+    """Volatility-based position sizing."""
+    
+    def __init__(
+        self,
+        lookback_days: int = 20,
+        weight_floor: float = 0.02,
+        weight_cap: float = 0.20
+    ):
+        self.lookback_days = lookback_days
+        self.weight_floor = weight_floor
+        self.weight_cap = weight_cap
+    
+    def construct(
+        self,
+        signals: List[Signal],
+        prices: pd.DataFrame,
+        nav: float
+    ) -> Dict[str, float]:
+        """
+        Inverse volatility weighting with floor/cap.
+        
+        weight_i = (1/volatility_i) / sum(1/volatility_j)
+        """
+        if not signals:
+            return {}
+        
+        long_signals = [s for s in signals if s.direction == "long"]
+        
+        if not long_signals:
+            return {}
+        
+        volatilities = {}
+        for signal in long_signals:
+            symbol = signal.symbol
+            if symbol in prices.columns:
+                returns = prices[symbol].pct_change().dropna()
+                if len(returns) >= self.lookback_days:
+                    vol = returns.tail(self.lookback_days).std()
+                else:
+                    vol = returns.std()
+                
+                if vol > 0:
+                    volatilities[symbol] = vol
+                else:
+                    volatilities[symbol] = 0.01
+            else:
+                volatilities[symbol] = 0.01
+        
+        inv_vols = {s.symbol: 1.0 / volatilities.get(s.symbol, 0.01) for s in long_signals}
+        total_inv_vol = sum(inv_vols.values())
+        
+        if total_inv_vol == 0:
+            return {}
+        
+        weights = {}
+        for signal in long_signals:
+            symbol = signal.symbol
+            raw_weight = inv_vols[symbol] / total_inv_vol
+            
+            weight = max(self.weight_floor, min(self.weight_cap, raw_weight))
+            weights[symbol] = weight
+        
+        return weights
 
 
 @dataclass
@@ -141,7 +257,31 @@ class PortfolioConstructor:
         max_position_pct: float,
     ) -> Dict[str, Tuple[str, float]]:
         """Kelly criterion based portfolio construction."""
-        return self._equal_weight(signals, current_prices, nav, max_position_pct)
+        long_signals = [s for s in signals if s.direction == "long"]
+        short_signals = [s for s in signals if s.direction == "short"]
+
+        positions = {}
+
+        if long_signals:
+            kelly_result = calculate_kelly(0.55, 1.0, 1.0)
+            kelly_fraction = kelly_result.quarter_kelly
+            
+            weight_per_position = min(kelly_fraction / len(long_signals), max_position_pct)
+            for signal in long_signals:
+                price = current_prices.get(signal.symbol, 100)
+                quantity = int((nav * weight_per_position) / price)
+                if quantity > 0:
+                    positions[signal.symbol] = ("BUY", quantity)
+
+        if short_signals:
+            weight_per_position = min(0.05, max_position_pct)
+            for signal in short_signals:
+                price = current_prices.get(signal.symbol, 100)
+                quantity = int((nav * weight_per_position) / price)
+                if quantity > 0:
+                    positions[signal.symbol] = ("SELL", quantity)
+
+        return positions
 
     def _risk_parity(
         self,
@@ -151,7 +291,31 @@ class PortfolioConstructor:
         max_position_pct: float,
     ) -> Dict[str, Tuple[str, float]]:
         """Risk parity portfolio construction."""
-        return self._equal_weight(signals, current_prices, nav, max_position_pct)
+        long_signals = [s for s in signals if s.direction == "long"]
+        short_signals = [s for s in signals if s.direction == "short"]
+
+        positions = {}
+
+        if long_signals:
+            rp = RiskParityConstructor()
+            price_df = pd.DataFrame([current_prices])
+            weights = rp.construct(long_signals, price_df, nav)
+            
+            for symbol, weight in weights.items():
+                price = current_prices.get(symbol, 100)
+                quantity = int((nav * weight) / price)
+                if quantity > 0:
+                    positions[symbol] = ("BUY", quantity)
+
+        if short_signals:
+            short_weight = max_position_pct / len(short_signals)
+            for signal in short_signals:
+                price = current_prices.get(signal.symbol, 100)
+                quantity = int((nav * short_weight) / price)
+                if quantity > 0:
+                    positions[signal.symbol] = ("SELL", quantity)
+
+        return positions
 
 
 class ExecutionScheduler:

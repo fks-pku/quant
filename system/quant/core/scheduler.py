@@ -35,6 +35,7 @@ class Job:
     interval_minutes: Optional[int] = None
     offset_minutes: int = 0
     cron_expression: Optional[str] = None
+    market: str = "all"
 
 
 class Scheduler:
@@ -56,6 +57,7 @@ class Scheduler:
         interval_minutes: Optional[int] = None,
         offset_minutes: int = 0,
         cron_expression: Optional[str] = None,
+        market: str = "all",
     ) -> None:
         """Add a job to the scheduler."""
         job = Job(
@@ -65,6 +67,7 @@ class Scheduler:
             interval_minutes=interval_minutes,
             offset_minutes=offset_minutes,
             cron_expression=cron_expression,
+            market=market,
         )
         self.jobs.append(job)
 
@@ -96,6 +99,9 @@ class Scheduler:
         now = get_current_time("America/New_York")
 
         for job in self.jobs:
+            if job.market not in ("all", "US", "HK"):
+                continue
+                
             if job.trigger == "market_open":
                 self._check_market_open_job(job, now)
             elif job.trigger == "market_close":
@@ -108,7 +114,16 @@ class Scheduler:
     def _check_market_open_job(self, job: Job, now: datetime) -> None:
         """Check if a market open job should run."""
         markets = self.config.get("markets", {})
-        for market_name, market_config in markets.items():
+        
+        if job.market == "all":
+            market_names = list(markets.keys())
+        else:
+            market_names = [job.market]
+
+        for market_name in market_names:
+            if market_name not in markets:
+                continue
+            market_config = markets[market_name]
             tz = market_config.get("timezone", "America/New_York")
             open_hour = market_config.get("open_hour", 9)
             open_minute = market_config.get("open_minute", 30)
@@ -117,14 +132,23 @@ class Scheduler:
             target_time = next_open + timedelta(minutes=job.offset_minutes)
 
             if self._is_within_one_second(now, target_time):
-                if self._should_run_job(job.name):
+                if self._should_run_job(job.name, market_name):
                     job.callback()
-                    self._last_run[job.name] = now
+                    self._last_run[f"{job.name}_{market_name}"] = now
 
     def _check_market_close_job(self, job: Job, now: datetime) -> None:
         """Check if a market close job should run."""
         markets = self.config.get("markets", {})
-        for market_name, market_config in markets.items():
+        
+        if job.market == "all":
+            market_names = list(markets.keys())
+        else:
+            market_names = [job.market]
+
+        for market_name in market_names:
+            if market_name not in markets:
+                continue
+            market_config = markets[market_name]
             tz = market_config.get("timezone", "America/New_York")
             close_hour = market_config.get("close_hour", 16)
             close_minute = market_config.get("close_minute", 0)
@@ -133,9 +157,9 @@ class Scheduler:
             target_time = next_close - timedelta(minutes=job.offset_minutes)
 
             if self._is_within_one_second(now, target_time):
-                if self._should_run_job(job.name):
+                if self._should_run_job(job.name, market_name):
                     job.callback()
-                    self._last_run[job.name] = now
+                    self._last_run[f"{job.name}_{market_name}"] = now
 
     def _check_intraday_job(self, job: Job, now: datetime) -> None:
         """Check if an intraday interval job should run."""
@@ -144,7 +168,12 @@ class Scheduler:
 
         interval_seconds = job.interval_minutes * 60
         last = self._last_run.get(job.name)
-        market_config = self.config.get("markets", {}).get("US", {})
+        
+        if job.market == "all":
+            market_config = self.config.get("markets", {}).get("US", {})
+        else:
+            market_config = self.config.get("markets", {}).get(job.market, {})
+            
         tz = market_config.get("timezone", "America/New_York")
         open_hour = market_config.get("open_hour", 9)
         open_minute = market_config.get("open_minute", 30)
@@ -175,9 +204,10 @@ class Scheduler:
                 job.callback()
                 self._last_run[job.name] = now
 
-    def _should_run_job(self, job_name: str) -> bool:
+    def _should_run_job(self, job_name: str, market_name: Optional[str] = None) -> bool:
         """Check if job should run (not already run recently)."""
-        last = self._last_run.get(job_name)
+        key = f"{job_name}_{market_name}" if market_name else job_name
+        last = self._last_run.get(key)
         if last is None:
             return True
         return (get_current_time("America/New_York") - last).total_seconds() > 1
