@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import ReactMarkdown from 'react-markdown';
 import './App.css';
 
 const API_BASE = 'http://localhost:5000/api';
@@ -8,10 +9,16 @@ function App() {
   const [systemStatus, setSystemStatus] = useState('stopped');
   const [portfolio, setPortfolio] = useState({ nav: 0, total_unrealized_pnl: 0, total_realized_pnl: 0 });
   const [strategies, setStrategies] = useState([]);
+  const [availableStrategies, setAvailableStrategies] = useState([]);
+  const [selectedStrategy, setSelectedStrategy] = useState(null);
+  const [strategyDocs, setStrategyDocs] = useState(null);
+  const [strategyBacktest, setStrategyBacktest] = useState(null);
   const [positions, setPositions] = useState([]);
   const [logs, setLogs] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [showDocsModal, setShowDocsModal] = useState(false);
+  const [currentRegime, setCurrentRegime] = useState('chop');
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -25,11 +32,53 @@ function App() {
     }
   }, []);
 
+  const fetchStrategies = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/strategies`);
+      setAvailableStrategies(res.data.strategies || []);
+      setSelectedStrategy(res.data.selected);
+    } catch (err) {
+      console.error('Failed to fetch strategies:', err);
+    }
+  }, []);
+
+  const fetchStrategyDocs = async (strategyId) => {
+    try {
+      const res = await axios.get(`${API_BASE}/strategies/docs/${strategyId}`);
+      setStrategyDocs(res.data);
+      setShowDocsModal(true);
+    } catch (err) {
+      console.error('Failed to fetch strategy docs:', err);
+    }
+  };
+
+  const fetchStrategyBacktest = async (strategyId) => {
+    try {
+      const res = await axios.get(`${API_BASE}/strategies/backtest/${strategyId}`);
+      setStrategyBacktest(res.data.backtest);
+    } catch (err) {
+      console.error('Failed to fetch backtest:', err);
+    }
+  };
+
+  const handleSelectStrategy = async (strategyId) => {
+    setIsLoading(true);
+    try {
+      await axios.post(`${API_BASE}/strategies/select`, { strategy_id: strategyId });
+      setSelectedStrategy(strategyId);
+      fetchStrategyBacktest(strategyId);
+    } catch (err) {
+      console.error('Failed to select strategy:', err);
+    }
+    setIsLoading(false);
+  };
+
   useEffect(() => {
     fetchStatus();
+    fetchStrategies();
     const interval = setInterval(fetchStatus, 2000);
     return () => clearInterval(interval);
-  }, [fetchStatus]);
+  }, [fetchStatus, fetchStrategies]);
 
   const startSystem = async () => {
     setIsLoading(true);
@@ -60,15 +109,32 @@ function App() {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
   };
 
-  const formatPercent = (val) => {
-    const num = parseFloat(val) || 0;
-    return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`;
-  };
-
   const pnlColor = (val) => val >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+
+  const getRegimeColor = (regime) => {
+    switch (regime) {
+      case 'bull': return 'var(--accent-green)';
+      case 'bear': return 'var(--accent-red)';
+      default: return 'var(--accent-amber)';
+    }
+  };
 
   return (
     <div className="app">
+      {showDocsModal && strategyDocs && (
+        <div className="modal-overlay" onClick={() => setShowDocsModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{strategyDocs.strategy_name} Documentation</h2>
+              <button className="modal-close" onClick={() => setShowDocsModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <ReactMarkdown>{strategyDocs.content}</ReactMarkdown>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="header">
         <div className="header-left">
           <div className="logo">
@@ -79,6 +145,12 @@ function App() {
             <span className="status-dot"></span>
             <span className="status-text">{systemStatus.toUpperCase()}</span>
           </div>
+          {selectedStrategy && (
+            <div className="regime-badge" style={{ borderColor: getRegimeColor(currentRegime) }}>
+              <span className="regime-label">REGIME:</span>
+              <span className="regime-value" style={{ color: getRegimeColor(currentRegime) }}>{currentRegime.toUpperCase()}</span>
+            </div>
+          )}
         </div>
         <div className="header-right">
           <span className="header-time mono">{new Date().toLocaleString()}</span>
@@ -164,6 +236,46 @@ function App() {
           </div>
         </div>
 
+        <div className="strategy-selector-section">
+          <h3 className="section-title">Select Trading Strategy</h3>
+          <div className="strategy-selector-grid">
+            {availableStrategies.map((strategy) => (
+              <div 
+                key={strategy.id}
+                className={`strategy-selector-card ${selectedStrategy === strategy.id ? 'selected' : ''}`}
+                onClick={() => handleSelectStrategy(strategy.id)}
+              >
+                <div className="strategy-selector-header">
+                  <span className="strategy-selector-name">{strategy.name}</span>
+                  {selectedStrategy === strategy.id && (
+                    <span className="strategy-selected-badge">ACTIVE</span>
+                  )}
+                </div>
+                <p className="strategy-selector-desc">{strategy.description}</p>
+                <div className="strategy-selector-meta">
+                  <span className={`strategy-sharpe ${strategy.backtest?.sharpe >= 0.8 ? 'good' : strategy.backtest?.sharpe >= 0.5 ? 'medium' : 'poor'}`}>
+                    Sharpe: {strategy.backtest?.sharpe?.toFixed(2) || 'N/A'}
+                  </span>
+                  <span className="strategy-mdd">
+                    MaxDD: {strategy.backtest?.max_dd?.toFixed(1) || 'N/A'}%
+                  </span>
+                </div>
+                {strategy.has_docs && (
+                  <button 
+                    className="strategy-learn-more"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fetchStrategyDocs(strategy.id);
+                    }}
+                  >
+                    Learn More
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="tabs">
           <button 
             className={`tab ${activeTab === 'dashboard' ? 'tab-active' : ''}`}
@@ -176,6 +288,12 @@ function App() {
             onClick={() => setActiveTab('strategies')}
           >
             Strategies
+          </button>
+          <button 
+            className={`tab ${activeTab === 'backtest' ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab('backtest')}
+          >
+            Backtest
           </button>
           <button 
             className={`tab ${activeTab === 'positions' ? 'tab-active' : ''}`}
@@ -208,6 +326,10 @@ function App() {
                   <div className="info-row">
                     <span className="info-label">Active Strategies</span>
                     <span className="info-value mono">{strategies.filter(s => s.enabled).length}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">Selected Strategy</span>
+                    <span className="info-value mono">{selectedStrategy || 'None'}</span>
                   </div>
                 </div>
               </div>
@@ -252,6 +374,76 @@ function App() {
                   </div>
                 ))
               )}
+            </div>
+          )}
+
+          {activeTab === 'backtest' && (
+            <div className="backtest-panel">
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>Backtest Results - {selectedStrategy || 'Select a strategy'}</h3>
+                </div>
+                <div className="panel-content">
+                  {strategyBacktest ? (
+                    <div className="backtest-results">
+                      <div className="backtest-metrics">
+                        <div className="backtest-metric">
+                          <span className="backtest-metric-label">Sharpe Ratio (OOS)</span>
+                          <span className="backtest-metric-value" style={{ color: strategyBacktest.sharpe >= 0.8 ? 'var(--accent-green)' : strategyBacktest.sharpe >= 0.5 ? 'var(--accent-amber)' : 'var(--accent-red)' }}>
+                            {strategyBacktest.sharpe.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="backtest-metric">
+                          <span className="backtest-metric-label">Max Drawdown</span>
+                          <span className="backtest-metric-value" style={{ color: strategyBacktest.max_dd > 20 ? 'var(--accent-red)' : 'var(--accent-amber)' }}>
+                            {strategyBacktest.max_dd.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="backtest-metric">
+                          <span className="backtest-metric-label">CAGR</span>
+                          <span className="backtest-metric-value" style={{ color: strategyBacktest.cagr > 10 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                            {strategyBacktest.cagr.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="backtest-metric">
+                          <span className="backtest-metric-label">Win Rate</span>
+                          <span className="backtest-metric-value">
+                            {strategyBacktest.win_rate.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                      <div className="backtest-validation">
+                        <h4>Walk-Forward Validation</h4>
+                        <div className="validation-grid">
+                          <div className="validation-item">
+                            <span className="validation-label">Train Sharpe</span>
+                            <span className="validation-value">{strategyBacktest.train_sharpe?.toFixed(2) || 'N/A'}</span>
+                          </div>
+                          <div className="validation-item">
+                            <span className="validation-label">Test Sharpe</span>
+                            <span className="validation-value">{strategyBacktest.test_sharpe?.toFixed(2) || 'N/A'}</span>
+                          </div>
+                          <div className="validation-item">
+                            <span className="validation-label">Sharpe Degradation</span>
+                            <span className="validation-value" style={{ color: strategyBacktest.sharpe_degradation < 30 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                              {strategyBacktest.sharpe_degradation?.toFixed(1) || 'N/A'}%
+                            </span>
+                          </div>
+                          <div className="validation-item">
+                            <span className="validation-label">% Profitable Windows</span>
+                            <span className="validation-value" style={{ color: strategyBacktest.pct_profitable > 80 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                              {strategyBacktest.pct_profitable?.toFixed(1) || 'N/A'}%
+                            </span>
+                          </div>
+                        </div>
+                        <p className="backtest-period">Validation Period: {strategyBacktest.period}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="empty-state">Select a strategy to view backtest results</div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 

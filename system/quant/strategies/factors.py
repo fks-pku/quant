@@ -223,6 +223,106 @@ class ATRFactor(Factor):
         return atr
 
 
+class VolatilityRegimeFactor(Factor):
+    """Volatility regime factor - detects market regime based on VIX or realized vol."""
+
+    REGIME_BULL = 1.0
+    REGIME_CHOP = 0.0
+    REGIME_BEAR = -1.0
+
+    def __init__(
+        self,
+        lookback: int = 20,
+        vix_bull_threshold: float = 15.0,
+        vix_bear_threshold: float = 25.0,
+        use_realized_vol: bool = False,
+    ):
+        super().__init__("volatility_regime", lookback)
+        self.vix_bull_threshold = vix_bull_threshold
+        self.vix_bear_threshold = vix_bear_threshold
+        self.use_realized_vol = use_realized_vol
+
+    def calculate(self, data: pd.DataFrame) -> float:
+        """Calculate regime: 1.0 (bull), 0.0 (chop), -1.0 (bear)."""
+        if self.use_realized_vol:
+            return self._calculate_from_realized_vol(data)
+        else:
+            return self._calculate_from_vix(data)
+
+    def _calculate_from_realized_vol(self, data: pd.DataFrame) -> float:
+        if len(data) < self.lookback:
+            return self.REGIME_CHOP
+
+        returns = data['close'].pct_change().dropna()
+        if len(returns) < self.lookback:
+            return self.REGIME_CHOP
+
+        realized_vol = returns.tail(self.lookback).std() * np.sqrt(252) * 100
+
+        if realized_vol < self.vix_bull_threshold:
+            return self.REGIME_BULL
+        elif realized_vol > self.vix_bear_threshold:
+            return self.REGIME_BEAR
+        else:
+            return self.REGIME_CHOP
+
+    def _calculate_from_vix(self, data: pd.DataFrame) -> float:
+        if 'vix_close' not in data.columns and len(data.columns) == 1:
+            return self.REGIME_CHOP
+
+        if 'vix_close' in data.columns:
+            vix = data['vix_close'].iloc[-1]
+        else:
+            return self.REGIME_CHOP
+
+        if len(data) >= self.lookback:
+            vix_sma = data['vix_close'].tail(self.lookback).mean()
+        else:
+            vix_sma = vix
+
+        if vix_sma < self.vix_bull_threshold:
+            return self.REGIME_BULL
+        elif vix_sma > self.vix_bear_threshold:
+            return self.REGIME_BEAR
+        else:
+            return self.REGIME_CHOP
+
+    def get_regime_label(self, value: float) -> str:
+        if value >= 0.5:
+            return "bull"
+        elif value <= -0.5:
+            return "bear"
+        else:
+            return "chop"
+
+
+class QualityFactor(Factor):
+    """Quality factor - based on ROE and debt-to-equity."""
+
+    def __init__(self, lookback: int = 252):
+        super().__init__("quality", lookback)
+
+    def calculate(self, data: pd.DataFrame) -> float:
+        """Calculate quality score from fundamental data.
+
+        Requires 'roe' and 'debt_to_equity' in data columns.
+        Returns composite quality score: high ROE + low debt = good quality.
+        """
+        if len(data) < self.lookback:
+            return 0.0
+
+        if 'roe' not in data.columns or 'debt_to_equity' not in data.columns:
+            return 0.0
+
+        roe = data['roe'].iloc[-1]
+        debt_to_equity = data['debt_to_equity'].iloc[-1]
+
+        roe_normalized = max(-2, min(2, (roe - 0.1) / 0.1))
+        debt_normalized = max(-2, min(2, (0.5 - debt_to_equity) / 0.5))
+
+        return (roe_normalized + debt_normalized) / 2
+
+
 class FactorLibrary:
     """Collection of factors with factory methods."""
 
@@ -254,6 +354,15 @@ class FactorLibrary:
             )
         elif name == "atr":
             return ATRFactor(kwargs.get("lookback", 14))
+        elif name == "volatility_regime":
+            return VolatilityRegimeFactor(
+                lookback=kwargs.get("lookback", 20),
+                vix_bull_threshold=kwargs.get("vix_bull_threshold", 15.0),
+                vix_bear_threshold=kwargs.get("vix_bear_threshold", 25.0),
+                use_realized_vol=kwargs.get("use_realized_vol", False),
+            )
+        elif name == "quality":
+            return QualityFactor(kwargs.get("lookback", 252))
         else:
             raise ValueError(f"Unknown factor: {name}")
 
