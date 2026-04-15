@@ -30,7 +30,7 @@ if ! lsof -i :3000 2>/dev/null | grep -q LISTEN; then
         echo "Installing npm packages..."
         "$NPM_PATH" install > "$LOG_DIR/npm_install.log" 2>&1
     fi
-    nohup "$NPM_PATH" start > "$LOG_DIR/frontend.log" 2>&1 &
+    nohup env BROWSER=none "$NPM_PATH" start > "$LOG_DIR/frontend.log" 2>&1 &
     echo "Frontend starting..."
     sleep 10
 fi

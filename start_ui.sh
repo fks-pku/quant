@@ -40,7 +40,7 @@ sleep 2
 # Start React frontend
 echo ""
 echo "Starting React frontend on http://localhost:3000"
-cd frontend && npm start &
+cd frontend && BROWSER=none npm start &
 FRONTEND_PID=$!
 
 # Open browser
