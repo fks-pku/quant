@@ -23,12 +23,14 @@ import pandas as pd
 import numpy as np
 
 from quant.strategies.base import Strategy
+from quant.strategies.registry import strategy
 from quant.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from quant.core.engine import Context
 
 
+@strategy("VolatilityRegime")
 class VolatilityRegime(Strategy):
     """
     Volatility regime-based strategy switching.

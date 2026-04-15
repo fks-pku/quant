@@ -1,28 +1,16 @@
 """Fill processing and reconciliation with portfolio updates."""
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import threading
 
-from quant.execution.brokers.base import BrokerAdapter, Order, OrderStatus
+from quant.models.fill import Fill
+from quant.models.order import OrderStatus
 from quant.utils.logger import setup_logger
 
 if TYPE_CHECKING:
     from quant.core.portfolio import Portfolio
     from quant.core.events import EventBus
-
-
-@dataclass
-class Fill:
-    """Represents a trade fill."""
-    order_id: str
-    symbol: str
-    side: str
-    quantity: float
-    price: float
-    commission: float
-    timestamp: datetime
 
 
 class FillHandler:

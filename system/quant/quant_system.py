@@ -35,6 +35,7 @@ from quant.strategies.examples.mean_reversion import MeanReversion1m
 from quant.strategies.examples.dual_thrust import DualThrust
 from quant.strategies.implementations.volatility_regime import VolatilityRegime
 from quant.strategies.implementations.simple_momentum import SimpleMomentum
+from quant.strategies.registry import StrategyRegistry
 from quant.utils.config_loader import ConfigLoader
 from quant.utils.logger import setup_logger
 
@@ -192,20 +193,29 @@ class QuantSystem:
                 self.logger.info(f"Strategy {name} enabled")
 
     def _create_strategy(self, name: str, symbols: list, params: dict) -> Any:
-        """Create a strategy instance by name."""
-        if name == "MomentumEOD":
-            return MomentumEOD(symbols)
-        elif name == "MeanReversion1m":
-            return MeanReversion1m(symbols)
-        elif name == "DualThrust":
-            return DualThrust(symbols)
-        elif name == "VolatilityRegime":
-            return VolatilityRegime(**params) if params else VolatilityRegime(symbols=symbols)
-        elif name == "SimpleMomentum":
-            return SimpleMomentum(**params) if params else SimpleMomentum(symbols=symbols)
-        else:
-            self.logger.warning(f"Unknown strategy: {name}")
-            return None
+        """Create a strategy instance by name using the registry."""
+        if StrategyRegistry.is_registered(name):
+            try:
+                if params:
+                    params["symbols"] = symbols
+                    return StrategyRegistry.create(name, **params)
+                else:
+                    return StrategyRegistry.create(name, symbols=symbols)
+            except Exception as e:
+                self.logger.error(f"Failed to create strategy {name}: {e}")
+                return None
+
+        fallback_map = {
+            "MomentumEOD": MomentumEOD,
+            "MeanReversion1m": MeanReversion1m,
+            "DualThrust": DualThrust,
+        }
+        cls = fallback_map.get(name)
+        if cls:
+            return cls(symbols)
+
+        self.logger.warning(f"Unknown strategy: {name}")
+        return None
 
     def run(self, mode: Optional[str] = None) -> None:
         """Run the system in specified mode."""

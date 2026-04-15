@@ -1,57 +1,56 @@
-"""Paper trading broker adapter with simulated execution."""
+"""Paper trading broker adapter with simulated execution using real market data."""
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Dict, List, Optional
-import random
+from datetime import datetime
+from typing import Dict, List, Optional, Any
 import threading
-import uuid
 
-from quant.execution.brokers.base import (
-    BrokerAdapter,
-    Order,
-    OrderStatus,
-    Position,
-    AccountInfo,
-)
+from quant.models import Order, OrderStatus, Position, AccountInfo
+from quant.execution.brokers.base import BrokerAdapter
 from quant.utils.logger import setup_logger
 
 
 class PaperBroker(BrokerAdapter):
-    """Internal simulated broker for paper trading."""
+    """Simulated broker for paper trading using real market data."""
 
-    def __init__(self, initial_cash: float = 100000.0, slippage_bps: float = 5):
+    def __init__(
+        self,
+        initial_cash: float = 100000.0,
+        slippage_bps: float = 5,
+        data_provider: Any = None,
+    ):
         super().__init__("paper")
         self.initial_cash = initial_cash
         self.cash = initial_cash
         self.slippage_bps = slippage_bps
+        self.data_provider = data_provider
         self.positions: Dict[str, Position] = {}
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self._lock = threading.RLock()
         self._next_order_id = 1
+        self._latest_prices: Dict[str, float] = {}
         self.logger = setup_logger("PaperBroker")
 
+    def update_price(self, symbol: str, price: float) -> None:
+        """Update the latest known price for a symbol (called by data feed)."""
+        self._latest_prices[symbol] = price
+
+    def set_data_provider(self, provider: Any) -> None:
+        """Set or replace the data provider for price lookups."""
+        self.data_provider = provider
+
     def connect(self) -> None:
-        """Connect to paper broker (no-op)."""
         self._connected = True
         self.logger.info("Connected to Paper Broker")
 
     def disconnect(self) -> None:
-        """Disconnect from paper broker (no-op)."""
         self._connected = False
         self.logger.info("Disconnected from Paper Broker")
 
     def is_connected(self) -> bool:
-        """Check if connected."""
         return self._connected
 
     def submit_order(self, order: Order) -> str:
-        """
-        Submit an order to the paper broker.
-        Simulates immediate fill at current price with slippage.
-        """
         with self._lock:
             order_id = f"PAPER_{self._next_order_id}"
             self._next_order_id += 1
@@ -72,8 +71,7 @@ class PaperBroker(BrokerAdapter):
             return order_id
 
     def _simulate_fill(self, order: Order) -> None:
-        """Simulate order fill with slippage."""
-        current_price = self._get_simulated_price(order.symbol)
+        current_price = self._get_current_price(order.symbol)
 
         slippage = current_price * (self.slippage_bps / 10000)
         if order.side == "BUY":
@@ -87,23 +85,36 @@ class PaperBroker(BrokerAdapter):
 
         self._update_position(order, fill_price)
 
-    def _get_simulated_price(self, symbol: str) -> float:
-        """Get a simulated price for a symbol (base price + random variation)."""
-        base_prices = {
-            "AAPL": 175.0,
-            "GOOGL": 140.0,
-            "MSFT": 380.0,
-            "AMZN": 180.0,
-            "TSLA": 250.0,
-            "SPY": 470.0,
-            "QQQ": 400.0,
-        }
-        base = base_prices.get(symbol, 100.0)
-        variation = base * 0.001 * random.uniform(-1, 1)
-        return base + variation
+    def _get_current_price(self, symbol: str) -> float:
+        """Get current price: prefer cached latest price, then data provider, then fallback."""
+        if symbol in self._latest_prices:
+            return self._latest_prices[symbol]
+
+        if self.data_provider and hasattr(self.data_provider, "get_quote"):
+            try:
+                quote = self.data_provider.get_quote(symbol)
+                if quote and hasattr(quote, "last_price") and quote.last_price > 0:
+                    return quote.last_price
+                if isinstance(quote, dict) and quote.get("last_price", 0) > 0:
+                    return quote["last_price"]
+            except Exception:
+                pass
+
+        if self.data_provider and hasattr(self.data_provider, "get_bars"):
+            try:
+                from datetime import timedelta
+                end = datetime.now()
+                start = end - timedelta(days=5)
+                bars = self.data_provider.get_bars(symbol, start, end, "1d")
+                if bars is not None and not bars.empty:
+                    return float(bars["close"].iloc[-1])
+            except Exception:
+                pass
+
+        self.logger.warning(f"No price data for {symbol}, using fallback 100.0")
+        return 100.0
 
     def _update_position(self, order: Order, fill_price: float) -> None:
-        """Update position after fill."""
         if order.symbol not in self.positions:
             self.positions[order.symbol] = Position(
                 symbol=order.symbol,
@@ -121,16 +132,16 @@ class PaperBroker(BrokerAdapter):
             pos.avg_cost = total_cost / pos.quantity if pos.quantity > 0 else 0
             self.cash -= fill_price * order.quantity
         else:
-            pos.quantity -= order.quantity
-            self.cash += fill_price * order.quantity
-            if pos.quantity < 0:
+            sell_qty = min(order.quantity, pos.quantity)
+            self.cash += fill_price * sell_qty
+            pos.quantity -= sell_qty
+            if pos.quantity <= 0:
                 pos.quantity = 0
                 pos.avg_cost = 0
 
         pos.market_value = pos.quantity * fill_price
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order (only if not yet filled)."""
         with self._lock:
             if order_id not in self.orders:
                 return False
@@ -144,12 +155,10 @@ class PaperBroker(BrokerAdapter):
             return True
 
     def get_positions(self) -> List[Position]:
-        """Get current positions."""
         with self._lock:
             return [pos for pos in self.positions.values() if pos.quantity > 0]
 
     def get_account_info(self) -> AccountInfo:
-        """Get account information."""
         with self._lock:
             total_value = self.cash + sum(
                 pos.market_value for pos in self.positions.values()
@@ -163,7 +172,6 @@ class PaperBroker(BrokerAdapter):
             )
 
     def get_order_status(self, order_id: str) -> OrderStatus:
-        """Get the status of an order."""
         with self._lock:
             if order_id in self.orders:
                 return self.orders[order_id].status

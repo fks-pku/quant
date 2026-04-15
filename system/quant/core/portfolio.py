@@ -3,22 +3,14 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from decimal import Decimal
 import threading
 
 import pandas as pd
 
+from quant.models.position import Position
 
-@dataclass
-class Position:
-    """Represents a single position."""
-    symbol: str
-    quantity: float
-    avg_cost: float
-    market_value: float
-    unrealized_pnl: float
-    realized_pnl: float
-    sector: Optional[str] = None
+
+__all__ = ["Position", "PortfolioSnapshot", "Portfolio"]
 
 
 @dataclass

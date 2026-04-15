@@ -2,29 +2,19 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import threading
 import time
 import uuid
 
-from quant.execution.brokers.base import BrokerAdapter, Order, OrderStatus
+from quant.models.order import Order, OrderStatus
+from quant.execution.brokers.base import BrokerAdapter
 from quant.utils.logger import setup_logger
 
 if TYPE_CHECKING:
     from quant.core.portfolio import Portfolio
     from quant.core.risk import RiskEngine
     from quant.core.events import EventType
-
-
-class OrderState(Enum):
-    """Order state machine states."""
-    PENDING = "pending"
-    SUBMITTED = "submitted"
-    FILLED = "filled"
-    PARTIAL = "partial"
-    CANCELLED = "cancelled"
-    REJECTED = "rejected"
 
 
 @dataclass

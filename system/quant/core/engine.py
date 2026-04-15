@@ -3,14 +3,15 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 import threading
 import time
 
-from quant.core.events import EventBus, Event, EventType
+from quant.core.events import EventBus, EventType
 from quant.core.scheduler import Scheduler
 from quant.core.portfolio import Portfolio
 from quant.core.risk import RiskEngine
+from quant.execution.brokers.paper import PaperBroker
 from quant.utils.logger import setup_logger
 
 
@@ -19,16 +20,6 @@ class SystemMode(Enum):
     LIVE = "live"
     PAPER = "paper"
     BACKTEST = "backtest"
-
-
-@dataclass
-class Order:
-    """Represents a trading order."""
-    symbol: str
-    quantity: float
-    order_type: str
-    side: str
-    price: Optional[float] = None
 
 
 @dataclass
@@ -80,7 +71,7 @@ class Engine:
         self.order_manager = order_manager
 
     def add_strategy(self, strategy: Any) -> None:
-        """Add a strategy to the engine."""
+        """Add a strategy to the engine and wire it to the event bus."""
         strategy.context = Context(
             portfolio=self.portfolio,
             risk_engine=self.risk_engine,
@@ -91,6 +82,26 @@ class Engine:
         )
         self.strategies.append(strategy)
 
+        self.event_bus.subscribe(EventType.BAR, lambda event: self._dispatch_bar(strategy, event))
+        self.event_bus.subscribe(EventType.MARKET_OPEN, lambda event: self._dispatch_market_open(strategy, event))
+        self.event_bus.subscribe(EventType.MARKET_CLOSE, lambda event: self._dispatch_market_close(strategy, event))
+
+    def _dispatch_bar(self, strategy: Any, event: Any) -> None:
+        if hasattr(strategy, "on_data") and strategy.context:
+            strategy.on_data(strategy.context, event.data)
+
+    def _dispatch_market_open(self, strategy: Any, event: Any) -> None:
+        if hasattr(strategy, "on_before_trading") and strategy.context:
+            ts = event.data.get("timestamp", datetime.now()) if isinstance(event.data, dict) else datetime.now()
+            trading_date = ts.date() if hasattr(ts, "date") else ts
+            strategy.on_before_trading(strategy.context, trading_date)
+
+    def _dispatch_market_close(self, strategy: Any, event: Any) -> None:
+        if hasattr(strategy, "on_after_trading") and strategy.context:
+            ts = event.data.get("timestamp", datetime.now()) if isinstance(event.data, dict) else datetime.now()
+            trading_date = ts.date() if hasattr(ts, "date") else ts
+            strategy.on_after_trading(strategy.context, trading_date)
+
     def subscribe(self, symbols: List[str]) -> None:
         """Subscribe to symbols for real-time data."""
         self._subscribed_symbols.extend(symbols)
@@ -99,7 +110,11 @@ class Engine:
                 provider.subscribe(symbols, lambda data, src=name: self._on_data(src, data))
 
     def _on_data(self, provider_name: str, data: Any) -> None:
-        """Handle incoming data from providers."""
+        """Handle incoming data from providers — dispatches via EventBus."""
+        if isinstance(data, dict):
+            symbol = data.get("symbol")
+            if symbol and isinstance(self.broker, PaperBroker):
+                self.broker.update_price(symbol, data.get("close", 0))
         self.event_bus.publish_nowait(EventType.BAR, data, provider_name)
 
     def start(self) -> None:

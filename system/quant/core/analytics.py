@@ -6,17 +6,11 @@ from typing import List, Tuple
 import pandas as pd
 import numpy as np
 
+from quant.models.trade import Trade
 
-@dataclass
-class Trade:
-    entry_time: datetime
-    exit_time: datetime
-    symbol: str
-    side: str
-    entry_price: float
-    exit_price: float
-    quantity: float
-    pnl: float
+
+__all__ = ["Trade", "calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
+           "calculate_performance_metrics", "PerformanceMetrics"]
 
 
 def calculate_sharpe(returns: pd.Series, periods_per_year: int = 252) -> float:
