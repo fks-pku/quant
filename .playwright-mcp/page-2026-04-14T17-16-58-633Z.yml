@@ -1,0 +1,90 @@
+- generic [active] [ref=e1]:
+  - heading "System Layout - 4-Panel Design" [level=2] [ref=e2]
+  - paragraph [ref=e3]: 绠€娲佺殑妯″潡鍖栧竷灞€锛氶《閮˙roker閫夋嫨 + 4涓姛鑳介潰鏉�
+  - generic [ref=e4]:
+    - generic [ref=e5]: Trading System UI Mockup
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]:
+          - generic [ref=e9]: Quant System
+          - generic [ref=e10]: CONNECTED
+        - generic [ref=e11]:
+          - combobox [ref=e12]:
+            - option "Futu (Paper)" [selected]
+            - option "IBKR"
+            - option "Alpaca"
+          - button "鈻� START" [ref=e13] [cursor=pointer]
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - heading "馃搳 Asset Overview" [level=3] [ref=e16]
+          - generic [ref=e17]:
+            - generic [ref=e18]:
+              - generic [ref=e19]: NAV
+              - generic [ref=e20]: $100,000
+            - generic [ref=e21]:
+              - generic [ref=e22]: Unrealized P&L
+              - generic [ref=e23]: +$1,234
+            - generic [ref=e24]:
+              - generic [ref=e25]: Realized P&L
+              - generic [ref=e26]: +$567
+            - generic [ref=e27]:
+              - generic [ref=e28]: Total P&L
+              - generic [ref=e29]: +$1,801
+          - generic [ref=e30]:
+            - generic [ref=e31]: HOLDINGS
+            - generic [ref=e32]: AAPL 100 shares | MSFT 50 shares
+        - generic [ref=e33]:
+          - heading "鈿� Strategy Zone" [level=3] [ref=e34]
+          - combobox [ref=e36]:
+            - option "VolatilityRegime (Active)" [selected]
+            - option "SimpleMomentum"
+            - option "MeanReversion"
+          - generic [ref=e37]:
+            - generic [ref=e38]:
+              - generic [ref=e39]: Active Strategy
+              - generic [ref=e40]: 鈼� Running
+            - generic [ref=e41]: VolatilityRegime
+            - generic [ref=e42]: "Regime: BULL | Signals: 5"
+        - generic [ref=e43]:
+          - heading "馃搱 Market Data" [level=3] [ref=e44]
+          - generic [ref=e46]:
+            - generic [ref=e47]: AAPL
+            - generic [ref=e48]: $178.50
+            - generic [ref=e49]: +1.2%
+          - generic [ref=e51]:
+            - generic [ref=e52]: MSFT
+            - generic [ref=e53]: $378.25
+            - generic [ref=e54]: "-0.5%"
+          - generic [ref=e56]:
+            - generic [ref=e57]: VIX
+            - generic [ref=e58]: "14.5"
+            - generic [ref=e59]: "SMA: 16.2"
+        - generic [ref=e60]:
+          - heading "馃摑 Order Zone" [level=3] [ref=e61]
+          - generic [ref=e62]:
+            - textbox "Symbol" [ref=e63]
+            - textbox "Qty" [ref=e64]
+            - combobox [ref=e65]:
+              - option "BUY" [selected]
+              - option "SELL"
+          - button "Submit Order" [ref=e66] [cursor=pointer]
+          - generic [ref=e67]:
+            - generic [ref=e68]: RECENT ORDERS
+            - generic [ref=e69]:
+              - generic [ref=e70]:
+                - generic [ref=e71]: BUY AAPL x100
+                - generic [ref=e72]: FILLED
+              - generic [ref=e73]:
+                - generic [ref=e74]: SELL MSFT x50
+                - generic [ref=e75]: FILLED
+  - generic [ref=e76]:
+    - generic [ref=e77]:
+      - generic [ref=e78]: 鉁�
+      - generic [ref=e79]:
+        - heading "杩欎釜甯冨眬鐪嬭捣鏉ヤ笉閿�" [level=3] [ref=e80]
+        - paragraph [ref=e81]: 绠€娲佺殑2x2缃戞牸锛屽洓涓姛鑳藉尯鍩熸竻鏅板垎鍖�
+    - generic [ref=e82]:
+      - generic [ref=e83]: ~
+      - generic [ref=e84]:
+        - heading "闇€瑕佽皟鏁�" [level=3] [ref=e85]
+        - paragraph [ref=e86]: 鎯充慨鏀规煇浜涘尯鍩熺殑甯冨眬鎴栦綅缃�

@@ -1,0 +1,97 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - heading "Superpowers Brainstorming" [level=1] [ref=e3]:
+      - link "Superpowers Brainstorming" [ref=e4] [cursor=pointer]:
+        - /url: https://github.com/obra/superpowers
+    - generic [ref=e5]: Connected
+  - generic [ref=e7]:
+    - heading "System Layout - 4-Panel Design" [level=2] [ref=e8]
+    - paragraph [ref=e9]: 简洁的模块化布局：顶部Broker选择 + 4个功能面板
+    - generic [ref=e10]:
+      - generic [ref=e11]: Trading System UI Mockup
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - generic [ref=e14]:
+            - generic [ref=e15]: Quant System
+            - generic [ref=e16]: CONNECTED
+          - generic [ref=e17]:
+            - combobox [ref=e18]:
+              - option "Futu (Paper)" [selected]
+              - option "IBKR"
+              - option "Alpaca"
+            - button "▶ START" [ref=e19] [cursor=pointer]
+        - generic [ref=e20]:
+          - generic [ref=e21]:
+            - heading "📊 Asset Overview" [level=3] [ref=e22]
+            - generic [ref=e23]:
+              - generic [ref=e24]:
+                - generic [ref=e25]: NAV
+                - generic [ref=e26]: $100,000
+              - generic [ref=e27]:
+                - generic [ref=e28]: Unrealized P&L
+                - generic [ref=e29]: +$1,234
+              - generic [ref=e30]:
+                - generic [ref=e31]: Realized P&L
+                - generic [ref=e32]: +$567
+              - generic [ref=e33]:
+                - generic [ref=e34]: Total P&L
+                - generic [ref=e35]: +$1,801
+            - generic [ref=e36]:
+              - generic [ref=e37]: HOLDINGS
+              - generic [ref=e38]: AAPL 100 shares | MSFT 50 shares
+          - generic [ref=e39]:
+            - heading "⚡ Strategy Zone" [level=3] [ref=e40]
+            - combobox [ref=e42]:
+              - option "VolatilityRegime (Active)" [selected]
+              - option "SimpleMomentum"
+              - option "MeanReversion"
+            - generic [ref=e43]:
+              - generic [ref=e44]:
+                - generic [ref=e45]: Active Strategy
+                - generic [ref=e46]: ● Running
+              - generic [ref=e47]: VolatilityRegime
+              - generic [ref=e48]: "Regime: BULL | Signals: 5"
+          - generic [ref=e49]:
+            - heading "📈 Market Data" [level=3] [ref=e50]
+            - generic [ref=e52]:
+              - generic [ref=e53]: AAPL
+              - generic [ref=e54]: $178.50
+              - generic [ref=e55]: +1.2%
+            - generic [ref=e57]:
+              - generic [ref=e58]: MSFT
+              - generic [ref=e59]: $378.25
+              - generic [ref=e60]: "-0.5%"
+            - generic [ref=e62]:
+              - generic [ref=e63]: VIX
+              - generic [ref=e64]: "14.5"
+              - generic [ref=e65]: "SMA: 16.2"
+          - generic [ref=e66]:
+            - heading "📝 Order Zone" [level=3] [ref=e67]
+            - generic [ref=e68]:
+              - textbox "Symbol" [ref=e69]
+              - textbox "Qty" [ref=e70]
+              - combobox [ref=e71]:
+                - option "BUY" [selected]
+                - option "SELL"
+            - button "Submit Order" [ref=e72] [cursor=pointer]
+            - generic [ref=e73]:
+              - generic [ref=e74]: RECENT ORDERS
+              - generic [ref=e75]:
+                - generic [ref=e76]:
+                  - generic [ref=e77]: BUY AAPL x100
+                  - generic [ref=e78]: FILLED
+                - generic [ref=e79]:
+                  - generic [ref=e80]: SELL MSFT x50
+                  - generic [ref=e81]: FILLED
+    - generic [ref=e82]:
+      - generic [ref=e83] [cursor=pointer]:
+        - generic [ref=e84]: ✓
+        - generic [ref=e85]:
+          - heading "这个布局看起来不错" [level=3] [ref=e86]
+          - paragraph [ref=e87]: 简洁的2x2网格，四个功能区域清晰分区
+      - generic [ref=e88] [cursor=pointer]:
+        - generic [ref=e89]: ~
+        - generic [ref=e90]:
+          - heading "需要调整" [level=3] [ref=e91]
+          - paragraph [ref=e92]: 想修改某些区域的布局或位置
+  - generic [ref=e93]: Click an option above, then return to the terminal

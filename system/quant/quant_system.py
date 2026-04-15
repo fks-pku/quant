@@ -26,6 +26,7 @@ from quant.data.providers.alpha_vantage import AlphaVantageProvider
 from quant.data.providers.futu import FutuProvider
 from quant.data.storage import Storage
 from quant.execution.brokers.paper import PaperBroker
+from quant.execution.brokers.futu import FutuBroker
 from quant.execution.order_manager import OrderManager
 from quant.execution.fill_handler import FillHandler
 from quant.strategies.examples.momentum_eod import MomentumEOD
@@ -112,6 +113,24 @@ class QuantSystem:
             broker.connect()
             self.engine.set_broker(broker)
             self.logger.info("Paper broker initialized")
+        elif broker_name == "futu":
+            host = self.config_loader.get("brokers.yaml", "futu", "host", default="127.0.0.1")
+            port = self.config_loader.get("brokers.yaml", "futu", "port", default=11111)
+            acc_list = self.config_loader.get("brokers.yaml", "futu", "acc_list", default={})
+            password = self.config_loader.get("brokers.yaml", "futu", "password", default="")
+            trade_mode = self.config_loader.get("brokers.yaml", "futu", "trade_mode", default="SIMULATE")
+            broker = FutuBroker(
+                host=host,
+                port=port,
+                acc_list=acc_list,
+                password=password,
+                trade_mode=trade_mode,
+            )
+            broker.connect()
+            if trade_mode == "REAL" and password:
+                broker.unlock_trade(password=password, trade_mode=trade_mode)
+            self.engine.set_broker(broker)
+            self.logger.info(f"Futu broker initialized (mode: {trade_mode})")
 
     def _setup_strategies(self) -> None:
         """Setup and register strategies."""

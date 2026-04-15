@@ -310,6 +310,42 @@ def stop_system():
         system_status = 'stopped'
 
 
+orders_data = []
+
+@app.route('/api/orders', methods=['POST'])
+def create_order():
+    global orders_data
+    
+    data = request.get_json()
+    order = {
+        'id': len(orders_data) + 1,
+        'symbol': data.get('symbol'),
+        'quantity': data.get('quantity'),
+        'side': data.get('side'),
+        'broker': data.get('broker', 'paper'),
+        'status': 'FILLED',
+        'time': datetime.now().isoformat()
+    }
+    orders_data.append(order)
+    return jsonify(order)
+
+
+@app.route('/api/orders', methods=['GET'])
+def get_orders():
+    return jsonify(orders_data[-20:])
+
+
+market_data = [
+    {'symbol': 'AAPL', 'price': 178.50, 'change': 1.2},
+    {'symbol': 'MSFT', 'price': 378.25, 'change': -0.5},
+    {'symbol': 'VIX', 'price': 14.5, 'sma': 16.2},
+]
+
+@app.route('/api/market', methods=['GET'])
+def get_market_data():
+    return jsonify(market_data)
+
+
 @app.route('/api/portfolio', methods=['GET'])
 def get_portfolio():
     return jsonify(portfolio_data)

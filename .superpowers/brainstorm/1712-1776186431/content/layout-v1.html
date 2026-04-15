@@ -1,0 +1,147 @@
+<h2>System Layout - 4-Panel Design</h2>
+<p class="subtitle">简洁的模块化布局：启动区 + 4个功能面板</p>
+
+<div class="mockup">
+  <div class="mockup-header">Trading System UI Mockup</div>
+  <div class="mockup-body">
+    <!-- Header -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #1a1a2e; border-bottom: 1px solid #333;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span style="font-weight: 700; font-size: 18px; color: #00ff88;">Quant System</span>
+        <span style="padding: 4px 10px; background: #00ff8833; color: #00ff88; border-radius: 4px; font-size: 12px;">CONNECTED</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <select style="background: #2a2a4a; color: #fff; border: 1px solid #444; padding: 6px 12px; border-radius: 4px;">
+          <option>Futu (Paper)</option>
+          <option>IBKR</option>
+          <option>Alpaca</option>
+        </select>
+        <button style="background: #00ff88; color: #000; padding: 8px 20px; border: none; border-radius: 4px; font-weight: 600; cursor: pointer;">▶ START</button>
+      </div>
+    </div>
+
+    <!-- 4 Panel Grid -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 16px; padding: 16px; background: #0f0f1a; min-height: calc(100vh - 70px);">
+      
+      <!-- Panel 1: Asset Overview -->
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 16px;">
+        <h3 style="margin: 0 0 12px 0; color: #fff; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">📊 Asset Overview</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div style="background: #252540; padding: 12px; border-radius: 6px;">
+            <div style="color: #888; font-size: 11px;">NAV</div>
+            <div style="color: #fff; font-size: 20px; font-weight: 600;">$100,000</div>
+          </div>
+          <div style="background: #252540; padding: 12px; border-radius: 6px;">
+            <div style="color: #888; font-size: 11px;">Unrealized P&L</div>
+            <div style="color: #00ff88; font-size: 20px; font-weight: 600;">+$1,234</div>
+          </div>
+          <div style="background: #252540; padding: 12px; border-radius: 6px;">
+            <div style="color: #888; font-size: 11px;">Realized P&L</div>
+            <div style="color: #fff; font-size: 20px; font-weight: 600;">+$567</div>
+          </div>
+          <div style="background: #252540; padding: 12px; border-radius: 6px;">
+            <div style="color: #888; font-size: 11px;">Total P&L</div>
+            <div style="color: #00ff88; font-size: 20px; font-weight: 600;">+$1,801</div>
+          </div>
+        </div>
+        <div style="margin-top: 12px;">
+          <div style="color: #888; font-size: 11px; margin-bottom: 6px;">HOLDINGS</div>
+          <div style="background: #252540; padding: 8px; border-radius: 4px; font-size: 12px; color: #aaa;">
+            AAPL 100 shares | MSFT 50 shares
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Strategy Zone -->
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 16px;">
+        <h3 style="margin: 0 0 12px 0; color: #fff; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">⚡ Strategy Zone</h3>
+        <div style="margin-bottom: 12px;">
+          <select style="width: 100%; background: #252540; color: #fff; border: 1px solid #444; padding: 10px; border-radius: 6px;">
+            <option>VolatilityRegime (Active)</option>
+            <option>SimpleMomentum</option>
+            <option>MeanReversion</option>
+          </select>
+        </div>
+        <div style="background: #252540; padding: 12px; border-radius: 6px;">
+          <div style="display: flex; justify-content: space-between; color: #888; font-size: 12px; margin-bottom: 8px;">
+            <span>Active Strategy</span>
+            <span style="color: #00ff88;">● Running</span>
+          </div>
+          <div style="color: #fff; font-size: 14px; font-weight: 500;">VolatilityRegime</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">Regime: BULL | Signals: 5</div>
+        </div>
+      </div>
+
+      <!-- Panel 3: Market Data -->
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 16px;">
+        <h3 style="margin: 0 0 12px 0; color: #fff; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">📈 Market Data</h3>
+        <div style="background: #252540; padding: 10px; border-radius: 6px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="color: #fff; font-weight: 600;">AAPL</span>
+            <span style="color: #00ff88;">$178.50</span>
+            <span style="color: #00ff88; font-size: 12px;">+1.2%</span>
+          </div>
+        </div>
+        <div style="background: #252540; padding: 10px; border-radius: 6px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="color: #fff; font-weight: 600;">MSFT</span>
+            <span style="color: #ff6b6b;">$378.25</span>
+            <span style="color: #ff6b6b; font-size: 12px;">-0.5%</span>
+          </div>
+        </div>
+        <div style="background: #252540; padding: 10px; border-radius: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="color: #fff; font-weight: 600;">VIX</span>
+            <span style="color: #fff;">14.5</span>
+            <span style="color: #888; font-size: 12px;">SMA: 16.2</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 4: Order Zone -->
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 16px;">
+        <h3 style="margin: 0 0 12px 0; color: #fff; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">📝 Order Zone</h3>
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+          <input placeholder="Symbol" style="flex: 1; background: #252540; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; font-size: 12px;">
+          <input placeholder="Qty" style="width: 60px; background: #252540; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; font-size: 12px;">
+          <select style="width: 70px; background: #252540; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; font-size: 12px;">
+            <option>BUY</option>
+            <option>SELL</option>
+          </select>
+        </div>
+        <button style="width: 100%; background: #00ff88; color: #000; padding: 10px; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; margin-bottom: 12px;">Submit Order</button>
+        <div>
+          <div style="color: #888; font-size: 11px; margin-bottom: 6px;">RECENT ORDERS</div>
+          <div style="background: #252540; padding: 8px; border-radius: 4px; font-size: 11px; color: #aaa; max-height: 80px; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>BUY AAPL x100</span>
+              <span style="color: #00ff88;">FILLED</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>SELL MSFT x50</span>
+              <span style="color: #00ff88;">FILLED</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="options" style="margin-top: 16px;">
+  <div class="option" data-choice="like" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>这个布局看起来不错</h3>
+      <p>简洁的2x2网格，四个功能区域清晰分区</p>
+    </div>
+  </div>
+  <div class="option" data-choice="modify" onclick="toggleSelect(this)">
+    <div class="letter">~</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>想修改某些区域的布局或位置</p>
+    </div>
+  </div>
+</div>

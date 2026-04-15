@@ -1,0 +1,69 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: QUANTSYSTEM
+      - generic [ref=e7]: DISCONNECTED
+    - generic [ref=e8]:
+      - combobox [ref=e9] [cursor=pointer]:
+        - option "Paper Trading" [selected]
+        - option "Futu (HK/US)"
+        - option "Interactive Brokers"
+        - option "Alpaca"
+      - button "▶ START" [ref=e10] [cursor=pointer]
+  - main [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - generic [ref=e14]: 📊 Asset Overview
+        - generic [ref=e15]:
+          - generic [ref=e16]:
+            - generic [ref=e17]:
+              - generic [ref=e18]: NAV
+              - generic [ref=e19]: $100,000.00
+            - generic [ref=e20]:
+              - generic [ref=e21]: Unrealized P&L
+              - generic [ref=e22]: $0.00
+            - generic [ref=e23]:
+              - generic [ref=e24]: Realized P&L
+              - generic [ref=e25]: $0.00
+            - generic [ref=e26]:
+              - generic [ref=e27]: Total P&L
+              - generic [ref=e28]: $0.00
+          - generic [ref=e29]: HOLDINGS
+          - generic [ref=e31]: No positions
+      - generic [ref=e32]:
+        - generic [ref=e33]: ⚡ Strategy Zone
+        - generic [ref=e34]:
+          - combobox [ref=e35] [cursor=pointer]
+          - generic [ref=e36]:
+            - generic [ref=e37]:
+              - generic [ref=e38]: Active Strategy
+              - generic [ref=e39]: ● Running
+            - generic [ref=e40]: None
+            - generic [ref=e41]: "Regime: BULL | Signals: 0"
+      - generic [ref=e42]:
+        - generic [ref=e43]: 📈 Market Data
+        - generic [ref=e44]:
+          - generic [ref=e45]:
+            - generic [ref=e46]: AAPL
+            - generic [ref=e47]: $178.5
+            - generic [ref=e48]: +1.2%
+          - generic [ref=e49]:
+            - generic [ref=e50]: MSFT
+            - generic [ref=e51]: $378.25
+            - generic [ref=e52]: "-0.5%"
+          - generic [ref=e53]:
+            - generic [ref=e54]: VIX
+            - generic [ref=e55]: $14.5
+            - generic [ref=e56]: "%"
+      - generic [ref=e57]:
+        - generic [ref=e58]: 📝 Order Zone
+        - generic [ref=e59]:
+          - generic [ref=e60]:
+            - textbox "Symbol" [ref=e61]
+            - textbox "Qty" [ref=e62]
+            - combobox [ref=e63]:
+              - option "BUY" [selected]
+              - option "SELL"
+          - button "Submit Order" [disabled] [ref=e64]
+          - generic [ref=e65]: RECENT ORDERS
+          - generic [ref=e67]: No orders
