@@ -192,8 +192,9 @@ class SignalGenerator:
 class PortfolioConstructor:
     """Converts signals to target weights."""
 
-    def __init__(self, method: str = "equal_weight"):
+    def __init__(self, method: str = "equal_weight", kelly_params: Optional[Dict[str, float]] = None):
         self.method = method
+        self.kelly_params = kelly_params or {"win_rate": 0.55, "avg_win": 1.0, "avg_loss": 1.0}
 
     def construct(
         self,
@@ -201,6 +202,7 @@ class PortfolioConstructor:
         current_prices: Dict[str, float],
         nav: float,
         max_position_pct: float = 0.05,
+        price_history: Optional[pd.DataFrame] = None,
     ) -> Dict[str, Tuple[str, float]]:
         """
         Convert signals to target positions.
@@ -211,7 +213,7 @@ class PortfolioConstructor:
         elif self.method == "kelly":
             return self._kelly(signals, current_prices, nav, max_position_pct)
         elif self.method == "risk_parity":
-            return self._risk_parity(signals, current_prices, nav, max_position_pct)
+            return self._risk_parity(signals, current_prices, nav, max_position_pct, price_history)
         else:
             return self._equal_weight(signals, current_prices, nav, max_position_pct)
 
@@ -263,7 +265,11 @@ class PortfolioConstructor:
         positions = {}
 
         if long_signals:
-            kelly_result = calculate_kelly(0.55, 1.0, 1.0)
+            kelly_result = calculate_kelly(
+                self.kelly_params.get("win_rate", 0.55),
+                self.kelly_params.get("avg_win", 1.0),
+                self.kelly_params.get("avg_loss", 1.0)
+            )
             kelly_fraction = kelly_result.quarter_kelly
             
             weight_per_position = min(kelly_fraction / len(long_signals), max_position_pct)
@@ -289,6 +295,7 @@ class PortfolioConstructor:
         current_prices: Dict[str, float],
         nav: float,
         max_position_pct: float,
+        price_history: Optional[pd.DataFrame] = None,
     ) -> Dict[str, Tuple[str, float]]:
         """Risk parity portfolio construction."""
         long_signals = [s for s in signals if s.direction == "long"]
@@ -298,8 +305,11 @@ class PortfolioConstructor:
 
         if long_signals:
             rp = RiskParityConstructor()
-            price_df = pd.DataFrame([current_prices])
-            weights = rp.construct(long_signals, price_df, nav)
+            if price_history is not None and not price_history.empty:
+                weights = rp.construct(long_signals, price_history, nav)
+            else:
+                price_df = pd.DataFrame([current_prices])
+                weights = rp.construct(long_signals, price_df, nav)
             
             for symbol, weight in weights.items():
                 price = current_prices.get(symbol, 100)

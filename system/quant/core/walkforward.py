@@ -30,6 +30,12 @@ class WFResult:
     aggregate_max_dd: float
     consistency: float
     best_params: Dict[str, Any]
+    sharpe_degradation: float
+    avg_train_sharpe: float
+    avg_test_sharpe: float
+    test_sharpe_std: float
+    pct_profitable: float
+    is_viable: bool
 
 
 class WalkForwardEngine:
@@ -124,12 +130,30 @@ class WalkForwardEngine:
                 aggregate_sharpe=0.0,
                 aggregate_max_dd=0.0,
                 consistency=0.0,
-                best_params={}
+                best_params={},
+                sharpe_degradation=0.0,
+                avg_train_sharpe=0.0,
+                avg_test_sharpe=0.0,
+                test_sharpe_std=0.0,
+                pct_profitable=0.0,
+                is_viable=False
             )
         
         aggregate_sharpe = np.mean([w.test_sharpe for w in window_results])
         aggregate_max_dd = max(w.test_max_dd for w in window_results) if window_results else 0.0
         consistency = len([w for w in window_results if w.test_return > 0]) / len(window_results)
+        
+        train_sharpes = [w.train_sharpe for w in window_results]
+        test_sharpes = [w.test_sharpe for w in window_results]
+        
+        avg_train = float(np.mean(train_sharpes)) if train_sharpes else 0.0
+        avg_test = float(np.mean(test_sharpes)) if test_sharpes else 0.0
+        test_std = float(np.std(test_sharpes)) if test_sharpes else 0.0
+        
+        sharpe_degradation = 1.0 - (avg_test / avg_train) if avg_train != 0 else 1.0
+        pct_profitable = float(len([w for w in window_results if w.test_return > 0]) / len(window_results)) if window_results else 0.0
+        
+        is_viable = avg_test > 0.5 and sharpe_degradation < 0.5 and pct_profitable > 0.5
         
         best_params = window_results[np.argmax([w.test_sharpe for w in window_results])].params
         
@@ -138,7 +162,13 @@ class WalkForwardEngine:
             aggregate_sharpe=float(aggregate_sharpe),
             aggregate_max_dd=float(aggregate_max_dd),
             consistency=float(consistency),
-            best_params=best_params
+            best_params=best_params,
+            sharpe_degradation=float(sharpe_degradation),
+            avg_train_sharpe=avg_train,
+            avg_test_sharpe=avg_test,
+            test_sharpe_std=test_std,
+            pct_profitable=pct_profitable,
+            is_viable=is_viable
         )
 
     def _find_best_params(
@@ -242,6 +272,12 @@ class WalkForwardExporter:
             "aggregate_sharpe": result.aggregate_sharpe,
             "aggregate_max_dd": result.aggregate_max_dd,
             "consistency": result.consistency,
+            "sharpe_degradation": result.sharpe_degradation,
+            "avg_train_sharpe": result.avg_train_sharpe,
+            "avg_test_sharpe": result.avg_test_sharpe,
+            "test_sharpe_std": result.test_sharpe_std,
+            "pct_profitable": result.pct_profitable,
+            "is_viable": result.is_viable,
             **{f"best_param_{k}": v for k, v in result.best_params.items()}
         }])
         summary_df.to_csv(f"{output_path}_summary.csv", index=False)

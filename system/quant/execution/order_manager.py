@@ -11,10 +11,11 @@ from quant.models.order import Order, OrderStatus
 from quant.execution.brokers.base import BrokerAdapter
 from quant.utils.logger import setup_logger
 
+from quant.core.events import EventBus, EventType
+
 if TYPE_CHECKING:
     from quant.core.portfolio import Portfolio
     from quant.core.risk import RiskEngine
-    from quant.core.events import EventType
 
 
 @dataclass

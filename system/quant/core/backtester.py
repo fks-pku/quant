@@ -233,8 +233,7 @@ class Backtester:
                 entry_times[symbol] = bar.get('timestamp', datetime.now())
 
             old_qty = portfolio.get_position(symbol).quantity if portfolio.get_position(symbol) else 0
-            cost = exec_price * quantity + commission
-            portfolio.update_position(symbol, quantity=quantity, price=exec_price, cost=cost)
+            portfolio.update_position(symbol, quantity=quantity, price=exec_price, cost=exec_price * quantity)
             portfolio.cash -= total_cost
 
             new_qty = old_qty + quantity
@@ -252,26 +251,28 @@ class Backtester:
                 return None
 
             sell_qty = min(quantity, pos.quantity)
-            realized = portfolio.close_position(symbol, exec_price)
-            portfolio.cash += (exec_price * sell_qty) - commission
+            entry_price = entry_prices.get(symbol, pos.avg_cost)
+            entry_time = entry_times.get(symbol, datetime.now())
+            realized = (exec_price - pos.avg_cost) * sell_qty
 
-            trade = Trade(
-                entry_time=entry_times.get(symbol, datetime.now()),
-                exit_time=bar.get('timestamp', datetime.now()),
-                symbol=symbol,
-                side=order['side'],
-                entry_price=entry_prices.get(symbol, exec_price),
-                exit_price=exec_price,
-                quantity=sell_qty,
-                pnl=realized - commission
-            )
+            portfolio.cash += exec_price * sell_qty - commission
+            portfolio.update_position(symbol, quantity=-sell_qty, price=exec_price, cost=0)
 
-            remaining = pos.quantity - sell_qty if pos else 0
+            remaining = pos.quantity - sell_qty
             if remaining <= 0:
                 entry_prices.pop(symbol, None)
                 entry_times.pop(symbol, None)
 
-            return trade
+            return Trade(
+                entry_time=entry_time,
+                exit_time=bar.get('timestamp', datetime.now()),
+                symbol=symbol,
+                side=order['side'],
+                entry_price=entry_price,
+                exit_price=exec_price,
+                quantity=sell_qty,
+                pnl=realized - commission
+            )
 
         return None
 

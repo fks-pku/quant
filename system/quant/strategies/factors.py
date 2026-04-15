@@ -407,3 +407,30 @@ RSI = create_factor_function("rsi", lookback=14)
 MACD = create_factor_function("macd")
 BOLLINGER = create_factor_function("bollinger", lookback=20, num_std=2.0)
 ATR = create_factor_function("atr", lookback=14)
+
+
+def calculate_ic(signal_values: pd.Series, forward_returns: pd.Series, method: str = 'spearman') -> dict:
+    from scipy import stats as scipy_stats
+    aligned = pd.concat([signal_values, forward_returns], axis=1).dropna()
+    if len(aligned) < 10:
+        return {"ic": 0.0, "p_value": 1.0, "ir": 0.0, "is_significant": False}
+    signal_clean = aligned.iloc[:, 0]
+    returns_clean = aligned.iloc[:, 1]
+    if method == 'spearman':
+        ic, p_value = scipy_stats.spearmanr(signal_clean, returns_clean)
+    else:
+        ic, p_value = scipy_stats.pearsonr(signal_clean, returns_clean)
+    ic_by_period = signal_clean.groupby(signal_clean.index.to_period('M')).apply(
+        lambda x: scipy_stats.spearmanr(x, returns_clean.loc[x.index])[0] if len(x) > 5 else np.nan
+    )
+    ic_mean = ic_by_period.mean()
+    ic_std = ic_by_period.std()
+    ir = ic_mean / ic_std if ic_std != 0 else 0.0
+    return {
+        "ic": float(ic),
+        "p_value": float(p_value),
+        "ic_mean": float(ic_mean),
+        "ic_std": float(ic_std),
+        "ir": float(ir),
+        "is_significant": abs(ir) > 2.0 if ic_std > 0 else False,
+    }

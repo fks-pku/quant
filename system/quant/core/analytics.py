@@ -10,7 +10,9 @@ from quant.models.trade import Trade
 
 
 __all__ = ["Trade", "calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
-           "calculate_performance_metrics", "PerformanceMetrics"]
+           "calculate_performance_metrics", "PerformanceMetrics",
+           "calculate_rolling_sharpe", "calculate_rolling_sortino",
+           "calculate_statistical_significance"]
 
 
 def calculate_sharpe(returns: pd.Series, periods_per_year: int = 252) -> float:
@@ -103,12 +105,26 @@ def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
 
 
 def calculate_max_adverse_excursion(trades: List[Trade]) -> float:
-    """Maximum adverse excursion - largest peak-to-trough loss during trade."""
+    """Maximum adverse excursion - largest peak-to-trough loss during trade.
+
+    .. note::
+        This is a stub implementation returning 0.0. The Trade model only tracks
+        entry_price and exit_price, so intraday high/low data is unavailable.
+        To compute true MAE, the trade model would need bar-level or tick-level
+        price data for each position's lifetime.
+    """
     return 0.0
 
 
 def calculate_max_favorable_excursion(trades: List[Trade]) -> float:
-    """Maximum favorable excursion - largest peak-to-trough gain during trade."""
+    """Maximum favorable excursion - largest peak-to-trough gain during trade.
+
+    .. note::
+        This is a stub implementation returning 0.0. The Trade model only tracks
+        entry_price and exit_price, so intraday high/low data is unavailable.
+        To compute true MFE, the trade model would need bar-level or tick-level
+        price data for each position's lifetime.
+    """
     return 0.0
 
 
@@ -196,6 +212,52 @@ def calculate_expectancy(trades: List[Trade]) -> float:
     return win_rate * avg_win - loss_rate * avg_loss
 
 
+def calculate_rolling_sharpe(returns: pd.Series, window: int = 63, periods_per_year: int = 252) -> pd.Series:
+    if returns.empty or len(returns) < window:
+        return pd.Series(dtype=float)
+    rolling_mean = returns.rolling(window).mean()
+    rolling_std = returns.rolling(window).std()
+    return (rolling_mean / rolling_std) * np.sqrt(periods_per_year)
+
+
+def calculate_rolling_sortino(returns: pd.Series, window: int = 63, periods_per_year: int = 252) -> pd.Series:
+    if returns.empty or len(returns) < window:
+        return pd.Series(dtype=float)
+    rolling_mean = returns.rolling(window).mean()
+    rolling_downside = returns.rolling(window).apply(lambda x: x[x < 0].std() if len(x[x < 0]) > 0 else 0, raw=False)
+    return (rolling_mean / rolling_downside.replace(0, np.nan)) * np.sqrt(periods_per_year)
+
+
+def _erf_approx(x: float) -> float:
+    a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
+    p = 0.3275911
+    sign = 1.0 if x >= 0 else -1.0
+    x = abs(x)
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * np.exp(-x * x)
+    return sign * y
+
+
+def calculate_statistical_significance(returns: pd.Series, benchmark_returns: pd.Series = None) -> dict:
+    if returns.empty:
+        return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
+    mean_ret = returns.mean()
+    std_ret = returns.std()
+    n = len(returns)
+    if std_ret == 0 or n < 2:
+        return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (mean_ret, mean_ret)}
+    se = std_ret / np.sqrt(n)
+    t_stat = mean_ret / se
+    try:
+        from scipy import stats as scipy_stats
+        p_value = 2 * (1 - scipy_stats.t.cdf(abs(t_stat), df=n - 1))
+    except ImportError:
+        z = abs(t_stat)
+        p_value = max(0.0, 2.0 * (1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0)))))
+    ci_95 = (mean_ret - 1.96 * se, mean_ret + 1.96 * se)
+    return {"t_stat": float(t_stat), "p_value": float(p_value), "is_significant": p_value < 0.05, "confidence_interval": ci_95}
+
+
 @dataclass
 class PerformanceMetrics:
     total_return: float
@@ -214,6 +276,12 @@ class PerformanceMetrics:
     losing_trades: int
     equity_curve: pd.Series
     trades: List[Trade]
+    rolling_sharpe: pd.Series
+    ulcer_index: float
+    gain_to_pain_ratio: float
+    tail_ratio: float
+    recovery_factor: float
+    statistical_significance: dict
 
 
 def calculate_performance_metrics(
@@ -238,7 +306,13 @@ def calculate_performance_metrics(
             winning_trades=0,
             losing_trades=0,
             equity_curve=equity_curve,
-            trades=trades
+            trades=trades,
+            rolling_sharpe=pd.Series(dtype=float),
+            ulcer_index=0.0,
+            gain_to_pain_ratio=0.0,
+            tail_ratio=1.0,
+            recovery_factor=0.0,
+            statistical_significance={"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
         )
     
     returns = equity_curve.pct_change().dropna()
@@ -258,6 +332,13 @@ def calculate_performance_metrics(
     winning_trades = len([t for t in trades if t.pnl > 0])
     losing_trades = len([t for t in trades if t.pnl < 0])
     
+    rolling_sharpe = calculate_rolling_sharpe(returns)
+    ulcer_idx = calculate_ulcer_index(equity_curve)
+    gtp_ratio = calculate_gain_to_pain_ratio(trades)
+    tail = calculate_tail_ratio(returns)
+    recovery = calculate_recovery_factor(trades, max_dd)
+    stat_sig = calculate_statistical_significance(returns)
+    
     return PerformanceMetrics(
         total_return=total_return,
         sharpe_ratio=sharpe,
@@ -274,5 +355,11 @@ def calculate_performance_metrics(
         winning_trades=winning_trades,
         losing_trades=losing_trades,
         equity_curve=equity_curve,
-        trades=trades
+        trades=trades,
+        rolling_sharpe=rolling_sharpe,
+        ulcer_index=ulcer_idx,
+        gain_to_pain_ratio=gtp_ratio,
+        tail_ratio=tail,
+        recovery_factor=recovery,
+        statistical_significance=stat_sig
     )
