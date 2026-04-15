@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import './App.css';
 
@@ -14,6 +14,7 @@ const BROKERS = [
 function App() {
   const [selectedBroker, setSelectedBroker] = useState('paper');
   const [systemStatus, setSystemStatus] = useState('stopped');
+  const [apiConnected, setApiConnected] = useState(false);
   const [portfolio, setPortfolio] = useState({
     nav: 100000,
     total_unrealized_pnl: 0,
@@ -23,18 +24,18 @@ function App() {
   });
   const [availableStrategies, setAvailableStrategies] = useState([]);
   const [activeStrategies, setActiveStrategies] = useState([]);
-  const [marketData, setMarketData] = useState([
-    { symbol: 'AAPL', price: 178.50, change: 1.2 },
-    { symbol: 'MSFT', price: 378.25, change: -0.5 },
-    { symbol: 'VIX', price: 14.5, sma: 16.2 },
-  ]);
+  const [marketData, setMarketData] = useState([]);
   const [orders, setOrders] = useState([]);
   const [orderForm, setOrderForm] = useState({ symbol: '', quantity: '', side: 'BUY' });
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedStrategyId, setSelectedStrategyId] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const fetchCountRef = useRef(0);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE}/status`);
+      setApiConnected(true);
       setSystemStatus(res.data.status);
       setPortfolio({
         nav: res.data.portfolio?.nav || 100000,
@@ -44,45 +45,83 @@ function App() {
         holdings: res.data.positions || []
       });
       setActiveStrategies(res.data.strategies || []);
+      if (res.data.selected_strategy) {
+        const stratEntry = Object.entries({
+          'VolatilityRegime': 'volatility_regime',
+          'SimpleMomentum': 'simple_momentum',
+          'MomentumEOD': 'momentum_eod',
+          'MeanReversion1m': 'mean_reversion_1m',
+          'DualThrust': 'dual_thrust'
+        }).find(([, id]) => id === res.data.selected_strategy || [0] === res.data.selected_strategy);
+        if (stratEntry) setSelectedStrategyId(stratEntry[1]);
+      }
     } catch (err) {
-      console.error('Failed to fetch status:', err);
+      setApiConnected(false);
+      setSystemStatus('stopped');
     }
   }, []);
 
   const fetchStrategies = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE}/strategies`);
-      setAvailableStrategies(res.data.strategies || []);
+      const strats = res.data.strategies || [];
+      setAvailableStrategies(strats);
+      if (!selectedStrategyId && strats.length > 0) {
+        const enabled = strats.find(s => s.enabled);
+        setSelectedStrategyId(enabled ? enabled.id : strats[0].id);
+      }
     } catch (err) {
       console.error('Failed to fetch strategies:', err);
+    }
+  }, [selectedStrategyId]);
+
+  const fetchMarketData = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/market`);
+      setMarketData(res.data);
+    } catch (err) {
+      console.error('Failed to fetch market data:', err);
     }
   }, []);
 
   useEffect(() => {
     fetchStatus();
     fetchStrategies();
-    const interval = setInterval(fetchStatus, 3000);
-    return () => clearInterval(interval);
-  }, [fetchStatus, fetchStrategies]);
+    fetchMarketData();
+
+    const statusInterval = setInterval(fetchStatus, 3000);
+    const marketInterval = setInterval(fetchMarketData, 5000);
+
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(marketInterval);
+    };
+  }, [fetchStatus, fetchStrategies, fetchMarketData]);
 
   const startSystem = async () => {
     setIsLoading(true);
+    setSubmitError('');
     try {
       await axios.post(`${API_BASE}/start`, { broker: selectedBroker });
+      await new Promise(r => setTimeout(r, 1000));
       fetchStatus();
     } catch (err) {
-      console.error('Failed to start system:', err);
+      const msg = err.response?.data?.error || err.message;
+      setSubmitError(msg);
     }
     setIsLoading(false);
   };
 
   const stopSystem = async () => {
     setIsLoading(true);
+    setSubmitError('');
     try {
       await axios.post(`${API_BASE}/stop`);
+      await new Promise(r => setTimeout(r, 500));
       fetchStatus();
     } catch (err) {
-      console.error('Failed to stop system:', err);
+      const msg = err.response?.data?.error || err.message;
+      setSubmitError(msg);
     }
     setIsLoading(false);
   };
@@ -90,6 +129,7 @@ function App() {
   const submitOrder = async () => {
     if (!orderForm.symbol || !orderForm.quantity) return;
     setIsLoading(true);
+    setSubmitError('');
     try {
       const res = await axios.post(`${API_BASE}/orders`, {
         symbol: orderForm.symbol.toUpperCase(),
@@ -101,9 +141,19 @@ function App() {
       setOrderForm({ symbol: '', quantity: '', side: 'BUY' });
       fetchStatus();
     } catch (err) {
-      console.error('Failed to submit order:', err);
+      const msg = err.response?.data?.error || err.message;
+      setSubmitError(msg);
     }
     setIsLoading(false);
+  };
+
+  const selectStrategy = async (strategyId) => {
+    setSelectedStrategyId(strategyId);
+    try {
+      await axios.post(`${API_BASE}/strategies/select`, { strategy_id: strategyId });
+    } catch (err) {
+      console.error('Failed to select strategy:', err);
+    }
   };
 
   const formatCurrency = (val) => {
@@ -114,11 +164,12 @@ function App() {
   const pnlColor = (val) => val >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
   const getStatusBadge = () => {
+    if (!apiConnected) return { text: 'DISCONNECTED', color: 'var(--accent-red)' };
     switch (systemStatus) {
-      case 'running': return { text: 'CONNECTED', color: 'var(--accent-green)' };
+      case 'running': return { text: 'RUNNING', color: 'var(--accent-green)' };
       case 'starting': return { text: 'STARTING', color: 'var(--accent-amber)' };
       case 'stopping': return { text: 'STOPPING', color: 'var(--accent-amber)' };
-      default: return { text: 'DISCONNECTED', color: 'var(--text-muted)' };
+      default: return { text: 'STOPPED', color: 'var(--text-muted)' };
     }
   };
 
@@ -155,11 +206,16 @@ function App() {
         </div>
       </header>
 
+      {submitError && (
+        <div style={{ background: 'var(--accent-red)', color: '#fff', padding: '8px 16px', fontSize: '13px' }}>
+          {submitError}
+        </div>
+      )}
+
       <main className="main">
         <div className="panel-grid">
-          {/* Panel 1: Asset Overview */}
           <div className="panel">
-            <div className="panel-header">📊 Asset Overview</div>
+            <div className="panel-header">📊 ASSET OVERVIEW</div>
             <div className="panel-content">
               <div className="metric-grid">
                 <div className="metric-box">
@@ -194,6 +250,9 @@ function App() {
                     <div key={i} className="holding-item">
                       <span>{h.symbol}</span>
                       <span>{h.quantity} shares</span>
+                      <span style={{ color: pnlColor(h.pnl || 0), fontSize: '12px' }}>
+                        {formatCurrency(h.pnl || 0)}
+                      </span>
                     </div>
                   ))
                 )}
@@ -201,19 +260,13 @@ function App() {
             </div>
           </div>
 
-          {/* Panel 2: Strategy Zone */}
           <div className="panel">
-            <div className="panel-header">⚡ Strategy Zone</div>
+            <div className="panel-header">⚡ STRATEGY ZONE</div>
             <div className="panel-content">
               <select
                 className="strategy-select"
-                value={availableStrategies.find(s => s.enabled)?.id || ''}
-                onChange={(e) => {
-                  const strategy = availableStrategies.find(s => s.id === e.target.value);
-                  if (strategy) {
-                    axios.post(`${API_BASE}/strategies/select`, { strategy_id: strategy.id });
-                  }
-                }}
+                value={selectedStrategyId}
+                onChange={(e) => selectStrategy(e.target.value)}
               >
                 {availableStrategies.map(s => (
                   <option key={s.id} value={s.id}>
@@ -224,10 +277,12 @@ function App() {
               <div className="active-strategy-card">
                 <div className="active-strategy-header">
                   <span>Active Strategy</span>
-                  <span className="status-running">● Running</span>
+                  <span className={systemStatus === 'running' ? 'status-running' : ''} style={systemStatus !== 'running' ? { color: 'var(--text-muted)' } : {}}>
+                    {systemStatus === 'running' ? '● Running' : '○ Idle'}
+                  </span>
                 </div>
                 <div className="active-strategy-name">
-                  {availableStrategies.find(s => s.enabled)?.name || 'None'}
+                  {availableStrategies.find(s => s.id === selectedStrategyId)?.name || 'None'}
                 </div>
                 <div className="active-strategy-meta">
                   Regime: BULL | Signals: {activeStrategies.length}
@@ -236,25 +291,27 @@ function App() {
             </div>
           </div>
 
-          {/* Panel 3: Market Data */}
           <div className="panel">
-            <div className="panel-header">📈 Market Data</div>
+            <div className="panel-header">📈 MARKET DATA</div>
             <div className="panel-content">
-              {marketData.map((m, i) => (
-                <div key={i} className="market-item">
-                  <span className="market-symbol">{m.symbol}</span>
-                  <span className="market-price">${m.price}</span>
-                  <span className="market-change" style={{ color: m.change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                    {m.change >= 0 ? '+' : ''}{m.change}%
-                  </span>
-                </div>
-              ))}
+              {marketData.length === 0 ? (
+                <div className="empty-text">Loading market data...</div>
+              ) : (
+                marketData.map((m, i) => (
+                  <div key={i} className="market-item">
+                    <span className="market-symbol">{m.symbol}</span>
+                    <span className="market-price">${m.price}</span>
+                    <span className="market-change" style={{ color: m.change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                      {m.change >= 0 ? '+' : ''}{m.change}%
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
-          {/* Panel 4: Order Zone */}
           <div className="panel">
-            <div className="panel-header">📝 Order Zone</div>
+            <div className="panel-header">📝 ORDER ZONE</div>
             <div className="panel-content">
               <div className="order-form">
                 <input
@@ -292,8 +349,8 @@ function App() {
                 ) : (
                   orders.map((o, i) => (
                     <div key={i} className="order-item">
-                      <span>{o.side} {o.symbol} x{o.quantity}</span>
-                      <span className="order-status" style={{ color: 'var(--accent-green)' }}>FILLED</span>
+                      <span>{o.side} {o.symbol} x{o.quantity} @ ${o.price}</span>
+                      <span className="order-status" style={{ color: 'var(--accent-green)' }}>{o.status}</span>
                     </div>
                   ))
                 )}
