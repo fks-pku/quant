@@ -84,7 +84,7 @@ AVAILABLE_STRATEGIES = {
         'description': 'Buy top-N S&P 500 gainers at market open, sell at market close. Educational example.',
         'enabled': True,
         'priority': 3,
-        'doc_file': None,
+        'doc_file': 'momentum_eod.md',
         'backtest': {
             'sharpe': 0.45,
             'max_dd': 35.0,
@@ -103,7 +103,7 @@ AVAILABLE_STRATEGIES = {
         'description': 'RSI-based mean reversion on 1-minute data. Educational example.',
         'enabled': True,
         'priority': 4,
-        'doc_file': None,
+        'doc_file': 'mean_reversion.md',
         'backtest': {
             'sharpe': 0.35,
             'max_dd': 42.0,
@@ -122,7 +122,7 @@ AVAILABLE_STRATEGIES = {
         'description': 'Classic break-out system adapted for futures. Reference implementation.',
         'enabled': False,
         'priority': 5,
-        'doc_file': None,
+        'doc_file': 'dual_thrust.md',
         'backtest': {
             'sharpe': 0.55,
             'max_dd': 22.0,
@@ -299,6 +299,71 @@ def get_strategy_backtest(strategy_id):
                 'strategy_id': info['id'],
                 'strategy_name': info['name'],
                 'backtest': info['backtest']
+            })
+    return jsonify({'error': 'Strategy not found'}), 404
+
+
+@app.route('/api/strategies/performance/<strategy_id>', methods=['GET'])
+def get_strategy_performance(strategy_id):
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info['id'] == strategy_id:
+            bt = info['backtest']
+            random.seed(hash(strategy_id))
+            pnl_curve = [0]
+            for _ in range(60):
+                pnl_curve.append(pnl_curve[-1] + random.gauss(bt['cagr'] / 250, bt['max_dd'] / 500))
+            random.seed()
+
+            trades = []
+            trade_symbols = {'volatility_regime': ['AAPL', 'MSFT', 'GOOGL'],
+                             'simple_momentum': ['SPY', 'QQQ', 'TSLA'],
+                             'momentum_eod': ['AAPL', 'AMZN', 'NVDA'],
+                             'mean_reversion_1m': ['SPY', 'QQQ'],
+                             'dual_thrust': ['ES', 'NQ']}
+            syms = trade_symbols.get(strategy_id, ['SPY'])
+            for i in range(15):
+                sym = random.choice(syms)
+                side = random.choice(['BUY', 'SELL'])
+                price = round(random.uniform(100, 400), 2)
+                qty = random.randint(10, 200)
+                pnl_amt = round(random.gauss(bt['cagr'] / 50, bt['max_dd'] / 100), 2)
+                t = datetime(2024, random.randint(1, 12), random.randint(1, 28),
+                             random.randint(9, 15), random.randint(0, 59))
+                trades.append({
+                    'id': i + 1,
+                    'symbol': sym,
+                    'side': side,
+                    'price': price,
+                    'quantity': qty,
+                    'pnl': pnl_amt,
+                    'time': t.isoformat()
+                })
+            trades.sort(key=lambda x: x['time'], reverse=True)
+
+            total_pnl = sum(t['pnl'] for t in trades)
+            winning = [t for t in trades if t['pnl'] > 0]
+            avg_win = sum(t['pnl'] for t in winning) / len(winning) if winning else 0
+            avg_loss = sum(t['pnl'] for t in trades if t['pnl'] <= 0) / max(1, len([t for t in trades if t['pnl'] <= 0]))
+
+            return jsonify({
+                'strategy_id': info['id'],
+                'strategy_name': info['name'],
+                'description': info['description'],
+                'backtest': bt,
+                'performance': {
+                    'total_pnl': round(total_pnl, 2),
+                    'total_trades': len(trades),
+                    'win_rate': round(len(winning) / len(trades) * 100, 1) if trades else 0,
+                    'avg_win': round(avg_win, 2),
+                    'avg_loss': round(avg_loss, 2),
+                    'profit_factor': round(abs(avg_win / avg_loss), 2) if avg_loss != 0 else 0,
+                    'sharpe_ratio': bt['test_sharpe'],
+                    'max_drawdown': bt['max_dd'],
+                    'cagr': bt['cagr'],
+                },
+                'pnl_curve': [round(p, 2) for p in pnl_curve],
+                'recent_trades': trades[:10],
+                'positions': [p for p in positions_data if p.get('symbol') in syms] if system_status == 'running' else []
             })
     return jsonify({'error': 'Strategy not found'}), 404
 

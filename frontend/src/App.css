@@ -134,9 +134,12 @@ body {
 .panel-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto;
   gap: 20px;
   min-height: calc(100vh - 80px);
+}
+
+.panel-wide {
+  grid-column: 1 / -1;
 }
 
 .panel {
@@ -369,6 +372,126 @@ body {
 
 .order-status {
   font-weight: 500;
+}
+
+.strategy-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sd-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sd-section-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.sd-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.sd-metric {
+  background: var(--bg-tertiary);
+  padding: 12px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.sd-metric-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.sd-metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sd-chart-container {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.sd-chart {
+  flex: 1;
+  height: 80px;
+}
+
+.sd-chart-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 60px;
+  text-align: right;
+}
+
+.sd-trades {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sd-trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sd-trades-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.sd-trades-table td {
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sd-trades-table tr:last-child td {
+  border-bottom: none;
+}
+
+.sd-trades-table tr:hover td {
+  background: rgba(0, 212, 255, 0.05);
+}
+
+.sd-trade-time {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.sd-trade-sym {
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 @media (max-width: 900px) {
