@@ -173,23 +173,28 @@ class VolatilityRegime(Strategy):
                 self.logger.warning(f"Could not calculate RSI: {e}")
 
     def on_data(self, context: "Context", data: Any) -> None:
-        if not hasattr(data, "symbol"):
+        if isinstance(data, dict):
+            symbol = data.get("symbol", "")
+            close = data.get("close")
+        elif hasattr(data, "symbol"):
+            symbol = data.symbol
+            close = getattr(data, "close", None)
+        else:
             return
 
-        symbol = data.symbol
+        if not symbol or not close:
+            return
+
+        if symbol == self.vix_symbol:
+            self._vix_history.append(close)
+            return
+
         if symbol not in self._symbols:
             return
 
         if symbol not in self._day_data:
             self._day_data[symbol] = []
         self._day_data[symbol].append(data)
-
-        if hasattr(data, "close"):
-            if len(self._vix_history) > 0:
-                if hasattr(data, "timestamp"):
-                    self._vix_history.append(self._vix_history[-1])
-                elif self._vix_history:
-                    self._vix_history.append(self._vix_history[-1])
 
     def execute(self, context: "Context") -> None:
         if self._positions_opened:
@@ -274,9 +279,11 @@ class VolatilityRegime(Strategy):
     def _get_last_price(self, symbol: str) -> float:
         if symbol in self._day_data and len(self._day_data[symbol]) > 0:
             last_bar = self._day_data[symbol][-1]
+            if isinstance(last_bar, dict):
+                return float(last_bar.get("close", 0))
             if hasattr(last_bar, "close"):
-                return last_bar.close
-        return 100.0
+                return float(last_bar.close)
+        return 0.0
 
     def on_fill(self, context: "Context", fill: Any) -> None:
         super().on_fill(context, fill)
@@ -285,6 +292,7 @@ class VolatilityRegime(Strategy):
         )
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
+        self.execute(context)
         self._positions_opened = False
 
     def on_stop(self, context: "Context") -> None:

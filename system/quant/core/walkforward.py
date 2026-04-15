@@ -19,6 +19,7 @@ class WFWindowResult:
     train_sharpe: float
     test_sharpe: float
     test_return: float
+    test_max_dd: float
     params: Dict[str, Any]
 
 
@@ -101,6 +102,8 @@ class WalkForwardEngine:
                 backtester, strategy, test_data, initial_cash
             )
             
+            test_max_dd = test_result.max_drawdown_pct if hasattr(test_result, 'max_drawdown_pct') else 0.0
+            
             window_results.append(WFWindowResult(
                 train_start=train_start,
                 train_end=train_end,
@@ -109,6 +112,7 @@ class WalkForwardEngine:
                 train_sharpe=best_train_sharpe,
                 test_sharpe=test_result.sharpe_ratio,
                 test_return=test_result.total_return,
+                test_max_dd=test_max_dd,
                 params=best_params
             ))
             
@@ -124,12 +128,10 @@ class WalkForwardEngine:
             )
         
         aggregate_sharpe = np.mean([w.test_sharpe for w in window_results])
-        test_returns = [w.test_return for w in window_results]
-        aggregate_max_dd = np.mean([abs(w.test_return * 0.15) for w in window_results])
+        aggregate_max_dd = max(w.test_max_dd for w in window_results) if window_results else 0.0
         consistency = len([w for w in window_results if w.test_return > 0]) / len(window_results)
         
-        all_params = [w.params for w in window_results]
-        best_params = window_results[np.argmax([w.train_sharpe for w in window_results])].params
+        best_params = window_results[np.argmax([w.test_sharpe for w in window_results])].params
         
         return WFResult(
             windows=window_results,
@@ -229,6 +231,7 @@ class WalkForwardExporter:
                 "train_sharpe": w.train_sharpe,
                 "test_sharpe": w.test_sharpe,
                 "test_return": w.test_return,
+                "test_max_dd": w.test_max_dd,
                 **{f"param_{k}": v for k, v in w.params.items()}
             }
             for w in result.windows

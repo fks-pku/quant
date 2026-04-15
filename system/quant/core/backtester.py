@@ -100,24 +100,29 @@ class Backtester:
                         for _, bar in bars.iterrows():
                             bar_data = bar.to_dict()
                             bar_data['timestamp'] = bar.name if hasattr(bar, 'name') else current_date
+                            bar_data['symbol'] = symbol
                             
                             for strategy in strategies:
                                 if hasattr(strategy, "on_data"):
                                     strategy.on_data(strategy.context, bar_data)
-                                    
-                                if hasattr(strategy, "_pending_orders"):
-                                    for order in strategy._pending_orders:
-                                        fill = self._execute_order(order, portfolio, symbol, bar_data, positions)
+                        
+                        for strategy in strategies:
+                            if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
+                                om = strategy.context.order_manager
+                                if om and hasattr(om, "_pending_orders"):
+                                    for order in list(om._pending_orders):
+                                        fill = self._execute_order(order, portfolio, symbol, bar_data if not bars.empty else {}, positions)
                                         if fill:
                                             all_trades.append(fill)
                                             for s in strategies:
                                                 if hasattr(s, "on_fill"):
                                                     s.on_fill(s.context, fill)
-                                            
+                                    om.clear_pending()
+                                    
                     except Exception:
                         continue
             
-            nav = portfolio.calculate_nav()
+            nav = portfolio.nav
             equity_curve_dates.append(current_date)
             equity_curve_values.append(nav)
             
@@ -174,6 +179,9 @@ class Backtester:
                 }
                 self._pending_orders.append(order)
                 return f"backtest_order_{len(self._pending_orders)}"
+            
+            def clear_pending(self):
+                self._pending_orders.clear()
         
         class BacktestBroker:
             def __init__(self):
@@ -234,10 +242,11 @@ class Backtester:
         
         if new_qty == 0:
             entry_price = positions[symbol]["entry_price"]
-            pnl = (exec_price - entry_price) * quantity
             if order['side'] == 'SELL':
-                pnl = -pnl
-                
+                pnl = (exec_price - entry_price) * quantity
+            else:
+                pnl = (entry_price - exec_price) * quantity
+
             trade = Trade(
                 entry_time=positions[symbol]["entry_time"],
                 exit_time=bar.get('timestamp', datetime.now()),
@@ -248,6 +257,7 @@ class Backtester:
                 quantity=quantity,
                 pnl=pnl - commission
             )
+            positions[symbol]["entry_price"] = 0
             return trade
         
         if order['side'] == 'BUY':
@@ -267,7 +277,7 @@ class Backtester:
         if market == "US":
             cfg = self.commission.US
             if cfg["type"] == "per_share":
-                commission = price * quantity * cfg.get("per_share", 0.005)
+                commission = quantity * cfg.get("per_share", 0.005)
                 return max(commission, cfg.get("min_per_order", 1.0))
         elif market == "HK":
             cfg = self.commission.HK

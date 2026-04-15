@@ -10,9 +10,10 @@ Usage:
 import argparse
 import signal
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -32,6 +33,8 @@ from quant.execution.fill_handler import FillHandler
 from quant.strategies.examples.momentum_eod import MomentumEOD
 from quant.strategies.examples.mean_reversion import MeanReversion1m
 from quant.strategies.examples.dual_thrust import DualThrust
+from quant.strategies.implementations.volatility_regime import VolatilityRegime
+from quant.strategies.implementations.simple_momentum import SimpleMomentum
 from quant.utils.config_loader import ConfigLoader
 from quant.utils.logger import setup_logger
 
@@ -79,6 +82,7 @@ class QuantSystem:
         for broker_name in brokers:
             self._setup_broker(broker_name)
 
+        self._setup_order_manager()
         self._setup_strategies()
 
         self.logger.info("System initialization complete")
@@ -132,9 +136,44 @@ class QuantSystem:
             self.engine.set_broker(broker)
             self.logger.info(f"Futu broker initialized (mode: {trade_mode})")
 
+    def _setup_order_manager(self) -> None:
+        """Setup order manager and fill handler, wire to engine."""
+        order_manager = OrderManager(
+            portfolio=self.engine.portfolio,
+            risk_engine=self.engine.risk_engine,
+            event_bus=self.engine.event_bus,
+            config=self.config,
+        )
+        if self.engine.broker:
+            order_manager.register_broker("paper", self.engine.broker)
+            order_manager.register_broker("futu", self.engine.broker)
+        self.engine.set_order_manager(order_manager)
+        self.logger.info("OrderManager initialized")
+
+        fill_handler = FillHandler(
+            portfolio=self.engine.portfolio,
+            event_bus=self.engine.event_bus,
+            config=self.config,
+        )
+        fill_handler.register_fill_callback(self._on_fill)
+        self._fill_handler = fill_handler
+        self.logger.info("FillHandler initialized")
+
+    def _on_fill(self, fill: Any) -> None:
+        """Handle fill events from FillHandler."""
+        for strategy in self.engine.strategies:
+            if hasattr(strategy, "on_fill"):
+                strategy.on_fill(strategy.context, fill)
+
     def _setup_strategies(self) -> None:
-        """Setup and register strategies."""
+        """Setup and register strategies from both config.yaml and strategies.yaml."""
         strategies_config = self.config.get("strategies", [])
+
+        strategy_params = {}
+        try:
+            strategy_params = self.config_loader.load("strategies.yaml").get("strategies", {})
+        except Exception:
+            pass
 
         for strategy_cfg in strategies_config:
             if not strategy_cfg.get("enabled", False):
@@ -142,19 +181,31 @@ class QuantSystem:
 
             name = strategy_cfg.get("name")
             symbols = strategy_cfg.get("symbols", [])
+            params = strategy_params.get(name, {}).get("parameters", {})
 
-            if name == "MomentumEOD":
-                strategy = MomentumEOD(symbols)
+            if params:
+                params["symbols"] = symbols
+
+            strategy = self._create_strategy(name, symbols, params)
+            if strategy:
                 self.engine.add_strategy(strategy)
                 self.logger.info(f"Strategy {name} enabled")
-            elif name == "MeanReversion1m":
-                strategy = MeanReversion1m(symbols)
-                self.engine.add_strategy(strategy)
-                self.logger.info(f"Strategy {name} enabled")
-            elif name == "DualThrust":
-                strategy = DualThrust(symbols)
-                self.engine.add_strategy(strategy)
-                self.logger.info(f"Strategy {name} enabled")
+
+    def _create_strategy(self, name: str, symbols: list, params: dict) -> Any:
+        """Create a strategy instance by name."""
+        if name == "MomentumEOD":
+            return MomentumEOD(symbols)
+        elif name == "MeanReversion1m":
+            return MeanReversion1m(symbols)
+        elif name == "DualThrust":
+            return DualThrust(symbols)
+        elif name == "VolatilityRegime":
+            return VolatilityRegime(**params) if params else VolatilityRegime(symbols=symbols)
+        elif name == "SimpleMomentum":
+            return SimpleMomentum(**params) if params else SimpleMomentum(symbols=symbols)
+        else:
+            self.logger.warning(f"Unknown strategy: {name}")
+            return None
 
     def run(self, mode: Optional[str] = None) -> None:
         """Run the system in specified mode."""
@@ -189,7 +240,6 @@ class QuantSystem:
                     f"Unrealized P&L=${status['total_unrealized_pnl']:.2f}, "
                     f"Realized P&L=${status['total_realized_pnl']:.2f}"
                 )
-                import time
                 time.sleep(60)
         except KeyboardInterrupt:
             self.engine.stop()

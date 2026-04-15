@@ -141,13 +141,22 @@ class Engine:
 
     def _run_loop(self) -> None:
         """Main engine loop for Mode A (Live) and Mode C (Paper)."""
+        was_market_open = False
         while self._running:
             try:
                 self._heartbeat()
-                self.event_bus.publish_nowait(
-                    EventType.MARKET_OPEN if self._is_market_open() else EventType.MARKET_CLOSE,
-                    {"timestamp": datetime.now()}
-                )
+                is_open = self._is_market_open()
+                if is_open and not was_market_open:
+                    self.event_bus.publish_nowait(
+                        EventType.MARKET_OPEN,
+                        {"timestamp": datetime.now()}
+                    )
+                elif not is_open and was_market_open:
+                    self.event_bus.publish_nowait(
+                        EventType.MARKET_CLOSE,
+                        {"timestamp": datetime.now()}
+                    )
+                was_market_open = is_open
             except Exception as e:
                 self.logger.error(f"Engine loop error: {e}")
             time.sleep(60)

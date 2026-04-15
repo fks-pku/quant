@@ -55,7 +55,16 @@ def calculate_max_drawdown(equity_curve: pd.Series) -> Tuple[float, float, datet
         return 0.0, 0.0, datetime.now(), datetime.now()
     
     trough_date = equity_curve.index[trough_idx] if isinstance(trough_idx, int) else trough_idx
-    peak_idx = equity_curve[:trough_idx].idxmax() if trough_idx > 0 else 0
+    
+    if isinstance(trough_idx, int):
+        peak_idx = equity_curve[:trough_idx].idxmax() if trough_idx > 0 else 0
+    else:
+        trough_pos = equity_curve.index.get_loc(trough_idx)
+        if trough_pos > 0:
+            peak_idx = equity_curve.iloc[:trough_pos].idxmax()
+        else:
+            peak_idx = equity_curve.index[0]
+    
     peak_date = equity_curve.index[peak_idx] if isinstance(peak_idx, int) else peak_idx
     
     return float(drawdown.min()), float(drawdown_pct.min()), peak_date, trough_date
@@ -92,7 +101,10 @@ def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
     """Average holding period."""
     if not trades:
         return timedelta(0)
-    total_duration = sum((t.exit_time - t.entry_time) for t in trades)
+    durations = [t.exit_time - t.entry_time for t in trades]
+    total_duration = timedelta(0)
+    for d in durations:
+        total_duration += d
     return total_duration / len(trades)
 
 
