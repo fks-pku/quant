@@ -97,7 +97,12 @@ def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
     """Average holding period."""
     if not trades:
         return timedelta(0)
-    durations = [t.exit_time - t.entry_time for t in trades]
+    durations = []
+    for t in trades:
+        d = t.exit_time - t.entry_time
+        if not isinstance(d, timedelta):
+            d = timedelta(seconds=int(d.total_seconds()) if hasattr(d, 'total_seconds') else int(d))
+        durations.append(d)
     total_duration = timedelta(0)
     for d in durations:
         total_duration += d

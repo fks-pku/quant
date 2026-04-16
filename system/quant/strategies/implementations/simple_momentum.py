@@ -53,7 +53,6 @@ class SimpleMomentum(Strategy):
         self._momentum_scores: Dict[str, float] = {}
         self._day_data: Dict[str, List] = {}
         self._last_rebalance_date: Optional[date] = None
-        self._positions_opened = False
         self._long_positions: List[str] = []
         self._short_positions: List[str] = []
 
@@ -120,9 +119,6 @@ class SimpleMomentum(Strategy):
         self._calculate_momentum_scores()
 
     def execute(self, context: "Context", trading_date: Optional[date] = None) -> None:
-        if self._positions_opened:
-            return
-
         if trading_date is None:
             trading_date = date.today()
 
@@ -131,9 +127,13 @@ class SimpleMomentum(Strategy):
             if days_since_rebalance < self.holding_period:
                 return
 
+        self._execute_rebalance(context, trading_date)
+
+    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
         self._calculate_momentum_scores()
 
         if not self._momentum_scores:
+            self._last_rebalance_date = trading_date
             return
 
         sorted_by_momentum = sorted(
@@ -166,7 +166,6 @@ class SimpleMomentum(Strategy):
                     self.sell(symbol, quantity)
 
         self._last_rebalance_date = trading_date
-        self._positions_opened = True
 
         self.logger.info(
             f"SimpleMomentum rebalanced: long={self._long_positions}, short={self._short_positions}"
@@ -189,14 +188,16 @@ class SimpleMomentum(Strategy):
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         self.execute(context, trading_date)
-        self._positions_opened = False
 
     def on_stop(self, context: "Context") -> None:
+        for symbol, quantity in list(self._positions.items()):
+            if quantity > 0:
+                price = self._get_last_price(symbol)
+                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
         self._momentum_scores.clear()
         self._day_data.clear()
         self._long_positions.clear()
         self._short_positions.clear()
-        self._positions_opened = False
 
     def get_state(self) -> Dict[str, Any]:
         return {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
+import BacktestDashboard from './BacktestDashboard';
 import './App.css';
 
 const API_BASE = 'http://localhost:5000/api';
@@ -152,6 +153,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [submitError, setSubmitError] = useState('');
+  const [activeTab, setActiveTab] = useState('backtest');
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -294,7 +296,13 @@ function App() {
         <div style={{ background: 'var(--accent-red)', color: '#fff', padding: '8px 16px', fontSize: '13px' }}>{submitError}</div>
       )}
 
+      <div className="tab-bar">
+        <button className={`tab ${activeTab === 'backtest' ? 'active' : ''}`} onClick={() => setActiveTab('backtest')}>BACKTEST</button>
+        <button className={`tab ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>LIVE TRADING</button>
+      </div>
+
       <main className="main">
+        {activeTab === 'backtest' ? <BacktestDashboard /> : (
         <div className="panel-grid">
           <div className="panel">
             <div className="panel-header">📊 ASSET OVERVIEW</div>
@@ -421,6 +429,7 @@ function App() {
             </div>
           </div>
         </div>
+        )}
       </main>
     </div>
   );

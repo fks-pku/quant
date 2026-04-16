@@ -2,5 +2,7 @@
 
 from quant.strategies.implementations.volatility_regime import VolatilityRegime
 from quant.strategies.implementations.simple_momentum import SimpleMomentum
+from quant.strategies.implementations.cross_sectional_mean_reversion import CrossSectionalMeanReversion
+from quant.strategies.implementations.dual_momentum import DualMomentum
 
-__all__ = ["VolatilityRegime", "SimpleMomentum"]
+__all__ = ["VolatilityRegime", "SimpleMomentum", "CrossSectionalMeanReversion", "DualMomentum"]

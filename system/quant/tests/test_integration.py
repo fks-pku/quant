@@ -13,6 +13,8 @@ from quant.core.portfolio import Portfolio
 from quant.core.risk import RiskEngine
 from quant.strategies.implementations.volatility_regime import VolatilityRegime
 from quant.strategies.implementations.simple_momentum import SimpleMomentum
+from quant.strategies.implementations.cross_sectional_mean_reversion import CrossSectionalMeanReversion
+from quant.strategies.implementations.dual_momentum import DualMomentum
 
 
 def _generate_test_data(symbols, days=120, start_date=None):
@@ -280,6 +282,171 @@ class TestBacktesterIntegration:
         assert result is not None
         assert result.final_nav > 0
         assert isinstance(result.sharpe_ratio, float)
+
+    def test_backtest_simple_momentum_produces_trades(self):
+        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
+        data = _generate_test_data(symbols, days=120)
+
+        config = {
+            "backtest": {"slippage_bps": 5, "speed": "1x"},
+            "execution": {
+                "commission": {
+                    "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                }
+            },
+            "data": {"default_timeframe": "1d"},
+            "risk": {
+                "max_position_pct": 0.20,
+                "max_sector_pct": 1.0,
+                "max_daily_loss_pct": 0.10,
+                "max_leverage": 2.0,
+                "max_orders_minute": 100,
+            }
+        }
+
+        strategy = SimpleMomentum(
+            symbols=symbols,
+            momentum_lookback=20,
+            holding_period=21,
+            max_position_pct=0.10,
+        )
+
+        backtester = Backtester(config)
+        start = data['timestamp'].min()
+        end = data['timestamp'].max()
+
+        result = backtester.run(
+            start=start,
+            end=end,
+            strategies=[strategy],
+            initial_cash=100000,
+            data_provider=_InMemoryProvider(data),
+            symbols=symbols,
+        )
+
+        assert len(result.trades) >= 1
+        for trade in result.trades:
+            assert trade.entry_price > 0
+            assert trade.exit_price > 0
+            commission = max(trade.quantity * 0.005, 1.0)
+            expected_pnl = (trade.exit_price - trade.entry_price) * trade.quantity - commission
+            assert abs(trade.pnl - expected_pnl) < 0.5, f"P&L mismatch: expected ~{expected_pnl}, got {trade.pnl}"
+
+    def test_backtest_all_four_strategies_run(self):
+        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
+        all_symbols = symbols + ["^VIX"]
+        data = _generate_test_data(all_symbols, days=120)
+
+        config = {
+            "backtest": {"slippage_bps": 5, "speed": "1x"},
+            "execution": {
+                "commission": {
+                    "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                }
+            },
+            "data": {"default_timeframe": "1d"},
+            "risk": {
+                "max_position_pct": 0.20,
+                "max_sector_pct": 1.0,
+                "max_daily_loss_pct": 0.10,
+                "max_leverage": 2.0,
+                "max_orders_minute": 100,
+            }
+        }
+
+        strategies = [
+            SimpleMomentum(symbols=symbols, momentum_lookback=20, holding_period=21, max_position_pct=0.10),
+            VolatilityRegime(symbols=symbols, vix_symbol="^VIX", vix_lookback=20, momentum_top_n=3, max_position_pct=0.10),
+            CrossSectionalMeanReversion(symbols=symbols, lookback_days=5, holding_days=5, max_position_pct=0.10),
+            DualMomentum(symbols=symbols, abs_lookback=30, rel_lookback=10, holding_days=21, max_position_pct=0.10),
+        ]
+
+        for strategy in strategies:
+            backtester = Backtester(config)
+            start = data['timestamp'].min()
+            end = data['timestamp'].max()
+
+            result = backtester.run(
+                start=start,
+                end=end,
+                strategies=[strategy],
+                initial_cash=100000,
+                data_provider=_InMemoryProvider(data),
+                symbols=all_symbols,
+            )
+
+            assert result is not None, f"{strategy.name} returned None"
+            assert result.final_nav > 0, f"{strategy.name} final_nav={result.final_nav}"
+
+    def test_backtest_metrics_are_reasonable(self):
+        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
+        data = _generate_test_data(symbols, days=120)
+
+        config = {
+            "backtest": {"slippage_bps": 5, "speed": "1x"},
+            "execution": {
+                "commission": {
+                    "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                }
+            },
+            "data": {"default_timeframe": "1d"},
+            "risk": {
+                "max_position_pct": 0.20,
+                "max_sector_pct": 1.0,
+                "max_daily_loss_pct": 0.10,
+                "max_leverage": 2.0,
+                "max_orders_minute": 100,
+            }
+        }
+
+        strategy = SimpleMomentum(
+            symbols=symbols,
+            momentum_lookback=20,
+            holding_period=21,
+            max_position_pct=0.10,
+        )
+
+        backtester = Backtester(config)
+        start = data['timestamp'].min()
+        end = data['timestamp'].max()
+
+        result = backtester.run(
+            start=start,
+            end=end,
+            strategies=[strategy],
+            initial_cash=100000,
+            data_provider=_InMemoryProvider(data),
+            symbols=symbols,
+        )
+
+        assert -3 < result.sharpe_ratio < 3
+        assert -1 < result.max_drawdown_pct < 0
+        assert 0 <= result.win_rate <= 1
+
+    def test_api_backtest_endpoints(self):
+        import sys
+        import os
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+            from api_server import app
+        except ImportError:
+            pytest.skip("api_server not available")
+
+        client = app.test_client()
+
+        resp = client.get('/api/backtest/list')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'backtests' in data
+
+        resp = client.get('/api/backtest/result/nonexistent')
+        assert resp.status_code == 404
+
+        resp = client.get('/api/strategies')
+        assert resp.status_code == 200
+        strategy_names = [s['name'] for s in resp.get_json()['strategies']]
+        assert 'CrossSectionalMeanReversion' in strategy_names
+        assert 'DualMomentum' in strategy_names
 
 
 class _InMemoryProvider:

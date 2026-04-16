@@ -95,17 +95,7 @@ class VolatilityRegime(Strategy):
         )
 
     def _load_data(self) -> None:
-        if self.context and hasattr(self.context, "data_provider"):
-            end = datetime.now()
-            start = end - pd.Timedelta(days=self.vix_lookback + 60)
-            try:
-                vix_data = self.context.data_provider.get_bars(
-                    self.vix_symbol, start, end, "1d"
-                )
-                if vix_data is not None and not vix_data.empty:
-                    self._vix_history = vix_data["close"].tolist()
-            except Exception as e:
-                self.logger.warning(f"Could not load VIX data: {e}")
+        pass
 
     def on_before_trading(self, context: "Context", trading_date: date) -> None:
         self._update_regime(context, trading_date)
@@ -137,7 +127,7 @@ class VolatilityRegime(Strategy):
 
     def _calculate_momentum_scores(self, context: "Context", trading_date: date) -> None:
         if self.context and hasattr(self.context, "data_provider"):
-            end = datetime.now()
+            end = datetime.combine(trading_date, datetime.max.time())
             start = end - pd.Timedelta(days=self.momentum_lookback + 30)
             try:
                 for symbol in self._symbols:
@@ -155,7 +145,7 @@ class VolatilityRegime(Strategy):
 
     def _calculate_rsi_values(self, context: "Context", trading_date: date) -> None:
         if self.context and hasattr(self.context, "data_provider"):
-            end = datetime.now()
+            end = datetime.combine(trading_date, datetime.max.time())
             start = end - pd.Timedelta(days=self.rsi_period * 3 + 30)
             try:
                 for symbol in self._symbols:

@@ -1,0 +1,150 @@
+"""CLI runner for US equity backtests using yfinance data."""
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+from quant.core.backtester import Backtester, BacktestResultExporter
+from quant.data.providers.yfinance_provider import YfinanceProvider
+from quant.strategies.registry import StrategyRegistry
+import quant.strategies.implementations  # noqa: F401
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="US Equity Backtest Runner")
+    parser.add_argument("--strategy", required=True, help="Strategy name (e.g. SimpleMomentum)")
+    parser.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
+    parser.add_argument("--end", required=True, help="End date YYYY-MM-DD")
+    parser.add_argument("--symbols", required=True, help="Comma-separated symbols (e.g. AAPL,MSFT,GOOGL)")
+    parser.add_argument("--initial-cash", type=float, default=100000)
+    parser.add_argument("--slippage-bps", type=float, default=5)
+    parser.add_argument("--output-dir", default="./backtest_output")
+    parser.add_argument("--cache-dir", default="./data/cache")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    start = datetime.strptime(args.start, "%Y-%m-%d")
+    end = datetime.strptime(args.end, "%Y-%m-%d")
+    symbols = [s.strip().upper() for s in args.symbols.split(",")]
+
+    registry = StrategyRegistry()
+    strategy_class = registry.get(args.strategy)
+    if strategy_class is None:
+        print(f"Error: Strategy '{args.strategy}' not found. Available: {registry.list_strategies()}")
+        sys.exit(1)
+    strategy = strategy_class(symbols=symbols)
+
+    print(f"Downloading data for {symbols} from {args.start} to {args.end}...")
+    provider = YfinanceProvider(cache_dir=args.cache_dir)
+    provider.connect()
+
+    all_data = []
+    for symbol in symbols:
+        bars = provider.get_bars(symbol, start, end, "1d")
+        if bars.empty:
+            print(f"Warning: No data for {symbol}, skipping")
+            continue
+        bars = bars.reset_index()
+        bars['symbol'] = symbol
+        if 'Date' in bars.columns:
+            bars = bars.rename(columns={'Date': 'timestamp'})
+        elif 'index' in bars.columns:
+            bars = bars.rename(columns={'index': 'timestamp'})
+        all_data.append(bars[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'symbol']])
+
+    if not all_data:
+        print("Error: No data downloaded for any symbol")
+        sys.exit(1)
+
+    data = pd.concat(all_data, ignore_index=True)
+    print(f"Downloaded {len(data)} bars for {data['symbol'].nunique()} symbols")
+
+    config = {
+        "backtest": {"slippage_bps": args.slippage_bps},
+        "execution": {
+            "commission": {
+                "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                "HK": {"type": "percent", "percent": 0.001, "min_per_order": 2.0},
+            }
+        },
+        "data": {"default_timeframe": "1d"},
+        "risk": {
+            "max_position_pct": 0.20,
+            "max_sector_pct": 1.0,
+            "max_daily_loss_pct": 0.10,
+            "max_leverage": 2.0,
+            "max_orders_minute": 100,
+        },
+    }
+
+    from quant.core.walkforward import _DataFrameProvider
+
+    data_provider = _DataFrameProvider(data)
+
+    backtester = Backtester(config)
+    result = backtester.run(
+        start=start,
+        end=end,
+        strategies=[strategy],
+        initial_cash=args.initial_cash,
+        data_provider=data_provider,
+        symbols=data['symbol'].unique().tolist(),
+    )
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_path = str(output_dir / f"{args.strategy}_{args.start}_{args.end}")
+
+    BacktestResultExporter.to_csv(result, base_path)
+
+    metrics = result.metrics
+    print(f"\n{'='*50}")
+    print(f"BACKTEST RESULTS: {args.strategy}")
+    print(f"Period: {args.start} to {args.end}")
+    print(f"{'='*50}")
+    print(f"Final NAV:        ${result.final_nav:,.2f}")
+    print(f"Total Return:     {result.total_return*100:.2f}%")
+    print(f"Sharpe Ratio:     {result.sharpe_ratio:.2f}")
+    print(f"Sortino Ratio:    {result.sortino_ratio:.2f}")
+    print(f"Max Drawdown:     {result.max_drawdown_pct*100:.2f}%")
+    print(f"Win Rate:         {result.win_rate*100:.1f}%")
+    print(f"Profit Factor:    {result.profit_factor:.2f}")
+    print(f"Total Trades:     {metrics.total_trades}")
+    print(f"Avg Duration:     {metrics.avg_trade_duration}")
+    print(f"{'='*50}")
+    print(f"\nResults saved to: {base_path}_*.csv")
+
+    metrics_json = {
+        "strategy": args.strategy,
+        "start": args.start,
+        "end": args.end,
+        "symbols": symbols,
+        "initial_cash": args.initial_cash,
+        "final_nav": result.final_nav,
+        "total_return": result.total_return,
+        "sharpe_ratio": result.sharpe_ratio,
+        "sortino_ratio": result.sortino_ratio,
+        "max_drawdown": result.max_drawdown,
+        "max_drawdown_pct": result.max_drawdown_pct,
+        "win_rate": result.win_rate,
+        "profit_factor": result.profit_factor,
+        "total_trades": metrics.total_trades,
+        "calmar_ratio": metrics.calmar_ratio,
+        "payoff_ratio": metrics.payoff_ratio,
+        "expectancy": metrics.expectancy,
+    }
+    with open(f"{base_path}_metrics.json", "w") as f:
+        json.dump(metrics_json, f, indent=2)
+
+    return result
+
+
+if __name__ == "__main__":
+    main()

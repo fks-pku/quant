@@ -70,7 +70,6 @@ class Backtester:
         equity_curve_values: List[float] = []
         all_trades: List[Trade] = []
 
-        entry_prices: Dict[str, float] = {}
         entry_times: Dict[str, datetime] = {}
         last_prices: Dict[str, float] = {}
 
@@ -108,15 +107,13 @@ class Backtester:
                     except Exception:
                         pass
 
-                    self._update_portfolio_prices(portfolio, last_prices)
-
                     for strategy in strategies:
                         if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
                             om = strategy.context.order_manager
                             if om and hasattr(om, "_pending_orders"):
                                 for order in list(om._pending_orders):
                                     trade = self._execute_order(
-                                        order, portfolio, symbol, bar_data, entry_prices, entry_times
+                                        order, portfolio, symbol, bar_data, entry_times
                                     )
                                     if trade:
                                         all_trades.append(trade)
@@ -124,6 +121,8 @@ class Backtester:
                                             if hasattr(s, "on_fill"):
                                                 s.on_fill(s.context, trade)
                                 om.clear_pending()
+
+            self._update_portfolio_prices(portfolio, last_prices)
 
             nav = portfolio.nav
             equity_curve_dates.append(current_date)
@@ -205,10 +204,8 @@ class Backtester:
         portfolio: Portfolio,
         symbol: str,
         bar: Dict,
-        entry_prices: Dict[str, float],
         entry_times: Dict[str, datetime],
     ) -> Optional[Trade]:
-        """Execute order through Portfolio, returning a Trade on position close."""
         exec_price = bar.get('close', bar.get('price', 100))
         if not exec_price or exec_price <= 0:
             return None
@@ -228,20 +225,11 @@ class Backtester:
             if portfolio.cash < total_cost:
                 return None
 
-            entry_prices[symbol] = entry_prices.get(symbol, exec_price)
             if symbol not in entry_times:
                 entry_times[symbol] = bar.get('timestamp', datetime.now())
 
-            old_qty = portfolio.get_position(symbol).quantity if portfolio.get_position(symbol) else 0
             portfolio.update_position(symbol, quantity=quantity, price=exec_price, cost=exec_price * quantity)
             portfolio.cash -= total_cost
-
-            new_qty = old_qty + quantity
-            if old_qty > 0 and new_qty > 0:
-                entry_prices[symbol] = (entry_prices[symbol] * old_qty + exec_price * quantity) / new_qty
-            elif old_qty == 0:
-                entry_prices[symbol] = exec_price
-                entry_times[symbol] = bar.get('timestamp', datetime.now())
 
             return None
 
@@ -251,16 +239,14 @@ class Backtester:
                 return None
 
             sell_qty = min(quantity, pos.quantity)
-            entry_price = entry_prices.get(symbol, pos.avg_cost)
+            entry_price = pos.avg_cost
             entry_time = entry_times.get(symbol, datetime.now())
             realized = (exec_price - pos.avg_cost) * sell_qty
 
             portfolio.cash += exec_price * sell_qty - commission
             portfolio.update_position(symbol, quantity=-sell_qty, price=exec_price, cost=0)
 
-            remaining = pos.quantity - sell_qty
-            if remaining <= 0:
-                entry_prices.pop(symbol, None)
+            if pos.quantity <= 0:
                 entry_times.pop(symbol, None)
 
             return Trade(

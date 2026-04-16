@@ -102,10 +102,9 @@ class WalkForwardEngine:
             )
             
             strategy = strategy_factory(best_params)
-            backtester = Backtester(config)
             
             test_result = self._run_single_backtest(
-                backtester, strategy, test_data, initial_cash
+                Backtester(config), strategy, test_data, initial_cash, config
             )
             
             test_max_dd = test_result.max_drawdown_pct if hasattr(test_result, 'max_drawdown_pct') else 0.0
@@ -193,7 +192,7 @@ class WalkForwardEngine:
             try:
                 strategy = strategy_factory(params)
                 backtester = Backtester(config)
-                result = self._run_single_backtest(backtester, strategy, train_data, initial_cash)
+                result = self._run_single_backtest(backtester, strategy, train_data, initial_cash, config)
                 
                 if result.sharpe_ratio > best_sharpe:
                     best_sharpe = result.sharpe_ratio
@@ -205,14 +204,20 @@ class WalkForwardEngine:
 
     def _run_single_backtest(
         self,
-        backtester: Backtester,
+        backtester_or_config,
         strategy: Any,
         data: pd.DataFrame,
-        initial_cash: float
+        initial_cash: float,
+        config: Optional[Dict[str, Any]] = None
     ) -> BacktestResult:
         """Run a single backtest on given data."""
         from quant.core.events import EventBus
-        
+
+        if isinstance(backtester_or_config, Backtester):
+            backtester = backtester_or_config
+        else:
+            backtester = Backtester(config or {})
+
         event_bus = EventBus()
         
         symbols = data['symbol'].unique().tolist()

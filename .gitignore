@@ -17,3 +17,8 @@ Thumbs.db
 # Local launchers (platform-specific)
 start_ui.ps1
 start_ui_windows.bat
+.worktrees/
+frontend/build/
+system/data/cache/
+system/data/*.db
+backtest_output/
