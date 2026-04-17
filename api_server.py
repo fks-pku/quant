@@ -504,6 +504,7 @@ def run_backtest():
     symbols = data.get('symbols', ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY'])
     initial_cash = data.get('initial_cash', 100000)
     slippage_bps = data.get('slippage_bps', 5)
+    strategy_params = data.get('strategy_params', {})
 
     backtest_id = str(uuid.uuid4())[:8]
     with _backtest_lock:
@@ -554,7 +555,10 @@ def run_backtest():
                 with _backtest_lock:
                     _backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}
                 return
-            strategy = strategy_class(symbols=symbols)
+            strategy_kwargs = {"symbols": symbols}
+            if strategy_params:
+                strategy_kwargs.update(strategy_params)
+            strategy = strategy_class(**strategy_kwargs)
 
             config = {
                 "backtest": {"slippage_bps": slippage_bps},

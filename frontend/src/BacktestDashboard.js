@@ -1,14 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 
 const API_BASE = 'http://localhost:5000/api';
-
-const STRATEGIES = [
-  'SimpleMomentum',
-  'VolatilityRegime',
-  'CrossSectionalMeanReversion',
-  'DualMomentum',
-];
 
 const fmtCurrency = (v) => {
   const n = parseFloat(v) || 0;
@@ -135,6 +128,9 @@ export default function BacktestDashboard() {
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
   const pollRef = useRef(null);
+  const [strategies, setStrategies] = useState([]);
+  const [strategyParams, setStrategyParams] = useState({});
+  const [paramValues, setParamValues] = useState({});
 
   const fetchHistory = async () => {
     try {
@@ -142,6 +138,41 @@ export default function BacktestDashboard() {
       setHistory(res.data.backtests || []);
     } catch {}
   };
+
+  const fetchStrategies = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/strategies`);
+      const strats = res.data.strategies || [];
+      setStrategies(strats);
+      if (strats.length > 0 && !strats.find(s => s.id === strategy)) {
+        setStrategy(strats[0].id);
+      }
+    } catch (e) { console.error('Failed to fetch strategies:', e); }
+  }, [strategy]);
+
+  const fetchParams = useCallback(async (strategyId) => {
+    try {
+      const res = await axios.get(`${API_BASE}/strategies/${strategyId}/parameters`);
+      const params = res.data.parameters || {};
+      setStrategyParams(params);
+      const defaults = {};
+      Object.entries(params).forEach(([key, def]) => {
+        defaults[key] = def.default;
+      });
+      setParamValues(defaults);
+    } catch (e) {
+      setStrategyParams({});
+      setParamValues({});
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStrategies();
+  }, [fetchStrategies]);
+
+  useEffect(() => {
+    if (strategy) fetchParams(strategy);
+  }, [strategy, fetchParams]);
 
   useEffect(() => {
     fetchHistory();
@@ -189,6 +220,7 @@ export default function BacktestDashboard() {
         symbols: symbols.split(',').map(s => s.trim()).filter(Boolean),
         initial_cash: Number(initialCash),
         slippage_bps: Number(slippageBps),
+        strategy_params: paramValues,
       });
       pollResult(res.data.backtest_id);
     } catch (err) {
@@ -226,7 +258,7 @@ export default function BacktestDashboard() {
         <div className="bt-control-group">
           <label>Strategy</label>
           <select className="bt-select" value={strategy} onChange={e => setStrategy(e.target.value)}>
-            {STRATEGIES.map(s => <option key={s} value={s}>{s}</option>)}
+            {strategies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div className="bt-control-group">
@@ -258,6 +290,36 @@ export default function BacktestDashboard() {
       {error && (
         <div className="bt-controls" style={{ color: 'var(--accent-red)', fontSize: '13px', marginBottom: 20 }}>
           {error}
+        </div>
+      )}
+
+      {Object.keys(strategyParams).length > 0 && (
+        <div className="bt-controls bt-params-section">
+          <div style={{ width: '100%', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+            Strategy-Specific Parameters
+          </div>
+          {Object.entries(strategyParams).map(([key, def]) => (
+            <div key={key} className="bt-control-group">
+              <label>{key.replace(/_/g, ' ')} <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>({def.type})</span></label>
+              {def.type === 'bool' ? (
+                <label className="toggle-switch" style={{ marginTop: 4 }}>
+                  <input type="checkbox" checked={!!paramValues[key]} onChange={e => setParamValues(prev => ({ ...prev, [key]: e.target.checked }))} />
+                  <span className="toggle-slider"></span>
+                </label>
+              ) : def.options ? (
+                <select className="bt-input" value={paramValues[key] ?? def.default} onChange={e => setParamValues(prev => ({ ...prev, [key]: e.target.value }))}>
+                  {def.options.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : (
+                <input type={def.type === 'int' || def.type === 'float' ? 'number' : 'text'} className="bt-input"
+                  value={paramValues[key] ?? def.default}
+                  step={def.type === 'float' ? '0.1' : undefined}
+                  onChange={e => setParamValues(prev => ({ ...prev, [key]: def.type === 'int' ? parseInt(e.target.value) : def.type === 'float' ? parseFloat(e.target.value) : e.target.value }))}
+                />
+              )}
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{def.description}</span>
+            </div>
+          ))}
         </div>
       )}
 

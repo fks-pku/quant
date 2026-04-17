@@ -619,6 +619,15 @@ body {
   font-weight: 600;
 }
 
+.bt-params-section {
+  flex-wrap: wrap;
+  align-items: start;
+}
+
+.bt-params-section .bt-control-group {
+  min-width: 160px;
+}
+
 .bt-results {
   display: flex;
   flex-direction: column;
@@ -1514,4 +1523,207 @@ body {
 
 .btn-backtest:hover {
   background: var(--accent-green);
+}
+
+/* Position Overview */
+.position-overview {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.po-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.po-summary-card {
+  background: var(--bg-tertiary);
+  padding: 14px;
+  border-radius: 8px;
+}
+
+.po-summary-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.po-summary-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.po-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 12px;
+}
+
+.po-tab {
+  padding: 10px 20px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+
+.po-tab.active {
+  color: var(--accent-cyan);
+  border-bottom-color: var(--accent-cyan);
+}
+
+.po-tab:hover {
+  color: var(--text-primary);
+}
+
+.po-table-wrap {
+  overflow-x: auto;
+}
+
+.po-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.po-table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+}
+
+.po-table td {
+  padding: 10px 14px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.po-table tr:hover td {
+  background: rgba(0, 212, 255, 0.03);
+}
+
+/* Live Trading Page */
+.live-trading-page {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.lt-orders-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+/* Strategy Management */
+.strategy-management {
+  margin-bottom: 20px;
+}
+
+.sm-weights-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.sm-strategy-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.sm-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.sm-activate-select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sm-activate-select:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+}
+
+/* Strategy Detail Modal Tabs */
+.sdm-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 20px;
+}
+
+.sdm-tab {
+  padding: 12px 20px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+
+.sdm-tab.active {
+  color: var(--accent-cyan);
+  border-bottom-color: var(--accent-cyan);
+}
+
+.sdm-tab:hover {
+  color: var(--text-primary);
+}
+
+.sdm-performance {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sdm-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.sdm-chart-section {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.sdm-trades-section {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  overflow: hidden;
 }
