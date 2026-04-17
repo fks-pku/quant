@@ -649,5 +649,142 @@ def list_backtests():
     return jsonify({"backtests": results})
 
 
+# ─── CIO Module ───────────────────────────────────────────────────────────────
+
+_cio_engine = None
+
+
+def _get_cio_engine():
+    global _cio_engine
+    if _cio_engine is None:
+        from quant.cio.cio_engine import CIOEngine
+        from quant.cio.market_assessor import MarketAssessor
+        from quant.cio.news_analyzer import NewsAnalyzer
+        from quant.cio.weight_allocator import WeightAllocator
+
+        assessor = MarketAssessor()
+        news_analyzer = NewsAnalyzer(provider="openai")
+        allocator = WeightAllocator()
+        _cio_engine = CIOEngine(
+            assessor=assessor,
+            news_analyzer=news_analyzer,
+            allocator=allocator,
+        )
+    return _cio_engine
+
+
+@app.route('/api/cio/assessment', methods=['GET'])
+def get_cio_assessment():
+    engine = _get_cio_engine()
+
+    indicators = {
+        "vix": MOCK_PRICES.get("VIX", 14.5),
+        "vix_percentile": 22.0,
+        "trend_strength": 0.72,
+        "market_breadth": 0.65,
+    }
+
+    enabled_strategies = [name for name, info in AVAILABLE_STRATEGIES.items() if info.get("enabled", False)]
+    strategy_ids = [AVAILABLE_STRATEGIES[name]["id"] for name in enabled_strategies]
+
+    result = engine.assess(indicators=indicators, enabled_strategies=strategy_ids)
+    return jsonify(result)
+
+
+@app.route('/api/cio/refresh', methods=['POST'])
+def refresh_cio_assessment():
+    engine = _get_cio_engine()
+    data = request.get_json() or {}
+    news_text = data.get("news_text") if data else None
+
+    indicators = {
+        "vix": MOCK_PRICES.get("VIX", 14.5),
+        "vix_percentile": 22.0,
+        "trend_strength": 0.72,
+        "market_breadth": 0.65,
+    }
+
+    enabled_strategies = [name for name, info in AVAILABLE_STRATEGIES.items() if info.get("enabled", False)]
+    strategy_ids = [AVAILABLE_STRATEGIES[name]["id"] for name in enabled_strategies]
+
+    result = engine.assess(indicators=indicators, news_text=news_text, enabled_strategies=strategy_ids)
+    return jsonify({"success": True, "assessment": result})
+
+
+# ─── Strategy Pool ────────────────────────────────────────────────────────────
+
+@app.route('/api/strategy-pool', methods=['GET'])
+def get_strategy_pool():
+    total_nav = portfolio_data.get("nav", 100000.0)
+
+    engine = _get_cio_engine()
+    cached = engine.get_cached()
+
+    pool = []
+    for name, info in AVAILABLE_STRATEGIES.items():
+        strat_id = info["id"]
+        weight = 0.0
+        pnl = 0.0
+
+        if cached and "weights" in cached:
+            weight = cached["weights"].get(strat_id, 0.0)
+
+        allocated = total_nav * weight
+
+        pool.append({
+            "id": strat_id,
+            "name": info["name"],
+            "enabled": info["enabled"],
+            "weight": weight,
+            "allocated_capital": round(allocated, 2),
+            "current_pnl": round(pnl, 2),
+            "backtest_sharpe": info.get("backtest", {}).get("test_sharpe", 0.0),
+            "has_readme": info.get("doc_file") is not None,
+        })
+
+    return jsonify({
+        "total_capital": total_nav,
+        "strategies": pool,
+    })
+
+
+@app.route('/api/strategy-pool/weights', methods=['POST'])
+def update_strategy_weights():
+    global portfolio_data
+
+    data = request.get_json()
+    manual_weights = data.get("weights", {})
+
+    total = sum(manual_weights.values())
+    if abs(total - 1.0) > 0.001:
+        return jsonify({"error": "Weights must sum to 1.0"}), 400
+
+    return jsonify({"success": True, "weights": manual_weights})
+
+
+@app.route('/api/strategies/<strategy_id>/readme', methods=['GET'])
+def get_strategy_readme(strategy_id):
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info["id"] == strategy_id:
+            if info.get("doc_file") is None:
+                return jsonify({"error": "No documentation available"}), 404
+
+            doc_path = DOCS_DIR / info["doc_file"]
+            if not doc_path.exists():
+                return jsonify({"error": "Documentation file not found"}), 404
+
+            with open(doc_path, "r") as f:
+                content = f.read()
+
+            return jsonify({
+                "strategy_id": info["id"],
+                "strategy_name": info["name"],
+                "content": content,
+                "format": "markdown",
+            })
+
+    return jsonify({"error": "Strategy not found"}), 404
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)

@@ -1,0 +1,14 @@
+strategy:
+  name: DualMomentum
+  enabled: true
+  priority: 7
+
+parameters:
+  symbols: [SPY, QQQ, AAPL, MSFT, GOOGL, AMZN, TSLA, META]
+  abs_lookback: 60
+  rel_lookback: 20
+  sma_short: 20
+  holding_days: 21
+  top_tercile_pct: 0.33
+  bottom_tercile_pct: 0.33
+  max_position_pct: 0.05

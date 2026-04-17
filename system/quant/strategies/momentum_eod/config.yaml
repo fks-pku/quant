@@ -1,0 +1,9 @@
+strategy:
+  name: MomentumEOD
+  enabled: false
+  priority: 3
+
+parameters:
+  symbols: [AAPL, GOOGL, MSFT, AMZN, TSLA, SPY]
+  top_n: 5
+  max_position_pct: 0.05

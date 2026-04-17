@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import BacktestDashboard from './BacktestDashboard';
+import StrategyPoolPage from './StrategyPoolPage';
+import StrategyWeightBar from './StrategyWeightBar';
 import './App.css';
 
 const API_BASE = 'http://localhost:5000/api';
@@ -154,6 +156,7 @@ function App() {
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [activeTab, setActiveTab] = useState('backtest');
+  const [cioData, setCioData] = useState(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -204,14 +207,27 @@ function App() {
     }
   }, []);
 
+  const fetchCIO = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/cio/assessment`);
+      setCioData(res.data);
+    } catch (e) { console.error('CIO fetch error', e); }
+  }, []);
+
   useEffect(() => {
     fetchStatus();
     fetchStrategies();
     fetchMarketData();
+    fetchCIO();
     const statusInterval = setInterval(fetchStatus, 3000);
     const marketInterval = setInterval(fetchMarketData, 5000);
-    return () => { clearInterval(statusInterval); clearInterval(marketInterval); };
-  }, [fetchStatus, fetchStrategies, fetchMarketData]);
+    const cioInterval = setInterval(fetchCIO, 60000);
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(marketInterval);
+      clearInterval(cioInterval);
+    };
+  }, [fetchStatus, fetchStrategies, fetchMarketData, fetchCIO]);
 
   const startSystem = async () => {
     setIsLoading(true); setSubmitError('');
@@ -299,10 +315,11 @@ function App() {
       <div className="tab-bar">
         <button className={`tab ${activeTab === 'backtest' ? 'active' : ''}`} onClick={() => setActiveTab('backtest')}>BACKTEST</button>
         <button className={`tab ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>LIVE TRADING</button>
+        <button className={`tab ${activeTab === 'strategy_pool' ? 'active' : ''}`} onClick={() => setActiveTab('strategy_pool')}>STRATEGY POOL</button>
       </div>
 
       <main className="main">
-        {activeTab === 'backtest' ? <BacktestDashboard /> : (
+        {activeTab === 'backtest' ? <BacktestDashboard /> : activeTab === 'strategy_pool' ? <StrategyPoolPage /> : (
         <div className="panel-grid">
           <div className="panel">
             <div className="panel-header">📊 ASSET OVERVIEW</div>
@@ -367,6 +384,16 @@ function App() {
                   {availableStrategies.find(s => s.id === selectedStrategyId)?.name || 'None'}
                 </div>
                 <div className="active-strategy-meta">Regime: BULL | Signals: {activeStrategies.length}</div>
+                {cioData && Object.keys(cioData.weights || {}).length > 0 && (
+                  <>
+                    <StrategyWeightBar weights={cioData.weights} />
+                    <div style={{ marginTop: '8px' }}>
+                      <button className="btn-link" onClick={() => setActiveTab('strategy_pool')}>
+                        → Go to Strategy Pool
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>

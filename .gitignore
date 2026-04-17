@@ -10,6 +10,9 @@ frontend/package-lock.json
 # Local workspace
 .vibe-kanban-workspaces/
 
+# Brainstorming artifacts
+.superpowers/
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -1,0 +1,11 @@
+strategy:
+  name: MeanReversion1m
+  enabled: false
+  priority: 4
+
+parameters:
+  symbols: [SPY, QQQ, AAPL]
+  rsi_period: 14
+  oversold_threshold: 30.0
+  overbought_threshold: 70.0
+  max_position_pct: 0.05
