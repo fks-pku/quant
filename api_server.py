@@ -16,7 +16,8 @@ from flask_cors import CORS
 
 sys.path.insert(0, str(Path(__file__).parent / 'system'))
 
-app = Flask(__name__)
+BUILD_DIR = str(Path(__file__).parent / 'frontend' / 'build')
+app = Flask(__name__, static_folder=str(Path(__file__).parent / 'frontend' / 'build' / 'static'), static_url_path='/static')
 CORS(app)
 
 system_process = None
@@ -38,6 +39,16 @@ MOCK_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY', 'QQQ']
 MOCK_PRICES = {
     'AAPL': 178.50, 'MSFT': 378.25, 'GOOGL': 141.80,
     'AMZN': 185.60, 'TSLA': 245.20, 'SPY': 512.30, 'QQQ': 438.50, 'VIX': 14.5
+}
+
+_STRATEGY_DIR_MAP = {
+    'volatility_regime': 'volatility_regime',
+    'simple_momentum': 'simple_momentum',
+    'momentum_eod': 'momentum_eod',
+    'mean_reversion_1m': 'mean_reversion',
+    'dual_thrust': 'dual_thrust',
+    'cross_sectional_mean_reversion': 'cross_sectional_mr',
+    'dual_momentum': 'dual_momentum',
 }
 
 STRATEGIES_DIR = Path(__file__).parent / 'system' / 'quant' / 'strategies'
@@ -145,7 +156,7 @@ AVAILABLE_STRATEGIES = {
         'description': 'Short-term mean reversion strategy based on cross-sectional z-scores.',
         'enabled': False,
         'priority': 6,
-        'doc_file': None,
+        'doc_file': 'cross_sectional_mean_reversion.md',
         'backtest': {
             'sharpe': 0.65,
             'max_dd': 25.0,
@@ -164,7 +175,7 @@ AVAILABLE_STRATEGIES = {
         'description': 'Absolute and relative momentum for tactical asset allocation.',
         'enabled': False,
         'priority': 7,
-        'doc_file': None,
+        'doc_file': 'dual_momentum.md',
         'backtest': {
             'sharpe': 0.72,
             'max_dd': 20.0,
@@ -684,8 +695,7 @@ def get_cio_assessment():
         "market_breadth": 0.65,
     }
 
-    enabled_strategies = [name for name, info in AVAILABLE_STRATEGIES.items() if info.get("enabled", False)]
-    strategy_ids = [AVAILABLE_STRATEGIES[name]["id"] for name in enabled_strategies]
+    strategy_ids = [info["id"] for info in AVAILABLE_STRATEGIES.values()]
 
     result = engine.assess(indicators=indicators, enabled_strategies=strategy_ids)
     return jsonify(result)
@@ -704,8 +714,7 @@ def refresh_cio_assessment():
         "market_breadth": 0.65,
     }
 
-    enabled_strategies = [name for name, info in AVAILABLE_STRATEGIES.items() if info.get("enabled", False)]
-    strategy_ids = [AVAILABLE_STRATEGIES[name]["id"] for name in enabled_strategies]
+    strategy_ids = [info["id"] for info in AVAILABLE_STRATEGIES.values()]
 
     result = engine.assess(indicators=indicators, news_text=news_text, enabled_strategies=strategy_ids)
     return jsonify({"success": True, "assessment": result})
@@ -764,26 +773,46 @@ def update_strategy_weights():
 
 @app.route('/api/strategies/<strategy_id>/readme', methods=['GET'])
 def get_strategy_readme(strategy_id):
+    dir_name = _STRATEGY_DIR_MAP.get(strategy_id)
+    if dir_name:
+        new_readme = STRATEGIES_DIR / dir_name / 'README.md'
+        if new_readme.exists():
+            for name, info in AVAILABLE_STRATEGIES.items():
+                if info["id"] == strategy_id:
+                    with open(new_readme, "r") as f:
+                        content = f.read()
+                    return jsonify({
+                        "strategy_id": info["id"],
+                        "strategy_name": info["name"],
+                        "content": content,
+                        "format": "markdown",
+                    })
+
     for name, info in AVAILABLE_STRATEGIES.items():
         if info["id"] == strategy_id:
-            if info.get("doc_file") is None:
-                return jsonify({"error": "No documentation available"}), 404
-
-            doc_path = DOCS_DIR / info["doc_file"]
-            if not doc_path.exists():
-                return jsonify({"error": "Documentation file not found"}), 404
-
-            with open(doc_path, "r") as f:
-                content = f.read()
-
-            return jsonify({
-                "strategy_id": info["id"],
-                "strategy_name": info["name"],
-                "content": content,
-                "format": "markdown",
-            })
+            if info.get("doc_file") is not None:
+                doc_path = DOCS_DIR / info["doc_file"]
+                if doc_path.exists():
+                    with open(doc_path, "r") as f:
+                        content = f.read()
+                    return jsonify({
+                        "strategy_id": info["id"],
+                        "strategy_name": info["name"],
+                        "content": content,
+                        "format": "markdown",
+                    })
+            return jsonify({"error": "No documentation available"}), 404
 
     return jsonify({"error": "Strategy not found"}), 404
+
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    build_dir = Path(__file__).parent / 'frontend' / 'build'
+    if path and (build_dir / path).exists():
+        return send_file(str(build_dir / path))
+    return send_file(str(build_dir / 'index.html'))
 
 
 if __name__ == '__main__':

@@ -10,22 +10,31 @@ REGIME_HIGH_VOL = "high_vol_bear"
 class WeightAllocator:
     REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
         REGIME_LOW_VOL: {
-            "volatility_regime": 0.40,
-            "simple_momentum": 0.35,
-            "cross_sectional_mr": 0.15,
+            "volatility_regime": 0.30,
+            "simple_momentum": 0.20,
+            "momentum_eod": 0.15,
+            "mean_reversion_1m": 0.10,
+            "cross_sectional_mean_reversion": 0.10,
             "dual_momentum": 0.10,
+            "dual_thrust": 0.05,
         },
         REGIME_MEDIUM_VOL: {
-            "volatility_regime": 0.35,
-            "simple_momentum": 0.20,
-            "cross_sectional_mr": 0.30,
-            "dual_momentum": 0.15,
+            "volatility_regime": 0.25,
+            "simple_momentum": 0.10,
+            "momentum_eod": 0.10,
+            "mean_reversion_1m": 0.20,
+            "cross_sectional_mean_reversion": 0.20,
+            "dual_momentum": 0.10,
+            "dual_thrust": 0.05,
         },
         REGIME_HIGH_VOL: {
-            "volatility_regime": 0.50,
-            "simple_momentum": 0.10,
-            "cross_sectional_mr": 0.25,
+            "volatility_regime": 0.35,
+            "simple_momentum": 0.05,
+            "momentum_eod": 0.05,
+            "mean_reversion_1m": 0.15,
+            "cross_sectional_mean_reversion": 0.20,
             "dual_momentum": 0.15,
+            "dual_thrust": 0.05,
         },
     }
 
