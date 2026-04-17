@@ -740,6 +740,10 @@ def get_strategy_pool():
 
         allocated = total_nav * weight
 
+        # Get parameters for this strategy
+        params = STRATEGY_PARAMETERS.get(strat_id, {})
+        param_values = {k: v['default'] for k, v in params.items()}
+
         pool.append({
             "id": strat_id,
             "name": info["name"],
@@ -747,8 +751,10 @@ def get_strategy_pool():
             "weight": weight,
             "allocated_capital": round(allocated, 2),
             "current_pnl": round(pnl, 2),
+            "backtest": info.get("backtest", {}),
             "backtest_sharpe": info.get("backtest", {}).get("test_sharpe", 0.0),
             "has_readme": info.get("doc_file") is not None,
+            "parameters": param_values,
         })
 
     return jsonify({
@@ -804,6 +810,86 @@ def get_strategy_readme(strategy_id):
             return jsonify({"error": "No documentation available"}), 404
 
     return jsonify({"error": "Strategy not found"}), 404
+
+
+# Strategy parameters extraction from strategy classes
+STRATEGY_PARAMETERS = {
+    'volatility_regime': {
+        'vix_lookback': {'type': 'int', 'default': 20, 'description': 'VIX lookback period for SMA calculation'},
+        'vix_bull_threshold': {'type': 'float', 'default': 15.0, 'description': 'VIX threshold for bull regime'},
+        'vix_bear_threshold': {'type': 'float', 'default': 25.0, 'description': 'VIX threshold for bear regime'},
+        'momentum_lookback': {'type': 'int', 'default': 20, 'description': 'Momentum calculation lookback'},
+        'momentum_top_n': {'type': 'int', 'default': 5, 'description': 'Number of top momentum stocks'},
+        'rsi_period': {'type': 'int', 'default': 14, 'description': 'RSI calculation period'},
+        'rsi_oversold': {'type': 'float', 'default': 30.0, 'description': 'RSI oversold threshold'},
+        'rsi_overbought': {'type': 'float', 'default': 70.0, 'description': 'RSI overbought threshold'},
+        'max_position_pct': {'type': 'float', 'default': 0.05, 'description': 'Max position size as % of NAV'},
+        'reduce_exposure_bear': {'type': 'float', 'default': 0.3, 'description': 'Exposure reduction in bear regime'},
+    },
+    'simple_momentum': {
+        'lookback_days': {'type': 'int', 'default': 20, 'description': 'Momentum lookback period'},
+        'top_n': {'type': 'int', 'default': 10, 'description': 'Number of top performers to long'},
+        'bottom_n': {'type': 'int', 'default': 10, 'description': 'Number of bottom performers to short'},
+        'rebalance_freq': {'type': 'str', 'default': 'monthly', 'description': 'Rebalancing frequency'},
+    },
+    'momentum_eod': {
+        'top_n': {'type': 'int', 'default': 5, 'description': 'Number of top gainers to buy'},
+        'max_position_pct': {'type': 'float', 'default': 0.1, 'description': 'Max position size per trade'},
+    },
+    'mean_reversion_1m': {
+        'rsi_period': {'type': 'int', 'default': 14, 'description': 'RSI calculation period'},
+        'rsi_oversold': {'type': 'float', 'default': 30.0, 'description': 'RSI oversold threshold'},
+        'rsi_overbought': {'type': 'float', 'default': 70.0, 'description': 'RSI overbought threshold'},
+        'lookback': {'type': 'int', 'default': 20, 'description': 'Mean reversion lookback'},
+    },
+    'dual_thrust': {
+        'n_periods': {'type': 'int', 'default': 20, 'description': 'Lookback period for range calculation'},
+        'k1': {'type': 'float', 'default': 0.5, 'description': 'Upper bound multiplier'},
+        'k2': {'type': 'float', 'default': 0.5, 'description': 'Lower bound multiplier'},
+    },
+    'cross_sectional_mean_reversion': {
+        'lookback': {'type': 'int', 'default': 5, 'description': 'Return lookback period'},
+        'zscore_threshold': {'type': 'float', 'default': 1.5, 'description': 'Z-score entry threshold'},
+    },
+    'dual_momentum': {
+        'lookback_months': {'type': 'int', 'default': 12, 'description': 'Momentum lookback period'},
+        'risk_free_rate': {'type': 'float', 'default': 0.02, 'description': 'Risk-free rate for excess return'},
+    },
+}
+
+
+@app.route('/api/strategies/<strategy_id>/toggle', methods=['POST'])
+def toggle_strategy(strategy_id):
+    """Toggle strategy enabled/disabled status."""
+    global AVAILABLE_STRATEGIES
+
+    data = request.get_json()
+    enabled = data.get('enabled')
+
+    if enabled is None:
+        return jsonify({'error': 'Missing enabled parameter'}), 400
+
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info['id'] == strategy_id:
+            AVAILABLE_STRATEGIES[name]['enabled'] = enabled
+            return jsonify({
+                'strategy_id': strategy_id,
+                'strategy_name': info['name'],
+                'enabled': enabled,
+                'message': f"Strategy {info['name']} {'activated' if enabled else 'deactivated'}"
+            })
+
+    return jsonify({'error': 'Strategy not found'}), 404
+
+
+@app.route('/api/strategies/<strategy_id>/parameters', methods=['GET'])
+def get_strategy_parameters(strategy_id):
+    """Get strategy parameters and their definitions."""
+    params = STRATEGY_PARAMETERS.get(strategy_id, {})
+    return jsonify({
+        'strategy_id': strategy_id,
+        'parameters': params
+    })
 
 
 @app.route('/', defaults={'path': ''})
