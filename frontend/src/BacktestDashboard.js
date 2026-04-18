@@ -3,9 +3,9 @@ import axios from 'axios';
 
 const API_BASE = 'http://localhost:5000/api';
 
-const fmtCurrency = (v) => {
+const fmtCurrency = (v, isHK) => {
   const n = parseFloat(v) || 0;
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: isHK ? 'HKD' : 'USD' }).format(n);
 };
 
 const fmtPct = (v) => {
@@ -15,7 +15,7 @@ const fmtPct = (v) => {
 
 const colorPnl = (v) => v >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
-function EquityChart({ curve }) {
+function EquityChart({ curve, isHK = false }) {
   if (!curve || curve.length < 2) return null;
 
   const W = 700;
@@ -61,7 +61,7 @@ function EquityChart({ curve }) {
           <g key={i}>
             <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#333355" strokeWidth="0.5" />
             <text x={padL - 6} y={y + 3} textAnchor="end" fill="#666680" fontSize="9">
-              {fmtCurrency(v)}
+              {fmtCurrency(v, isHK)}
             </text>
           </g>
         );
@@ -77,7 +77,7 @@ function EquityChart({ curve }) {
   );
 }
 
-function DrawdownChart({ curve }) {
+function DrawdownChart({ curve, isHK = false }) {
   if (!curve || curve.length < 2) return null;
 
   const W = 700;
@@ -252,6 +252,8 @@ export default function BacktestDashboard() {
   const statusText = { idle: 'Idle', running: 'Running...', completed: 'Completed', error: 'Error' };
   const statusColor = { idle: 'var(--text-muted)', running: 'var(--accent-amber)', completed: 'var(--accent-green)', error: 'var(--accent-red)' };
 
+  const isHK = symbols.split(',').map(s => s.trim()).some(s => s.startsWith('HK.'));
+
   return (
     <div className="bt-dashboard">
       <div className="bt-controls">
@@ -344,7 +346,7 @@ export default function BacktestDashboard() {
         <div className="bt-results">
           <div className="bt-metrics">
             {[
-              { label: 'Final NAV', value: fmtCurrency(result.metrics.final_nav) },
+              { label: 'Final NAV', value: fmtCurrency(result.metrics.final_nav, isHK) },
               { label: 'Total Return', value: fmtPct(result.metrics.total_return_pct), color: colorPnl(result.metrics.total_return_pct) },
               { label: 'Sharpe Ratio', value: (result.metrics.sharpe_ratio || 0).toFixed(2) },
               { label: 'Sortino Ratio', value: (result.metrics.sortino_ratio || 0).toFixed(2) },
@@ -362,12 +364,12 @@ export default function BacktestDashboard() {
 
           <div className="bt-chart">
             <div className="bt-chart-title">Equity Curve</div>
-            <EquityChart curve={result.equity_curve} />
+            <EquityChart curve={result.equity_curve} isHK={isHK} />
           </div>
 
           <div className="bt-chart">
             <div className="bt-chart-title">Drawdown</div>
-            <DrawdownChart curve={result.equity_curve} />
+            <DrawdownChart curve={result.equity_curve} isHK={isHK} />
           </div>
 
           {result.trades && result.trades.length > 0 && (
@@ -401,10 +403,10 @@ export default function BacktestDashboard() {
                           <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.symbol}</td>
                           <td style={{ color: t.side === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>{t.side}</td>
                           <td>{t.quantity}</td>
-                          <td>${t.entry_price}</td>
-                          <td>${t.exit_price}</td>
+                          <td>{fmtCurrency(t.entry_price, isHK)}</td>
+                          <td>{fmtCurrency(t.exit_price, isHK)}</td>
                           <td style={{ color: colorPnl(t.pnl), fontWeight: 600 }}>
-                            {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl)}
+                            {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
                           </td>
                           <td>{durDays}d</td>
                         </tr>

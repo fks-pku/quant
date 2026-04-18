@@ -97,7 +97,7 @@ class Backtester:
                         if bars is not None and not bars.empty:
                             for _, bar in bars.iterrows():
                                 bar_data = bar.to_dict()
-                                bar_data['timestamp'] = bar.name if hasattr(bar, 'name') else current_date
+                                bar_data['timestamp'] = bar_data.get('timestamp', bar.name if hasattr(bar, 'name') else current_date)
                                 bar_data['symbol'] = symbol
                                 last_prices[symbol] = bar_data.get('close', 0)
 
@@ -110,16 +110,20 @@ class Backtester:
                     for strategy in strategies:
                         if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
                             om = strategy.context.order_manager
-                            if om and hasattr(om, "_pending_orders"):
-                                for order in list(om._pending_orders):
-                                    trade = self._execute_order(
-                                        order, portfolio, symbol, bar_data, entry_times
-                                    )
-                                    if trade:
-                                        all_trades.append(trade)
-                                        for s in strategies:
-                                            if hasattr(s, "on_fill"):
-                                                s.on_fill(s.context, trade)
+                            if om and hasattr(om, "_pending_orders") and om._pending_orders:
+                                exec_bar = bar_data if bar_data.get('close') else None
+                                if exec_bar is None and last_prices.get(symbol, 0) > 0:
+                                    exec_bar = {'close': last_prices[symbol], 'timestamp': current_date, 'symbol': symbol}
+                                if exec_bar:
+                                    for order in list(om._pending_orders):
+                                        trade = self._execute_order(
+                                            order, portfolio, symbol, exec_bar, entry_times
+                                        )
+                                        if trade:
+                                            all_trades.append(trade)
+                                            for s in strategies:
+                                                if hasattr(s, "on_fill"):
+                                                    s.on_fill(s.context, trade)
                                 om.clear_pending()
 
             self._update_portfolio_prices(portfolio, last_prices)
@@ -226,7 +230,8 @@ class Backtester:
                 return None
 
             if symbol not in entry_times:
-                entry_times[symbol] = bar.get('timestamp', datetime.now())
+                ts = bar.get('timestamp', datetime.now())
+                entry_times[symbol] = pd.Timestamp(ts).to_pydatetime() if not isinstance(ts, datetime) else ts
 
             portfolio.update_position(symbol, quantity=quantity, price=exec_price, cost=exec_price * quantity)
             portfolio.cash -= total_cost
@@ -241,6 +246,11 @@ class Backtester:
             sell_qty = min(quantity, pos.quantity)
             entry_price = pos.avg_cost
             entry_time = entry_times.get(symbol, datetime.now())
+            if not isinstance(entry_time, datetime):
+                entry_time = pd.Timestamp(entry_time).to_pydatetime()
+            exit_ts = bar.get('timestamp', datetime.now())
+            if not isinstance(exit_ts, datetime):
+                exit_ts = pd.Timestamp(exit_ts).to_pydatetime()
             realized = (exec_price - pos.avg_cost) * sell_qty
 
             portfolio.cash += exec_price * sell_qty - commission
@@ -251,7 +261,7 @@ class Backtester:
 
             return Trade(
                 entry_time=entry_time,
-                exit_time=bar.get('timestamp', datetime.now()),
+                exit_time=exit_ts,
                 symbol=symbol,
                 side=order['side'],
                 entry_price=entry_price,
@@ -263,7 +273,7 @@ class Backtester:
         return None
 
     def _detect_market(self, symbol: str) -> str:
-        if symbol.isdigit() and len(symbol) >= 5:
+        if symbol.startswith("HK.") or (symbol.isdigit() and len(symbol) >= 5):
             return "HK"
         return "US"
 

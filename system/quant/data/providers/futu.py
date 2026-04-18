@@ -108,11 +108,13 @@ class FutuProvider(DataProvider):
         subtype = self.SUBTYPE_MAP.get(timeframe, "5m")
 
         try:
-            ret, data = self._quote_api.get_history_kline(
+            ret, data, _page_req_key = self._quote_api.request_history_kline(
                 code=symbol,
                 start=start.strftime("%Y-%m-%d"),
                 end=end.strftime("%Y-%m-%d"),
-                subtype=subtype,
+                ktype="K_DAY" if subtype == "1d" else subtype,
+                autype="qfq",
+                max_count=1000,
             )
 
             if ret != 0:
@@ -122,7 +124,7 @@ class FutuProvider(DataProvider):
             if data is None or data.empty:
                 return pd.DataFrame()
 
-            df = pd.DataFrame(data)
+            df = data.copy()
             df["timestamp"] = pd.to_datetime(df["time_key"])
             df["symbol"] = symbol
             df = df.rename(columns={

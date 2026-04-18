@@ -4,32 +4,23 @@ cd /d "%~dp0"
 echo Starting Quant Trading System...
 echo.
 
-REM Kill any existing processes
-taskkill /F /IM python.exe >nul 2>&1
-taskkill /F /IM node.exe >nul 2>&1
-timeout /t 1 /nobreak >nul
+REM Kill any existing processes on relevant ports
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr :5000 ^| findstr LISTENING') do taskkill //F //PID %%P 2>nul
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr :3000 ^| findstr LISTENING') do taskkill //F //PID %%P 2>nul
+timeout /t 2 /nobreak >nul
 
-REM Start API server in background
-start "QuantAPI" cmd /c "cd /d "%~dp0" && python api_server.py"
+REM Start API server (serves built frontend on port 5000)
+start "Quant System" cmd /c "cd /d "%~dp0" && python api_server.py"
 
-REM Wait for API
-timeout /t 3 /nobreak >nul
-
-REM Start frontend in background
-cd frontend
-start "QuantUI" cmd /c "npm start"
-cd ..
-
-REM Wait for frontend to compile
-timeout /t 12 /nobreak >nul
+REM Wait for server to start
+echo Waiting for server...
+timeout /t 4 /nobreak >nul
 
 REM Open browser
-start http://localhost:3000
+start http://localhost:5000
 
-echo System is starting...
 echo.
-echo Wait 15 seconds for everything to load.
-echo If browser doesn't open, go to: http://localhost:3000
+echo System started at http://localhost:5000
 echo.
 echo Close this window to exit.
 pause

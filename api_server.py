@@ -187,7 +187,34 @@ AVAILABLE_STRATEGIES = {
             'sharpe_degradation': 28.0,
             'pct_profitable': 80.0
         }
+    },
+    'TencentMomentum': {
+        'id': 'TencentMomentum',
+        'name': 'Tencent SMA Crossover',
+        'description': 'Single-stock SMA crossover strategy for HK equities. Buy when fast SMA > slow SMA, sell on death cross.',
+        'enabled': True,
+        'priority': 8,
+        'doc_file': None,
+        'backtest': {
+            'sharpe': 0.31,
+            'max_dd': 54.48,
+            'cagr': 5.9,
+            'win_rate': 40.91,
+            'period': '2016-2026 HK.00700',
+        }
     }
+}
+
+
+STRATEGY_ID_TO_REGISTRY = {
+    'volatility_regime': 'VolatilityRegime',
+    'simple_momentum': 'SimpleMomentum',
+    'momentum_eod': 'MomentumEOD',
+    'mean_reversion_1m': 'MeanReversion1m',
+    'dual_thrust': 'DualThrust',
+    'cross_sectional_mean_reversion': 'CrossSectionalMeanReversion',
+    'dual_momentum': 'DualMomentum',
+    'TencentMomentum': 'TencentMomentum',
 }
 
 
@@ -495,6 +522,34 @@ def get_logs():
     return jsonify([])
 
 
+@app.route('/api/data/symbols', methods=['GET'])
+def list_data_symbols():
+    try:
+        from quant.data.storage_duckdb import DuckDBStorage
+        db = DuckDBStorage()
+        result = {}
+        for market in ("hk", "us"):
+            for freq in ("daily", "minute"):
+                table = f"{freq}_{market}"
+                symbols = db.get_symbols(freq, market)
+                for sym in symbols:
+                    key = f"{table}:{sym}"
+                    r = db.get_date_range(sym, freq)
+                    result[key] = {
+                        "symbol": sym,
+                        "table": table,
+                        "frequency": freq,
+                        "market": market,
+                        "start": r["start"].isoformat() if r else None,
+                        "end": r["end"].isoformat() if r else None,
+                        "rows": db.table_row_count(table),
+                    }
+        db.close()
+        return jsonify({"symbols": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/backtest/run', methods=['POST'])
 def run_backtest():
     data = request.json
@@ -513,51 +568,65 @@ def run_backtest():
     def _run():
         try:
             import pandas as pd
-            from quant.data.providers.yfinance_provider import YfinanceProvider
             from quant.core.backtester import Backtester
             from quant.strategies.registry import StrategyRegistry
             from quant.strategies.implementations import (
                 VolatilityRegime, SimpleMomentum,
                 CrossSectionalMeanReversion, DualMomentum,
+                TencentMomentum,
             )
-            from quant.core.walkforward import _DataFrameProvider
+            from quant.data.providers.duckdb_provider import DuckDBProvider
 
-            provider = YfinanceProvider()
-            provider.connect()
+            db_provider = DuckDBProvider()
+            db_provider.connect()
 
             all_data = []
+            missing_symbols = []
+
             for symbol in symbols:
-                bars = provider.get_bars(
+                bars = db_provider.get_bars(
                     symbol,
                     datetime.strptime(start_date, '%Y-%m-%d'),
                     datetime.strptime(end_date, '%Y-%m-%d'),
                     "1d",
                 )
                 if not bars.empty:
-                    bars = bars.reset_index()
-                    bars['symbol'] = symbol
-                    col_map = {'Date': 'timestamp', 'index': 'timestamp'}
-                    bars = bars.rename(columns=col_map)
-                    cols = [c for c in ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'symbol'] if c in bars.columns]
-                    all_data.append(bars[cols])
+                    all_data.append(bars)
+                else:
+                    missing_symbols.append(symbol)
 
             if not all_data:
+                db_provider.disconnect()
                 with _backtest_lock:
-                    _backtest_results[backtest_id] = {"status": "error", "error": "No data downloaded", "backtest_id": backtest_id}
+                    _backtest_results[backtest_id] = {
+                        "status": "error",
+                        "error": f"No data found in DuckDB for symbols: {missing_symbols}. "
+                                 f"Available: {db_provider.list_available_symbols('daily', 'hk') + db_provider.list_available_symbols('daily', 'us')}",
+                        "backtest_id": backtest_id,
+                    }
                 return
+
+            from quant.core.walkforward import _DataFrameProvider
 
             data_df = pd.concat(all_data, ignore_index=True)
             data_provider = _DataFrameProvider(data_df)
 
+            import inspect as _inspect
+
             registry = StrategyRegistry()
-            strategy_class = registry.get(strategy_id)
+            registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
+            strategy_class = registry.get(registry_key)
             if strategy_class is None:
                 with _backtest_lock:
                     _backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}
                 return
+            sig = _inspect.signature(strategy_class.__init__)
+            accepted = set(list(sig.parameters.keys())[1:])  # skip 'self'
             strategy_kwargs = {"symbols": symbols}
             if strategy_params:
-                strategy_kwargs.update(strategy_params)
+                for k, v in strategy_params.items():
+                    if k in accepted:
+                        strategy_kwargs[k] = v
             strategy = strategy_class(**strategy_kwargs)
 
             config = {
@@ -858,6 +927,11 @@ STRATEGY_PARAMETERS = {
     'dual_momentum': {
         'lookback_months': {'type': 'int', 'default': 12, 'description': 'Momentum lookback period'},
         'risk_free_rate': {'type': 'float', 'default': 0.02, 'description': 'Risk-free rate for excess return'},
+    },
+    'TencentMomentum': {
+        'fast_period': {'type': 'int', 'default': 20, 'description': 'Fast SMA period'},
+        'slow_period': {'type': 'int', 'default': 60, 'description': 'Slow SMA period'},
+        'position_pct': {'type': 'float', 'default': 0.95, 'description': 'Position size as % of NAV'},
     },
 }
 
