@@ -114,6 +114,8 @@ class SimpleMomentum(Strategy):
             self._day_data[symbol] = []
 
         self._day_data[symbol].append(data)
+        if len(self._day_data[symbol]) > self.momentum_lookback * 2:
+            self._day_data[symbol] = self._day_data[symbol][-self.momentum_lookback:]
 
     def on_before_trading(self, context: "Context", trading_date: date) -> None:
         self._calculate_momentum_scores()

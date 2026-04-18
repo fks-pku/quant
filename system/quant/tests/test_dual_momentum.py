@@ -3,8 +3,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-from quant.core.backtester import Backtester
-from quant.strategies.implementations.dual_momentum import DualMomentum
+pytestmark = pytest.mark.skip(reason="DualMomentum strategy removed from codebase")
 
 
 def _generate_test_data(symbols, days=120, start_date=None):

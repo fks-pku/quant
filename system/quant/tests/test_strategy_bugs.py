@@ -6,8 +6,9 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import pandas as pd
 import numpy as np
 
-from quant.strategies.implementations.volatility_regime import VolatilityRegime
-from quant.strategies.implementations.simple_momentum import SimpleMomentum
+from quant.strategies.registry import StrategyRegistry
+from quant.strategies.volatility_regime.strategy import VolatilityRegime
+from quant.strategies.simple_momentum.strategy import SimpleMomentum
 
 
 def _make_context(nav=100000.0, data_provider=None):

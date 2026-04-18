@@ -11,46 +11,6 @@ const fmtCurrency = (v) => {
 const fmtPct = (v) => (parseFloat(v) || 0).toFixed(2) + '%';
 const pnlColor = (v) => v >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
-function ModalEquityChart({ curve }) {
-  if (!curve || curve.length < 2) return null;
-  const W = 600, H = 160, padL = 50, padR = 15, padT = 10, padB = 25;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const values = curve.map(([, v]) => v);
-  const minV = Math.min(...values), maxV = Math.max(...values), rangeV = maxV - minV || 1;
-  const scaleX = (i) => padL + (i / (curve.length - 1)) * plotW;
-  const scaleY = (v) => padT + plotH - ((v - minV) / rangeV) * plotH;
-  const points = curve.map(([, v], i) => `${scaleX(i)},${scaleY(v)}`).join(' ');
-  const areaPoints = `${scaleX(0)},${padT + plotH} ${points} ${scaleX(curve.length - 1)},${padT + plotH}`;
-  const dateLabels = [0, Math.floor(curve.length / 2), curve.length - 1].map(idx => ({
-    x: scaleX(idx), label: curve[idx][0].slice(0, 10)
-  }));
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: '160px' }}>
-      <defs>
-        <linearGradient id="modalEqGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#00d4ff" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#00d4ff" stopOpacity="0.02" />
-        </linearGradient>
-      </defs>
-      {[0, 0.25, 0.5, 0.75, 1].map((frac, i) => {
-        const v = minV + rangeV * frac;
-        const y = scaleY(v);
-        return (
-          <g key={i}>
-            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#333355" strokeWidth="0.5" />
-            <text x={padL - 6} y={y + 3} textAnchor="end" fill="#666680" fontSize="8">{fmtCurrency(v)}</text>
-          </g>
-        );
-      })}
-      <polygon points={areaPoints} fill="url(#modalEqGrad)" />
-      <polyline points={points} fill="none" stroke="#00d4ff" strokeWidth="1.5" />
-      {dateLabels.map((dl, i) => (
-        <text key={i} x={dl.x} y={H - 5} textAnchor="middle" fill="#666680" fontSize="8">{dl.label}</text>
-      ))}
-    </svg>
-  );
-}
-
 function ModalPnlChart({ curve }) {
   if (!curve || curve.length < 2) return null;
   const W = 600, H = 120, padL = 50, padR = 15, padT = 10, padB = 20;
@@ -76,7 +36,6 @@ function ModalPnlChart({ curve }) {
 export default function StrategyDetailModal({ isOpen, onClose, strategy }) {
   const [activeTab, setActiveTab] = useState('readme');
   const [readme, setReadme] = useState(null);
-  const [backtestData, setBacktestData] = useState(null);
   const [liveData, setLiveData] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -91,7 +50,6 @@ export default function StrategyDetailModal({ isOpen, onClose, strategy }) {
     if (!isOpen || !strategy) return;
     setActiveTab('readme');
     setReadme(null);
-    setBacktestData(null);
     setLiveData(null);
 
     setLoading(true);
@@ -100,10 +58,6 @@ export default function StrategyDetailModal({ isOpen, onClose, strategy }) {
       promises.push(
         axios.get(`${API_BASE}/strategies/${strategy.id}/readme`)
           .then(res => setReadme(res.data)).catch(() => setReadme(null))
-      );
-      promises.push(
-        axios.get(`${API_BASE}/strategies/backtest/${strategy.id}`)
-          .then(res => setBacktestData(res.data)).catch(() => setBacktestData(null))
       );
       promises.push(
         axios.get(`${API_BASE}/strategies/performance/${strategy.id}`)
@@ -119,7 +73,6 @@ export default function StrategyDetailModal({ isOpen, onClose, strategy }) {
 
   const tabs = [
     { id: 'readme', label: 'README' },
-    { id: 'backtest', label: 'Backtest' },
     { id: 'live', label: 'Live Performance' },
   ];
 
@@ -146,34 +99,6 @@ export default function StrategyDetailModal({ isOpen, onClose, strategy }) {
               </div>
             ) : (
               <div className="empty-text">README not available</div>
-            )
-          ) : activeTab === 'backtest' ? (
-            backtestData && backtestData.metrics ? (
-              <div className="sdm-performance">
-                <div className="sdm-metrics-grid">
-                  {[
-                    { label: 'Total Return', value: fmtPct(backtestData.metrics.total_return_pct), color: pnlColor(backtestData.metrics.total_return_pct) },
-                    { label: 'Sharpe Ratio', value: (backtestData.metrics.sharpe_ratio || 0).toFixed(2) },
-                    { label: 'Max Drawdown', value: fmtPct(backtestData.metrics.max_drawdown_pct), color: 'var(--accent-red)' },
-                    { label: 'Win Rate', value: fmtPct(backtestData.metrics.win_rate) },
-                    { label: 'Profit Factor', value: (backtestData.metrics.profit_factor || 0).toFixed(2) },
-                    { label: 'Total Trades', value: backtestData.metrics.total_trades },
-                  ].map((m, i) => (
-                    <div key={i} className="bt-metric">
-                      <div className="bt-metric-value" style={m.color ? { color: m.color } : {}}>{m.value}</div>
-                      <div className="bt-metric-label">{m.label}</div>
-                    </div>
-                  ))}
-                </div>
-                {backtestData.equity_curve && (
-                  <div className="sdm-chart-section">
-                    <div className="bt-chart-title">Equity Curve</div>
-                    <ModalEquityChart curve={backtestData.equity_curve} />
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="empty-text">暂无回测记录，请先在回测模块运行</div>
             )
           ) : (
             liveData && liveData.performance ? (

@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from quant.core.backtester import Backtester
-from quant.strategies.implementations.cross_sectional_mean_reversion import CrossSectionalMeanReversion
+from quant.strategies.cross_sectional_mr.strategy import CrossSectionalMeanReversion
 
 
 def _generate_test_data(symbols, days=120, start_date=None):

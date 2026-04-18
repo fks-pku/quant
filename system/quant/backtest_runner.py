@@ -1,4 +1,4 @@
-"""CLI runner for US equity backtests using yfinance data."""
+"""CLI runner for backtests using DuckDB-stored data."""
 
 import argparse
 import json
@@ -9,21 +9,29 @@ from pathlib import Path
 import pandas as pd
 
 from quant.core.backtester import Backtester, BacktestResultExporter
-from quant.data.providers.yfinance_provider import YfinanceProvider
+from quant.data.providers.duckdb_provider import DuckDBProvider
+from quant.data.storage_duckdb import DuckDBStorage
 from quant.strategies.registry import StrategyRegistry
-import quant.strategies.implementations  # noqa: F401
+
+
+def _normalize_symbol(symbol):
+    if symbol.startswith("HK.") or symbol.startswith("US."):
+        return symbol
+    if symbol.isdigit() and len(symbol) >= 5:
+        return f"HK.{symbol}"
+    return f"US.{symbol}"
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="US Equity Backtest Runner")
+    parser = argparse.ArgumentParser(description="Backtest Runner (DuckDB data)")
     parser.add_argument("--strategy", required=True, help="Strategy name (e.g. SimpleMomentum)")
     parser.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
     parser.add_argument("--end", required=True, help="End date YYYY-MM-DD")
-    parser.add_argument("--symbols", required=True, help="Comma-separated symbols (e.g. AAPL,MSFT,GOOGL)")
+    parser.add_argument("--symbols", required=True, help="Comma-separated symbols (e.g. AAPL,HK.00700)")
     parser.add_argument("--initial-cash", type=float, default=100000)
     parser.add_argument("--slippage-bps", type=float, default=5)
     parser.add_argument("--output-dir", default="./backtest_output")
-    parser.add_argument("--cache-dir", default="./data/cache")
+    parser.add_argument("--db", default="./data/duckdb/quant.duckdb")
     return parser.parse_args(argv)
 
 
@@ -32,7 +40,8 @@ def main(argv=None):
 
     start = datetime.strptime(args.start, "%Y-%m-%d")
     end = datetime.strptime(args.end, "%Y-%m-%d")
-    symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    raw_symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    symbols = [_normalize_symbol(s) for s in raw_symbols]
 
     registry = StrategyRegistry()
     strategy_class = registry.get(args.strategy)
@@ -41,8 +50,8 @@ def main(argv=None):
         sys.exit(1)
     strategy = strategy_class(symbols=symbols)
 
-    print(f"Downloading data for {symbols} from {args.start} to {args.end}...")
-    provider = YfinanceProvider(cache_dir=args.cache_dir)
+    print(f"Loading data for {symbols} from DuckDB ({args.start} ~ {args.end})...")
+    provider = DuckDBProvider(db_path=args.db)
     provider.connect()
 
     all_data = []
@@ -51,27 +60,30 @@ def main(argv=None):
         if bars.empty:
             print(f"Warning: No data for {symbol}, skipping")
             continue
-        bars = bars.reset_index()
-        bars['symbol'] = symbol
-        if 'Date' in bars.columns:
-            bars = bars.rename(columns={'Date': 'timestamp'})
-        elif 'index' in bars.columns:
-            bars = bars.rename(columns={'index': 'timestamp'})
-        all_data.append(bars[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'symbol']])
+        all_data.append(bars)
 
     if not all_data:
-        print("Error: No data downloaded for any symbol")
+        print("Error: No data found for any symbol. Run `python scripts/prepare_data.py` first.")
         sys.exit(1)
 
     data = pd.concat(all_data, ignore_index=True)
-    print(f"Downloaded {len(data)} bars for {data['symbol'].nunique()} symbols")
+    print(f"Loaded {len(data)} bars for {data['symbol'].nunique()} symbols")
+
+    provider.disconnect()
+
+    storage = DuckDBStorage(args.db)
+    lot_sizes = {}
+    for symbol in symbols:
+        lot_sizes[symbol] = storage.get_lot_size(symbol)
+    storage.close()
+    print(f"Lot sizes: {lot_sizes}")
 
     config = {
         "backtest": {"slippage_bps": args.slippage_bps},
         "execution": {
             "commission": {
                 "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
-                "HK": {"type": "percent", "percent": 0.001, "min_per_order": 2.0},
+                "HK": {"type": "hk_realistic"},
             }
         },
         "data": {"default_timeframe": "1d"},
@@ -88,7 +100,13 @@ def main(argv=None):
 
     data_provider = _DataFrameProvider(data)
 
-    backtester = Backtester(config)
+    warnings = data_provider.validate()
+    if warnings:
+        print("\nData quality warnings:")
+        for w in warnings:
+            print(f"  - {w}")
+
+    backtester = Backtester(config, lot_sizes=lot_sizes)
     result = backtester.run(
         start=start,
         end=end,
@@ -105,6 +123,7 @@ def main(argv=None):
     BacktestResultExporter.to_csv(result, base_path)
 
     metrics = result.metrics
+    diag = result.diagnostics
     print(f"\n{'='*50}")
     print(f"BACKTEST RESULTS: {args.strategy}")
     print(f"Period: {args.start} to {args.end}")
@@ -119,6 +138,13 @@ def main(argv=None):
     print(f"Total Trades:     {metrics.total_trades}")
     print(f"Avg Duration:     {metrics.avg_trade_duration}")
     print(f"{'='*50}")
+    print(f"\nDiagnostics:")
+    print(f"  Suspended days:       {diag.suspended_days}")
+    print(f"  Volume-limited:       {diag.volume_limited_trades}")
+    print(f"  Lot-adjusted:         {diag.lot_adjusted_trades}")
+    print(f"  Avg fill delay:       {diag.avg_fill_delay_days:.1f} days")
+    print(f"  Total costs:          ${diag.total_commission:,.2f}")
+    print(f"  Cost drag:            {diag.cost_drag_pct:.1f}%")
     print(f"\nResults saved to: {base_path}_*.csv")
 
     metrics_json = {
@@ -139,9 +165,17 @@ def main(argv=None):
         "calmar_ratio": metrics.calmar_ratio,
         "payoff_ratio": metrics.payoff_ratio,
         "expectancy": metrics.expectancy,
+        "diagnostics": {
+            "suspended_days": diag.suspended_days,
+            "volume_limited_trades": diag.volume_limited_trades,
+            "lot_adjusted_trades": diag.lot_adjusted_trades,
+            "avg_fill_delay_days": diag.avg_fill_delay_days,
+            "total_commission": diag.total_commission,
+            "cost_drag_pct": diag.cost_drag_pct,
+        }
     }
     with open(f"{base_path}_metrics.json", "w") as f:
-        json.dump(metrics_json, f, indent=2)
+        json.dump(metrics_json, f, indent=2, default=str)
 
     return result
 

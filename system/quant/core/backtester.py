@@ -1,4 +1,4 @@
-"""Backtest engine using Portfolio as single source of truth for positions."""
+"""Backtest engine with realistic execution: T+1 fills, suspension handling, lot sizes."""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -13,8 +13,39 @@ from quant.core.risk import RiskEngine
 from quant.core.analytics import calculate_performance_metrics, PerformanceMetrics
 from quant.models.trade import Trade
 
-
 logger = logging.getLogger(__name__)
+
+MAX_FILL_DEFER_DAYS = 5
+VOLUME_PARTICIPATION_LIMIT = 0.05
+DEFAULT_LOT_SIZE = 100
+
+HK_COMMISSION_RATE = 0.0003
+HK_STAMP_DUTY_RATE = 0.0013
+HK_SFC_LEVY_RATE = 0.0000278
+HK_CLEARING_RATE = 0.00002
+HK_TRADING_FEE_RATE = 0.00005
+HK_MIN_COMMISSION = 3.0
+
+
+@dataclass
+class BacktestDiagnostics:
+    suspended_days: int = 0
+    volume_limited_trades: int = 0
+    lot_adjusted_trades: int = 0
+    total_fill_delay_days: int = 0
+    fill_count: int = 0
+    total_commission: float = 0.0
+    total_gross_pnl: float = 0.0
+
+    @property
+    def avg_fill_delay_days(self) -> float:
+        return self.total_fill_delay_days / self.fill_count if self.fill_count > 0 else 0.0
+
+    @property
+    def cost_drag_pct(self) -> float:
+        if self.total_gross_pnl == 0:
+            return 0.0
+        return self.total_commission / abs(self.total_gross_pnl) * 100
 
 
 @dataclass
@@ -31,27 +62,40 @@ class BacktestResult:
     equity_curve: pd.Series
     trades: List[Trade]
     metrics: PerformanceMetrics
+    diagnostics: BacktestDiagnostics = field(default_factory=BacktestDiagnostics)
 
 
 @dataclass
 class CommissionConfig:
     US: Dict[str, Any] = field(default_factory=lambda: {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0})
-    HK: Dict[str, Any] = field(default_factory=lambda: {"type": "percent", "percent": 0.001, "min_per_order": 2.0})
+    HK: Dict[str, Any] = field(default_factory=lambda: {"type": "hk_realistic"})
 
 
 class Backtester:
-    """Backtester that uses Portfolio as the single source of truth for positions."""
+    """Backtester with realistic execution."""
 
-    def __init__(self, config: Dict[str, Any], event_bus: Optional[EventBus] = None):
+    def __init__(self, config: Dict[str, Any], event_bus: Optional[EventBus] = None,
+                 lot_sizes: Optional[Dict[str, int]] = None):
         self.config = config
         self.event_bus = event_bus or EventBus()
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
+        self.lot_sizes = lot_sizes or {}
 
         commission_config = config.get("execution", {}).get("commission", {})
         self.commission = CommissionConfig(
             US=commission_config.get("US", {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}),
-            HK=commission_config.get("HK", {"type": "percent", "percent": 0.001, "min_per_order": 2.0})
+            HK=commission_config.get("HK", {"type": "hk_realistic"})
         )
+
+    def _get_lot_size(self, symbol: str) -> int:
+        return self.lot_sizes.get(symbol, DEFAULT_LOT_SIZE)
+
+    @staticmethod
+    def _is_suspended(bar: Dict, prev_bar: Optional[Dict]) -> bool:
+        if bar.get("volume", 0) == 0:
+            if prev_bar and bar.get("close") == prev_bar.get("close"):
+                return True
+        return False
 
     def run(
         self,
@@ -65,76 +109,143 @@ class Backtester:
         portfolio = Portfolio(initial_cash=initial_cash, currency="USD")
         risk_engine = RiskEngine(self.config, portfolio, self.event_bus)
         symbols = symbols or []
+        diag = BacktestDiagnostics()
 
         equity_curve_dates: List[datetime] = []
         equity_curve_values: List[float] = []
         all_trades: List[Trade] = []
 
         entry_times: Dict[str, datetime] = {}
+        entry_prices: Dict[str, float] = {}
         last_prices: Dict[str, float] = {}
+        prev_bars: Dict[str, Dict] = {}
+
+        deferred_orders: List[Dict] = []
+        pending_orders: List[Dict] = []
 
         for strategy in strategies:
             strategy.context = self._create_context(portfolio, risk_engine, data_provider)
             if hasattr(strategy, "on_start"):
                 strategy.on_start(strategy.context)
 
+        if data_provider and hasattr(data_provider, 'trading_dates'):
+            trading_dates_set = data_provider.trading_dates
+        else:
+            trading_dates_set = None
+
         current_date = start
         while current_date <= end:
+            if trading_dates_set and current_date not in trading_dates_set:
+                current_date += timedelta(days=1)
+                continue
+
+            today_bars: Dict[str, Dict] = {}
+
             for strategy in strategies:
                 if hasattr(strategy, "on_before_trading"):
                     strategy.on_before_trading(strategy.context, current_date.date())
 
             if data_provider:
+                has_fast_lookup = hasattr(data_provider, 'get_bar_for_date')
                 for symbol in symbols:
-                    bar_data = {}
                     try:
-                        bars = data_provider.get_bars(
-                            symbol,
-                            current_date,
-                            current_date + timedelta(days=1),
-                            self.config.get("data", {}).get("default_timeframe", "1d")
-                        )
-                        if bars is not None and not bars.empty:
-                            for _, bar in bars.iterrows():
-                                bar_data = bar.to_dict()
-                                bar_data['timestamp'] = bar_data.get('timestamp', bar.name if hasattr(bar, 'name') else current_date)
-                                bar_data['symbol'] = symbol
+                        if has_fast_lookup:
+                            bar_data = data_provider.get_bar_for_date(symbol, current_date)
+                            if bar_data is None:
+                                continue
+                            bar_data = dict(bar_data)
+                            bar_data['symbol'] = symbol
+                            bar_data['_suspended'] = self._is_suspended(bar_data, prev_bars.get(symbol))
+                            today_bars[symbol] = bar_data
+
+                            if bar_data['_suspended']:
+                                diag.suspended_days += 1
+                            else:
                                 last_prices[symbol] = bar_data.get('close', 0)
 
-                                for strategy in strategies:
-                                    if hasattr(strategy, "on_data"):
-                                        strategy.on_data(strategy.context, bar_data)
+                            for strategy in strategies:
+                                if hasattr(strategy, "on_data"):
+                                    strategy.on_data(strategy.context, bar_data)
+
+                            prev_bars[symbol] = bar_data
+                        else:
+                            bars = data_provider.get_bars(
+                                symbol,
+                                current_date,
+                                current_date + timedelta(days=1),
+                                self.config.get("data", {}).get("default_timeframe", "1d")
+                            )
+                            if bars is not None and not bars.empty:
+                                for _, bar in bars.iterrows():
+                                    bar_data = bar.to_dict()
+                                    bar_data['timestamp'] = bar_data.get('timestamp', bar.name if hasattr(bar, 'name') else current_date)
+                                    bar_data['symbol'] = symbol
+                                    bar_data['_suspended'] = self._is_suspended(bar_data, prev_bars.get(symbol))
+                                    today_bars[symbol] = bar_data
+
+                                    if bar_data['_suspended']:
+                                        diag.suspended_days += 1
+                                    else:
+                                        last_prices[symbol] = bar_data.get('close', 0)
+
+                                    for strategy in strategies:
+                                        if hasattr(strategy, "on_data"):
+                                            strategy.on_data(strategy.context, bar_data)
+
+                                    prev_bars[symbol] = bar_data
                     except Exception:
                         pass
 
-                    for strategy in strategies:
-                        if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
-                            om = strategy.context.order_manager
-                            if om and hasattr(om, "_pending_orders") and om._pending_orders:
-                                exec_bar = bar_data if bar_data.get('close') else None
-                                if exec_bar is None and last_prices.get(symbol, 0) > 0:
-                                    exec_bar = {'close': last_prices[symbol], 'timestamp': current_date, 'symbol': symbol}
-                                if exec_bar:
-                                    for order in list(om._pending_orders):
-                                        trade = self._execute_order(
-                                            order, portfolio, symbol, exec_bar, entry_times
-                                        )
-                                        if trade:
-                                            all_trades.append(trade)
-                                            for s in strategies:
-                                                if hasattr(s, "on_fill"):
-                                                    s.on_fill(s.context, trade)
-                                om.clear_pending()
+            for order in deferred_orders:
+                order['_deferred_days'] = order.get('_deferred_days', 0) + 1
+
+            fillable = []
+            still_deferred = []
+            for order in deferred_orders:
+                sym = order['symbol']
+                bar = today_bars.get(sym, {})
+                if bar.get('_suspended'):
+                    if order.get('_deferred_days', 0) >= MAX_FILL_DEFER_DAYS:
+                        continue
+                    still_deferred.append(order)
+                else:
+                    fillable.append(order)
+            deferred_orders = still_deferred
+
+            for order in fillable:
+                sym = order['symbol']
+                bar = today_bars.get(sym, {})
+                trade = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag)
+                if trade:
+                    all_trades.append(trade)
+                    for s in strategies:
+                        if hasattr(s, "on_fill"):
+                            s.on_fill(s.context, trade)
+
+            for strategy in strategies:
+                if hasattr(strategy, "on_after_trading"):
+                    strategy.on_after_trading(strategy.context, current_date.date())
+
+            if data_provider:
+                for strategy in strategies:
+                    if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
+                        om = strategy.context.order_manager
+                        if om and hasattr(om, "_pending_orders") and om._pending_orders:
+                            for order in om._pending_orders:
+                                order['_signal_date'] = current_date
+                                order['_deferred_days'] = 0
+                                pending_orders.append(order)
+                            om.clear_pending()
+
+            for order in pending_orders:
+                deferred_orders.append(order)
+            pending_orders = []
 
             self._update_portfolio_prices(portfolio, last_prices)
 
             nav = portfolio.nav
             equity_curve_dates.append(current_date)
             equity_curve_values.append(nav)
-
-            for strategy in strategies:
-                if hasattr(strategy, "on_after_trading"):
-                    strategy.on_after_trading(strategy.context, current_date.date())
 
             current_date += timedelta(days=1)
 
@@ -144,6 +255,8 @@ class Backtester:
 
         equity_curve = pd.Series(equity_curve_values, index=equity_curve_dates)
         metrics = calculate_performance_metrics(equity_curve, all_trades)
+
+        diag.total_gross_pnl = sum(t.pnl for t in all_trades) + diag.total_commission
 
         return BacktestResult(
             final_nav=metrics.equity_curve.iloc[-1] if not metrics.equity_curve.empty else initial_cash,
@@ -157,11 +270,11 @@ class Backtester:
             avg_trade_duration=metrics.avg_trade_duration,
             equity_curve=equity_curve,
             trades=all_trades,
-            metrics=metrics
+            metrics=metrics,
+            diagnostics=diag
         )
 
     def _update_portfolio_prices(self, portfolio: Portfolio, last_prices: Dict[str, float]) -> None:
-        """Update portfolio position market_values with latest prices."""
         for symbol, pos in portfolio.positions.items():
             if pos.quantity != 0 and symbol in last_prices:
                 pos.market_value = pos.quantity * last_prices[symbol]
@@ -209,31 +322,63 @@ class Backtester:
         symbol: str,
         bar: Dict,
         entry_times: Dict[str, datetime],
+        entry_prices: Dict[str, float],
+        diag: BacktestDiagnostics,
     ) -> Optional[Trade]:
-        exec_price = bar.get('close', bar.get('price', 100))
-        if not exec_price or exec_price <= 0:
+        fill_price = bar.get('open', bar.get('close', 0))
+        if not fill_price or fill_price <= 0:
             return None
 
-        slippage = exec_price * (self.slippage_bps / 10000)
+        signal_date = order.get('_signal_date')
+        fill_ts = bar.get('timestamp', datetime.now())
+        if not isinstance(fill_ts, datetime):
+            fill_ts = pd.Timestamp(fill_ts).to_pydatetime()
+
+        diag.total_fill_delay_days += order.get('_deferred_days', 0)
+        diag.fill_count += 1
+
+        slippage = fill_price * (self.slippage_bps / 10000)
         if order['side'] == 'BUY':
-            exec_price += slippage
+            fill_price += slippage
         else:
-            exec_price -= slippage
+            fill_price -= slippage
 
         quantity = order['quantity']
         market = self._detect_market(symbol)
-        commission = self._calculate_commission(exec_price, quantity, market)
-        total_cost = exec_price * quantity + commission
+        lot_size = self._get_lot_size(symbol)
+
+        if market == "HK":
+            lot_qty = (int(quantity) // lot_size) * lot_size
+            if lot_qty < lot_size:
+                return None
+            if lot_qty != int(quantity):
+                diag.lot_adjusted_trades += 1
+            quantity = float(lot_qty)
+
+        bar_volume = bar.get('volume', 0)
+        if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
+            max_qty = int(bar_volume * VOLUME_PARTICIPATION_LIMIT)
+            if market == "HK":
+                max_qty = (max_qty // lot_size) * lot_size
+            if max_qty <= 0:
+                return None
+            quantity = float(max_qty)
+            diag.volume_limited_trades += 1
+
+        cost_breakdown = self._calculate_commission_breakdown(fill_price, quantity, market, order['side'])
+        commission = sum(cost_breakdown.values())
+        diag.total_commission += commission
 
         if order['side'] == 'BUY':
+            total_cost = fill_price * quantity + commission
             if portfolio.cash < total_cost:
                 return None
 
             if symbol not in entry_times:
-                ts = bar.get('timestamp', datetime.now())
-                entry_times[symbol] = pd.Timestamp(ts).to_pydatetime() if not isinstance(ts, datetime) else ts
+                entry_times[symbol] = fill_ts
+                entry_prices[symbol] = fill_price
 
-            portfolio.update_position(symbol, quantity=quantity, price=exec_price, cost=exec_price * quantity)
+            portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity)
             portfolio.cash -= total_cost
 
             return None
@@ -248,26 +393,30 @@ class Backtester:
             entry_time = entry_times.get(symbol, datetime.now())
             if not isinstance(entry_time, datetime):
                 entry_time = pd.Timestamp(entry_time).to_pydatetime()
-            exit_ts = bar.get('timestamp', datetime.now())
-            if not isinstance(exit_ts, datetime):
-                exit_ts = pd.Timestamp(exit_ts).to_pydatetime()
-            realized = (exec_price - pos.avg_cost) * sell_qty
 
-            portfolio.cash += exec_price * sell_qty - commission
-            portfolio.update_position(symbol, quantity=-sell_qty, price=exec_price, cost=0)
+            realized = (fill_price - pos.avg_cost) * sell_qty
+
+            portfolio.cash += fill_price * sell_qty - commission
+            portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0)
 
             if pos.quantity <= 0:
                 entry_times.pop(symbol, None)
+                entry_prices.pop(symbol, None)
 
             return Trade(
                 entry_time=entry_time,
-                exit_time=exit_ts,
+                exit_time=fill_ts,
                 symbol=symbol,
                 side=order['side'],
                 entry_price=entry_price,
-                exit_price=exec_price,
+                exit_price=fill_price,
                 quantity=sell_qty,
-                pnl=realized - commission
+                pnl=realized - commission,
+                signal_date=signal_date,
+                fill_date=fill_ts,
+                fill_price=fill_price,
+                intended_qty=order['quantity'],
+                cost_breakdown=cost_breakdown,
             )
 
         return None
@@ -277,18 +426,30 @@ class Backtester:
             return "HK"
         return "US"
 
-    def _calculate_commission(self, price: float, quantity: float, market: str) -> float:
+    def _calculate_commission_breakdown(self, price: float, quantity: float, market: str, side: str) -> Dict[str, float]:
+        trade_value = price * quantity
         if market == "US":
             cfg = self.commission.US
             if cfg["type"] == "per_share":
                 commission = quantity * cfg.get("per_share", 0.005)
-                return max(commission, cfg.get("min_per_order", 1.0))
-        elif market == "HK":
-            cfg = self.commission.HK
-            if cfg["type"] == "percent":
-                commission = price * quantity * cfg.get("percent", 0.001)
-                return max(commission, cfg.get("min_per_order", 2.0))
-        return 0.0
+                commission = max(commission, cfg.get("min_per_order", 1.0))
+            else:
+                commission = max(trade_value * cfg.get("percent", 0.001), cfg.get("min_per_order", 1.0))
+            return {"commission": commission}
+
+        commission = max(trade_value * HK_COMMISSION_RATE, HK_MIN_COMMISSION)
+        sfc_levy = trade_value * HK_SFC_LEVY_RATE
+        clearing = trade_value * HK_CLEARING_RATE
+        trading_fee = trade_value * HK_TRADING_FEE_RATE
+        stamp_duty = trade_value * HK_STAMP_DUTY_RATE if side == 'SELL' else 0.0
+
+        return {
+            "commission": commission,
+            "stamp_duty": stamp_duty,
+            "sfc_levy": sfc_levy,
+            "clearing": clearing,
+            "trading_fee": trading_fee,
+        }
 
 
 class BacktestResultExporter:
@@ -301,14 +462,19 @@ class BacktestResultExporter:
         if result.trades:
             trades_df = pd.DataFrame([
                 {
+                    "signal_date": t.signal_date,
                     "entry_time": t.entry_time,
                     "exit_time": t.exit_time,
+                    "fill_date": t.fill_date,
                     "symbol": t.symbol,
                     "side": t.side,
                     "entry_price": t.entry_price,
                     "exit_price": t.exit_price,
+                    "fill_price": t.fill_price,
+                    "intended_qty": t.intended_qty,
                     "quantity": t.quantity,
-                    "pnl": t.pnl
+                    "pnl": t.pnl,
+                    "cost_breakdown": t.cost_breakdown,
                 }
                 for t in result.trades
             ])

@@ -1,5 +1,5 @@
 """Data providers package."""
 
-from quant.data.providers.yfinance_provider import YfinanceProvider
+from quant.data.providers.duckdb_provider import DuckDBProvider
 
-__all__ = ["YfinanceProvider"]
+__all__ = ["DuckDBProvider"]

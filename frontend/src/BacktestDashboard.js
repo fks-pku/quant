@@ -120,7 +120,7 @@ export default function BacktestDashboard() {
   const [strategy, setStrategy] = useState('SimpleMomentum');
   const [startDate, setStartDate] = useState('2020-01-01');
   const [endDate, setEndDate] = useState('2024-12-31');
-  const [symbols, setSymbols] = useState('AAPL,MSFT,GOOGL,AMZN,TSLA,SPY');
+  const [symbols, setSymbols] = useState('HK.00700');
   const [initialCash, setInitialCash] = useState(100000);
   const [slippageBps, setSlippageBps] = useState(5);
   const [status, setStatus] = useState('idle');
@@ -131,6 +131,8 @@ export default function BacktestDashboard() {
   const [strategies, setStrategies] = useState([]);
   const [strategyParams, setStrategyParams] = useState({});
   const [paramValues, setParamValues] = useState({});
+  const symbolsRef = useRef('HK.00700');
+  const userEditedSymbols = useRef(false);
 
   const fetchHistory = async () => {
     try {
@@ -166,13 +168,26 @@ export default function BacktestDashboard() {
     }
   }, []);
 
+  const getDefaultSymbols = useCallback((strategyId) => {
+    const found = strategies.find(s => s.id === strategyId);
+    return found?.default_symbols || 'HK.00700';
+  }, [strategies]);
+
+
   useEffect(() => {
     fetchStrategies();
   }, [fetchStrategies]);
 
   useEffect(() => {
-    if (strategy) fetchParams(strategy);
-  }, [strategy, fetchParams]);
+    if (strategy) {
+      fetchParams(strategy);
+      if (!userEditedSymbols.current) {
+        const defaultSym = getDefaultSymbols(strategy);
+        setSymbols(defaultSym);
+        symbolsRef.current = defaultSym;
+      }
+    }
+  }, [strategy, fetchParams, getDefaultSymbols]);
 
   useEffect(() => {
     fetchHistory();
@@ -194,7 +209,7 @@ export default function BacktestDashboard() {
           pollRef.current = null;
           fetchHistory();
         } else if (res.data.status === 'error') {
-          setError(res.data.description || 'Backtest failed');
+          setError(res.data.error || res.data.description || 'Backtest failed');
           setStatus('error');
           clearInterval(pollRef.current);
           pollRef.current = null;
@@ -240,7 +255,7 @@ export default function BacktestDashboard() {
       } else if (res.data.status === 'running') {
         pollResult(btId);
       } else {
-        setError(res.data.description || 'Backtest failed');
+        setError(res.data.error || res.data.description || 'Backtest failed');
         setStatus('error');
       }
     } catch (err) {
@@ -273,7 +288,7 @@ export default function BacktestDashboard() {
         </div>
         <div className="bt-control-group" style={{ minWidth: 200 }}>
           <label>Symbols</label>
-          <input type="text" className="bt-input" value={symbols} onChange={e => setSymbols(e.target.value)} />
+          <input type="text" className="bt-input" value={symbols} onChange={e => { setSymbols(e.target.value); userEditedSymbols.current = true; }} />
         </div>
         <div className="bt-control-group">
           <label>Initial Cash</label>

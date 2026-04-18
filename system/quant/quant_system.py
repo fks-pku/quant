@@ -33,8 +33,6 @@ from quant.execution.fill_handler import FillHandler
 from quant.strategies.examples.momentum_eod import MomentumEOD
 from quant.strategies.examples.mean_reversion import MeanReversion1m
 from quant.strategies.examples.dual_thrust import DualThrust
-from quant.strategies.implementations.volatility_regime import VolatilityRegime
-from quant.strategies.implementations.simple_momentum import SimpleMomentum
 from quant.strategies.registry import StrategyRegistry
 from quant.utils.config_loader import ConfigLoader
 from quant.utils.logger import setup_logger

@@ -126,43 +126,35 @@ class VolatilityRegime(Strategy):
         self._regime_history.append(self._current_regime)
 
     def _calculate_momentum_scores(self, context: "Context", trading_date: date) -> None:
-        if self.context and hasattr(self.context, "data_provider"):
-            end = datetime.combine(trading_date, datetime.max.time())
-            start = end - pd.Timedelta(days=self.momentum_lookback + 30)
-            try:
-                for symbol in self._symbols:
-                    data = self.context.data_provider.get_bars(
-                        symbol, start, end, "1d"
-                    )
-                    if data is not None and len(data) >= self.momentum_lookback:
-                        returns = data["close"].pct_change(self.momentum_lookback)
-                        score = returns.iloc[-1]
-                        self._momentum_scores[symbol] = score
-                    else:
-                        self._momentum_scores[symbol] = 0.0
-            except Exception as e:
-                self.logger.warning(f"Could not calculate momentum scores: {e}")
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            if len(bars) >= self.momentum_lookback:
+                prices = [b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0) for b in bars]
+                past = prices[-self.momentum_lookback]
+                if past > 0:
+                    self._momentum_scores[symbol] = (prices[-1] - past) / past
+                else:
+                    self._momentum_scores[symbol] = 0.0
+            else:
+                self._momentum_scores[symbol] = 0.0
 
     def _calculate_rsi_values(self, context: "Context", trading_date: date) -> None:
-        if self.context and hasattr(self.context, "data_provider"):
-            end = datetime.combine(trading_date, datetime.max.time())
-            start = end - pd.Timedelta(days=self.rsi_period * 3 + 30)
-            try:
-                for symbol in self._symbols:
-                    data = self.context.data_provider.get_bars(
-                        symbol, start, end, "1d"
-                    )
-                    if data is not None and len(data) >= self.rsi_period:
-                        delta = data["close"].diff()
-                        gain = delta.clip(lower=0).rolling(self.rsi_period).mean()
-                        loss = (-delta.clip(upper=0)).rolling(self.rsi_period).mean()
-                        rs = gain / loss.replace(0, np.nan)
-                        rsi = 100 - (100 / (1 + rs))
-                        self._rsi_values[symbol] = rsi.iloc[-1]
-                    else:
-                        self._rsi_values[symbol] = 50.0
-            except Exception as e:
-                self.logger.warning(f"Could not calculate RSI: {e}")
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            if len(bars) >= self.rsi_period + 1:
+                prices = [b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0) for b in bars[-(self.rsi_period + 1):]]
+                deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+                gains = [d if d > 0 else 0 for d in deltas]
+                losses = [-d if d < 0 else 0 for d in deltas]
+                avg_gain = sum(gains) / self.rsi_period
+                avg_loss = sum(losses) / self.rsi_period
+                if avg_loss == 0:
+                    self._rsi_values[symbol] = 100.0
+                else:
+                    rs = avg_gain / avg_loss
+                    self._rsi_values[symbol] = 100.0 - (100.0 / (1.0 + rs))
+            else:
+                self._rsi_values[symbol] = 50.0
 
     def on_data(self, context: "Context", data: Any) -> None:
         if isinstance(data, dict):
@@ -187,6 +179,9 @@ class VolatilityRegime(Strategy):
         if symbol not in self._day_data:
             self._day_data[symbol] = []
         self._day_data[symbol].append(data)
+        max_keep = max(self.momentum_lookback, self.rsi_period + 1) * 2
+        if len(self._day_data[symbol]) > max_keep:
+            self._day_data[symbol] = self._day_data[symbol][-max_keep//2:]
 
     def execute(self, context: "Context") -> None:
         if self._positions_opened:

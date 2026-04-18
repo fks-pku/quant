@@ -11,10 +11,9 @@ from quant.core.engine import Engine, Context
 from quant.core.events import EventBus
 from quant.core.portfolio import Portfolio
 from quant.core.risk import RiskEngine
-from quant.strategies.implementations.volatility_regime import VolatilityRegime
-from quant.strategies.implementations.simple_momentum import SimpleMomentum
-from quant.strategies.implementations.cross_sectional_mean_reversion import CrossSectionalMeanReversion
-from quant.strategies.implementations.dual_momentum import DualMomentum
+from quant.strategies.volatility_regime.strategy import VolatilityRegime
+from quant.strategies.simple_momentum.strategy import SimpleMomentum
+from quant.strategies.cross_sectional_mr.strategy import CrossSectionalMeanReversion
 
 
 def _generate_test_data(symbols, days=120, start_date=None):
@@ -358,7 +357,6 @@ class TestBacktesterIntegration:
             SimpleMomentum(symbols=symbols, momentum_lookback=20, holding_period=21, max_position_pct=0.10),
             VolatilityRegime(symbols=symbols, vix_symbol="^VIX", vix_lookback=20, momentum_top_n=3, max_position_pct=0.10),
             CrossSectionalMeanReversion(symbols=symbols, lookback_days=5, holding_days=5, max_position_pct=0.10),
-            DualMomentum(symbols=symbols, abs_lookback=30, rel_lookback=10, holding_days=21, max_position_pct=0.10),
         ]
 
         for strategy in strategies:
@@ -446,7 +444,7 @@ class TestBacktesterIntegration:
         assert resp.status_code == 200
         strategy_names = [s['name'] for s in resp.get_json()['strategies']]
         assert 'CrossSectionalMeanReversion' in strategy_names
-        assert 'DualMomentum' in strategy_names
+        assert 'SimpleMomentum' in strategy_names
 
 
 class _InMemoryProvider:

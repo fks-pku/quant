@@ -36,7 +36,7 @@ class DuckDBStorage:
     def _init_database(self) -> None:
         self._conn = duckdb.connect(str(self.db_path))
         self._conn.execute("SET threads=4")
-        for table in ("orders", "trades", "portfolio_snapshots"):
+        for table in ("orders", "trades", "portfolio_snapshots", "instrument_meta"):
             self._ensure_table(table)
         self.logger.info(f"DuckDB initialized at {self.db_path}")
 
@@ -91,6 +91,15 @@ class DuckDBStorage:
                     unrealized_pnl DOUBLE,
                     realized_pnl DOUBLE,
                     margin_used DOUBLE
+                )
+            """)
+        elif table_name == "instrument_meta":
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS instrument_meta (
+                    symbol VARCHAR PRIMARY KEY,
+                    lot_size INTEGER DEFAULT 100,
+                    market VARCHAR DEFAULT 'HK',
+                    name VARCHAR DEFAULT ''
                 )
             """)
 
@@ -284,6 +293,31 @@ class DuckDBStorage:
             return self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
         except Exception:
             return 0
+
+    def save_instrument_meta(self, symbol: str, lot_size: int = 100, market: str = "HK", name: str = "") -> None:
+        self._ensure_table("instrument_meta")
+        with self._lock:
+            self.conn.execute("""
+                INSERT OR REPLACE INTO instrument_meta (symbol, lot_size, market, name)
+                VALUES (?, ?, ?, ?)
+            """, [symbol, lot_size, market, name])
+
+    def get_lot_size(self, symbol: str) -> int:
+        self._ensure_table("instrument_meta")
+        try:
+            result = self.conn.execute(
+                "SELECT lot_size FROM instrument_meta WHERE symbol = ?", [symbol]
+            ).fetchone()
+            return result[0] if result else 100
+        except Exception:
+            return 100
+
+    def get_all_instrument_meta(self) -> pd.DataFrame:
+        self._ensure_table("instrument_meta")
+        try:
+            return self.conn.execute("SELECT * FROM instrument_meta").fetchdf()
+        except Exception:
+            return pd.DataFrame()
 
     def close(self) -> None:
         if self._conn:

@@ -41,6 +41,29 @@ MOCK_PRICES = {
     'AMZN': 185.60, 'TSLA': 245.20, 'SPY': 512.30, 'QQQ': 438.50, 'VIX': 14.5
 }
 
+_STRATEGY_DEFAULT_SYMBOLS = {}
+
+def _init_default_symbols():
+    global _STRATEGY_DEFAULT_SYMBOLS
+    if _STRATEGY_DEFAULT_SYMBOLS:
+        return
+    try:
+        from quant.data.storage_duckdb import DuckDBStorage
+        _db_tmp = DuckDBStorage()
+        _all_syms = _db_tmp.get_symbols('daily', 'hk') + _db_tmp.get_symbols('daily', 'us')
+        _db_tmp.close()
+        if _all_syms:
+            _default_sym_str = ','.join(_all_syms)
+        else:
+            _default_sym_str = 'HK.00700'
+    except Exception:
+        _default_sym_str = 'HK.00700'
+    for _sid in ['TencentMomentum', 'volatility_regime', 'simple_momentum',
+                  'momentum_eod', 'mean_reversion_1m', 'dual_thrust',
+                  'cross_sectional_mean_reversion', 'dual_momentum']:
+        _STRATEGY_DEFAULT_SYMBOLS[_sid] = _default_sym_str
+
+
 _STRATEGY_DIR_MAP = {
     'volatility_regime': 'volatility_regime',
     'simple_momentum': 'simple_momentum',
@@ -59,7 +82,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'volatility_regime',
         'name': 'Volatility Regime',
         'description': 'Regime-based strategy switching based on VIX levels. Switches between momentum and mean reversion sub-strategies depending on market volatility.',
-        'enabled': True,
+        'status': 'active',
         'priority': 1,
         'doc_file': 'volatility_regime.md',
         'backtest': {
@@ -78,7 +101,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'simple_momentum',
         'name': 'Cross-Sectional Momentum',
         'description': 'Long top decile, short bottom decile by momentum score. Monthly rebalancing.',
-        'enabled': False,
+        'status': 'paused',
         'priority': 2,
         'doc_file': 'simple_momentum.md',
         'backtest': {
@@ -97,7 +120,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'momentum_eod',
         'name': 'Momentum EOD',
         'description': 'Buy top-N S&P 500 gainers at market open, sell at market close. Educational example.',
-        'enabled': True,
+        'status': 'active',
         'priority': 3,
         'doc_file': 'momentum_eod.md',
         'backtest': {
@@ -116,7 +139,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'mean_reversion_1m',
         'name': 'Mean Reversion (1m)',
         'description': 'RSI-based mean reversion on 1-minute data. Educational example.',
-        'enabled': True,
+        'status': 'active',
         'priority': 4,
         'doc_file': 'mean_reversion.md',
         'backtest': {
@@ -135,7 +158,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'dual_thrust',
         'name': 'Dual Thrust',
         'description': 'Classic break-out system adapted for futures. Reference implementation.',
-        'enabled': False,
+        'status': 'paused',
         'priority': 5,
         'doc_file': 'dual_thrust.md',
         'backtest': {
@@ -154,7 +177,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'cross_sectional_mean_reversion',
         'name': 'Cross-Sectional Mean Reversion',
         'description': 'Short-term mean reversion strategy based on cross-sectional z-scores.',
-        'enabled': False,
+        'status': 'paused',
         'priority': 6,
         'doc_file': 'cross_sectional_mean_reversion.md',
         'backtest': {
@@ -173,7 +196,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'dual_momentum',
         'name': 'Dual Momentum',
         'description': 'Absolute and relative momentum for tactical asset allocation.',
-        'enabled': False,
+        'status': 'paused',
         'priority': 7,
         'doc_file': 'dual_momentum.md',
         'backtest': {
@@ -192,7 +215,7 @@ AVAILABLE_STRATEGIES = {
         'id': 'TencentMomentum',
         'name': 'Tencent SMA Crossover',
         'description': 'Single-stock SMA crossover strategy for HK equities. Buy when fast SMA > slow SMA, sell on death cross.',
-        'enabled': True,
+        'status': 'active',
         'priority': 8,
         'doc_file': None,
         'backtest': {
@@ -204,6 +227,43 @@ AVAILABLE_STRATEGIES = {
         }
     }
 }
+
+_STATE_FILE = Path(__file__).parent / 'data' / 'strategy_state.json'
+
+
+def _load_strategy_state():
+    if not _STATE_FILE.exists():
+        return
+    try:
+        with open(_STATE_FILE, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        deleted = set(state.get('deleted', []))
+        statuses = state.get('statuses', {})
+        for sid in deleted:
+            for name in list(AVAILABLE_STRATEGIES.keys()):
+                if AVAILABLE_STRATEGIES[name]['id'] == sid:
+                    del AVAILABLE_STRATEGIES[name]
+                    break
+            STRATEGY_ID_TO_REGISTRY.pop(sid, None)
+            STRATEGY_PARAMETERS.pop(sid, None)
+            _STRATEGY_DEFAULT_SYMBOLS.pop(sid, None)
+        for name, info in AVAILABLE_STRATEGIES.items():
+            if info['id'] in statuses:
+                info['status'] = statuses[info['id']]
+        print(f"Loaded strategy state: {len(deleted)} deleted, {len(statuses)} status overrides")
+    except Exception as e:
+        print(f"Warning: failed to load strategy state: {e}")
+
+
+def _save_strategy_state():
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    all_ids = {'volatility_regime', 'simple_momentum', 'momentum_eod', 'mean_reversion_1m',
+               'dual_thrust', 'cross_sectional_mean_reversion', 'dual_momentum', 'TencentMomentum'}
+    remaining = {info['id'] for info in AVAILABLE_STRATEGIES.values()}
+    deleted = list(all_ids - remaining)
+    statuses = {info['id']: info.get('status', 'paused') for info in AVAILABLE_STRATEGIES.values()}
+    with open(_STATE_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'deleted': deleted, 'statuses': statuses}, f, indent=2)
 
 
 STRATEGY_ID_TO_REGISTRY = {
@@ -312,17 +372,21 @@ def get_status():
 
 @app.route('/api/strategies', methods=['GET'])
 def get_strategies():
+    _init_default_symbols()
     strategies_list = []
     for name, info in AVAILABLE_STRATEGIES.items():
         strategies_list.append({
             'id': info['id'],
             'name': info['name'],
             'description': info['description'],
-            'enabled': info['enabled'],
+            'status': info.get('status', 'paused'),
+            'enabled': info.get('status', 'paused') == 'active',
             'priority': info['priority'],
             'has_docs': info['doc_file'] is not None,
-            'backtest': info['backtest']
+            'backtest': info['backtest'],
+            'default_symbols': _STRATEGY_DEFAULT_SYMBOLS.get(info['id'], 'HK.00700'),
         })
+    strategies_list.sort(key=lambda s: s['name'].lower())
     return jsonify({
         'strategies': strategies_list,
         'selected': selected_strategy
@@ -337,7 +401,8 @@ def get_strategy(strategy_id):
                 'id': info['id'],
                 'name': info['name'],
                 'description': info['description'],
-                'enabled': info['enabled'],
+                'status': info.get('status', 'paused'),
+                'enabled': info.get('status', 'paused') == 'active',
                 'priority': info['priority'],
                 'has_docs': info['doc_file'] is not None,
                 'backtest': info['backtest']
@@ -570,12 +635,10 @@ def run_backtest():
             import pandas as pd
             from quant.core.backtester import Backtester
             from quant.strategies.registry import StrategyRegistry
-            from quant.strategies.implementations import (
-                VolatilityRegime, SimpleMomentum,
-                CrossSectionalMeanReversion, DualMomentum,
-                TencentMomentum,
-            )
             from quant.data.providers.duckdb_provider import DuckDBProvider
+            registry = StrategyRegistry()
+            registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
+            strategy_class = registry.get(registry_key)
 
             db_provider = DuckDBProvider()
             db_provider.connect()
@@ -820,7 +883,7 @@ def get_strategy_pool():
         pool.append({
             "id": strat_id,
             "name": info["name"],
-            "enabled": info["enabled"],
+            "enabled": info.get("status", "paused") == "active",
             "weight": weight,
             "allocated_capital": round(allocated, 2),
             "current_pnl": round(pnl, 2),
@@ -935,29 +998,84 @@ STRATEGY_PARAMETERS = {
     },
 }
 
+_load_strategy_state()
 
-@app.route('/api/strategies/<strategy_id>/toggle', methods=['POST'])
-def toggle_strategy(strategy_id):
-    """Toggle strategy enabled/disabled status."""
-    global AVAILABLE_STRATEGIES
 
-    data = request.get_json()
-    enabled = data.get('enabled')
-
-    if enabled is None:
-        return jsonify({'error': 'Missing enabled parameter'}), 400
-
+@app.route('/api/strategies/<strategy_id>/pause', methods=['POST'])
+def pause_strategy(strategy_id):
+    global AVAILABLE_STRATEGIES, _backtest_results
+    data = request.get_json() or {}
+    flatten = data.get('flatten', True)
     for name, info in AVAILABLE_STRATEGIES.items():
         if info['id'] == strategy_id:
-            AVAILABLE_STRATEGIES[name]['enabled'] = enabled
-            return jsonify({
-                'strategy_id': strategy_id,
-                'strategy_name': info['name'],
-                'enabled': enabled,
-                'message': f"Strategy {info['name']} {'activated' if enabled else 'deactivated'}"
-            })
-
+            info['status'] = 'paused'
+            _save_strategy_state()
+            msg = f"Strategy {info['name']} paused"
+            if flatten:
+                msg += " — positions will be flattened"
+            return jsonify({'success': True, 'strategy_id': strategy_id, 'status': 'paused', 'message': msg})
     return jsonify({'error': 'Strategy not found'}), 404
+
+
+@app.route('/api/strategies/<strategy_id>/resume', methods=['POST'])
+def resume_strategy(strategy_id):
+    global AVAILABLE_STRATEGIES
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info['id'] == strategy_id:
+            if info.get('status') == 'retired':
+                return jsonify({'error': 'Retired strategy must be restored first'}), 400
+            info['status'] = 'active'
+            _save_strategy_state()
+            return jsonify({'success': True, 'strategy_id': strategy_id, 'status': 'active',
+                            'message': f"Strategy {info['name']} resumed"})
+    return jsonify({'error': 'Strategy not found'}), 404
+
+
+@app.route('/api/strategies/<strategy_id>/retire', methods=['POST'])
+def retire_strategy(strategy_id):
+    global AVAILABLE_STRATEGIES
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info['id'] == strategy_id:
+            info['status'] = 'retired'
+            _save_strategy_state()
+            return jsonify({'success': True, 'strategy_id': strategy_id, 'status': 'retired',
+                            'message': f"Strategy {info['name']} retired"})
+    return jsonify({'error': 'Strategy not found'}), 404
+
+
+@app.route('/api/strategies/<strategy_id>/restore', methods=['POST'])
+def restore_strategy(strategy_id):
+    global AVAILABLE_STRATEGIES
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info['id'] == strategy_id:
+            info['status'] = 'paused'
+            _save_strategy_state()
+            return jsonify({'success': True, 'strategy_id': strategy_id, 'status': 'paused',
+                            'message': f"Strategy {info['name']} restored to paused"})
+    return jsonify({'error': 'Strategy not found'}), 404
+
+
+@app.route('/api/strategies/<strategy_id>', methods=['DELETE'])
+def delete_strategy(strategy_id):
+    global AVAILABLE_STRATEGIES, STRATEGY_ID_TO_REGISTRY, STRATEGY_PARAMETERS, _STRATEGY_DEFAULT_SYMBOLS, _backtest_results
+    to_delete = None
+    for name, info in AVAILABLE_STRATEGIES.items():
+        if info['id'] == strategy_id:
+            if info.get('status') != 'retired':
+                return jsonify({'error': 'Only retired strategies can be permanently deleted'}), 400
+            to_delete = name
+            break
+    if to_delete is None:
+        return jsonify({'error': 'Strategy not found'}), 404
+    del AVAILABLE_STRATEGIES[to_delete]
+    STRATEGY_ID_TO_REGISTRY.pop(strategy_id, None)
+    STRATEGY_PARAMETERS.pop(strategy_id, None)
+    _STRATEGY_DEFAULT_SYMBOLS.pop(strategy_id, None)
+    to_remove = [bid for bid, r in _backtest_results.items() if r.get('strategy_id') == strategy_id]
+    for bid in to_remove:
+        del _backtest_results[bid]
+    _save_strategy_state()
+    return jsonify({'success': True, 'deleted': strategy_id, 'backtests_removed': len(to_remove)})
 
 
 @app.route('/api/strategies/<strategy_id>/parameters', methods=['GET'])
