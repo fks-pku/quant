@@ -1,0 +1,60 @@
+research:
+  enabled: true
+  schedule:
+    cron: "0 20 * * 5"
+    timezone: "Asia/Shanghai"
+
+  search:
+    sources:
+      - name: arxiv
+        enabled: true
+        max_results: 15
+        lookback_days: 7
+      - name: ssrn
+        enabled: false
+        max_results: 10
+      - name: quantconnect
+        enabled: false
+        max_results: 10
+      - name: twitter
+        enabled: false
+      - name: cn_forums
+        enabled: false
+    max_concurrent_sources: 3
+    rate_limit_seconds: 3
+
+  analysis:
+    min_feasibility_score: 60
+    max_ideas_per_run: 5
+
+  coding:
+    max_retries: 2
+    timeout_seconds: 120
+
+  evaluation:
+    default_backtest_period_months: 24
+    run_walkforward: true
+    symbols:
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - TSLA
+      - META
+      - NVDA
+      - JPM
+    adopt_threshold:
+      min_sharpe: 1.0
+      max_correlation_with_existing: 0.7
+    watchlist_threshold:
+      min_sharpe: 0.5
+
+  llm:
+    provider: "openai"
+    model: "gpt-4o"
+    temperature: 0.3
+    max_tokens: 4096
+
+  storage:
+    reports_dir: "quant/research/reports"
+    save_intermediate: true

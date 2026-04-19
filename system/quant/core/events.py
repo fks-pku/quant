@@ -23,6 +23,11 @@ class EventType(Enum):
     MARKET_CLOSE = "market_close"
     STRATEGY_SIGNAL = "strategy_signal"
     SYSTEM_SHUTDOWN = "system_shutdown"
+    RESEARCH_SEARCH_DONE = "research_search_done"
+    RESEARCH_IDEA_SCORED = "research_idea_scored"
+    RESEARCH_CODE_READY = "research_code_ready"
+    RESEARCH_REPORT_DONE = "research_report_done"
+    RESEARCH_ERROR = "research_error"
 
 
 @dataclass
