@@ -34,6 +34,12 @@ def run_backtest():
             registry = StrategyRegistry()
             registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
             strategy_class = registry.get(registry_key)
+            if strategy_class is None:
+                sid_norm = strategy_id.lower().replace('_', '').replace('-', '')
+                for name in registry.list_strategies():
+                    if name.lower().replace('_', '').replace('-', '') == sid_norm:
+                        strategy_class = registry.get(name)
+                        break
 
             db_provider = DuckDBProvider()
             db_provider.connect()
@@ -74,6 +80,12 @@ def run_backtest():
             registry = StrategyRegistry()
             registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
             strategy_class = registry.get(registry_key)
+            if strategy_class is None:
+                sid_norm = strategy_id.lower().replace('_', '').replace('-', '')
+                for name in registry.list_strategies():
+                    if name.lower().replace('_', '').replace('-', '') == sid_norm:
+                        strategy_class = registry.get(name)
+                        break
             if strategy_class is None:
                 with _backtest_lock:
                     _backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}

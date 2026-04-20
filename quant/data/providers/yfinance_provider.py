@@ -2,6 +2,7 @@ import os
 import time
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 import pandas as pd
 
@@ -14,9 +15,12 @@ except ImportError:
 from quant.data.providers.base import DataProvider
 from quant.utils.logger import setup_logger
 
+_PKG_DIR = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_CACHE = str(_PKG_DIR / "var" / "cache")
+
 
 class YfinanceProvider(DataProvider):
-    def __init__(self, cache_dir: str = "./var/cache", cache_ttl_hours: int = 24):
+    def __init__(self, cache_dir: str = _DEFAULT_CACHE, cache_ttl_hours: int = 24):
         super().__init__("yfinance")
         self._cache_dir = cache_dir
         self._cache_ttl_hours = cache_ttl_hours

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
 from quant.data.providers.futu import FutuProvider
-from quant.data.storage_duckdb import DuckDBStorage
+from quant.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
 from quant.utils.logger import setup_logger
 
 logger = setup_logger("prepare_data")
@@ -159,7 +159,7 @@ def main():
     parser.add_argument("--start", default="2015-01-01")
     parser.add_argument("--end", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--timeframe", default="1d")
-    parser.add_argument("--db", default="./var/duckdb/quant.duckdb")
+    parser.add_argument("--db", default=_DEFAULT_DB)
     parser.add_argument("--force", action="store_true", help="Re-fetch even if up-to-date")
     args = parser.parse_args()
 

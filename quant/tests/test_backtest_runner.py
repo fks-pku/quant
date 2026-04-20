@@ -36,7 +36,8 @@ class TestParseArgs:
         assert args.initial_cash == 100000
         assert args.slippage_bps == 5
         assert args.output_dir == "./backtest_output"
-        assert args.db == "./var/duckdb/quant.duckdb"
+        from quant.data.providers.duckdb_provider import _DEFAULT_DB
+        assert args.db == _DEFAULT_DB
 
     def test_custom_values(self):
         args = parse_args([

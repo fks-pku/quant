@@ -401,7 +401,7 @@ def run_quant_system():
 def _get_cio_engine():
     global _cio_engine
     if _cio_engine is None:
-        from quant.cio.cioengine import CIOEngine
+        from quant.cio.cio_engine import CIOEngine
         from quant.cio.market_assessor import MarketAssessor
         from quant.cio.news_analyzer import NewsAnalyzer
         from quant.cio.weight_allocator import WeightAllocator

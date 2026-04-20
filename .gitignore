@@ -8,6 +8,7 @@ quant/frontend/node_modules/
 
 # Runtime data
 quant/var/
+var/
 
 # Local workspace
 .vibe-kanban-workspaces/

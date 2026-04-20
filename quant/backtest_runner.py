@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pandas as pd
 
 from quant.core.backtester import Backtester, BacktestResultExporter
-from quant.data.providers.duckdb_provider import DuckDBProvider
+from quant.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
 from quant.data.storage_duckdb import DuckDBStorage
 from quant.strategies.registry import StrategyRegistry
 
@@ -33,7 +33,7 @@ def parse_args(argv=None):
     parser.add_argument("--initial-cash", type=float, default=100000)
     parser.add_argument("--slippage-bps", type=float, default=5)
     parser.add_argument("--output-dir", default="./backtest_output")
-    parser.add_argument("--db", default="./var/duckdb/quant.duckdb")
+    parser.add_argument("--db", default=_DEFAULT_DB)
     return parser.parse_args(argv)
 
 

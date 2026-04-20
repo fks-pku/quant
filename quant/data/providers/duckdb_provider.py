@@ -10,12 +10,12 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from quant.data.providers.base import DataProvider
-from quant.data.storage_duckdb import DuckDBStorage
+from quant.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
 from quant.utils.logger import setup_logger
 
 
 class DuckDBProvider(DataProvider):
-    def __init__(self, db_path: str = "./var/duckdb/quant.duckdb"):
+    def __init__(self, db_path: str = _DEFAULT_DB):
         super().__init__("DuckDB")
         self._db_path = db_path
         self._storage: Optional[DuckDBStorage] = None
