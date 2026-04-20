@@ -41,7 +41,7 @@ _STRATEGY_DIR_MAP = {
     'dual_momentum': 'dual_momentum',
 }
 
-STRATEGIES_DIR = Path(__file__).resolve().parent.parent.parent / 'quant' / 'strategies'
+STRATEGIES_DIR = Path(__file__).resolve().parent.parent / 'strategies'
 DOCS_DIR = STRATEGIES_DIR / 'docs'
 
 AVAILABLE_STRATEGIES = {
@@ -195,7 +195,7 @@ AVAILABLE_STRATEGIES = {
     }
 }
 
-_STATE_FILE = Path(__file__).resolve().parent.parent.parent / 'data' / 'strategy_state.json'
+_STATE_FILE = Path(__file__).resolve().parent.parent / 'var' / 'strategy_state.json'
 
 STRATEGY_ID_TO_REGISTRY = {
     'volatility_regime': 'VolatilityRegime',

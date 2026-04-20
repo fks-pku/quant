@@ -4,13 +4,11 @@ api.log
 frontend.log
 
 # Dependencies
-frontend/node_modules/
-frontend/package-lock.json
+quant/frontend/node_modules/
+quant/frontend/package-lock.json
 
 # Runtime data
-data/duckdb/
-data/strategy_state.json
-data/strategy_positions.json
+quant/var/
 
 # Local workspace
 .vibe-kanban-workspaces/
@@ -26,6 +24,6 @@ Thumbs.db
 start_ui.ps1
 start_ui_windows.bat
 .worktrees/
-frontend/build/
+quant/frontend/build/
 build/
 backtest_output/

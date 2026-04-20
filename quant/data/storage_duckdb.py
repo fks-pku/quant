@@ -25,7 +25,7 @@ BAR_INDEX = "timestamp, symbol"
 
 
 class DuckDBStorage:
-    def __init__(self, db_path: str = "./data/duckdb/quant.duckdb"):
+    def __init__(self, db_path: str = "./var/duckdb/quant.duckdb"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = setup_logger("DuckDBStorage")

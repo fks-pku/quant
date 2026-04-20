@@ -18,7 +18,7 @@ def futu_connect():
             return jsonify({'connected': True, 'message': 'Already connected'})
     try:
         from quant.execution.brokers.futu import FutuBroker
-        config_path = str(Path(__file__).resolve().parent.parent.parent / 'quant' / 'config' / 'brokers.yaml')
+        config_path = str(Path(__file__).resolve().parent.parent / 'config' / 'brokers.yaml')
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         futu_config = config.get('futu', {})

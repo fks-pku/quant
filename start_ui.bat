@@ -7,7 +7,7 @@ echo ========================================
 
 echo.
 echo Starting API server on http://localhost:5000
-start "Quant API Server" python api_server.py
+start "Quant API Server" python quant/api_server.py
 
 ping -n 3 127.0.0.1 >nul
 

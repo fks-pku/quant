@@ -48,27 +48,31 @@ A full-stack quantitative trading system for US and HK equities supporting:
 ### 1.3 Project Structure
 
 ```
-quant/
-├── api_server.py              # Flask orchestrator (44 lines)
-├── quant/
-│   ├── api/                   # Flask blueprints (new)
-│   │   ├── state.py          # Shared mutable state
-│   │   ├── system_bp.py      # /api/status, /api/start, /api/stop
-│   │   ├── strategies_bp.py  # /api/strategies/*
-│   │   ├── backtest_bp.py    # /api/backtest/*
-│   │   ├── cio_bp.py         # /api/cio/*, /api/strategy-pool/*
-│   │   ├── futu_bp.py        # /api/futu/*
-│   │   └── positions_bp.py   # /api/portfolio, /api/orders, etc.
-│   ├── core/                 # Engine, backtester, events, portfolio, risk
-│   ├── data/                 # Providers, DuckDB storage, normalizer
-│   ├── execution/            # Order management, fill handling, brokers
-│   ├── strategies/           # Strategy implementations
-│   ├── cio/                  # CIO market assessment
-│   ├── models/               # Dataclasses (Order, Position, Trade, etc.)
-│   └── utils/                # Logger, datetime, config loader
-├── frontend/                 # React SPA
-├── scripts/                  # Data pipelines, demos
-└── docs/                     # Documentation
+quant/                          # Everything lives under quant/
+├── api_server.py               # Flask API server — main web UI entry point
+├── api/                        # Flask blueprints
+│   ├── state.py               # Shared mutable state
+│   ├── system_bp.py           # /api/status, /api/start, /api/stop
+│   ├── strategies_bp.py       # /api/strategies/*
+│   ├── backtest_bp.py         # /api/backtest/*
+│   ├── cio_bp.py              # /api/cio/*, /api/strategy-pool/*
+│   ├── futu_bp.py             # /api/futu/*
+│   └── positions_bp.py        # /api/portfolio, /api/orders, etc.
+├── core/                       # Engine, backtester, events, portfolio, risk
+├── data/                       # Providers, DuckDB storage, normalizer
+├── execution/                  # Order management, fill handling, brokers
+├── strategies/                 # Strategy implementations
+├── cio/                        # CIO market assessment
+├── models/                     # Dataclasses (Order, Position, Trade, etc.)
+├── utils/                      # Logger, datetime, config loader
+├── config/                     # YAML configs
+├── tests/                      # Pytest suite
+├── frontend/                   # React SPA
+├── scripts/                    # Data pipelines, demos
+├── docs/                       # Documentation
+└── var/                        # RUNTIME data (gitignored)
+    ├── duckdb/quant.duckdb    # Active DuckDB database
+    └── strategy_state.json    # UI-level strategy state
 ```
 
 ---
@@ -1241,7 +1245,7 @@ start_ui.bat
 ```
 
 This:
-1. Starts `api_server.py` in a new window
+1. Starts `quant/api_server.py` in a new window
 2. Waits 3 seconds
 3. Opens browser to `http://localhost:5000`
 
@@ -1259,7 +1263,7 @@ python quant/backtest_runner.py \
     --symbols "HK.00700,HK.09988"
 
 # Data preparation
-python scripts/prepare_data.py --market hk --start 2020-01-01
+python quant/scripts/prepare_data.py --market hk --start 2020-01-01
 ```
 
 ### 12.4 Testing
@@ -1282,7 +1286,7 @@ python -m pytest quant/tests/ -q
 
 ### A2. Why Blueprint Split?
 
-`api_server.py` was 1321 lines with 40 routes. Split into 7 blueprints (~50-250 lines each) for maintainability.
+`api_server.py` was originally 1321 lines with 40 routes. Split into 7 blueprints (~50-250 lines each) for maintainability. Now lives at `quant/api_server.py`.
 
 ### A3. Why Futu Broker Mixins?
 
@@ -1315,7 +1319,7 @@ All mutable shared state uses `threading.RLock()`:
 
 | File/Module | Lines | Purpose |
 |-------------|-------|---------|
-| `api_server.py` | 44 | Thin Flask orchestrator |
+| `api_server.py` | 44 | Thin Flask orchestrator (at quant/api_server.py) |
 | `quant/api/*` (8 files) | ~1,400 | API blueprints |
 | `quant/core/*` (6 files) | ~1,900 | Engine, backtester, portfolio, risk |
 | `quant/data/*` (12 files) | ~1,900 | Providers, DuckDB, normalizer |

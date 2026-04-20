@@ -23,15 +23,15 @@ if ! python3 -c "import flask" &> /dev/null; then
 fi
 
 # Install frontend dependencies if needed
-if [ ! -d "frontend/node_modules" ]; then
+if [ ! -d "quant/frontend/node_modules" ]; then
     echo "Installing frontend dependencies..."
-    cd frontend && npm install && cd ..
+    cd quant/frontend && npm install && cd ../..
 fi
 
 # Start Flask API in background
 echo ""
 echo "Starting API server on http://localhost:5000"
-python3 api_server.py &
+python3 quant/api_server.py &
 API_PID=$!
 
 # Wait a moment for API to start
@@ -40,7 +40,7 @@ sleep 2
 # Start React frontend
 echo ""
 echo "Starting React frontend on http://localhost:3000"
-cd frontend && BROWSER=none npm start &
+cd quant/frontend && BROWSER=none npm start &
 FRONTEND_PID=$!
 
 # Open browser

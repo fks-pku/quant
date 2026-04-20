@@ -15,7 +15,7 @@ from quant.utils.logger import setup_logger
 
 
 class DuckDBProvider(DataProvider):
-    def __init__(self, db_path: str = "./data/duckdb/quant.duckdb"):
+    def __init__(self, db_path: str = "./var/duckdb/quant.duckdb"):
         super().__init__("DuckDB")
         self._db_path = db_path
         self._storage: Optional[DuckDBStorage] = None

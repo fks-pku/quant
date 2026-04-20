@@ -7,47 +7,45 @@ Full-stack quantitative trading system for US and HK equities. Python backend (F
 ## Repository Layout
 
 ```
-D:\vk\quant\                    # Workspace root
+quant/                          # Everything lives under quant/
 ├── api_server.py               # Flask API server — main web UI entry point
-├── start_ui.bat / start_ui.sh  # Startup scripts (run api_server.py)
-├── requirements.txt            # Python dependencies
-├── quant/                      # Python package "quant"
-│   ├── quant_system.py         # CLI orchestrator for live/paper trading
-│   ├── backtest_runner.py      # CLI backtest runner
-│   ├── core/                   # Engine, backtester, events, portfolio, risk, analytics, walkforward, scheduler
-│   ├── data/                   # Providers, DuckDB storage, SQLite storage, normalizer, symbol registry
-│   ├── strategies/             # Strategy base, framework, factors, registry + per-strategy subdirs
-│   ├── execution/              # Order manager, fill handler, portfolio coordinator, broker adapters
-│   ├── models/                 # Domain dataclasses: Order, Position, Fill, Trade, AccountInfo
-│   ├── cio/                    # CIO engine, market assessor, news analyzer, weight allocator, LLM adapters
-│   ├── utils/                  # Logger, datetime utils, config loader
-│   ├── config/                 # YAML configs: config.yaml, brokers.yaml, strategies.yaml
-│   ├── tests/                  # Pytest suite
-│   └── migrations/             # (placeholder for future DB migrations)
-├── data/                       # RUNTIME data directory (CWD-relative)
-│   ├── duckdb/quant.duckdb     # Active DuckDB database
-│   └── strategy_state.json     # UI-level strategy state (selected strategy, running status)
+├── api/                        # Flask blueprints (state, system, strategies, backtest, cio, futu, positions)
+├── quant_system.py             # CLI orchestrator for live/paper trading
+├── backtest_runner.py          # CLI backtest runner
+├── core/                       # Engine, backtester, events, portfolio, risk, analytics, walkforward, scheduler
+├── data/                       # Providers, DuckDB storage, SQLite storage, normalizer, symbol registry
+├── strategies/                 # Strategy base, framework, factors, registry + per-strategy subdirs
+├── execution/                  # Order manager, fill handler, portfolio coordinator, broker adapters
+├── models/                     # Domain dataclasses: Order, Position, Fill, Trade, AccountInfo
+├── cio/                        # CIO engine, market assessor, news analyzer, weight allocator, LLM adapters
+├── utils/                      # Logger, datetime utils, config loader
+├── config/                     # YAML configs: config.yaml, brokers.yaml, strategies.yaml
+├── tests/                      # Pytest suite
 ├── frontend/                   # React 18 SPA (Create React App)
 │   ├── src/                    # React source components
 │   └── build/                  # Built frontend (served by api_server.py)
 ├── scripts/                    # Data pipeline, demos, profilers
 ├── docs/                       # Architecture docs
+└── var/                        # RUNTIME data (gitignored)
+    ├── duckdb/quant.duckdb     # Active DuckDB database
+    └── strategy_state.json     # UI-level strategy state
 ```
+
+Workspace root also has entry points: `start_ui.sh`, `start_ui.bat`, `requirements.txt`, `.gitignore`
 
 ## Key Conventions
 
 ### Python Package & sys.path
 
-- Package name: `quant` — lives at `quant/` (workspace root)
-- Workspace root is added to `sys.path` so that `from quant.*` resolves to `quant/*`
+- Package name: `quant` — lives at `quant/`
 - All imports use `from quant.<module>.<file> import <Class>`
 - Never use relative imports; always use fully qualified `quant.*` paths
 
 ### sys.path Setup Pattern
 
 ```python
-# api_server.py (workspace root): adds workspace root to path
-sys.path.insert(0, str(Path(__file__).parent))
+# api_server.py (inside quant/): adds workspace root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # quant_system.py / backtest_runner.py (inside quant/): adds workspace root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -72,8 +70,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 - Primary storage: `DuckDBStorage` (columnar, for backtesting + historical data)
 - Legacy storage: `Storage` (SQLite + Parquet, still used for some persistence)
-- Default DuckDB path is CWD-relative: `./data/duckdb/quant.duckdb`
-  - When running `api_server.py` from workspace root → resolves to `D:\vk\quant\data\duckdb\quant.duckdb`
+- Default DuckDB path is CWD-relative: `./var/duckdb/quant.duckdb`
 - All providers implement `DataProvider` ABC from `quant.data.providers.base`
 - Symbol format: internal `AAPL` / `00700`, Futu `US.AAPL` / `HK.00700` — use `SymbolRegistry` for translation
 - DuckDB tables: `{frequency}_{market}` — `daily_hk`, `daily_us`, `minute_hk`, `minute_us`
@@ -98,10 +95,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 ### Frontend
 
-- React 18 SPA in `frontend/`
+- React 18 SPA in `quant/frontend/`
 - Talks to backend via REST API on `http://localhost:5000/api/*`
-- API server serves the React build from `frontend/build/`
-- After frontend changes, rebuild: `cd frontend && npm run build`
+- API server serves the React build from `quant/frontend/build/`
+- After frontend changes, rebuild: `cd quant/frontend && npm run build`
 - Key components: `App.js`, `StrategyManagement.js`, `BacktestDashboard.js`, `LiveTradingPage.js`, `AccountOverview.js`, `CIOAssessmentPanel.js`, `StrategyPositionCards.js`
 
 ## Commands
@@ -133,7 +130,7 @@ python quant/backtest_runner.py --strategy SimpleMomentum --start 2024-01-01 --e
 ### Prepare Data
 
 ```bash
-python scripts/prepare_data.py --market hk --start 2020-01-01
+python quant/scripts/prepare_data.py --market hk --start 2020-01-01
 ```
 
 ## Code Style
@@ -170,12 +167,12 @@ Market regime detected by VIX SMA thresholds: bull (<15), chop (15-25), bear (>2
 
 ## File References
 
-- Architecture doc: `docs/md/system_architecture_0419.md`
+- Architecture doc: `quant/docs/md/system_architecture_0419.md`
 - Master config: `quant/config/config.yaml`
 - Broker config: `quant/config/brokers.yaml` (gitignored)
 - Strategy config: `quant/config/strategies.yaml`
 - CIO config: `quant/cio/config/cio_config.yaml`
-- DuckDB data: `data/duckdb/quant.duckdb` (gitignored, CWD-relative)
-- Strategy state: `data/strategy_state.json` (gitignored, UI-level state)
+- DuckDB data: `quant/var/duckdb/quant.duckdb` (gitignored, CWD-relative)
+- Strategy state: `quant/var/strategy_state.json` (gitignored, UI-level state)
 - Strategy positions: `quant/data/strategy_positions.json` (per-strategy position tracking)
 - Dependencies: `requirements.txt`

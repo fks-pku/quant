@@ -33,7 +33,7 @@ def parse_args(argv=None):
     parser.add_argument("--initial-cash", type=float, default=100000)
     parser.add_argument("--slippage-bps", type=float, default=5)
     parser.add_argument("--output-dir", default="./backtest_output")
-    parser.add_argument("--db", default="./data/duckdb/quant.duckdb")
+    parser.add_argument("--db", default="./var/duckdb/quant.duckdb")
     return parser.parse_args(argv)
 
 

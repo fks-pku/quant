@@ -16,7 +16,7 @@ from quant.utils.logger import setup_logger
 
 
 class YfinanceProvider(DataProvider):
-    def __init__(self, cache_dir: str = "./data/cache", cache_ttl_hours: int = 24):
+    def __init__(self, cache_dir: str = "./var/cache", cache_ttl_hours: int = 24):
         super().__init__("yfinance")
         self._cache_dir = cache_dir
         self._cache_ttl_hours = cache_ttl_hours
