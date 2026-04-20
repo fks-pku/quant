@@ -46,6 +46,11 @@ class Portfolio:
         return self.cash + sum(p.market_value for p in self.positions.values())
 
     @property
+    def starting_nav(self) -> float:
+        """Starting NAV for daily loss tracking."""
+        return self._starting_nav
+
+    @property
     def total_unrealized_pnl(self) -> float:
         """Total unrealized P&L."""
         return sum(p.unrealized_pnl for p in self.positions.values())

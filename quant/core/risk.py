@@ -7,6 +7,7 @@ import threading
 import time
 
 from quant.core.portfolio import Portfolio
+from quant.utils.logger import setup_logger
 
 
 @dataclass
@@ -28,6 +29,7 @@ class RiskEngine:
         self.portfolio = portfolio
         self.event_bus = event_bus
         self.risk_config = config.get("risk", {})
+        self.logger = setup_logger("RiskEngine")
 
         self.max_position_pct = self.risk_config.get("max_position_pct", 0.05)
         self.max_sector_pct = self.risk_config.get("max_sector_pct", 0.25)
@@ -119,8 +121,8 @@ class RiskEngine:
 
     def _check_daily_loss(self) -> RiskCheckResult:
         """Check max daily loss (2% of starting NAV)."""
-        limit = self.portfolio._starting_nav * self.max_daily_loss_pct
-        current_loss = self.portfolio._starting_nav - self.portfolio.nav
+        limit = self.portfolio.starting_nav * self.max_daily_loss_pct
+        current_loss = self.portfolio.starting_nav - self.portfolio.nav
         passed = current_loss <= limit
 
         return RiskCheckResult(
@@ -180,5 +182,7 @@ class RiskEngine:
         """Log risk check results."""
         for result in results:
             if not result.passed:
-                log_level = "CRITICAL" if result.is_hard_limit else "WARNING"
-                print(f"[{log_level}] Risk check '{result.check_name}': {result.message}")
+                if result.is_hard_limit:
+                    self.logger.critical(f"Risk check '{result.check_name}': {result.message}")
+                else:
+                    self.logger.warning(f"Risk check '{result.check_name}': {result.message}")

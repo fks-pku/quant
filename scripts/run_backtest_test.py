@@ -11,7 +11,7 @@ from quant.core.backtester import Backtester
 from quant.data.providers.duckdb_provider import DuckDBProvider
 from quant.data.storage_duckdb import DuckDBStorage
 from quant.strategies.simple_momentum.strategy import SimpleMomentum
-from quant.core.walkforward import _DataFrameProvider
+from quant.core.walkforward import DataFrameProvider
 
 symbols = ["HK.00700", "HK.09988", "HK.01810", "HK.09618", "HK.03690"]
 start = datetime(2024, 1, 1)
@@ -39,9 +39,9 @@ for symbol in symbols:
 storage.close()
 print(f"Lot sizes: {lot_sizes}")
 
-print("\nBuilding _DataFrameProvider with _bar_map index...")
+print("\nBuilding DataFrameProvider with _bar_map index...")
 t0 = time.perf_counter()
-data_provider = _DataFrameProvider(data)
+data_provider = DataFrameProvider(data)
 t1 = time.perf_counter()
 print(f"  Index built in {t1-t0:.3f}s ({len(data_provider._bar_map)} keys)")
 

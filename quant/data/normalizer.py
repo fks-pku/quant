@@ -30,8 +30,8 @@ class Quote:
 
 
 @dataclass
-class Trade:
-    """Standardized trade data."""
+class MarketTrade:
+    """Standardized market trade data (tick-level)."""
     timestamp: datetime
     symbol: str
     price: float
@@ -59,7 +59,7 @@ class Normalizer:
         if isinstance(data, pd.Series):
             data = data.to_dict()
 
-        ts = data.get("timestamp") or data.get("timestamp") or data.get("datetime") or data.get("index")
+        ts = data.get("timestamp") or data.get("date") or data.get("datetime") or data.get("index")
         if isinstance(ts, str):
             ts = pd.to_datetime(ts)
         elif not isinstance(ts, datetime):
@@ -98,7 +98,7 @@ class Normalizer:
         )
 
     @staticmethod
-    def normalize_trade(data: Dict, symbol: Optional[str] = None) -> Trade:
+    def normalize_trade(data: Dict, symbol: Optional[str] = None) -> MarketTrade:
         """
         Normalize trade data from any provider format.
         """
@@ -108,7 +108,7 @@ class Normalizer:
         elif not isinstance(ts, datetime):
             ts = datetime.now()
 
-        return Trade(
+        return MarketTrade(
             timestamp=ts,
             symbol=data.get("symbol") or symbol or "",
             price=float(data.get("price", 0)),

@@ -98,9 +98,9 @@ def main(argv=None):
         },
     }
 
-    from quant.core.walkforward import _DataFrameProvider
+    from quant.core.walkforward import DataFrameProvider
 
-    data_provider = _DataFrameProvider(data)
+    data_provider = DataFrameProvider(data)
 
     warnings = data_provider.validate()
     if warnings:

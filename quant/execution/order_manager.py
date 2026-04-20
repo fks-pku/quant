@@ -148,7 +148,7 @@ class OrderManager:
                 self.logger.info(f"Order submitted: {broker_order_id} {order.symbol} {order.side} {order.quantity}")
 
                 self.event_bus.publish_nowait(
-                    "order_submit",
+                    EventType.ORDER_SUBMIT,
                     {
                         "order_id": broker_order_id,
                         "symbol": order.symbol,

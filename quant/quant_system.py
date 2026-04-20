@@ -200,15 +200,6 @@ class QuantSystem:
                 self.logger.error(f"Failed to create strategy {name}: {e}")
                 return None
 
-        fallback_map = {
-            "MomentumEOD": MomentumEOD,
-            "MeanReversion1m": MeanReversion1m,
-            "DualThrust": DualThrust,
-        }
-        cls = fallback_map.get(name)
-        if cls:
-            return cls(symbols)
-
         self.logger.warning(f"Unknown strategy: {name}")
         return None
 

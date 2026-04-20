@@ -227,14 +227,14 @@ class WalkForwardEngine:
             end=data['timestamp'].max(),
             strategies=[strategy],
             initial_cash=initial_cash,
-            data_provider=_DataFrameProvider(data),
+            data_provider=DataFrameProvider(data),
             symbols=symbols
         )
         
         return result
 
 
-class _DataFrameProvider:
+class DataFrameProvider:
     """In-memory data provider for backtesting, with pre-indexed lookup."""
     
     def __init__(self, data: pd.DataFrame):

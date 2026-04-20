@@ -90,7 +90,18 @@ class FillHandler:
                 cost=cost,
             )
         elif fill.side.upper() == "SELL":
-            self.portfolio.close_position(fill.symbol, fill.price)
+            pos = self.portfolio.get_position(fill.symbol)
+            sell_qty = min(fill.quantity, pos.quantity if pos else 0)
+            if sell_qty <= 0:
+                return
+            proceeds = fill.price * sell_qty - fill.commission
+            self.portfolio.update_position(
+                symbol=fill.symbol,
+                quantity=-sell_qty,
+                price=fill.price,
+                cost=0,
+            )
+            self.portfolio.cash += proceeds
 
     def _notify_callbacks(self, fill: Fill) -> None:
         """Notify registered callbacks of the fill."""

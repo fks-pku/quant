@@ -129,10 +129,10 @@ class TestBacktesterIntegration:
         
         backtester = Backtester(config)
         
-        commission = backtester._calculate_commission(100.0, 100, "US")
+        commission = backtester._calculate_commission_breakdown(100.0, 100, "US", "BUY")["commission"]
         assert commission == 0.5, f"Expected 100 * 0.005 = 0.5, got {commission}"
         
-        commission_small = backtester._calculate_commission(100.0, 10, "US")
+        commission_small = backtester._calculate_commission_breakdown(100.0, 10, "US", "BUY")["commission"]
         assert commission_small == 0.05, f"Expected 10 * 0.005 = 0.05, got {commission_small}"
 
     def test_backtest_pnl_correct_for_sell(self):

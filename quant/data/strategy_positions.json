@@ -68,15 +68,15 @@
       "AAPL": {
         "symbol": "AAPL",
         "strategy_name": "default",
-        "qty": 120.0,
-        "avg_cost": 150.0,
+        "qty": 40.0,
+        "avg_cost": 82.61703610761136,
         "market_value": 0.0,
         "unrealized_pnl": 0.0
       },
       "MSFT": {
         "symbol": "MSFT",
         "strategy_name": "default",
-        "qty": 30.0,
+        "qty": 70.0,
         "avg_cost": 300.0,
         "market_value": 0.0,
         "unrealized_pnl": 0.0
@@ -84,7 +84,7 @@
     }
   },
   "realized_pnl": {
-    "default": 600.0
+    "default": 5154.6814443044495
   },
   "order_map": {
     "84244785-274": "default",
@@ -98,6 +98,22 @@
     "9EC6629F-2BF": "default",
     "B44D9BDB-38A": "default",
     "E5D43676-49C": "default",
-    "35E2AA85-470": "default"
+    "35E2AA85-470": "default",
+    "BCAA6293-464": "default",
+    "EFAD58FA-05E": "default",
+    "A8A2B776-613": "default",
+    "97CE1EC6-A01": "default",
+    "80455644-882": "default",
+    "A152FA09-DFD": "default",
+    "3B725BC5-131": "default",
+    "7B13E30E-4A0": "default",
+    "04F9EFB0-9B6": "default",
+    "E63C0A0C-E9F": "default",
+    "07325230-8B4": "default",
+    "CCF0E477-50E": "default",
+    "DC5F5D23-A54": "default",
+    "5031D19C-243": "default",
+    "BC91AF5B-5F9": "default",
+    "7018DAA9-35D": "default"
   }
 }

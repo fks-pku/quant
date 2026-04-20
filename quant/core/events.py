@@ -6,6 +6,10 @@ from enum import Enum
 from typing import Callable, Dict, List, Any, Optional
 import threading
 
+from quant.utils.logger import setup_logger
+
+_logger = setup_logger("EventBus")
+
 
 class EventType(Enum):
     """Event types for the internal event bus."""
@@ -69,7 +73,7 @@ class EventBus:
             try:
                 callback(event)
             except Exception as e:
-                print(f"Error in event callback: {e}")
+                _logger.error(f"Error in event callback: {e}")
 
     def publish_nowait(self, event_type: EventType, data: Any, source: Optional[str] = None) -> None:
         """Publish an event without waiting (fire and forget)."""

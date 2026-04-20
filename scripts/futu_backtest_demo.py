@@ -21,7 +21,7 @@ from quant.core.backtester import Backtester, BacktestResultExporter
 from quant.data.providers.duckdb_provider import DuckDBProvider
 from quant.strategies.base import Strategy
 from quant.strategies.registry import strategy as reg_strategy
-from quant.core.walkforward import _DataFrameProvider
+from quant.core.walkforward import DataFrameProvider
 
 SYMBOL = "HK.00700"
 DB_PATH = str(Path(os.path.join(os.path.dirname(__file__), "..", "data", "duckdb", "quant.duckdb")))
@@ -164,7 +164,7 @@ def run_backtest(df):
         "data": {"default_timeframe": "1d"},
     }
 
-    provider = _DataFrameProvider(df)
+    provider = DataFrameProvider(df)
     backtester = Backtester(config)
 
     start = df["timestamp"].min()

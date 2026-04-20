@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 import logging
 
+from quant.core.risk import RiskCheckResult
 from quant.models.position import Position
 from quant.models.order import Order
 
@@ -18,16 +19,6 @@ class StrategyAllocation:
     max_risk_pct: float
     current_positions: Dict[str, Position] = field(default_factory=dict)
     current_risk_used: float = 0.0
-
-
-@dataclass
-class RiskCheckResult:
-    passed: bool
-    is_hard_limit: bool
-    check_name: str
-    message: str
-    current_value: float
-    limit_value: float
 
 
 class PortfolioCoordinator:

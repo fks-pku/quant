@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 
 from quant.data.providers.duckdb_provider import DuckDBProvider
-from quant.core.walkforward import _DataFrameProvider
+from quant.core.walkforward import DataFrameProvider
 from quant.core.backtester import Backtester
 from quant.strategies.simple_momentum.strategy import SimpleMomentum
 
@@ -47,11 +47,11 @@ t3 = time.perf_counter()
 data_df = pd.concat(all_data, ignore_index=True)
 print(f"\n[Step 2] DuckDB load + concat: {t3-t2:.3f}s  ({len(data_df)} total bars)")
 
-# === Step 3: Build _DataFrameProvider + _bar_map index ===
+# === Step 3: Build DataFrameProvider + _bar_map index ===
 t4 = time.perf_counter()
-data_provider = _DataFrameProvider(data_df)
+data_provider = DataFrameProvider(data_df)
 t5 = time.perf_counter()
-print(f"[Step 3] _DataFrameProvider + index: {t5-t4:.3f}s  ({len(data_provider._bar_map)} keys)")
+print(f"[Step 3] DataFrameProvider + index: {t5-t4:.3f}s  ({len(data_provider._bar_map)} keys)")
 
 # === Step 4: Run backtest ===
 strategy = SimpleMomentum(symbols=all_syms)

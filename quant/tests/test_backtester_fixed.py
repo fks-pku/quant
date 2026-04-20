@@ -5,9 +5,13 @@ import pandas as pd
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from quant.core.backtester import Backtester
+from quant.core.backtester import Backtester, BacktestDiagnostics
 from quant.core.portfolio import Portfolio
 from quant.models.trade import Trade
+
+
+def _make_diag():
+    return BacktestDiagnostics()
 
 
 class TestMultiBuyAveragesEntryPrice:
@@ -15,11 +19,13 @@ class TestMultiBuyAveragesEntryPrice:
         bt = Backtester(config={"backtest": {"slippage_bps": 0}, "execution": {}})
         portfolio = Portfolio(initial_cash=100000)
         entry_times = {}
+        entry_prices = {}
+        diag = _make_diag()
 
         bar1 = {"close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
-            portfolio, "AAPL", bar1, entry_times,
+            portfolio, "AAPL", bar1, entry_times, entry_prices, diag,
         )
 
         assert portfolio.positions["AAPL"].avg_cost == 100
@@ -28,7 +34,7 @@ class TestMultiBuyAveragesEntryPrice:
         bar2 = {"close": 110, "timestamp": datetime(2024, 1, 2)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 110},
-            portfolio, "AAPL", bar2, entry_times,
+            portfolio, "AAPL", bar2, entry_times, entry_prices, diag,
         )
 
         assert portfolio.positions["AAPL"].avg_cost == 105
@@ -40,23 +46,25 @@ class TestSellPnlUsesAvgCost:
         bt = Backtester(config={"backtest": {"slippage_bps": 0}, "execution": {}})
         portfolio = Portfolio(initial_cash=100000)
         entry_times = {}
+        entry_prices = {}
+        diag = _make_diag()
 
         bar1 = {"close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
-            portfolio, "AAPL", bar1, entry_times,
+            portfolio, "AAPL", bar1, entry_times, entry_prices, diag,
         )
 
         bar2 = {"close": 110, "timestamp": datetime(2024, 1, 2)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 110},
-            portfolio, "AAPL", bar2, entry_times,
+            portfolio, "AAPL", bar2, entry_times, entry_prices, diag,
         )
 
         bar3 = {"close": 120, "timestamp": datetime(2024, 1, 3)}
         trade = bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "SELL", "order_type": "market", "price": 120},
-            portfolio, "AAPL", bar3, entry_times,
+            portfolio, "AAPL", bar3, entry_times, entry_prices, diag,
         )
 
         assert trade is not None
@@ -107,15 +115,18 @@ class TestPortfolioPricesUpdatedOncePerDay:
 class TestCommissionUsPerShareCorrect:
     def test_commission_us_per_share_formula(self):
         bt = Backtester(config={"execution": {}})
-        assert bt._calculate_commission(100.0, 100, "US") == max(100 * 0.005, 1.0)
+        result = bt._calculate_commission_breakdown(100.0, 100, "US", "BUY")
+        assert result["commission"] == max(100 * 0.005, 1.0)
 
     def test_commission_us_per_share_above_min(self):
         bt = Backtester(config={"execution": {}})
-        assert bt._calculate_commission(100.0, 1000, "US") == 1000 * 0.005
+        result = bt._calculate_commission_breakdown(100.0, 1000, "US", "BUY")
+        assert result["commission"] == 1000 * 0.005
 
     def test_commission_us_per_share_below_min(self):
         bt = Backtester(config={"execution": {}})
-        assert bt._calculate_commission(100.0, 10, "US") == 1.0
+        result = bt._calculate_commission_breakdown(100.0, 10, "US", "BUY")
+        assert result["commission"] == 1.0
 
 
 class TestSlippageDirectionCorrect:
@@ -123,13 +134,15 @@ class TestSlippageDirectionCorrect:
         bt = Backtester(config={"backtest": {"slippage_bps": 100}, "execution": {}})
         portfolio = Portfolio(initial_cash=100000)
         entry_times = {}
+        entry_prices = {}
+        diag = _make_diag()
 
         slippage = 100 * (100 / 10000)
 
         bar = {"close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
-            portfolio, "AAPL", bar, entry_times,
+            portfolio, "AAPL", bar, entry_times, entry_prices, diag,
         )
 
         buy_commission = max(10 * 0.005, 1.0)
@@ -138,7 +151,7 @@ class TestSlippageDirectionCorrect:
 
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "SELL", "order_type": "market", "price": 100},
-            portfolio, "AAPL", bar, entry_times,
+            portfolio, "AAPL", bar, entry_times, entry_prices, diag,
         )
 
         sell_commission = max(10 * 0.005, 1.0)
@@ -151,11 +164,13 @@ class TestCashTrackingAfterBuyAndSell:
         bt = Backtester(config={"backtest": {"slippage_bps": 0}, "execution": {}})
         portfolio = Portfolio(initial_cash=100000)
         entry_times = {}
+        entry_prices = {}
+        diag = _make_diag()
 
         bar1 = {"close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
-            portfolio, "AAPL", bar1, entry_times,
+            portfolio, "AAPL", bar1, entry_times, entry_prices, diag,
         )
 
         buy_commission = max(10 * 0.005, 1.0)
@@ -164,7 +179,7 @@ class TestCashTrackingAfterBuyAndSell:
         bar2 = {"close": 110, "timestamp": datetime(2024, 1, 2)}
         trade = bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "SELL", "order_type": "market", "price": 110},
-            portfolio, "AAPL", bar2, entry_times,
+            portfolio, "AAPL", bar2, entry_times, entry_prices, diag,
         )
 
         sell_commission = max(10 * 0.005, 1.0)

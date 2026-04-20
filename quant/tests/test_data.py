@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import pandas as pd
 
-from quant.data.normalizer import Normalizer, Bar, Quote, Trade
+from quant.data.normalizer import Normalizer, Bar, Quote, MarketTrade
 
 
 class TestNormalizer:
@@ -80,7 +80,7 @@ class TestNormalizer:
 
         trade = Normalizer.normalize_trade(data)
 
-        assert isinstance(trade, Trade)
+        assert isinstance(trade, MarketTrade)
         assert trade.symbol == "AAPL"
         assert trade.price == 150.25
 

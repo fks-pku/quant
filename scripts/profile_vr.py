@@ -8,7 +8,7 @@ import pandas as pd
 from collections import Counter
 
 from quant.data.providers.duckdb_provider import DuckDBProvider
-from quant.core.walkforward import _DataFrameProvider
+from quant.core.walkforward import DataFrameProvider
 from quant.core.backtester import Backtester
 from quant.strategies.volatility_regime.strategy import VolatilityRegime
 
@@ -36,7 +36,7 @@ print(f"Data load: {t1-t0:.3f}s ({len(data_df)} bars)")
 
 # Build provider
 t2 = time.perf_counter()
-dp = _DataFrameProvider(data_df)
+dp = DataFrameProvider(data_df)
 t3 = time.perf_counter()
 print(f"Provider build: {t3-t2:.3f}s")
 

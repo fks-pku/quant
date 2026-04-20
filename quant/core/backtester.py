@@ -374,14 +374,29 @@ class Backtester:
             if portfolio.cash < total_cost:
                 return None
 
-            if symbol not in entry_times:
+            is_new_entry = symbol not in entry_times
+            if is_new_entry:
                 entry_times[symbol] = fill_ts
                 entry_prices[symbol] = fill_price
 
             portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity)
             portfolio.cash -= total_cost
 
-            return None
+            return Trade(
+                entry_time=fill_ts,
+                exit_time=fill_ts,
+                symbol=symbol,
+                side=order['side'],
+                entry_price=fill_price,
+                exit_price=fill_price,
+                quantity=quantity,
+                pnl=-commission,
+                signal_date=signal_date,
+                fill_date=fill_ts,
+                fill_price=fill_price,
+                intended_qty=order['quantity'],
+                cost_breakdown=cost_breakdown,
+            )
 
         elif order['side'] == 'SELL':
             pos = portfolio.get_position(symbol)

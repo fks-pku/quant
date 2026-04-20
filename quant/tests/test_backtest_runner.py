@@ -36,7 +36,7 @@ class TestParseArgs:
         assert args.initial_cash == 100000
         assert args.slippage_bps == 5
         assert args.output_dir == "./backtest_output"
-        assert args.cache_dir == "./data/cache"
+        assert args.db == "./data/duckdb/quant.duckdb"
 
     def test_custom_values(self):
         args = parse_args([
@@ -83,19 +83,21 @@ def _make_synthetic_data(symbols, start, days):
 class TestRunnerWithSyntheticData:
     def test_runner_with_synthetic_data(self, monkeypatch, tmp_path):
         np.random.seed(42)
-        symbols = ["FAKE1", "FAKE2"]
+        symbols = ["HK.00700", "HK.09988"]
         start = datetime(2024, 1, 2)
         end = datetime(2024, 3, 1)
         days = 60
         synthetic = _make_synthetic_data(symbols, start, days)
 
-        from quant.core.walkforward import _DataFrameProvider
+        from quant.core.walkforward import DataFrameProvider
 
-        class FakeProvider:
+        class FakeDuckDBProvider:
             def __init__(self, *a, **kw):
                 self._connected = False
             def connect(self):
                 self._connected = True
+            def disconnect(self):
+                pass
             def get_bars(self, symbol, start, end, timeframe):
                 subset = synthetic[synthetic["symbol"] == symbol]
                 subset = subset[
@@ -103,8 +105,19 @@ class TestRunnerWithSyntheticData:
                 ]
                 return subset
 
+        class FakeDuckDBStorage:
+            def __init__(self, *a, **kw):
+                pass
+            def get_lot_size(self, symbol):
+                return 100
+            def close(self):
+                pass
+
         monkeypatch.setattr(
-            "quant.backtest_runner.YfinanceProvider", FakeProvider
+            "quant.backtest_runner.DuckDBProvider", FakeDuckDBProvider
+        )
+        monkeypatch.setattr(
+            "quant.backtest_runner.DuckDBStorage", FakeDuckDBStorage
         )
 
         output_dir = tmp_path / "bt_out"
@@ -112,14 +125,13 @@ class TestRunnerWithSyntheticData:
             "--strategy", "SimpleMomentum",
             "--start", "2024-01-02",
             "--end", "2024-03-01",
-            "--symbols", "FAKE1,FAKE2",
+            "--symbols", "HK.00700,HK.09988",
             "--output-dir", str(output_dir),
             "--initial-cash", "100000",
         ])
 
         assert result is not None
         assert result.final_nav > 0
-        assert result.total_return != 0 or True
 
         equity_csv = output_dir / "SimpleMomentum_2024-01-02_2024-03-01_equity.csv"
         assert equity_csv.exists()

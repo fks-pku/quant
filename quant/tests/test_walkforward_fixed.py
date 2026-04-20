@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-from quant.core.walkforward import WalkForwardEngine, _DataFrameProvider
+from quant.core.walkforward import WalkForwardEngine, DataFrameProvider
 from quant.core.backtester import Backtester
 
 
