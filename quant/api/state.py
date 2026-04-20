@@ -16,6 +16,7 @@ portfolio_data = {
 }
 strategies_data = []
 positions_data = []
+orders_data = []
 selected_strategy = 'VolatilityRegime'
 simulation_running = False
 _backtest_results = {}

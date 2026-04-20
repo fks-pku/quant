@@ -5,7 +5,6 @@ frontend.log
 
 # Dependencies
 quant/frontend/node_modules/
-quant/frontend/package-lock.json
 
 # Runtime data
 quant/var/
@@ -24,6 +23,5 @@ Thumbs.db
 start_ui.ps1
 start_ui_windows.bat
 .worktrees/
-quant/frontend/build/
 build/
 backtest_output/
