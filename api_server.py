@@ -14,7 +14,7 @@ from datetime import datetime
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-sys.path.insert(0, str(Path(__file__).parent / 'system'))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from quant.execution.strategy_position_tracker import get_tracker, DEFAULT_STRATEGY
 
@@ -78,7 +78,7 @@ _STRATEGY_DIR_MAP = {
     'dual_momentum': 'dual_momentum',
 }
 
-STRATEGIES_DIR = Path(__file__).parent / 'system' / 'quant' / 'strategies'
+STRATEGIES_DIR = Path(__file__).parent / 'quant' / 'strategies'
 DOCS_DIR = STRATEGIES_DIR / 'docs'
 
 AVAILABLE_STRATEGIES = {
@@ -1132,7 +1132,7 @@ def futu_connect():
     try:
         from quant.execution.brokers.futu import FutuBroker
         import yaml
-        config_path = str(Path(__file__).parent / 'system' / 'quant' / 'config' / 'brokers.yaml')
+        config_path = str(Path(__file__).parent / 'quant' / 'config' / 'brokers.yaml')
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         futu_config = config.get('futu', {})

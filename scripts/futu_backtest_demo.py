@@ -10,7 +10,7 @@ Requires: Futu OpenD running at 127.0.0.1:11111
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "system"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
 from datetime import datetime, timedelta, date as date_type

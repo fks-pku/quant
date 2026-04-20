@@ -18,7 +18,7 @@ import os
 import time
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "system"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
 from quant.data.providers.futu import FutuProvider

@@ -1,5 +1,5 @@
 import sys, time
-sys.path.insert(0, "D:/vk/quant/system")
+sys.path.insert(0, "D:/vk/quant")
 
 t0 = time.perf_counter()
 

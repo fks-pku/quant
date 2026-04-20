@@ -1,6 +1,6 @@
 """Quick end-to-end backtest test."""
 import sys
-sys.path.insert(0, "D:/vk/quant/system")
+sys.path.insert(0, "D:/vk/quant")
 
 from datetime import datetime
 from pathlib import Path

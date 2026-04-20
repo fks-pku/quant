@@ -1,6 +1,6 @@
 """Profile VolatilityRegime backtest to find the exact bottleneck."""
 import sys
-sys.path.insert(0, "D:/vk/quant/system")
+sys.path.insert(0, "D:/vk/quant")
 
 import time
 from datetime import datetime
