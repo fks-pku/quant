@@ -7,6 +7,11 @@ frontend.log
 frontend/node_modules/
 frontend/package-lock.json
 
+# Runtime data
+data/duckdb/
+data/strategy_state.json
+data/strategy_positions.json
+
 # Local workspace
 .vibe-kanban-workspaces/
 
@@ -22,6 +27,5 @@ start_ui.ps1
 start_ui_windows.bat
 .worktrees/
 frontend/build/
-system/data/cache/
-system/data/*.db
+build/
 backtest_output/

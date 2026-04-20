@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from quant.core.engine import Engine, SystemMode
 from quant.core.events import EventBus, EventType
@@ -30,9 +30,6 @@ from quant.execution.brokers.paper import PaperBroker
 from quant.execution.brokers.futu import FutuBroker
 from quant.execution.order_manager import OrderManager
 from quant.execution.fill_handler import FillHandler
-from quant.strategies.examples.momentum_eod import MomentumEOD
-from quant.strategies.examples.mean_reversion import MeanReversion1m
-from quant.strategies.examples.dual_thrust import DualThrust
 from quant.strategies.registry import StrategyRegistry
 from quant.utils.config_loader import ConfigLoader
 from quant.utils.logger import setup_logger
