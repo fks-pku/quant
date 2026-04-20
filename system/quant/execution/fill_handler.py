@@ -48,11 +48,8 @@ class FillHandler:
         price: float,
         commission: float = 0.0,
         timestamp: Optional[datetime] = None,
+        strategy_name: Optional[str] = None,
     ) -> Fill:
-        """
-        Process a fill and update portfolio.
-        Returns the Fill object.
-        """
         if timestamp is None:
             timestamp = datetime.now()
 
@@ -64,7 +61,10 @@ class FillHandler:
             price=price,
             commission=commission,
             timestamp=timestamp,
+            strategy_name=strategy_name,
         )
+
+        self._update_tracker(fill)
 
         with self._lock:
             self._fills.append(fill)
@@ -116,6 +116,21 @@ class FillHandler:
                 "timestamp": fill.timestamp,
             }
         )
+
+    def _update_tracker(self, fill: Fill) -> None:
+        try:
+            from quant.execution.strategy_position_tracker import get_tracker
+            tracker = get_tracker()
+            strategy = fill.strategy_name or tracker.get_strategy_for_order(fill.order_id)
+            tracker.update_from_fill(
+                strategy_name=strategy,
+                symbol=fill.symbol,
+                side=fill.side,
+                qty=fill.quantity,
+                price=fill.price,
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to update strategy tracker: {e}")
 
     def get_fills(
         self,

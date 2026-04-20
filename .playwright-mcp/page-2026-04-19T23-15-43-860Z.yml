@@ -1,0 +1,91 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: QUANTSYSTEM
+      - generic [ref=e7]: STOPPED
+    - generic [ref=e8]:
+      - combobox [ref=e9] [cursor=pointer]:
+        - option "Paper Trading" [selected]
+        - option "Futu (HK/US)"
+        - option "Interactive Brokers"
+        - option "Alpaca"
+      - button "▶ START" [ref=e94] [cursor=pointer]
+  - generic [ref=e11]:
+    - button "BACKTEST" [ref=e12] [cursor=pointer]
+    - button "LIVE TRADING" [active] [ref=e13] [cursor=pointer]
+  - main [ref=e14]:
+    - generic [ref=e96]:
+      - generic [ref=e97]:
+        - generic [ref=e98]: 账户总览
+        - generic [ref=e99]:
+          - generic [ref=e100]:
+            - generic [ref=e101]:
+              - generic [ref=e102]: 资产净值
+              - generic [ref=e103]: HK$0.00
+            - generic [ref=e104]:
+              - generic [ref=e105]: 最大购买力
+              - generic [ref=e106]: HK$0.00
+            - generic [ref=e107]:
+              - generic [ref=e108]: 剩余流动性
+              - generic [ref=e109]: HK$0.00
+            - generic [ref=e110]:
+              - generic [ref=e111]: 证券市值
+              - generic [ref=e112]: HK$0.00
+            - generic [ref=e113]:
+              - generic [ref=e114]: 持仓盈亏
+              - generic [ref=e115]: HK$0.00
+          - generic [ref=e116]:
+            - generic [ref=e153]: 持仓
+            - generic [ref=e154]: No positions
+      - generic [ref=e156]:
+        - generic [ref=e158]: Loading CIO assessment...
+        - generic [ref=e159]:
+          - generic [ref=e161]: Strategies
+          - table [ref=e163]:
+            - rowgroup [ref=e164]:
+              - row "Strategy Status Weight Allocated P&L Sharpe Actions" [ref=e165]:
+                - columnheader "Strategy" [ref=e166]
+                - columnheader "Status" [ref=e167]
+                - columnheader "Weight" [ref=e168]
+                - columnheader "Allocated" [ref=e169]
+                - columnheader "P&L" [ref=e170]
+                - columnheader "Sharpe" [ref=e171]
+                - columnheader "Actions" [ref=e172]
+            - rowgroup [ref=e173]:
+              - row "No strategies. Use the backtest page to explore strategies." [ref=e174]:
+                - cell "No strategies. Use the backtest page to explore strategies." [ref=e175]
+      - generic [ref=e176]:
+        - generic [ref=e177]: 策略管理
+        - generic [ref=e178]:
+          - generic [ref=e180]: Loading CIO assessment...
+          - generic [ref=e181]:
+            - generic [ref=e183]: Strategies
+            - table [ref=e185]:
+              - rowgroup [ref=e186]:
+                - row "Strategy Status Weight Allocated P&L Sharpe Actions" [ref=e187]:
+                  - columnheader "Strategy" [ref=e188]
+                  - columnheader "Status" [ref=e189]
+                  - columnheader "Weight" [ref=e190]
+                  - columnheader "Allocated" [ref=e191]
+                  - columnheader "P&L" [ref=e192]
+                  - columnheader "Sharpe" [ref=e193]
+                  - columnheader "Actions" [ref=e194]
+              - rowgroup [ref=e195]:
+                - row "No strategies. Use the backtest page to explore strategies." [ref=e196]:
+                  - cell "No strategies. Use the backtest page to explore strategies." [ref=e197]
+      - generic [ref=e198]:
+        - generic [ref=e199]: 近期交易记录
+        - table [ref=e201]:
+          - rowgroup [ref=e202]:
+            - row "时间 策略 标的 方向 数量 成交 价格 状态" [ref=e203]:
+              - columnheader "时间" [ref=e204]
+              - columnheader "策略" [ref=e205]
+              - columnheader "标的" [ref=e206]
+              - columnheader "方向" [ref=e207]
+              - columnheader "数量" [ref=e208]
+              - columnheader "成交" [ref=e209]
+              - columnheader "价格" [ref=e210]
+              - columnheader "状态" [ref=e211]
+          - rowgroup [ref=e212]:
+            - row "暂无交易记录" [ref=e213]:
+              - cell "暂无交易记录" [ref=e214]

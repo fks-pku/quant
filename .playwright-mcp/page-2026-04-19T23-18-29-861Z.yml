@@ -1,0 +1,37 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: QUANTSYSTEM
+      - generic [ref=e7]: DISCONNECTED
+    - generic [ref=e8]:
+      - combobox [ref=e9] [cursor=pointer]:
+        - option "Paper Trading" [selected]
+        - option "Futu (HK/US)"
+        - option "Interactive Brokers"
+        - option "Alpaca"
+      - button "▶ START" [ref=e10] [cursor=pointer]
+  - generic [ref=e11]:
+    - button "BACKTEST" [ref=e12] [cursor=pointer]
+    - button "LIVE TRADING" [ref=e13] [cursor=pointer]
+  - main [ref=e14]:
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - generic [ref=e18]: Strategy
+        - combobox [ref=e19]
+      - generic [ref=e20]:
+        - generic [ref=e21]: Start Date
+        - textbox [ref=e22]: 2020-01-01
+      - generic [ref=e23]:
+        - generic [ref=e24]: End Date
+        - textbox [ref=e25]: 2024-12-31
+      - generic [ref=e26]:
+        - generic [ref=e27]: Symbols
+        - textbox [ref=e28]: HK.00700
+      - generic [ref=e29]:
+        - generic [ref=e30]: Initial Cash
+        - spinbutton [ref=e31]: "100000"
+      - generic [ref=e32]:
+        - generic [ref=e33]: Slippage (bps)
+        - spinbutton [ref=e34]: "5"
+      - button "RUN BACKTEST" [ref=e35] [cursor=pointer]
+      - generic [ref=e36]: Idle

@@ -123,11 +123,13 @@ class OrderManager:
             status=OrderStatus.PENDING,
             price=price,
             timestamp=datetime.now(),
+            strategy_name=strategy_name,
         )
 
         with self._lock:
             self._orders[order_id] = order
 
+        self._record_strategy(order_id, strategy_name)
         self.risk_engine.record_order()
         self._submit_to_broker(order)
 
@@ -233,3 +235,10 @@ class OrderManager:
     def _get_last_price(self, symbol: str) -> float:
         """Get last known price for a symbol (placeholder)."""
         return 100.0
+
+    def _record_strategy(self, order_id: str, strategy_name: Optional[str]) -> None:
+        try:
+            from quant.execution.strategy_position_tracker import get_tracker
+            get_tracker().record_order(order_id, strategy_name)
+        except Exception:
+            pass

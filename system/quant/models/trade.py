@@ -22,3 +22,4 @@ class Trade:
     fill_price: float = 0.0
     intended_qty: float = 0.0
     cost_breakdown: Optional[Dict] = None
+    strategy_name: Optional[str] = None

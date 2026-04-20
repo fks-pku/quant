@@ -81,9 +81,9 @@ class FutuBroker(BrokerAdapter):
     def connect(self) -> None:
         """Connect to Futu OpenD and retrieve account list."""
         try:
-            from futu import OpenHKTradeContext, OpenQuoteContext
+            from futu import OpenSecTradeContext, OpenQuoteContext
 
-            self._trd_api = OpenHKTradeContext(host=self.host, port=self.port)
+            self._trd_api = OpenSecTradeContext(host=self.host, port=self.port)
             self._quote_api = OpenQuoteContext(host=self.host, port=self.port)
             self._connected = True
             self.logger.info(f"Connected to Futu OpenD at {self.host}:{self.port}")
@@ -114,13 +114,10 @@ class FutuBroker(BrokerAdapter):
             for acc in self._acc_list:
                 if isinstance(acc, dict):
                     acc_id = acc.get("acc_id", "")
-                    acc_name = acc.get("acc_name", "")
                     acc_type = acc.get("acc_type", "")
-                    market = acc.get("market", "")
-                    self.logger.info(f"  Account: {acc_id} ({acc_name}) - {acc_type} - Market: {market}")
-
-                    if market:
-                        self._acc_id_map[market] = int(acc_id)
+                    trd_env = acc.get("trd_env", "")
+                    markets = acc.get("trdmarket_auth", [])
+                    self.logger.info(f"  Account: {acc_id} - {acc_type} - {trd_env} - Markets: {markets}")
 
         except Exception as e:
             self.logger.error(f"Error retrieving account list: {e}")
@@ -128,6 +125,10 @@ class FutuBroker(BrokerAdapter):
     def unlock_trade(self, password: Optional[str] = None, trade_mode: Optional[str] = None) -> bool:
         """
         Unlock trading with password.
+
+        For GUI OpenD: API unlock is not supported. The method detects GUI OpenD
+        and checks if trading is already unlocked via a probe call (get_acc_list).
+        For headless OpenD: uses the standard unlock_trade API.
 
         Args:
             password: Trading password. If None, uses self.password
@@ -144,24 +145,66 @@ class FutuBroker(BrokerAdapter):
 
         try:
             ret, data = self._trd_api.unlock_trade(password=pwd)
+            if ret == 0:
+                self._unlocked = True
+                self._build_acc_id_map()
+                self.logger.info("Trading unlocked successfully via API")
+                return True
+        except Exception:
+            pass
+
+        self._unlocked = self._probe_unlock_status()
+        if self._unlocked:
+            self._build_acc_id_map()
+            self.logger.info("Trading already unlocked (GUI OpenD or pre-unlocked)")
+        else:
+            self.logger.warning("Trading not unlocked. For GUI OpenD, click unlock in OpenD interface first.")
+
+        return self._unlocked
+
+    def _probe_unlock_status(self) -> bool:
+        """Probe whether trading is already unlocked by trying a read-only API call."""
+        try:
+            ret, data = self._trd_api.get_acc_list()
             if ret != 0:
-                self.logger.error(f"Failed to unlock trading: {data}")
                 return False
-
-            self._unlocked = True
-            self._acc_id_map = {}
-            for acc in self._acc_list:
-                if isinstance(acc, dict):
-                    market = acc.get("market", "")
-                    if market:
-                        self._acc_id_map[market] = int(acc.get("acc_id", 0))
-
-            self.logger.info(f"Trading unlocked successfully")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Error unlocking trading: {e}")
+            if hasattr(data, 'empty') and not data.empty:
+                self._acc_list = data.to_dict('records')
+                return True
+            if isinstance(data, list) and len(data) > 0:
+                self._acc_list = data
+                return True
+            return ret == 0
+        except Exception:
             return False
+
+    def _build_acc_id_map(self):
+        """Build market -> acc_id mapping from account list."""
+        self._acc_id_map = {}
+        for acc in self._acc_list:
+            if not isinstance(acc, dict):
+                continue
+            acc_id = int(acc.get("acc_id", 0))
+            if acc_id == 0:
+                continue
+
+            markets = acc.get("trdmarket_auth", [])
+            if isinstance(markets, list) and markets:
+                for m in markets:
+                    self._acc_id_map[m] = acc_id
+            else:
+                market = acc.get("market", "")
+                if market:
+                    self._acc_id_map[market] = acc_id
+
+            acc_type = acc.get("acc_type", "")
+            trd_env = acc.get("trd_env", "")
+            if "HK" not in self._acc_id_map and trd_env in ("SIMULATE", "REAL"):
+                self._acc_id_map["HK"] = acc_id
+            if "US" not in self._acc_id_map and trd_env in ("SIMULATE", "REAL"):
+                self._acc_id_map["US"] = acc_id
+
+        self.logger.info(f"Account mapping: {self._acc_id_map}")
 
     def disconnect(self) -> None:
         """Disconnect from Futu OpenD."""
@@ -699,6 +742,108 @@ class FutuBroker(BrokerAdapter):
         except Exception as e:
             self.logger.error(f"Error getting order fees: {e}")
             return {}
+
+    def get_positions_enriched(self) -> List[Dict[str, Any]]:
+        if not self._connected or not self._trd_api:
+            return []
+        if not self._unlocked:
+            return []
+
+        holdings = []
+        markets = ["HK", "US"] if len(self._acc_list) > 1 else [self._acc_list[0].get("market", "HK")] if self._acc_list else ["HK"]
+
+        for market in markets:
+            acc_id = self._get_acc_id(market)
+            if acc_id == 0:
+                continue
+            try:
+                ret, data = self._trd_api.position_list_query(acc_id=acc_id)
+                if ret != 0 or data is None or (hasattr(data, 'empty') and data.empty):
+                    continue
+                for _, row in data.iterrows():
+                    symbol = row.get("code", "")
+                    if not symbol:
+                        continue
+                    qty = float(row.get("position", 0))
+                    if qty <= 0:
+                        continue
+                    cost_price = float(row.get("cost_price", 0))
+                    nominal_price = float(row.get("nominal_price", 0))
+                    market_val = float(row.get("market_val", 0))
+                    unrealized_pl = float(row.get("unrealized_pl", 0))
+                    pnl_pct = ((nominal_price - cost_price) / cost_price * 100) if cost_price > 0 else 0.0
+                    holdings.append({
+                        "symbol": symbol,
+                        "quantity": qty,
+                        "avg_cost": cost_price,
+                        "cost_price": cost_price,
+                        "current_price": nominal_price,
+                        "nominal_price": nominal_price,
+                        "market_value": market_val,
+                        "unrealized_pnl": unrealized_pl,
+                        "pnl_pct": pnl_pct,
+                        "market": market,
+                        "stock_name": row.get("stock_name", ""),
+                        "today_buy_qty": float(row.get("today_buy_qty", 0)),
+                        "today_sell_qty": float(row.get("today_sell_qty", 0)),
+                    })
+            except Exception as e:
+                self.logger.error(f"Error getting enriched positions for {market}: {e}")
+
+        return holdings
+
+    def get_account_detail(self) -> Dict[str, Any]:
+        if not self._connected or not self._trd_api:
+            return {}
+        if not self._unlocked:
+            return {}
+
+        result = {
+            "total_assets": 0.0,
+            "cash": 0.0,
+            "buying_power": 0.0,
+            "market_val": 0.0,
+            "unrealized_pl": 0.0,
+            "realized_pl": 0.0,
+            "power": 0.0,
+            "available_funds": 0.0,
+            "securities_assets": 0.0,
+            "hk": {"cash": 0.0, "assets": 0.0, "buying_power": 0.0, "market_val": 0.0},
+            "us": {"cash": 0.0, "assets": 0.0, "buying_power": 0.0, "market_val": 0.0},
+        }
+
+        markets = ["HK", "US"] if len(self._acc_list) > 1 else [self._acc_list[0].get("market", "HK")] if self._acc_list else ["HK"]
+
+        for market in markets:
+            acc_id = self._get_acc_id(market)
+            if acc_id == 0:
+                continue
+            try:
+                ret, data = self._trd_api.accinfo_query(acc_id=acc_id)
+                if ret != 0 or data is None or (hasattr(data, 'empty') and data.empty):
+                    continue
+                row = data.iloc[0]
+                mkt = {
+                    "cash": float(row.get("cash", 0)),
+                    "assets": float(row.get("total_assets", 0)),
+                    "buying_power": float(row.get("buying_power", 0)),
+                    "market_val": float(row.get("market_val", 0)),
+                }
+                if market == "HK":
+                    result["hk"] = mkt
+                else:
+                    result["us"] = mkt
+                result["total_assets"] += mkt["assets"]
+                result["cash"] += mkt["cash"]
+                result["buying_power"] += mkt["buying_power"]
+                result["market_val"] += mkt["market_val"]
+                result["power"] = result["buying_power"]
+                result["available_funds"] = result["cash"]
+                result["securities_assets"] = result["market_val"]
+            except Exception as e:
+                self.logger.error(f"Error getting account detail for {market}: {e}")
+
+        return result
 
     def subscribe_order_updates(self, callback) -> None:
         """

@@ -1,0 +1,73 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: QUANTSYSTEM
+      - generic [ref=e7]: STOPPED
+    - generic [ref=e8]:
+      - combobox [ref=e9] [cursor=pointer]:
+        - option "Paper Trading"
+        - option "Futu (HK/US)" [selected]
+        - option "Interactive Brokers"
+        - option "Alpaca"
+      - button "▶ START" [ref=e94] [cursor=pointer]
+  - generic [ref=e95]: Futu 交易未解锁，请在 OpenD 中解锁后重试
+  - generic [ref=e11]:
+    - button "BACKTEST" [ref=e12] [cursor=pointer]
+    - button "LIVE TRADING" [active] [ref=e13] [cursor=pointer]
+  - main [ref=e14]:
+    - generic [ref=e97]:
+      - generic [ref=e98]: 账户总览
+      - generic [ref=e99]:
+        - generic [ref=e100]:
+          - generic [ref=e101]:
+            - generic [ref=e102]: 资产净值
+            - generic [ref=e103]: HK$0.00
+          - generic [ref=e104]:
+            - generic [ref=e105]: 最大购买力
+            - generic [ref=e106]: HK$0.00
+          - generic [ref=e107]:
+            - generic [ref=e108]: 剩余流动性
+            - generic [ref=e109]: HK$0.00
+          - generic [ref=e110]:
+            - generic [ref=e111]: 证券市值
+            - generic [ref=e112]: HK$0.00
+          - generic [ref=e113]:
+            - generic [ref=e114]: 持仓盈亏
+            - generic [ref=e115]: HK$0.00
+        - generic [ref=e116]:
+          - generic [ref=e117]:
+            - generic [ref=e118]:
+              - generic [ref=e119]: 港股
+              - generic [ref=e120]: HKD
+            - generic [ref=e121]:
+              - generic [ref=e122]:
+                - generic [ref=e123]: 市值
+                - generic [ref=e124]: HK$0.00
+              - generic [ref=e125]:
+                - generic [ref=e126]: 现金
+                - generic [ref=e127]: HK$0.00
+              - generic [ref=e128]:
+                - generic [ref=e129]: 持仓盈亏
+                - generic [ref=e130]: HK$0.00
+              - generic [ref=e131]:
+                - generic [ref=e132]: 购买力
+                - generic [ref=e133]: HK$0.00
+            - generic [ref=e134]: 无持仓
+          - generic [ref=e135]:
+            - generic [ref=e136]:
+              - generic [ref=e137]: 美股
+              - generic [ref=e138]: USD
+            - generic [ref=e139]:
+              - generic [ref=e140]:
+                - generic [ref=e141]: 市值
+                - generic [ref=e142]: $0.00
+              - generic [ref=e143]:
+                - generic [ref=e144]: 现金
+                - generic [ref=e145]: $0.00
+              - generic [ref=e146]:
+                - generic [ref=e147]: 持仓盈亏
+                - generic [ref=e148]: $0.00
+              - generic [ref=e149]:
+                - generic [ref=e150]: 购买力
+                - generic [ref=e151]: $0.00
+            - generic [ref=e152]: 无持仓

@@ -1,0 +1,103 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: QUANTSYSTEM
+      - generic [ref=e7]: RUNNING
+    - generic [ref=e8]:
+      - combobox [ref=e9] [cursor=pointer]:
+        - option "Paper Trading" [selected]
+        - option "Futu (HK/US)"
+        - option "Interactive Brokers"
+        - option "Alpaca"
+      - button "■ STOP" [ref=e89] [cursor=pointer]
+  - generic [ref=e11]:
+    - button "BACKTEST" [ref=e12] [cursor=pointer]
+    - button "LIVE TRADING" [active] [ref=e13] [cursor=pointer]
+  - main [ref=e14]:
+    - generic [ref=e90]:
+      - generic [ref=e91]:
+        - generic [ref=e92]: 账户总览
+        - generic [ref=e93]:
+          - generic [ref=e94]:
+            - generic [ref=e95]:
+              - generic [ref=e96]: 资产净值
+              - generic [ref=e97]: HK$100,000.00
+            - generic [ref=e98]:
+              - generic [ref=e99]: 最大购买力
+              - generic [ref=e100]: HK$0.00
+            - generic [ref=e101]:
+              - generic [ref=e102]: 剩余流动性
+              - generic [ref=e103]: HK$0.00
+            - generic [ref=e104]:
+              - generic [ref=e105]: 证券市值
+              - generic [ref=e106]: HK$0.00
+            - generic [ref=e107]:
+              - generic [ref=e108]: 持仓盈亏
+              - generic [ref=e109]: HK$0.00
+          - generic [ref=e110]:
+            - generic [ref=e111]: 持仓
+            - generic [ref=e112]: No positions
+      - generic [ref=e114]:
+        - generic [ref=e115]:
+          - generic [ref=e116]:
+            - generic [ref=e117]: CIO Market Assessment
+            - button "↻ Refresh" [ref=e118] [cursor=pointer]
+          - generic [ref=e119]:
+            - generic [ref=e120]:
+              - generic [ref=e121]: Environment
+              - generic [ref=e122]: Medium Volatility
+            - generic [ref=e123]:
+              - generic [ref=e124]: Score
+              - generic [ref=e125]: 50/100
+            - generic [ref=e126]:
+              - generic [ref=e127]: Sentiment
+              - generic [ref=e128]: neutral
+            - generic [ref=e129]:
+              - generic [ref=e130]: VIX
+              - generic [ref=e131]: "14.42"
+            - generic [ref=e132]:
+              - generic [ref=e133]: Trend
+              - generic [ref=e134]: "0.72"
+            - generic [ref=e135]:
+              - generic [ref=e136]: Updated
+              - generic [ref=e137]: 23:17:39
+        - generic [ref=e138]:
+          - generic [ref=e140]: Strategies
+          - table [ref=e142]:
+            - rowgroup [ref=e143]:
+              - row "Strategy Status Weight Allocated P&L Sharpe Actions" [ref=e144]:
+                - columnheader "Strategy" [ref=e145]
+                - columnheader "Status" [ref=e146]
+                - columnheader "Weight" [ref=e147]
+                - columnheader "Allocated" [ref=e148]
+                - columnheader "P&L" [ref=e149]
+                - columnheader "Sharpe" [ref=e150]
+                - columnheader "Actions" [ref=e151]
+            - rowgroup [ref=e152]:
+              - row "Volatility Regime Paused - - - 0.97 Resume Retire" [ref=e153] [cursor=pointer]:
+                - cell "Volatility Regime" [ref=e154]
+                - cell "Paused" [ref=e155]:
+                  - generic [ref=e156]: Paused
+                - cell "-" [ref=e157]
+                - cell "-" [ref=e158]
+                - cell "-" [ref=e159]
+                - cell "0.97" [ref=e160]
+                - cell "Resume Retire" [ref=e161]:
+                  - button "Resume" [ref=e162]
+                  - button "Retire" [ref=e163]
+      - generic [ref=e164]:
+        - generic [ref=e165]: 近期交易记录
+        - table [ref=e167]:
+          - rowgroup [ref=e168]:
+            - row "时间 策略 标的 方向 数量 成交 价格 状态" [ref=e169]:
+              - columnheader "时间" [ref=e170]
+              - columnheader "策略" [ref=e171]
+              - columnheader "标的" [ref=e172]
+              - columnheader "方向" [ref=e173]
+              - columnheader "数量" [ref=e174]
+              - columnheader "成交" [ref=e175]
+              - columnheader "价格" [ref=e176]
+              - columnheader "状态" [ref=e177]
+          - rowgroup [ref=e178]:
+            - row "暂无交易记录" [ref=e179]:
+              - cell "暂无交易记录" [ref=e180]

@@ -16,6 +16,8 @@ from flask_cors import CORS
 
 sys.path.insert(0, str(Path(__file__).parent / 'system'))
 
+from quant.execution.strategy_position_tracker import get_tracker, DEFAULT_STRATEGY
+
 BUILD_DIR = str(Path(__file__).parent / 'frontend' / 'build')
 app = Flask(__name__, static_folder=str(Path(__file__).parent / 'frontend' / 'build' / 'static'), static_url_path='/static')
 CORS(app)
@@ -34,6 +36,8 @@ selected_strategy = 'VolatilityRegime'
 simulation_running = False
 _backtest_results = {}
 _backtest_lock = threading.Lock()
+_futu_lock = threading.Lock()
+_futu_broker = None
 
 MOCK_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY', 'QQQ']
 MOCK_PRICES = {
@@ -1086,6 +1090,222 @@ def get_strategy_parameters(strategy_id):
         'strategy_id': strategy_id,
         'parameters': params
     })
+
+
+# ─── Futu Broker ──────────────────────────────────────────────────────────────
+
+def _get_futu_broker():
+    global _futu_broker
+    return _futu_broker
+
+
+_last_snapshot_date = None
+
+
+def _maybe_snapshot(tracker, total_nav):
+    global _last_snapshot_date
+    from datetime import date as date_type
+    today = date_type.today().isoformat()
+    if _last_snapshot_date == today:
+        return
+    try:
+        from quant.data.storage_duckdb import DuckDBStorage
+        db = DuckDBStorage()
+        snapshots = tracker.snapshot_all(total_nav)
+        for snap in snapshots:
+            d = {"date": snap.date, "strategy_name": snap.strategy_name,
+                 "nav": snap.nav, "market_value": snap.market_value,
+                 "cash": snap.cash, "unrealized_pnl": snap.unrealized_pnl,
+                 "realized_pnl": snap.realized_pnl}
+            db.save_strategy_snapshot(d)
+        _last_snapshot_date = today
+    except Exception:
+        pass
+
+
+@app.route('/api/futu/connect', methods=['POST'])
+def futu_connect():
+    global _futu_broker
+    with _futu_lock:
+        if _futu_broker is not None and _futu_broker.is_connected():
+            return jsonify({'connected': True, 'message': 'Already connected'})
+    try:
+        from quant.execution.brokers.futu import FutuBroker
+        import yaml
+        config_path = str(Path(__file__).parent / 'system' / 'quant' / 'config' / 'brokers.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        futu_config = config.get('futu', {})
+        broker = FutuBroker(
+            host=futu_config.get('host', '127.0.0.1'),
+            port=futu_config.get('port', 11111),
+        )
+        broker.connect()
+        with _futu_lock:
+            _futu_broker = broker
+        return jsonify({'connected': True})
+    except Exception as e:
+        return jsonify({'connected': False, 'error': str(e)}), 500
+
+
+@app.route('/api/futu/disconnect', methods=['POST'])
+def futu_disconnect():
+    global _futu_broker
+    with _futu_lock:
+        if _futu_broker:
+            try:
+                _futu_broker.disconnect()
+            except Exception:
+                pass
+            _futu_broker = None
+    return jsonify({'disconnected': True})
+
+
+@app.route('/api/futu/unlock', methods=['POST'])
+def futu_unlock():
+    with _futu_lock:
+        broker = _get_futu_broker()
+    if broker is None:
+        return jsonify({'error': 'Not connected'}), 400
+    try:
+        broker.unlock_trade('')
+        return jsonify({'unlocked': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/futu/status', methods=['GET'])
+def futu_status():
+    with _futu_lock:
+        broker = _get_futu_broker()
+    if broker is None:
+        return jsonify({'connected': False, 'unlocked': False})
+    return jsonify({
+        'connected': broker.is_connected(),
+        'unlocked': broker.is_unlocked() if broker.is_connected() else False,
+    })
+
+
+@app.route('/api/futu/account', methods=['GET'])
+def futu_account():
+    with _futu_lock:
+        broker = _get_futu_broker()
+    if broker is None or not broker.is_connected() or not broker.is_unlocked():
+        return jsonify({'error': 'Futu not connected/unlocked'}), 400
+    try:
+        detail = broker.get_account_detail()
+        return jsonify(detail)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/futu/positions', methods=['GET'])
+def futu_positions():
+    with _futu_lock:
+        broker = _get_futu_broker()
+    if broker is None or not broker.is_connected() or not broker.is_unlocked():
+        return jsonify({'error': 'Futu not connected/unlocked'}), 400
+    try:
+        tracker = get_tracker()
+        holdings = broker.get_positions_enriched()
+        detail = broker.get_account_detail()
+        strategy_breakdown = tracker.calibrate(
+            [{"symbol": h.get("symbol", ""), "qty": h.get("quantity", 0),
+              "nominal_price": h.get("current_price", h.get("nominal_price", 0)),
+              "cost_price": h.get("cost_price", h.get("avg_cost", 0))}
+             for h in holdings]
+        )
+        nav = detail.get('total_assets', 0)
+        _maybe_snapshot(tracker, nav)
+        return jsonify({
+            'nav': nav,
+            'total_unrealized_pnl': detail.get('unrealized_pl', 0),
+            'total_realized_pnl': detail.get('realized_pl', 0),
+            'account': detail,
+            'hk': detail.get('hk', {}),
+            'us': detail.get('us', {}),
+            'holdings': holdings,
+            'strategy_breakdown': strategy_breakdown,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/futu/orders', methods=['GET'])
+def futu_orders():
+    with _futu_lock:
+        broker = _get_futu_broker()
+    if broker is None or not broker.is_connected() or not broker.is_unlocked():
+        return jsonify({'error': 'Futu not connected/unlocked'}), 400
+    try:
+        tracker = get_tracker()
+        orders = []
+        order_list = broker.get_order_list()
+        for o in order_list:
+            orders.append({
+                'order_id': o.order_id,
+                'symbol': o.symbol,
+                'side': o.side,
+                'quantity': o.quantity,
+                'price': o.price,
+                'status': o.status.name if hasattr(o.status, 'name') else str(o.status),
+                'filled_qty': o.filled_qty,
+                'avg_fill_price': o.avg_fill_price,
+                'time': o.update_time.isoformat() if o.update_time else None,
+                'strategy': tracker.get_strategy_for_order(o.order_id),
+            })
+        try:
+            deals_df = broker.get_today_deals()
+            if deals_df is not None and not deals_df.empty:
+                for _, r in deals_df.iterrows():
+                    orders.append({
+                        'order_id': str(r.get('deal_id', '')),
+                        'symbol': r.get('code', ''),
+                        'side': r.get('trd_side', ''),
+                        'quantity': float(r.get('qty', 0)),
+                        'price': float(r.get('price', 0)),
+                        'status': 'DEAL',
+                        'filled_qty': float(r.get('qty', 0)),
+                        'avg_fill_price': float(r.get('price', 0)),
+                        'time': str(r.get('create_time', '')),
+                        'strategy': DEFAULT_STRATEGY,
+                    })
+        except Exception:
+            pass
+        orders.sort(key=lambda x: x.get('time') or '', reverse=True)
+        return jsonify({'orders': orders})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/strategy-positions', methods=['GET'])
+def strategy_positions():
+    return jsonify(get_tracker().get_breakdown())
+
+
+@app.route('/api/strategy/<name>/history', methods=['GET'])
+def strategy_history(name):
+    try:
+        from quant.data.storage_duckdb import DuckDBStorage
+        db = DuckDBStorage()
+        snapshots = db.get_strategy_snapshots(strategy_name=name)
+        return jsonify({"strategy": name, "snapshots": snapshots})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/strategy/all-history', methods=['GET'])
+def all_strategy_history():
+    try:
+        from quant.data.storage_duckdb import DuckDBStorage
+        db = DuckDBStorage()
+        snapshots = db.get_strategy_snapshots()
+        by_strategy = {}
+        for s in snapshots:
+            by_strategy.setdefault(s["strategy_name"], []).append(s)
+        return jsonify(by_strategy)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/', defaults={'path': ''})

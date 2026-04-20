@@ -1,0 +1,104 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: QUANTSYSTEM
+      - generic [ref=e7]: STOPPED
+    - generic [ref=e8]:
+      - combobox [ref=e9] [cursor=pointer]:
+        - option "Paper Trading"
+        - option "Futu (HK/US)" [selected]
+        - option "Interactive Brokers"
+        - option "Alpaca"
+      - button "..." [disabled] [ref=e91]
+  - generic [ref=e93]:
+    - generic [ref=e94]: 请在 Futu OpenD GUI 中解锁交易，完成后点击确定
+    - button "确定" [ref=e95] [cursor=pointer]
+  - generic [ref=e11]:
+    - button "BACKTEST" [ref=e12] [cursor=pointer]
+    - button "LIVE TRADING" [ref=e13] [cursor=pointer]
+  - main [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e16]:
+        - generic [ref=e17]:
+          - generic [ref=e18]: Strategy
+          - combobox [ref=e19]:
+            - option "Volatility Regime" [selected]
+        - generic [ref=e20]:
+          - generic [ref=e21]: Start Date
+          - textbox [ref=e22]: 2020-01-01
+        - generic [ref=e23]:
+          - generic [ref=e24]: End Date
+          - textbox [ref=e25]: 2024-12-31
+        - generic [ref=e26]:
+          - generic [ref=e27]: Symbols
+          - textbox [ref=e28]: HK.01024,HK.06618,HK.02013,HK.02057,HK.01810,HK.00285,HK.06690,HK.00268,HK.00772,HK.00700,HK.09988,HK.03690,HK.09618,HK.02015,HK.09888,HK.09961,HK.02382,HK.00981,HK.09626,HK.09901,HK.02018
+        - generic [ref=e29]:
+          - generic [ref=e30]: Initial Cash
+          - spinbutton [ref=e31]: "100000"
+        - generic [ref=e32]:
+          - generic [ref=e33]: Slippage (bps)
+          - spinbutton [ref=e34]: "5"
+        - button "RUN BACKTEST" [ref=e35] [cursor=pointer]
+        - generic [ref=e36]: Idle
+      - generic [ref=e38]:
+        - generic [ref=e39]: Strategy-Specific Parameters
+        - generic [ref=e40]:
+          - generic [ref=e41]:
+            - text: max position pct
+            - generic [ref=e42]: (float)
+          - spinbutton [ref=e43]: "0.05"
+          - generic [ref=e44]: Max position size as % of NAV
+        - generic [ref=e45]:
+          - generic [ref=e46]:
+            - text: momentum lookback
+            - generic [ref=e47]: (int)
+          - spinbutton [ref=e48]: "20"
+          - generic [ref=e49]: Momentum calculation lookback
+        - generic [ref=e50]:
+          - generic [ref=e51]:
+            - text: momentum top n
+            - generic [ref=e52]: (int)
+          - spinbutton [ref=e53]: "5"
+          - generic [ref=e54]: Number of top momentum stocks
+        - generic [ref=e55]:
+          - generic [ref=e56]:
+            - text: reduce exposure bear
+            - generic [ref=e57]: (float)
+          - spinbutton [ref=e58]: "0.3"
+          - generic [ref=e59]: Exposure reduction in bear regime
+        - generic [ref=e60]:
+          - generic [ref=e61]:
+            - text: rsi overbought
+            - generic [ref=e62]: (float)
+          - spinbutton [ref=e63]: "70"
+          - generic [ref=e64]: RSI overbought threshold
+        - generic [ref=e65]:
+          - generic [ref=e66]:
+            - text: rsi oversold
+            - generic [ref=e67]: (float)
+          - spinbutton [ref=e68]: "30"
+          - generic [ref=e69]: RSI oversold threshold
+        - generic [ref=e70]:
+          - generic [ref=e71]:
+            - text: rsi period
+            - generic [ref=e72]: (int)
+          - spinbutton [ref=e73]: "14"
+          - generic [ref=e74]: RSI calculation period
+        - generic [ref=e75]:
+          - generic [ref=e76]:
+            - text: vix bear threshold
+            - generic [ref=e77]: (float)
+          - spinbutton [ref=e78]: "25"
+          - generic [ref=e79]: VIX threshold for bear regime
+        - generic [ref=e80]:
+          - generic [ref=e81]:
+            - text: vix bull threshold
+            - generic [ref=e82]: (float)
+          - spinbutton [ref=e83]: "15"
+          - generic [ref=e84]: VIX threshold for bull regime
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - text: vix lookback
+            - generic [ref=e87]: (int)
+          - spinbutton [ref=e88]: "20"
+          - generic [ref=e89]: VIX lookback period for SMA calculation

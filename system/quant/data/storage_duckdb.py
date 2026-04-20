@@ -36,7 +36,7 @@ class DuckDBStorage:
     def _init_database(self) -> None:
         self._conn = duckdb.connect(str(self.db_path))
         self._conn.execute("SET threads=4")
-        for table in ("orders", "trades", "portfolio_snapshots", "instrument_meta"):
+        for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta"):
             self._ensure_table(table)
         self.logger.info(f"DuckDB initialized at {self.db_path}")
 
@@ -100,6 +100,18 @@ class DuckDBStorage:
                     lot_size INTEGER DEFAULT 100,
                     market VARCHAR DEFAULT 'HK',
                     name VARCHAR DEFAULT ''
+                )
+            """)
+        elif table_name == "strategy_snapshots":
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_snapshots (
+                    date VARCHAR,
+                    strategy_name VARCHAR,
+                    nav DOUBLE,
+                    market_value DOUBLE,
+                    cash DOUBLE,
+                    unrealized_pnl DOUBLE,
+                    realized_pnl DOUBLE
                 )
             """)
 
@@ -318,6 +330,39 @@ class DuckDBStorage:
             return self.conn.execute("SELECT * FROM instrument_meta").fetchdf()
         except Exception:
             return pd.DataFrame()
+
+    def save_strategy_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        self._ensure_table("strategy_snapshots")
+        with self._lock:
+            self.conn.execute("""
+                INSERT INTO strategy_snapshots
+                (date, strategy_name, nav, market_value, cash, unrealized_pnl, realized_pnl)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, [
+                snapshot.get("date"),
+                snapshot.get("strategy_name"),
+                snapshot.get("nav"),
+                snapshot.get("market_value"),
+                snapshot.get("cash"),
+                snapshot.get("unrealized_pnl"),
+                snapshot.get("realized_pnl"),
+            ])
+
+    def get_strategy_snapshots(self, strategy_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        self._ensure_table("strategy_snapshots")
+        with self._lock:
+            if strategy_name:
+                df = self.conn.execute(
+                    "SELECT * FROM strategy_snapshots WHERE strategy_name = ? ORDER BY date ASC",
+                    [strategy_name],
+                ).fetchdf()
+            else:
+                df = self.conn.execute(
+                    "SELECT * FROM strategy_snapshots ORDER BY date ASC"
+                ).fetchdf()
+        if df.empty:
+            return []
+        return df.to_dict(orient="records")
 
     def close(self) -> None:
         if self._conn:
