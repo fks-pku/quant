@@ -25,4 +25,5 @@ start_ui.ps1
 start_ui_windows.bat
 .worktrees/
 build/
+!quant/frontend/build/
 backtest_output/
