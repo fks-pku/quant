@@ -10,10 +10,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 
-from quant.core.backtester import Backtester, BacktestResultExporter
-from quant.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
-from quant.data.storage_duckdb import DuckDBStorage
-from quant.strategies.registry import StrategyRegistry
+from quant.features.backtest.engine import Backtester, BacktestResultExporter
+from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+from quant.features.strategies.registry import StrategyRegistry
 
 
 def _normalize_symbol(symbol):
@@ -98,7 +98,7 @@ def main(argv=None):
         },
     }
 
-    from quant.core.walkforward import DataFrameProvider
+    from quant.features.backtest.walkforward import DataFrameProvider
 
     data_provider = DataFrameProvider(data)
 

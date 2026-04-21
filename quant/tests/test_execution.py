@@ -4,11 +4,11 @@ import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from quant.core.portfolio import Portfolio
-from quant.core.risk import RiskEngine
-from quant.core.events import EventBus, EventType
-from quant.execution.brokers.paper import PaperBroker
-from quant.execution.brokers.base import Order, OrderStatus
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.infrastructure.events import EventBus, EventType
+from quant.infrastructure.execution.brokers.paper import PaperBroker
+from quant.infrastructure.execution.brokers.base import Order, OrderStatus
 
 
 class TestPaperBroker:

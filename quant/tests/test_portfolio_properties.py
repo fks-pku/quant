@@ -1,6 +1,6 @@
 """Tests for Portfolio starting_nav property and reset_daily."""
 
-from quant.core.portfolio import Portfolio
+from quant.features.trading.portfolio import Portfolio
 
 
 def test_starting_nav_returns_initial_cash_on_creation():

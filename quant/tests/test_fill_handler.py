@@ -3,9 +3,9 @@
 import pytest
 from datetime import datetime
 
-from quant.core.portfolio import Portfolio
-from quant.core.events import EventBus
-from quant.execution.fill_handler import FillHandler
+from quant.features.trading.portfolio import Portfolio
+from quant.infrastructure.events import EventBus
+from quant.infrastructure.execution.fill_handler import FillHandler
 
 
 def _make_fill_handler():

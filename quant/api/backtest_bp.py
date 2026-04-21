@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 
-from quant.api.state import (
+from quant.api.state.runtime import (
     _backtest_results, _backtest_lock, STRATEGY_ID_TO_REGISTRY,
 )
 
@@ -28,9 +28,9 @@ def run_backtest():
     def _run():
         try:
             import pandas as pd
-            from quant.core.backtester import Backtester
-            from quant.strategies.registry import StrategyRegistry
-            from quant.data.providers.duckdb_provider import DuckDBProvider
+            from quant.features.backtest.engine import Backtester
+            from quant.features.strategies.registry import StrategyRegistry
+            from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
             registry = StrategyRegistry()
             registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
             strategy_class = registry.get(registry_key)
@@ -70,7 +70,7 @@ def run_backtest():
                     }
                 return
 
-            from quant.core.walkforward import DataFrameProvider
+            from quant.features.backtest.walkforward import DataFrameProvider
 
             data_df = pd.concat(all_data, ignore_index=True)
             data_provider = DataFrameProvider(data_df)

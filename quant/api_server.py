@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from flask import Flask, send_file
 from flask_cors import CORS
 
-from quant.api.state import _load_strategy_state
+from quant.api.state.runtime import _load_strategy_state
 from quant.api.system_bp import system_bp
 from quant.api.strategies_bp import strategies_bp
 from quant.api.backtest_bp import backtest_bp

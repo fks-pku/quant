@@ -4,8 +4,8 @@ import pytest
 from datetime import datetime
 from unittest.mock import MagicMock
 
-from quant.strategies.base import Strategy
-from quant.strategies.framework import SignalGenerator, PortfolioConstructor, Signal
+from quant.features.strategies.base import Strategy
+from quant.features.strategies.framework import SignalGenerator, PortfolioConstructor, Signal
 
 
 class MockStrategy(Strategy):

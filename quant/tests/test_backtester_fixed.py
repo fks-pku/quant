@@ -5,9 +5,9 @@ import pandas as pd
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from quant.core.backtester import Backtester, BacktestDiagnostics
-from quant.core.portfolio import Portfolio
-from quant.models.trade import Trade
+from quant.features.backtest.engine import Backtester, BacktestDiagnostics
+from quant.features.trading.portfolio import Portfolio
+from quant.shared.models.trade import Trade
 
 
 def _make_diag():

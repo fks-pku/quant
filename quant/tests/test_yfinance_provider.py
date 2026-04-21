@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import pytest
 
-from quant.data.providers.yfinance_provider import YfinanceProvider
+from quant.infrastructure.data.providers.yfinance_provider import YfinanceProvider
 
 SKIP_NETWORK = os.getenv("SKIP_NETWORK") == "1"
 

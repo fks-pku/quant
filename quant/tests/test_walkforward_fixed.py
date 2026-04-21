@@ -5,8 +5,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-from quant.core.walkforward import WalkForwardEngine, DataFrameProvider
-from quant.core.backtester import Backtester
+from quant.features.backtest.walkforward import WalkForwardEngine, DataFrameProvider
+from quant.features.backtest.engine import Backtester
 
 
 def _generate_data(symbols, days=250, start_date=None):

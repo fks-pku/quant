@@ -1,0 +1,27 @@
+# Broker credentials (gitignored - do not commit)
+
+alpha_vantage:
+  api_key: "YOUR_API_KEY_HERE"
+
+futu:
+  host: "127.0.0.1"
+  port: 11111
+  # Account IDs per market - leave empty to auto-detect from OpenD
+  acc_list:
+    HK: ""
+    US: ""
+  # Trading password for unlocking real trading
+  # Leave empty for simulated trading (default)
+  password: ""
+  # Trading mode: SIMULATE (paper trading) or REAL (live trading)
+  trade_mode: SIMULATE
+
+ibkr:
+  host: "127.0.0.1"
+  port: 7497
+  client_id: 1
+
+alpaca:
+  api_key: "YOUR_API_KEY"
+  secret_key: "YOUR_SECRET_KEY"
+  paper: true

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-from quant.core.analytics import (
+from quant.features.backtest.analytics import (
     calculate_sharpe,
     calculate_sortino,
     calculate_max_drawdown,
@@ -18,7 +18,7 @@ from quant.core.analytics import (
     calculate_statistical_significance,
     calculate_performance_metrics,
 )
-from quant.models.trade import Trade
+from quant.shared.models.trade import Trade
 
 
 def _make_equity_curve(initial=100000, days=100, daily_return=0.001):

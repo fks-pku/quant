@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from quant.api.state import (
+from quant.api.state.runtime import (
     AVAILABLE_STRATEGIES, selected_strategy, positions_data, system_status,
     _init_default_symbols, _STRATEGY_DEFAULT_SYMBOLS, STRATEGY_PARAMETERS,
     _save_strategy_state, _backtest_results, DOCS_DIR, STRATEGIES_DIR,

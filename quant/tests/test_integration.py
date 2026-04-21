@@ -6,14 +6,14 @@ import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from quant.core.backtester import Backtester
-from quant.core.engine import Engine, Context
-from quant.core.events import EventBus
-from quant.core.portfolio import Portfolio
-from quant.core.risk import RiskEngine
-from quant.strategies.volatility_regime.strategy import VolatilityRegime
-from quant.strategies.simple_momentum.strategy import SimpleMomentum
-from quant.strategies.cross_sectional_mr.strategy import CrossSectionalMeanReversion
+from quant.features.backtest.engine import Backtester
+from quant.features.trading.engine import Engine, Context
+from quant.infrastructure.events import EventBus
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.strategies.volatility_regime.strategy import VolatilityRegime
+from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
+from quant.features.strategies.cross_sectional_mr.strategy import CrossSectionalMeanReversion
 
 
 def _generate_test_data(symbols, days=120, start_date=None):
@@ -108,7 +108,7 @@ class TestBacktesterIntegration:
 
     def test_backtest_commission_calculated_correctly(self):
         """Commission should be qty * per_share, not price * qty * per_share."""
-        from quant.core.backtester import CommissionConfig
+        from quant.features.backtest.engine import CommissionConfig
         
         config = {
             "backtest": {"slippage_bps": 0, "speed": "1x"},
@@ -221,7 +221,7 @@ class TestBacktesterIntegration:
         
         engine = Engine(config)
         
-        from quant.execution.order_manager import OrderManager
+        from quant.infrastructure.execution.order_manager import OrderManager
         om = OrderManager(
             portfolio=engine.portfolio,
             risk_engine=engine.risk_engine,

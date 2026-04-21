@@ -2,7 +2,7 @@ import time
 import threading
 from flask import Blueprint, jsonify
 
-from quant.api.state import (
+from quant.api.state.runtime import (
     system_status, portfolio_data, strategies_data, positions_data,
     selected_strategy, system_process, system_thread, simulation_running,
     run_quant_system,

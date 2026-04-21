@@ -3,9 +3,9 @@
 import pytest
 from datetime import datetime
 
-from quant.core.portfolio import Portfolio
-from quant.core.risk import RiskEngine, RiskCheckResult
-from quant.core.events import EventBus
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine, RiskCheckResult
+from quant.infrastructure.events import EventBus
 
 
 def _make_risk_engine(portfolio=None, config=None):

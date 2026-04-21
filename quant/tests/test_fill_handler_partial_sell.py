@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from quant.core.events import EventBus
-from quant.core.portfolio import Portfolio
-from quant.execution.fill_handler import FillHandler
+from quant.infrastructure.events import EventBus
+from quant.features.trading.portfolio import Portfolio
+from quant.infrastructure.execution.fill_handler import FillHandler
 
 
 def _make_handler(initial_cash=100000.0):

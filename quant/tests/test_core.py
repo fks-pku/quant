@@ -4,9 +4,9 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-from quant.core.events import EventBus, Event, EventType
-from quant.core.portfolio import Portfolio, Position
-from quant.core.scheduler import Scheduler
+from quant.infrastructure.events import EventBus, Event, EventType
+from quant.features.trading.portfolio import Portfolio, Position
+from quant.features.trading.scheduler import Scheduler
 
 
 class TestEventBus:

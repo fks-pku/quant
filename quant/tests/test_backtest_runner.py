@@ -36,7 +36,7 @@ class TestParseArgs:
         assert args.initial_cash == 100000
         assert args.slippage_bps == 5
         assert args.output_dir == "./backtest_output"
-        from quant.data.providers.duckdb_provider import _DEFAULT_DB
+        from quant.infrastructure.data.providers.duckdb_provider import _DEFAULT_DB
         assert args.db == _DEFAULT_DB
 
     def test_custom_values(self):
@@ -90,7 +90,7 @@ class TestRunnerWithSyntheticData:
         days = 60
         synthetic = _make_synthetic_data(symbols, start, days)
 
-        from quant.core.walkforward import DataFrameProvider
+        from quant.features.backtest.walkforward import DataFrameProvider
 
         class FakeDuckDBProvider:
             def __init__(self, *a, **kw):

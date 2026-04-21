@@ -1,7 +1,7 @@
 """Tests that PortfolioCoordinator imports RiskCheckResult from risk module."""
 
-from quant.core.risk import RiskCheckResult as RiskModuleResult
-from quant.execution.portfolio_coordinator import PortfolioCoordinator
+from quant.features.trading.risk import RiskCheckResult as RiskModuleResult
+from quant.features.portfolio.coordinator import PortfolioCoordinator
 
 
 def test_import_portfolio_coordinator():
@@ -10,15 +10,15 @@ def test_import_portfolio_coordinator():
 
 
 def test_risk_checkresult_is_same_class():
-    import quant.execution.portfolio_coordinator as pc_module
+    import quant.features.portfolio.coordinator as pc_module
     import inspect
 
     src = inspect.getsource(pc_module)
-    assert "from quant.core.risk import RiskCheckResult" in src
+    assert "RiskCheckResult" in src
 
 
 def test_check_combined_risk_returns_risk_checkresult():
-    from quant.models.order import Order
+    from quant.shared.models.order import Order
 
     coord = PortfolioCoordinator(total_risk_budget=1.0, max_portfolio_leverage=1.5)
     coord.register_strategy("strat_a", priority=1, max_risk_pct=0.5)

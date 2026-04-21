@@ -1,4 +1,4 @@
-from quant.core.events import EventType
+from quant.infrastructure.events import EventType
 
 
 def test_research_event_types_exist():

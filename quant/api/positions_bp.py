@@ -2,10 +2,10 @@ import random
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 
-from quant.api.state import (
+from quant.api.state.runtime import (
     portfolio_data, positions_data, MOCK_PRICES, orders_data,
 )
-from quant.execution.strategy_position_tracker import get_tracker
+from quant.features.portfolio.tracker import get_tracker
 
 positions_bp = Blueprint('positions', __name__)
 
@@ -64,7 +64,7 @@ def get_market_data():
 @positions_bp.route('/api/data/symbols', methods=['GET'])
 def list_data_symbols():
     try:
-        from quant.data.storage_duckdb import DuckDBStorage
+        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
         db = DuckDBStorage()
         result = {}
         for market in ("hk", "us"):
@@ -97,7 +97,7 @@ def strategy_positions():
 @positions_bp.route('/api/strategy/<name>/history', methods=['GET'])
 def strategy_history(name):
     try:
-        from quant.data.storage_duckdb import DuckDBStorage
+        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
         db = DuckDBStorage()
         snapshots = db.get_strategy_snapshots(strategy_name=name)
         return jsonify({"strategy": name, "snapshots": snapshots})
@@ -108,7 +108,7 @@ def strategy_history(name):
 @positions_bp.route('/api/strategy/all-history', methods=['GET'])
 def all_strategy_history():
     try:
-        from quant.data.storage_duckdb import DuckDBStorage
+        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
         db = DuckDBStorage()
         snapshots = db.get_strategy_snapshots()
         by_strategy = {}

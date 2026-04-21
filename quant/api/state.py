@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from quant.execution.strategy_position_tracker import get_tracker, DEFAULT_STRATEGY
+from quant.features.portfolio.tracker import get_tracker, DEFAULT_STRATEGY
 
 system_process = None
 system_thread = None
@@ -266,7 +266,7 @@ def _init_default_symbols():
     if _STRATEGY_DEFAULT_SYMBOLS:
         return
     try:
-        from quant.data.storage_duckdb import DuckDBStorage
+        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
         _db_tmp = DuckDBStorage()
         _all_syms = _db_tmp.get_symbols('daily', 'hk') + _db_tmp.get_symbols('daily', 'us')
         _db_tmp.close()
@@ -401,10 +401,10 @@ def run_quant_system():
 def _get_cio_engine():
     global _cio_engine
     if _cio_engine is None:
-        from quant.cio.cio_engine import CIOEngine
-        from quant.cio.market_assessor import MarketAssessor
-        from quant.cio.news_analyzer import NewsAnalyzer
-        from quant.cio.weight_allocator import WeightAllocator
+        from quant.features.cio.cio_engine import CIOEngine
+        from quant.features.cio.market_assessor import MarketAssessor
+        from quant.features.cio.news_analyzer import NewsAnalyzer
+        from quant.features.cio.weight_allocator import WeightAllocator
 
         assessor = MarketAssessor()
         news_analyzer = NewsAnalyzer(provider="openai")
@@ -432,7 +432,7 @@ def _maybe_snapshot(tracker, total_nav):
     if _last_snapshot_date == today:
         return
     try:
-        from quant.data.storage_duckdb import DuckDBStorage
+        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
         db = DuckDBStorage()
         snapshots = tracker.snapshot_all(total_nav)
         for snap in snapshots:

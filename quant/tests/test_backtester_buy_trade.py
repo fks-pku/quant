@@ -3,8 +3,8 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
-from quant.core.backtester import Backtester
-from quant.models.trade import Trade
+from quant.features.backtest.engine import Backtester
+from quant.shared.models.trade import Trade
 
 
 def _make_backtester():
@@ -25,8 +25,8 @@ def _make_bar(price=100.0, volume=100000):
 
 def test_buy_returns_trade_not_none():
     bt = _make_backtester()
-    from quant.core.portfolio import Portfolio
-    from quant.core.backtester import BacktestDiagnostics
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.backtest.engine import BacktestDiagnostics
 
     portfolio = Portfolio(initial_cash=100000.0)
     entry_times = {}
@@ -51,8 +51,8 @@ def test_buy_returns_trade_not_none():
 
 def test_buy_trade_pnl_is_negative_commission():
     bt = _make_backtester()
-    from quant.core.portfolio import Portfolio
-    from quant.core.backtester import BacktestDiagnostics
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.backtest.engine import BacktestDiagnostics
 
     portfolio = Portfolio(initial_cash=100000.0)
     entry_times = {}
@@ -79,8 +79,8 @@ def test_buy_trade_pnl_is_negative_commission():
 
 def test_buy_trade_entry_price_equals_fill_price():
     bt = _make_backtester()
-    from quant.core.portfolio import Portfolio
-    from quant.core.backtester import BacktestDiagnostics
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.backtest.engine import BacktestDiagnostics
 
     portfolio = Portfolio(initial_cash=100000.0)
     entry_times = {}
@@ -105,8 +105,8 @@ def test_buy_trade_entry_price_equals_fill_price():
 
 def test_buy_trade_side_is_buy():
     bt = _make_backtester()
-    from quant.core.portfolio import Portfolio
-    from quant.core.backtester import BacktestDiagnostics
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.backtest.engine import BacktestDiagnostics
 
     portfolio = Portfolio(initial_cash=100000.0)
     entry_times = {}
@@ -131,8 +131,8 @@ def test_buy_trade_side_is_buy():
 
 def test_buy_trade_updates_portfolio_cash():
     bt = _make_backtester()
-    from quant.core.portfolio import Portfolio
-    from quant.core.backtester import BacktestDiagnostics
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.backtest.engine import BacktestDiagnostics
 
     portfolio = Portfolio(initial_cash=100000.0)
     entry_times = {}

@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from quant.api.state import (
+from quant.api.state.runtime import (
     AVAILABLE_STRATEGIES, MOCK_PRICES, portfolio_data,
     STRATEGY_PARAMETERS, _get_cio_engine,
 )

@@ -1,0 +1,124 @@
+system:
+  mode: paper
+  log_level: INFO
+  data_dir: ./data
+  start_date: "2025-01-01"
+  end_date: "2025-12-31"
+  initial_cash: 100000
+  currency: USD
+
+markets:
+  US:
+    timezone: America/New_York
+    open_hour: 9
+    open_minute: 30
+    close_hour: 16
+    close_minute: 0
+  HK:
+    timezone: Asia/Hong_Kong
+    open_hour: 9
+    open_minute: 30
+    close_hour: 16
+    close_minute: 0
+
+data:
+  providers:
+    - yahoo
+    - alpha_vantage
+    - futu
+  default_timeframe: 5m
+  cache_enabled: true
+  cache_ttl_minutes: 5
+  symbol_registry:
+    default_format: internal
+
+execution:
+  brokers:
+    - paper
+  broker_routing:
+    US: paper
+    HK: paper
+  default_order_type: MARKET
+  slippage_bps: 5
+  max_retries: 3
+  commission:
+    US:
+      type: per_share
+      per_share: 0.005
+      min_per_order: 1.0
+    HK:
+      type: percent
+      percent: 0.001
+      min_per_order: 2.0
+
+risk:
+  max_position_pct: 0.05
+  max_sector_pct: 0.25
+  max_daily_loss_pct: 0.02
+  max_leverage: 1.5
+  max_orders_minute: 30
+
+portfolio:
+  construction_method: quarter_kelly
+  kelly_fraction: 0.25
+
+scheduler:
+  jobs:
+    - name: us_open_rebalance
+      trigger: market_open
+      market: US
+      offset_minutes: 5
+    - name: hk_open_rebalance
+      trigger: market_open
+      market: HK
+      offset_minutes: 5
+    - name: intraday_check
+      trigger: intraday
+      market: US
+      interval_minutes: 15
+    - name: us_close_exit
+      trigger: market_close
+      market: US
+      offset_minutes: 10
+    - name: hk_close_exit
+      trigger: market_close
+      market: HK
+      offset_minutes: 10
+
+backtest:
+  speed: 1x
+  slippage_bps: 5
+  commission_model: us_equity
+
+walkforward:
+  enabled: true
+  train_window_days: 126
+  test_window_days: 21
+  step_days: 21
+  rebalance_freq: monthly
+
+strategies:
+  - name: MomentumEOD
+    enabled: true
+    priority: 1
+    max_risk_pct: 0.30
+    symbols:
+      - AAPL
+      - GOOGL
+      - MSFT
+      - AMZN
+      - TSLA
+  - name: MeanReversion1m
+    enabled: false
+    priority: 2
+    max_risk_pct: 0.50
+    symbols:
+      - SPY
+      - QQQ
+  - name: DualThrust
+    enabled: false
+    priority: 3
+    max_risk_pct: 0.20
+    symbols:
+      - ES
+      - NQ

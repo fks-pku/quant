@@ -2,11 +2,11 @@
 
 from datetime import datetime
 
-from quant.data.normalizer import MarketTrade, Normalizer
+from quant.infrastructure.data.normalizer import MarketTrade, Normalizer
 
 
 def test_import_market_trade():
-    from quant.data.normalizer import MarketTrade as MT
+    from quant.infrastructure.data.normalizer import MarketTrade as MT
     assert MT is MarketTrade
 
 

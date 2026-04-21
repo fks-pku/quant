@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-from quant.core.backtester import Backtester
-from quant.strategies.cross_sectional_mr.strategy import CrossSectionalMeanReversion
+from quant.features.backtest.engine import Backtester
+from quant.features.strategies.cross_sectional_mr.strategy import CrossSectionalMeanReversion
 
 
 def _generate_test_data(symbols, days=120, start_date=None):

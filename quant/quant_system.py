@@ -17,22 +17,22 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from quant.core.engine import Engine, SystemMode
-from quant.core.events import EventBus, EventType
-from quant.core.portfolio import Portfolio
-from quant.core.risk import RiskEngine
-from quant.core.scheduler import Scheduler
-from quant.data.providers.yahoo import YahooProvider
-from quant.data.providers.alpha_vantage import AlphaVantageProvider
-from quant.data.providers.futu import FutuProvider
-from quant.data.storage import Storage
-from quant.execution.brokers.paper import PaperBroker
-from quant.execution.brokers.futu import FutuBroker
-from quant.execution.order_manager import OrderManager
-from quant.execution.fill_handler import FillHandler
-from quant.strategies.registry import StrategyRegistry
-from quant.utils.config_loader import ConfigLoader
-from quant.utils.logger import setup_logger
+from quant.features.trading.engine import Engine, SystemMode
+from quant.infrastructure.events import EventBus, EventType
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.scheduler import Scheduler
+from quant.infrastructure.data.providers.yahoo import YahooProvider
+from quant.infrastructure.data.providers.alpha_vantage import AlphaVantageProvider
+from quant.infrastructure.data.providers.futu import FutuProvider
+from quant.infrastructure.data.storage import Storage
+from quant.infrastructure.execution.brokers.paper import PaperBroker
+from quant.infrastructure.execution.brokers.futu import FutuBroker
+from quant.infrastructure.execution.order_manager import OrderManager
+from quant.infrastructure.execution.fill_handler import FillHandler
+from quant.features.strategies.registry import StrategyRegistry
+from quant.shared.utils.config_loader import ConfigLoader
+from quant.shared.utils.logger import setup_logger
 
 
 class QuantSystem:

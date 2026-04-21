@@ -2,10 +2,10 @@ import yaml
 from pathlib import Path
 from flask import Blueprint, jsonify
 
-from quant.api.state import (
+from quant.api.state.runtime import (
     _futu_lock, _futu_broker, _get_futu_broker, _maybe_snapshot,
 )
-from quant.execution.strategy_position_tracker import get_tracker, DEFAULT_STRATEGY
+from quant.features.portfolio.tracker import get_tracker, DEFAULT_STRATEGY
 
 futu_bp = Blueprint('futu', __name__)
 
@@ -17,7 +17,7 @@ def futu_connect():
         if _futu_broker is not None and _futu_broker.is_connected():
             return jsonify({'connected': True, 'message': 'Already connected'})
     try:
-        from quant.execution.brokers.futu import FutuBroker
+        from quant.infrastructure.execution.brokers.futu import FutuBroker
         config_path = str(Path(__file__).resolve().parent.parent / 'config' / 'brokers.yaml')
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)

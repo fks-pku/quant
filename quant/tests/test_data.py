@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import pandas as pd
 
-from quant.data.normalizer import Normalizer, Bar, Quote, MarketTrade
+from quant.infrastructure.data.normalizer import Normalizer, Bar, Quote, MarketTrade
 
 
 class TestNormalizer:
