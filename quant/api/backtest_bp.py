@@ -60,12 +60,14 @@ def run_backtest():
                     missing_symbols.append(symbol)
 
             if not all_data:
+                available_hk = db_provider.list_available_symbols('daily', 'hk')
+                available_us = db_provider.list_available_symbols('daily', 'us')
                 db_provider.disconnect()
                 with _backtest_lock:
                     _backtest_results[backtest_id] = {
                         "status": "error",
                         "error": f"No data found in DuckDB for symbols: {missing_symbols}. "
-                                 f"Available: {db_provider.list_available_symbols('daily', 'hk') + db_provider.list_available_symbols('daily', 'us')}",
+                                 f"Available: {available_hk + available_us}",
                         "backtest_id": backtest_id,
                     }
                 return
@@ -109,7 +111,12 @@ def run_backtest():
                 "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0, "max_orders_minute": 100},
             }
 
-            backtester = Backtester(config)
+            from quant.infrastructure.data.storage_duckdb import DuckDBStorage as _Storage
+            _storage = _Storage()
+            lot_sizes = {s: _storage.get_lot_size(s) for s in symbols}
+            _storage.close()
+
+            backtester = Backtester(config, lot_sizes=lot_sizes)
             result = backtester.run(
                 start=datetime.strptime(start_date, '%Y-%m-%d'),
                 end=datetime.strptime(end_date, '%Y-%m-%d'),

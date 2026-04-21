@@ -21,9 +21,9 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
-from quant.data.providers.futu import FutuProvider
-from quant.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
-from quant.utils.logger import setup_logger
+from quant.infrastructure.data.providers.futu import FutuProvider
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
+from quant.shared.utils.logger import setup_logger
 
 logger = setup_logger("prepare_data")
 

@@ -17,11 +17,11 @@ from datetime import datetime, timedelta, date as date_type
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from quant.core.backtester import Backtester, BacktestResultExporter
-from quant.data.providers.duckdb_provider import DuckDBProvider
-from quant.strategies.base import Strategy
-from quant.strategies.registry import strategy as reg_strategy
-from quant.core.walkforward import DataFrameProvider
+from quant.features.backtest.engine import Backtester, BacktestResultExporter
+from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+from quant.features.strategies.base import Strategy
+from quant.features.strategies.registry import strategy as reg_strategy
+from quant.features.backtest.walkforward import DataFrameProvider
 
 SYMBOL = "HK.00700"
 DB_PATH = str(Path(os.path.join(os.path.dirname(__file__), "..", "data", "duckdb", "quant.duckdb")))

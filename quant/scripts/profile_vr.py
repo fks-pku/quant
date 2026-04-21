@@ -7,10 +7,10 @@ from datetime import datetime
 import pandas as pd
 from collections import Counter
 
-from quant.data.providers.duckdb_provider import DuckDBProvider
-from quant.core.walkforward import DataFrameProvider
-from quant.core.backtester import Backtester
-from quant.strategies.volatility_regime.strategy import VolatilityRegime
+from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.engine import Backtester
+from quant.features.strategies.volatility_regime.strategy import VolatilityRegime
 
 all_syms = ['HK.01024','HK.06618','HK.02013','HK.02057','HK.00700','HK.09988',
             'HK.03690','HK.09618','HK.02015','HK.09888','HK.09961','HK.02382',

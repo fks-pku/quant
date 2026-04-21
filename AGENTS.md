@@ -17,22 +17,41 @@ quant/
 ├── infrastructure/    # 基础设施（无业务语义）
 │   ├── data/          # 数据存储 + Provider
 │   ├── execution/     # 券商适配 + 订单执行
-│   └── events/        # 事件总线
+│   ├── events/        # 事件总线
+│   └── var/           # 运行时数据 (DuckDB, gitignore)
 ├── shared/            # 跨 feature 纯共享
 │   ├── models/        # 领域模型 (Order, Position, Trade)
 │   ├── utils/         # 工具 (logger, config_loader, datetime_utils)
 │   └── config/        # 配置 (config.yaml, brokers.yaml, strategies.yaml)
 ├── api/               # Flask 薄路由层
 │   └── state/         # 运行时状态
-└── tests/             # 测试
+├── frontend/          # React Dashboard UI (served by api_server.py)
+├── scripts/           # CLI 工具脚本
+├── docs/              # 设计文档
+├── tests/             # 测试
+├── api_server.py      # Flask API 入口
+├── backtest_runner.py # CLI 回测入口
+└── quant_system.py    # CLI 实盘/模拟入口
 ```
 
 ## Dependency Rules (铁律)
 
 - **feature 之间禁止互 import**，只通过 service 对外
-- **api/** 只调 features，不碰 infrastructure
+- **api/** 只调 features，不碰 infrastructure（已知技术债: api/ 中有 lazy import 直接访问 infrastructure.data/execution）
 - **infrastructure/** 不依赖任何 feature
 - **shared/** 无业务语义，纯工具
+
+## 已清理的旧路径 (禁止使用)
+
+以下路径已删除，禁止使用：
+- `quant.core.*` → 使用 `quant.features.trading.*` / `quant.features.backtest.*` / `quant.infrastructure.events.*`
+- `quant.data.*` → 使用 `quant.infrastructure.data.*`
+- `quant.execution.*` → 使用 `quant.infrastructure.execution.*`
+- `quant.models.*` → 使用 `quant.shared.models.*`
+- `quant.utils.*` → 使用 `quant.shared.utils.*`
+- `quant.strategies.*` → 使用 `quant.features.strategies.*`
+- `quant.cio.*` → 使用 `quant.features.cio.*`
+- `quant.config.*` → 使用 `quant.shared.config.*`
 
 ## Feature Index
 

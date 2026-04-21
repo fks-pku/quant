@@ -6,16 +6,16 @@ import time
 from datetime import datetime
 import pandas as pd
 
-from quant.data.providers.duckdb_provider import DuckDBProvider
-from quant.core.walkforward import DataFrameProvider
-from quant.core.backtester import Backtester
-from quant.strategies.simple_momentum.strategy import SimpleMomentum
+from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.engine import Backtester
+from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
 
 t_total = time.perf_counter()
 
 # === Step 1: Load symbols (same as API _init_default_symbols) ===
 t0 = time.perf_counter()
-from quant.data.storage_duckdb import DuckDBStorage
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 db = DuckDBStorage("D:/vk/quant/data/duckdb/quant.duckdb")
 all_syms = db.get_symbols('daily', 'hk') + db.get_symbols('daily', 'us')
 db.close()

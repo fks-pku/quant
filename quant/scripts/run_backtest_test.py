@@ -7,11 +7,11 @@ from pathlib import Path
 import pandas as pd
 import time
 
-from quant.core.backtester import Backtester
-from quant.data.providers.duckdb_provider import DuckDBProvider
-from quant.data.storage_duckdb import DuckDBStorage
-from quant.strategies.simple_momentum.strategy import SimpleMomentum
-from quant.core.walkforward import DataFrameProvider
+from quant.features.backtest.engine import Backtester
+from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
+from quant.features.backtest.walkforward import DataFrameProvider
 
 symbols = ["HK.00700", "HK.09988", "HK.01810", "HK.09618", "HK.03690"]
 start = datetime(2024, 1, 1)

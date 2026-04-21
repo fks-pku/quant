@@ -20,7 +20,7 @@ import pandas as pd
 
 from quant.shared.utils.logger import setup_logger
 
-_PKG_DIR = Path(__file__).resolve().parent.parent  # quant/
+_PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
 _DEFAULT_DB = str(_PKG_DIR / "var" / "duckdb" / "quant.duckdb")
 
 BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE"

@@ -14,8 +14,8 @@ from quant.shared.utils.logger import setup_logger
 from quant.infrastructure.events import EventBus, EventType
 
 if TYPE_CHECKING:
-    from quant.core.portfolio import Portfolio
-    from quant.core.risk import RiskEngine
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.risk import RiskEngine
 
 
 @dataclass
@@ -238,7 +238,7 @@ class OrderManager:
 
     def _record_strategy(self, order_id: str, strategy_name: Optional[str]) -> None:
         try:
-            from quant.execution.strategy_position_tracker import get_tracker
+            from quant.features.portfolio.tracker import get_tracker
             get_tracker().record_order(order_id, strategy_name)
         except Exception:
             pass

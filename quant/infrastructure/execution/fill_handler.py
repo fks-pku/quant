@@ -9,7 +9,7 @@ from quant.shared.models.order import OrderStatus
 from quant.shared.utils.logger import setup_logger
 
 if TYPE_CHECKING:
-    from quant.core.portfolio import Portfolio
+    from quant.features.trading.portfolio import Portfolio
     from quant.infrastructure.events import EventBus
 
 
@@ -130,7 +130,7 @@ class FillHandler:
 
     def _update_tracker(self, fill: Fill) -> None:
         try:
-            from quant.execution.strategy_position_tracker import get_tracker
+            from quant.features.portfolio.tracker import get_tracker
             tracker = get_tracker()
             strategy = fill.strategy_name or tracker.get_strategy_for_order(fill.order_id)
             tracker.update_from_fill(

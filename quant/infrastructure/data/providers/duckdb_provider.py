@@ -65,7 +65,11 @@ class DuckDBProvider(DataProvider):
         return self._storage
 
     def list_available_symbols(self, timeframe: str = "1d", market: str = "hk") -> List[str]:
+        if self._storage is None:
+            return []
         return self._storage.get_symbols(timeframe, market)
 
     def get_available_range(self, symbol: str, timeframe: str = "1d") -> Optional[Dict[str, datetime]]:
+        if self._storage is None:
+            return None
         return self._storage.get_date_range(symbol, timeframe)
