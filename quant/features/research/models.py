@@ -36,6 +36,12 @@ class ResearchConfig:
     default_backtest_start: str = "2020-01-01"
     default_backtest_end: str = "2024-12-31"
     default_symbols: List[str] = field(default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "SPY", "QQQ"])
+    llm_provider: str = "minimax"
+    llm_model: str = "MiniMax-M2.7"
+    llm_api_key: Optional[str] = None
+    llm_temperature: float = 0.3
+    llm_base_url: Optional[str] = None
+    llm_group_id: Optional[str] = None
 
 
 @dataclass

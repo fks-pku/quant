@@ -14,11 +14,36 @@ _research_lock = threading.Lock()
 _research_scheduler: ResearchScheduler = None
 
 
+def _create_llm_adapter(cfg: ResearchConfig):
+    if cfg.llm_provider == "openai":
+        from quant.features.cio.llm_adapters.openai_adapter import OpenAIAdapter
+        return OpenAIAdapter(model=cfg.llm_model, api_key=cfg.llm_api_key or "", temperature=cfg.llm_temperature)
+    elif cfg.llm_provider == "claude":
+        from quant.features.cio.llm_adapters.claude_adapter import ClaudeAdapter
+        return ClaudeAdapter(model=cfg.llm_model, api_key=cfg.llm_api_key or "", temperature=cfg.llm_temperature)
+    elif cfg.llm_provider == "ollama":
+        from quant.features.cio.llm_adapters.ollama_adapter import OllamaAdapter
+        return OllamaAdapter(model=cfg.llm_model)
+    elif cfg.llm_provider == "minimax":
+        from quant.features.cio.llm_adapters.minimax_adapter import MiniMaxAdapter
+        return MiniMaxAdapter(
+            model=cfg.llm_model,
+            api_key=cfg.llm_api_key or "",
+            temperature=cfg.llm_temperature,
+            base_url=cfg.llm_base_url or "https://api.minimax.chat/v1",
+            group_id=cfg.llm_group_id or "",
+        )
+    return None
+
+
 def _get_scheduler() -> ResearchScheduler:
     global _research_scheduler
     if _research_scheduler is None:
         cfg = _load_research_config()
-        engine = ResearchEngine(config=cfg)
+        llm_adapter = _create_llm_adapter(cfg)
+        from quant.features.research.evaluator import StrategyEvaluator
+        evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
+        engine = ResearchEngine(config=cfg, evaluator=evaluator)
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:
             _research_scheduler.start()
@@ -29,7 +54,15 @@ def _load_research_config() -> ResearchConfig:
     from quant.shared.utils.config_loader import ConfigLoader
     try:
         data = ConfigLoader.load("research")
-        return ResearchConfig(**data.get("research", {}))
+        research_cfg = data.get("research", {})
+        llm_cfg = data.get("llm", {})
+        research_cfg.setdefault("llm_provider", llm_cfg.get("provider", "minimax"))
+        research_cfg.setdefault("llm_model", llm_cfg.get("model", "MiniMax-M2.7"))
+        research_cfg.setdefault("llm_api_key", llm_cfg.get("api_key"))
+        research_cfg.setdefault("llm_temperature", llm_cfg.get("temperature", 0.3))
+        research_cfg.setdefault("llm_base_url", llm_cfg.get("base_url"))
+        research_cfg.setdefault("llm_group_id", llm_cfg.get("group_id"))
+        return ResearchConfig(**research_cfg)
     except Exception:
         return ResearchConfig()
 
@@ -46,7 +79,10 @@ def run_research():
         cfg.sources = sources
     cfg.max_results_per_source = max_results
 
-    engine = ResearchEngine(config=cfg)
+    llm_adapter = _create_llm_adapter(cfg)
+    from quant.features.research.evaluator import StrategyEvaluator
+    evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
+    engine = ResearchEngine(config=cfg, evaluator=evaluator)
 
     def _run():
         try:
@@ -124,6 +160,9 @@ def get_schedule():
         "evaluation_threshold": cfg.evaluation_threshold,
         "backtest_sharpe_threshold": cfg.backtest_sharpe_threshold,
         "auto_backtest": cfg.auto_backtest,
+        "llm_provider": cfg.llm_provider,
+        "llm_model": cfg.llm_model,
+        "llm_api_key_set": cfg.llm_api_key is not None,
     })
 
 
