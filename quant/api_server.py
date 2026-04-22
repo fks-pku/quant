@@ -16,6 +16,7 @@ from quant.api.backtest_bp import backtest_bp
 from quant.api.cio_bp import cio_bp
 from quant.api.futu_bp import futu_bp
 from quant.api.positions_bp import positions_bp
+from quant.api.research_bp import research_bp
 
 _HERE = Path(__file__).parent
 BUILD_DIR = str(_HERE / 'frontend' / 'build')
@@ -30,6 +31,7 @@ app.register_blueprint(backtest_bp)
 app.register_blueprint(cio_bp)
 app.register_blueprint(futu_bp)
 app.register_blueprint(positions_bp)
+app.register_blueprint(research_bp)
 
 
 @app.route('/', defaults={'path': ''})

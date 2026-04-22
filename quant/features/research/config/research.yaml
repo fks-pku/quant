@@ -1,0 +1,18 @@
+research:
+  auto_run: false
+  interval_days: 7
+  sources:
+    - arxiv
+    - ssrn
+  max_results_per_source: 10
+  evaluation_threshold: 6.0
+  backtest_sharpe_threshold: 0.5
+  auto_backtest: true
+  default_backtest_start: "2020-01-01"
+  default_backtest_end: "2024-12-31"
+  default_symbols:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - SPY
+    - QQQ

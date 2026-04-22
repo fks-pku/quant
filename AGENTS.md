@@ -22,7 +22,8 @@ quant/
 │   ├── trading/         # 实盘/模拟交易
 │   ├── portfolio/       # 仓位管理
 │   ├── cio/             # CIO 市场评估
-│   └── strategies/      # 策略框架 + 实现
+│   ├── strategies/      # 策略框架 + 实现
+│   └── research/        # 量化策略研究 (Quant Researcher)
 ├── shared/              # 跨 feature 纯共享工具
 │   ├── models/          # 兼容层 → re-export from domain
 │   ├── utils/           # 工具 (logger, config_loader, datetime_utils)
@@ -88,6 +89,7 @@ quant/
 | portfolio | features/portfolio/ | 策略仓位跟踪、多策略协调 |
 | cio | features/cio/ | CIO 市场评估、新闻分析、权重分配 |
 | strategies | features/strategies/ | 策略基类、注册表、因子库、策略实现 |
+| research | features/research/ | 策略发现、评估、回测、候选池管理 |
 
 ## Data Providers
 
@@ -158,6 +160,7 @@ from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine, RiskCheckResult
 from quant.features.strategies import Strategy, StrategyRegistry
 from quant.features.cio import CIOEngine
+from quant.features.research import ResearchEngine, CandidatePool, ResearchScheduler
 
 # Backward Compatibility (re-exports from domain)
 from quant.shared.models import Order, Position, Trade
