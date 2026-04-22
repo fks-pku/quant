@@ -8,7 +8,7 @@ from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
 from quant.infrastructure.events import EventBus, EventType
 from quant.infrastructure.execution.order_manager import OrderManager
-from quant.infrastructure.execution.brokers.base import Order, OrderStatus
+from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
 from quant.infrastructure.execution.brokers.paper import PaperBroker
 
 

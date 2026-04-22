@@ -4,7 +4,7 @@
       "MSFT": {
         "symbol": "MSFT",
         "strategy_name": "default",
-        "qty": 10.0,
+        "qty": 50.0,
         "avg_cost": 300.0,
         "market_value": 0.0,
         "unrealized_pnl": 0.0
@@ -12,12 +12,34 @@
     }
   },
   "realized_pnl": {
-    "default": 3949.9999999999986
+    "default": 19749.999999999996
   },
   "order_map": {
     "2F218A7A-454": "default",
     "DB3C5C1A-1E7": "default",
     "8C907F08-89E": "default",
-    "409F11D3-432": "default"
+    "409F11D3-432": "default",
+    "5519CBFF-243": "default",
+    "ADA46911-B41": "default",
+    "F37DA6C0-A9C": "default",
+    "22C0B6E6-822": "default",
+    "2AD27293-D19": "default",
+    "96DF4F4D-5E4": "default",
+    "08BD93D4-DF7": "default",
+    "3E57A4E1-FE1": "default",
+    "8C9FD721-C09": "default",
+    "096CBC09-C13": "default",
+    "5BD55035-FC2": "default",
+    "1832AD20-5A1": "default",
+    "F573E05B-8F6": "default",
+    "10D466C8-90C": "default",
+    "2096865F-377": "default",
+    "B8FFDFD3-8CE": "default",
+    "A5E1818C-68E": "default",
+    "2E68B08C-DE4": "default",
+    "9B28435D-517": "default",
+    "EAFB0C48-610": "default",
+    "0B0CD658-E6D": "default",
+    "C7AE505A-6F2": "default"
   }
 }

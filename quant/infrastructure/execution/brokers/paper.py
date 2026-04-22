@@ -4,8 +4,10 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 import threading
 
-from quant.shared.models import Order, OrderStatus, Position, AccountInfo
-from quant.infrastructure.execution.brokers.base import BrokerAdapter
+from quant.domain.models.order import Order, OrderSide, OrderStatus
+from quant.domain.models.position import Position
+from quant.domain.models.account import AccountInfo
+from quant.domain.ports.broker import BrokerAdapter
 from quant.shared.utils.logger import setup_logger
 
 
@@ -32,11 +34,9 @@ class PaperBroker(BrokerAdapter):
         self.logger = setup_logger("PaperBroker")
 
     def update_price(self, symbol: str, price: float) -> None:
-        """Update the latest known price for a symbol (called by data feed)."""
         self._latest_prices[symbol] = price
 
     def set_data_provider(self, provider: Any) -> None:
-        """Set or replace the data provider for price lookups."""
         self.data_provider = provider
 
     def connect(self) -> None:
@@ -55,38 +55,62 @@ class PaperBroker(BrokerAdapter):
             order_id = f"PAPER_{self._next_order_id}"
             self._next_order_id += 1
 
-            order.order_id = order_id
-            order.status = OrderStatus.SUBMITTED
-            order.timestamp = datetime.now()
-            self.orders[order_id] = order
+            updated = self._set_order_attrs(order, {
+                'order_id': order_id,
+                'status': OrderStatus.SUBMITTED,
+                'timestamp': datetime.now(),
+            })
+            self.orders[order_id] = updated
 
-            self._simulate_fill(order)
+            filled = self._simulate_fill(updated)
+            self.orders[order_id] = filled
 
-            self.order_history.append(order)
+            self.order_history.append(filled)
             self.logger.info(
-                f"Order submitted: {order_id} {order.side} {order.quantity} {order.symbol} "
-                f"@ {order.avg_fill_price:.2f}"
+                f"Order submitted: {order_id} {filled.side.value} {filled.quantity} {filled.symbol} "
+                f"@ {filled.avg_fill_price:.2f}"
             )
 
             return order_id
 
-    def _simulate_fill(self, order: Order) -> None:
+    def _set_order_attrs(self, order: Order, updates: dict) -> Order:
+        if hasattr(order, '__dataclass_fields__') and getattr(order, '__dataclass_params__', None) and order.__dataclass_params__.frozen:
+            from dataclasses import fields
+            kwargs = {}
+            for f in fields(order):
+                if f.name in updates:
+                    kwargs[f.name] = updates[f.name]
+                else:
+                    kwargs[f.name] = getattr(order, f.name)
+            return Order(**kwargs)
+        else:
+            for k, v in updates.items():
+                try:
+                    object.__setattr__(order, k, v)
+                except (AttributeError, TypeError):
+                    pass
+            return order
+
+    def _simulate_fill(self, order: Order) -> Order:
         current_price = self._get_current_price(order.symbol)
 
         slippage = current_price * (self.slippage_bps / 10000)
-        if order.side == "BUY":
+        side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
+        if side_value == "BUY":
             fill_price = current_price + slippage
         else:
             fill_price = current_price - slippage
 
-        order.status = OrderStatus.FILLED
-        order.filled_quantity = order.quantity
-        order.avg_fill_price = fill_price
+        filled = self._set_order_attrs(order, {
+            'status': OrderStatus.FILLED,
+            'filled_quantity': order.quantity,
+            'avg_fill_price': fill_price,
+        })
 
-        self._update_position(order, fill_price)
+        self._update_position(filled, fill_price)
+        return filled
 
     def _get_current_price(self, symbol: str) -> float:
-        """Get current price: prefer cached latest price, then data provider, then fallback."""
         if symbol in self._latest_prices:
             return self._latest_prices[symbol]
 
@@ -125,8 +149,9 @@ class PaperBroker(BrokerAdapter):
             )
 
         pos = self.positions[order.symbol]
+        side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
 
-        if order.side == "BUY":
+        if side_value == "BUY":
             total_cost = pos.avg_cost * pos.quantity + fill_price * order.quantity
             pos.quantity += order.quantity
             pos.avg_cost = total_cost / pos.quantity if pos.quantity > 0 else 0
@@ -150,7 +175,8 @@ class PaperBroker(BrokerAdapter):
             if order.status in (OrderStatus.FILLED, OrderStatus.CANCELLED):
                 return False
 
-            order.status = OrderStatus.CANCELLED
+            cancelled = self._set_order_attrs(order, {'status': OrderStatus.CANCELLED})
+            self.orders[order_id] = cancelled
             self.logger.info(f"Order cancelled: {order_id}")
             return True
 

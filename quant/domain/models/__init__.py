@@ -1,4 +1,4 @@
-"""Shared models - Re-export from domain for backward compatibility."""
+"""Domain models - Pure value objects and entities."""
 
 from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
 from quant.domain.models.position import Position

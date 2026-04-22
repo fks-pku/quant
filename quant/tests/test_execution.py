@@ -8,7 +8,7 @@ from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
 from quant.infrastructure.events import EventBus, EventType
 from quant.infrastructure.execution.brokers.paper import PaperBroker
-from quant.infrastructure.execution.brokers.base import Order, OrderStatus
+from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
 
 
 class TestPaperBroker:
@@ -39,8 +39,8 @@ class TestPaperBroker:
         order = Order(
             symbol="AAPL",
             quantity=10,
-            side="BUY",
-            order_type="MARKET",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
         )
 
         order_id = broker.submit_order(order)
@@ -56,8 +56,8 @@ class TestPaperBroker:
         order = Order(
             symbol="AAPL",
             quantity=10,
-            side="BUY",
-            order_type="MARKET",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
         )
 
         order_id = broker.submit_order(order)
@@ -72,8 +72,8 @@ class TestPaperBroker:
         order = Order(
             symbol="AAPL",
             quantity=10,
-            side="BUY",
-            order_type="MARKET",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
         )
 
         broker.submit_order(order)
@@ -100,13 +100,13 @@ class TestOrder:
         order = Order(
             symbol="AAPL",
             quantity=10,
-            side="BUY",
-            order_type="MARKET",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
         )
 
         assert order.symbol == "AAPL"
         assert order.quantity == 10
-        assert order.side == "BUY"
+        assert order.side == OrderSide.BUY
         assert order.status == OrderStatus.PENDING
 
 

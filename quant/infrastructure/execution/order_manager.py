@@ -1,14 +1,14 @@
 """Order lifecycle management with routing and retry logic."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import threading
 import time
 import uuid
 
-from quant.shared.models.order import Order, OrderStatus
-from quant.infrastructure.execution.brokers.base import BrokerAdapter
+from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
+from quant.domain.ports.broker import BrokerAdapter
 from quant.shared.utils.logger import setup_logger
 
 from quant.infrastructure.events import EventBus, EventType
@@ -117,8 +117,8 @@ class OrderManager:
         order = Order(
             symbol=symbol,
             quantity=quantity,
-            side=side,
-            order_type=order_type,
+            side=OrderSide(side),
+            order_type=OrderType(order_type),
             order_id=order_id,
             status=OrderStatus.PENDING,
             price=price,
@@ -142,8 +142,11 @@ class OrderManager:
         for attempt in range(self._max_retries):
             try:
                 broker_order_id = broker.submit_order(order)
-                order.order_id = broker_order_id
-                order.status = OrderStatus.SUBMITTED
+                updated = replace(order, order_id=broker_order_id, status=OrderStatus.SUBMITTED)
+                with self._lock:
+                    if order.order_id:
+                        self._orders[order.order_id] = updated
+                    self._orders[broker_order_id] = updated
 
                 self.logger.info(f"Order submitted: {broker_order_id} {order.symbol} {order.side} {order.quantity}")
 
@@ -153,7 +156,7 @@ class OrderManager:
                         "order_id": broker_order_id,
                         "symbol": order.symbol,
                         "quantity": order.quantity,
-                        "side": order.side,
+                        "side": order.side.value if hasattr(order.side, 'value') else order.side,
                     }
                 )
                 return
@@ -163,7 +166,9 @@ class OrderManager:
                 if attempt < self._max_retries - 1:
                     time.sleep(self._retry_delay * (2 ** attempt))
 
-        order.status = OrderStatus.REJECTED
+        rejected = replace(order, status=OrderStatus.REJECTED)
+        with self._lock:
+            self._orders[order.order_id] = rejected
         self.logger.error(f"Order rejected after {self._max_retries} attempts: {order.symbol}")
 
     def cancel_order(self, order_id: str) -> bool:
@@ -178,7 +183,7 @@ class OrderManager:
             try:
                 success = broker.cancel_order(order.order_id or order_id)
                 if success:
-                    order.status = OrderStatus.CANCELLED
+                    self._orders[order_id] = replace(order, status=OrderStatus.CANCELLED)
                     self.logger.info(f"Order cancelled: {order_id}")
                     return True
             except Exception as e:
@@ -202,7 +207,13 @@ class OrderManager:
     def get_all_orders(self) -> List[Order]:
         """Get all orders."""
         with self._lock:
-            return list(self._orders.values())
+            seen = set()
+            result = []
+            for o in self._orders.values():
+                if o.order_id not in seen:
+                    seen.add(o.order_id)
+                    result.append(o)
+            return result
 
     def get_open_orders(self) -> List[Order]:
         """Get all open (pending/submitted) orders."""
@@ -224,13 +235,17 @@ class OrderManager:
             if not order:
                 return
 
-            order.filled_quantity = filled_quantity
-            order.avg_fill_price = avg_fill_price
-
             if filled_quantity >= order.quantity:
-                order.status = OrderStatus.FILLED
+                new_status = OrderStatus.FILLED
             else:
-                order.status = OrderStatus.PARTIAL
+                new_status = OrderStatus.PARTIAL
+
+            self._orders[order_id] = replace(
+                order,
+                filled_quantity=filled_quantity,
+                avg_fill_price=avg_fill_price,
+                status=new_status,
+            )
 
     def _get_last_price(self, symbol: str) -> float:
         """Get last known price for a symbol (placeholder)."""
