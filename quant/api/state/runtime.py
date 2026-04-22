@@ -39,11 +39,7 @@ _STRATEGY_DEFAULT_SYMBOLS: Dict[str, str] = {}
 _STRATEGY_DIR_MAP = {
     'volatility_regime': 'volatility_regime',
     'simple_momentum': 'simple_momentum',
-    'momentum_eod': 'momentum_eod',
-    'mean_reversion_1m': 'mean_reversion',
-    'dual_thrust': 'dual_thrust',
     'cross_sectional_mean_reversion': 'cross_sectional_mr',
-    'dual_momentum': 'dual_momentum',
 }
 
 STRATEGIES_DIR = Path(__file__).resolve().parent.parent.parent / 'features' / 'strategies'
@@ -68,42 +64,15 @@ AVAILABLE_STRATEGIES = {
         'doc_file': 'simple_momentum.md',
         'backtest': {'sharpe': 0.78, 'max_dd': 28.5, 'cagr': 11.2, 'win_rate': 55.0, 'period': '2015-2024 OOS', 'train_sharpe': 1.05, 'test_sharpe': 0.78, 'sharpe_degradation': 25.7, 'pct_profitable': 85.0}
     },
-    'MomentumEOD': {
-        'id': 'momentum_eod', 'name': 'Momentum EOD',
-        'description': 'Buy top-N S&P 500 gainers at market open, sell at market close.',
-        'status': 'active', 'priority': 3, 'doc_file': 'momentum_eod.md',
-        'backtest': {'sharpe': 0.45, 'max_dd': 35.0, 'cagr': 6.8, 'win_rate': 52.0, 'period': '2015-2024 OOS', 'train_sharpe': 0.85, 'test_sharpe': 0.45, 'sharpe_degradation': 47.1, 'pct_profitable': 65.0}
-    },
-    'MeanReversion1m': {
-        'id': 'mean_reversion_1m', 'name': 'Mean Reversion (1m)',
-        'description': 'RSI-based mean reversion on 1-minute data.',
-        'status': 'active', 'priority': 4, 'doc_file': 'mean_reversion.md',
-        'backtest': {'sharpe': 0.35, 'max_dd': 42.0, 'cagr': 4.5, 'win_rate': 48.0, 'period': '2015-2024 OOS', 'train_sharpe': 0.72, 'test_sharpe': 0.35, 'sharpe_degradation': 51.4, 'pct_profitable': 55.0}
-    },
-    'DualThrust': {
-        'id': 'dual_thrust', 'name': 'Dual Thrust',
-        'description': 'Classic break-out system adapted for futures.',
-        'status': 'paused', 'priority': 5, 'doc_file': 'dual_thrust.md',
-        'backtest': {'sharpe': 0.55, 'max_dd': 22.0, 'cagr': 8.5, 'win_rate': 58.0, 'period': '2015-2024 OOS', 'train_sharpe': 0.95, 'test_sharpe': 0.55, 'sharpe_degradation': 42.1, 'pct_profitable': 72.0}
-    },
     'CrossSectionalMeanReversion': {
-        'id': 'cross_sectional_mean_reversion', 'name': 'Cross-Sectional Mean Reversion',
+        'id': 'cross_sectional_mean_reversion',
+        'name': 'Cross-Sectional Mean Reversion',
         'description': 'Short-term mean reversion strategy based on cross-sectional z-scores.',
-        'status': 'paused', 'priority': 6, 'doc_file': 'cross_sectional_mean_reversion.md',
+        'status': 'paused',
+        'priority': 3,
+        'doc_file': 'cross_sectional_mean_reversion.md',
         'backtest': {'sharpe': 0.65, 'max_dd': 25.0, 'cagr': 9.0, 'win_rate': 54.0, 'period': '2015-2024 OOS', 'train_sharpe': 0.90, 'test_sharpe': 0.65, 'sharpe_degradation': 27.8, 'pct_profitable': 78.0}
     },
-    'DualMomentum': {
-        'id': 'dual_momentum', 'name': 'Dual Momentum',
-        'description': 'Absolute and relative momentum for tactical asset allocation.',
-        'status': 'paused', 'priority': 7, 'doc_file': 'dual_momentum.md',
-        'backtest': {'sharpe': 0.72, 'max_dd': 20.0, 'cagr': 10.5, 'win_rate': 60.0, 'period': '2015-2024 OOS', 'train_sharpe': 1.00, 'test_sharpe': 0.72, 'sharpe_degradation': 28.0, 'pct_profitable': 80.0}
-    },
-    'TencentMomentum': {
-        'id': 'TencentMomentum', 'name': 'Tencent SMA Crossover',
-        'description': 'Single-stock SMA crossover strategy for HK equities.',
-        'status': 'active', 'priority': 8, 'doc_file': None,
-        'backtest': {'sharpe': 0.31, 'max_dd': 54.48, 'cagr': 5.9, 'win_rate': 40.91, 'period': '2016-2026 HK.00700'}
-    }
 }
 
 _STATE_FILE = Path(__file__).resolve().parent.parent.parent / 'var' / 'strategy_state.json'
@@ -111,12 +80,7 @@ _STATE_FILE = Path(__file__).resolve().parent.parent.parent / 'var' / 'strategy_
 STRATEGY_ID_TO_REGISTRY = {
     'volatility_regime': 'VolatilityRegime',
     'simple_momentum': 'SimpleMomentum',
-    'momentum_eod': 'MomentumEOD',
-    'mean_reversion_1m': 'MeanReversion1m',
-    'dual_thrust': 'DualThrust',
     'cross_sectional_mean_reversion': 'CrossSectionalMeanReversion',
-    'dual_momentum': 'DualMomentum',
-    'TencentMomentum': 'TencentMomentum',
 }
 
 STRATEGY_PARAMETERS = {
@@ -138,33 +102,9 @@ STRATEGY_PARAMETERS = {
         'bottom_n': {'type': 'int', 'default': 10, 'description': 'Number of bottom performers to short'},
         'rebalance_freq': {'type': 'str', 'default': 'monthly', 'description': 'Rebalancing frequency'},
     },
-    'momentum_eod': {
-        'top_n': {'type': 'int', 'default': 5, 'description': 'Number of top gainers to buy'},
-        'max_position_pct': {'type': 'float', 'default': 0.1, 'description': 'Max position size per trade'},
-    },
-    'mean_reversion_1m': {
-        'rsi_period': {'type': 'int', 'default': 14, 'description': 'RSI calculation period'},
-        'rsi_oversold': {'type': 'float', 'default': 30.0, 'description': 'RSI oversold threshold'},
-        'rsi_overbought': {'type': 'float', 'default': 70.0, 'description': 'RSI overbought threshold'},
-        'lookback': {'type': 'int', 'default': 20, 'description': 'Mean reversion lookback'},
-    },
-    'dual_thrust': {
-        'n_periods': {'type': 'int', 'default': 20, 'description': 'Lookback period for range calculation'},
-        'k1': {'type': 'float', 'default': 0.5, 'description': 'Upper bound multiplier'},
-        'k2': {'type': 'float', 'default': 0.5, 'description': 'Lower bound multiplier'},
-    },
     'cross_sectional_mean_reversion': {
         'lookback': {'type': 'int', 'default': 5, 'description': 'Return lookback period'},
         'zscore_threshold': {'type': 'float', 'default': 1.5, 'description': 'Z-score entry threshold'},
-    },
-    'dual_momentum': {
-        'lookback_months': {'type': 'int', 'default': 12, 'description': 'Momentum lookback period'},
-        'risk_free_rate': {'type': 'float', 'default': 0.02, 'description': 'Risk-free rate for excess return'},
-    },
-    'TencentMomentum': {
-        'fast_period': {'type': 'int', 'default': 20, 'description': 'Fast SMA period'},
-        'slow_period': {'type': 'int', 'default': 60, 'description': 'Slow SMA period'},
-        'position_pct': {'type': 'float', 'default': 0.95, 'description': 'Position size as % of NAV'},
     },
 }
 
@@ -179,14 +119,12 @@ def _init_default_symbols():
     try:
         from quant.infrastructure.data.storage_duckdb import DuckDBStorage
         _db_tmp = DuckDBStorage()
-        _all_syms = _db_tmp.get_symbols('daily', 'hk') + _db_tmp.get_symbols('daily', 'us')
+        _all_syms = _db_tmp.get_symbols('daily', 'hk') + _db_tmp.get_symbols('daily', 'us') + _db_tmp.get_symbols('daily', 'cn')
         _db_tmp.close()
         _default_sym_str = ','.join(_all_syms) if _all_syms else 'HK.00700'
     except Exception:
         _default_sym_str = 'HK.00700'
-    for _sid in ['TencentMomentum', 'volatility_regime', 'simple_momentum',
-                  'momentum_eod', 'mean_reversion_1m', 'dual_thrust',
-                  'cross_sectional_mean_reversion', 'dual_momentum']:
+    for _sid in list(STRATEGY_ID_TO_REGISTRY.keys()):
         _STRATEGY_DEFAULT_SYMBOLS[_sid] = _default_sym_str
 
 
@@ -215,8 +153,7 @@ def _load_strategy_state():
 
 def _save_strategy_state():
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    all_ids = {'volatility_regime', 'simple_momentum', 'momentum_eod', 'mean_reversion_1m',
-               'dual_thrust', 'cross_sectional_mean_reversion', 'dual_momentum', 'TencentMomentum'}
+    all_ids = set(STRATEGY_ID_TO_REGISTRY.keys())
     remaining = {info['id'] for info in AVAILABLE_STRATEGIES.values()}
     deleted = list(all_ids - remaining)
     statuses = {info['id']: info.get('status', 'paused') for info in AVAILABLE_STRATEGIES.values()}
