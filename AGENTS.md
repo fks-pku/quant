@@ -89,6 +89,30 @@ quant/
 | cio | features/cio/ | CIO 市场评估、新闻分析、权重分配 |
 | strategies | features/strategies/ | 策略基类、注册表、因子库、策略实现 |
 
+## Data Providers
+
+| Provider | File | Markets | Description |
+|----------|------|---------|-------------|
+| YfinanceProvider | `infrastructure/data/providers/yfinance_provider.py` | US | Yahoo Finance with parquet disk cache |
+| DuckDBProvider | `infrastructure/data/providers/duckdb_provider.py` | US / HK / CN | Local columnar storage (unified backtest source) |
+| AkshareProvider | `infrastructure/data/providers/akshare.py` | CN | China A-share daily bars via akshare |
+
+### Symbol Registry Markets
+
+| Market | Code Pattern | Example | DuckDB Table |
+|--------|--------------|---------|--------------|
+| US | Letters | `AAPL`, `SPY` | `daily_us` / `minute_us` |
+| HK | 5-digit numeric | `00700` | `daily_hk` / `minute_hk` |
+| CN | 6-digit numeric (0/3/6/8/9 prefix) | `600519` | `daily_cn` / `minute_cn` |
+
+### Backtest Commission Models
+
+| Market | Commission | Stamp Duty | Other Fees |
+|--------|-----------|------------|------------|
+| US | per-share $0.005 min $1 | — | — |
+| HK | 0.03% min HK$3 | 0.13% on SELL | SFC levy + clearing + trading fee |
+| CN | 0.025% min ¥5 | 0.05% on SELL | Transfer fee 0.001% |
+
 ## Python Package
 
 - 包名: `quant`
@@ -102,6 +126,7 @@ python quant/api_server.py                                        # 启动 API �
 python -m pytest quant/tests/ -q                                  # 运行测试
 python quant/backtest_runner.py --strategy SimpleMomentum ...     # CLI 回测
 python quant/quant_system.py --mode paper                         # CLI 实盘/模拟
+python quant/scripts/ingest_akshare.py --symbol 600519 ...        # 从 akshare 抓取 A-share 数据存入 DuckDB
 ```
 
 ## Import Path Reference
@@ -124,6 +149,7 @@ from quant.domain.ports.event_publisher import EventPublisher
 # Infrastructure (implements domain ports)
 from quant.infrastructure.events import EventBus, EventType, Event
 from quant.infrastructure.execution.brokers.paper import PaperBroker
+from quant.infrastructure.data.providers.akshare import AkshareProvider
 
 # Features (orchestrators)
 from quant.features.backtest.engine import Backtester
