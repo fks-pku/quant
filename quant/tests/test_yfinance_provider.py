@@ -74,7 +74,7 @@ def test_yfinance_invalid_symbol_returns_empty(provider):
 def test_yfinance_rate_limiting(provider):
     mock_df = _make_ohlcv_df()
 
-    with patch("quant.data.providers.yfinance_provider.yf") as mock_yf:
+    with patch("quant.infrastructure.data.providers.yfinance_provider.yf") as mock_yf:
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = mock_df
         mock_yf.Ticker.return_value = mock_ticker
@@ -96,7 +96,7 @@ def test_yfinance_cache_validity(cache_dir):
     p.connect()
 
     mock_df = _make_ohlcv_df()
-    with patch("quant.data.providers.yfinance_provider.yf") as mock_yf:
+    with patch("quant.infrastructure.data.providers.yfinance_provider.yf") as mock_yf:
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = mock_df
         mock_yf.Ticker.return_value = mock_ticker

@@ -76,7 +76,7 @@ class SymbolRegistry:
                 return f"HK.{symbol}"
             elif market == Market.CN:
                 return f"SH.{symbol}" if symbol.startswith(("6", "9")) else f"SZ.{symbol}"
-        elif provider.lower() in ("yahoo", "alpha_vantage", "akshare"):
+        elif provider.lower() in ("yahoo", "alpha_vantage", "akshare", "tushare"):
             return symbol
         
         return symbol
@@ -107,7 +107,7 @@ class SymbolRegistry:
         if source.lower() == "futu":
             if external_symbol.startswith(("US.", "HK.", "SH.", "SZ.")):
                 return external_symbol[3:]
-        elif source.lower() in ("yahoo", "alpha_vantage", "akshare"):
+        elif source.lower() in ("yahoo", "alpha_vantage", "akshare", "tushare"):
             return external_symbol
         
         return external_symbol

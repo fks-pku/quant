@@ -22,10 +22,13 @@ markets:
     close_minute: 0
 
 data:
+  tushare:
+    token: ""
   providers:
     - yahoo
     - alpha_vantage
     - futu
+    - tushare
   default_timeframe: 5m
   cache_enabled: true
   cache_ttl_minutes: 5
