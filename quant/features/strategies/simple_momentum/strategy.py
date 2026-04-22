@@ -143,29 +143,44 @@ class SimpleMomentum(Strategy):
         )
 
         n_stocks = len(sorted_by_momentum)
-        n_long = max(1, int(n_stocks * self.top_pct))
-        n_short = max(1, int(n_stocks * self.bottom_pct))
-
-        self._long_positions = [s[0] for s in sorted_by_momentum[:n_long]]
-        self._short_positions = [s[0] for s in sorted_by_momentum[-n_short:]]
-
         nav = context.portfolio.nav
-        long_weight = self.max_position_pct / n_long if n_long > 0 else 0
-        short_weight = self.max_position_pct / n_short if n_short > 0 else 0
 
-        for symbol in self._long_positions:
+        if n_stocks == 1:
+            symbol, score = sorted_by_momentum[0]
             price = self._get_last_price(symbol)
-            if price > 0:
-                quantity = int((nav * long_weight) / price)
-                if quantity > 0:
-                    self.buy(symbol, quantity)
+            if price <= 0:
+                self._last_rebalance_date = trading_date
+                return
+            if score > 0:
+                self.buy(symbol, int(nav / price * 0.95))
+                self._long_positions = [symbol]
+            elif score < 0:
+                self._close_position(context, symbol, int(nav / price))
+                self._long_positions = []
+            self._short_positions = []
+        else:
+            n_long = max(1, int(n_stocks * self.top_pct))
+            n_short = max(1, int(n_stocks * self.bottom_pct))
 
-        for symbol in self._short_positions:
-            price = self._get_last_price(symbol)
-            if price > 0:
-                quantity = int((nav * short_weight) / price)
-                if quantity > 0:
-                    self.sell(symbol, quantity)
+            self._long_positions = [s[0] for s in sorted_by_momentum[:n_long]]
+            self._short_positions = [s[0] for s in sorted_by_momentum[-n_short:]]
+
+            long_weight = self.max_position_pct / n_long if n_long > 0 else 0
+            short_weight = self.max_position_pct / n_short if n_short > 0 else 0
+
+            for symbol in self._long_positions:
+                price = self._get_last_price(symbol)
+                if price > 0:
+                    quantity = int((nav * long_weight) / price)
+                    if quantity > 0:
+                        self.buy(symbol, quantity)
+
+            for symbol in self._short_positions:
+                price = self._get_last_price(symbol)
+                if price > 0:
+                    quantity = int((nav * short_weight) / price)
+                    if quantity > 0:
+                        self.sell(symbol, quantity)
 
         self._last_rebalance_date = trading_date
 
@@ -181,6 +196,12 @@ class SimpleMomentum(Strategy):
             if hasattr(last_bar, "close"):
                 return float(last_bar.close)
         return 0.0
+
+    def _close_position(self, context: "Context", symbol: str, quantity: int) -> None:
+        pos_qty = self._positions.get(symbol, 0)
+        if pos_qty > 0:
+            sell_qty = min(quantity, pos_qty)
+            self.sell(symbol, sell_qty)
 
     def on_fill(self, context: "Context", fill: Any) -> None:
         super().on_fill(context, fill)
