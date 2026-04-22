@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import BacktestDashboard from './BacktestDashboard';
 import LiveTradingPage from './LiveTradingPage';
+import ResearchPanel from './ResearchPanel';
 import './App.css';
 
 const API_BASE = 'http://localhost:5000/api';
@@ -168,10 +169,11 @@ function App() {
       <div className="tab-bar">
         <button className={`tab ${activeTab === 'backtest' ? 'active' : ''}`} onClick={() => setActiveTab('backtest')}>BACKTEST</button>
         <button className={`tab ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>LIVE TRADING</button>
+        <button className={`tab ${activeTab === 'research' ? 'active' : ''}`} onClick={() => setActiveTab('research')}>RESEARCH</button>
       </div>
 
       <main className="main">
-        {activeTab === 'backtest' ? <BacktestDashboard /> : <LiveTradingPage broker={selectedBroker} systemRunning={systemStatus === 'running'} />}
+        {activeTab === 'backtest' ? <BacktestDashboard /> : activeTab === 'live' ? <LiveTradingPage broker={selectedBroker} systemRunning={systemStatus === 'running'} /> : <ResearchPanel />}
       </main>
     </div>
   );
