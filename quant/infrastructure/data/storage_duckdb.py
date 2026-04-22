@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 import pandas as pd
 
+from quant.domain.ports.storage import Storage
 from quant.shared.utils.logger import setup_logger
 
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
@@ -27,23 +28,27 @@ BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, lo
 BAR_INDEX = "timestamp, symbol"
 
 
-class DuckDBStorage:
-    def __init__(self, db_path: str = _DEFAULT_DB):
+class DuckDBStorage(Storage):
+    def __init__(self, db_path: str = _DEFAULT_DB, read_only: bool = False):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = setup_logger("DuckDBStorage")
         self._lock = threading.RLock()
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
+        self._read_only = read_only
         self._init_database()
 
     def _init_database(self) -> None:
-        self._conn = duckdb.connect(str(self.db_path))
-        self._conn.execute("SET threads=4")
-        for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta"):
-            self._ensure_table(table)
-        self.logger.info(f"DuckDB initialized at {self.db_path}")
+        self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
+        if not self._read_only:
+            self._conn.execute("SET threads=4")
+            for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta"):
+                self._ensure_table(table)
+        self.logger.info(f"DuckDB initialized at {self.db_path} (read_only={self._read_only})")
 
     def _ensure_table(self, table_name: str) -> None:
+        if self._read_only:
+            return
         if table_name.startswith(("daily_", "minute_")):
             self._conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {table_name} (

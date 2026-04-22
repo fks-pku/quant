@@ -1,7 +1,7 @@
 """Tushare Pro data provider for China A-share stock and index daily bars.
 
-Implements the DataProvider ABC interface, fetching data from Tushare Pro API
-and caching all results in DuckDB via DuckDBStorage.
+Implements the domain DataFeed port, fetching data from Tushare Pro API
+and caching all results via the Storage port.
 """
 
 import time
@@ -11,6 +11,7 @@ from typing import Optional
 import pandas as pd
 
 from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.storage import Storage
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
 from quant.shared.utils.config_loader import ConfigLoader
 from quant.shared.utils.logger import setup_logger
@@ -35,7 +36,7 @@ class TushareProvider(DataProvider):
         self._min_interval = min_interval
         self._last_request_time = 0.0
         self._api = None
-        self._storage: Optional[DuckDBStorage] = None
+        self._storage: Optional[Storage] = None
         self.logger = setup_logger("TushareProvider")
 
     def _load_config(self) -> dict:

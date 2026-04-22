@@ -1,16 +1,14 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
-
-from quant.domain.models.order import Order
 
 
 class Storage(ABC):
 
     @abstractmethod
-    def save_bars(self, symbol: str, df: pd.DataFrame) -> None:
+    def save_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:
         pass
 
     @abstractmethod
@@ -19,20 +17,28 @@ class Storage(ABC):
         symbol: str,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
+        timeframe: str = "1d",
     ) -> pd.DataFrame:
         pass
 
     @abstractmethod
-    def save_order(self, order: Order) -> None:
+    def get_symbols(self, timeframe: str = "1d", market: str = "hk") -> List[str]:
         pass
 
     @abstractmethod
-    def get_orders(
-        self,
-        symbol: Optional[str] = None,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
-    ) -> List[Order]:
+    def get_date_range(self, symbol: str, timeframe: str = "1d") -> Optional[Dict[str, datetime]]:
+        pass
+
+    @abstractmethod
+    def get_lot_size(self, symbol: str) -> int:
+        pass
+
+    @abstractmethod
+    def save_order(self, order: dict) -> None:
+        pass
+
+    @abstractmethod
+    def get_orders(self, symbol: Optional[str] = None, status: Optional[str] = None) -> pd.DataFrame:
         pass
 
     @abstractmethod
@@ -44,7 +50,23 @@ class Storage(ABC):
         self,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
-    ) -> List[dict]:
+    ) -> pd.DataFrame:
+        pass
+
+    @abstractmethod
+    def save_strategy_snapshot(self, snapshot: dict) -> None:
+        pass
+
+    @abstractmethod
+    def get_strategy_snapshots(self, strategy_name: Optional[str] = None) -> List[dict]:
+        pass
+
+    @abstractmethod
+    def list_tables(self) -> List[str]:
+        pass
+
+    @abstractmethod
+    def table_row_count(self, table_name: str) -> int:
         pass
 
     @abstractmethod

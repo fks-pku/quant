@@ -118,7 +118,7 @@ def _init_default_symbols():
         return
     try:
         from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        _db_tmp = DuckDBStorage()
+        _db_tmp = DuckDBStorage(read_only=True)
         _all_syms = _db_tmp.get_symbols('daily', 'hk') + _db_tmp.get_symbols('daily', 'us') + _db_tmp.get_symbols('daily', 'cn')
         _db_tmp.close()
         _default_sym_str = ','.join(_all_syms) if _all_syms else 'HK.00700'

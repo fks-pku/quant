@@ -22,10 +22,10 @@ class DuckDBProvider(DataProvider):
         self.logger = setup_logger("DuckDBProvider")
 
     def connect(self) -> None:
-        self._storage = DuckDBStorage(self._db_path)
+        self._storage = DuckDBStorage(self._db_path, read_only=True)
         self._connected = True
         tables = self._storage.list_tables()
-        self.logger.info(f"Connected to DuckDB, tables: {tables}")
+        self.logger.info(f"Connected to DuckDB (read-only), tables: {tables}")
 
     def disconnect(self) -> None:
         if self._storage:

@@ -65,9 +65,9 @@ def get_market_data():
 def list_data_symbols():
     try:
         from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage()
+        db = DuckDBStorage(read_only=True)
         result = {}
-        for market in ("hk", "us"):
+        for market in ("hk", "us", "cn"):
             for freq in ("daily", "minute"):
                 table = f"{freq}_{market}"
                 symbols = db.get_symbols(freq, market)
@@ -98,7 +98,7 @@ def strategy_positions():
 def strategy_history(name):
     try:
         from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage()
+        db = DuckDBStorage(read_only=True)
         snapshots = db.get_strategy_snapshots(strategy_name=name)
         return jsonify({"strategy": name, "snapshots": snapshots})
     except Exception as e:
@@ -109,7 +109,7 @@ def strategy_history(name):
 def all_strategy_history():
     try:
         from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage()
+        db = DuckDBStorage(read_only=True)
         snapshots = db.get_strategy_snapshots()
         by_strategy = {}
         for s in snapshots:

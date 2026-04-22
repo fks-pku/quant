@@ -30,25 +30,15 @@ def run_backtest():
             import pandas as pd
             from quant.features.backtest.engine import Backtester
             from quant.features.strategies.registry import StrategyRegistry
-            from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
-            registry = StrategyRegistry()
-            registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
-            strategy_class = registry.get(registry_key)
-            if strategy_class is None:
-                sid_norm = strategy_id.lower().replace('_', '').replace('-', '')
-                for name in registry.list_strategies():
-                    if name.lower().replace('_', '').replace('-', '') == sid_norm:
-                        strategy_class = registry.get(name)
-                        break
+            from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 
-            db_provider = DuckDBProvider()
-            db_provider.connect()
+            db = DuckDBStorage(read_only=True)
 
             all_data = []
             missing_symbols = []
 
             for symbol in symbols:
-                bars = db_provider.get_bars(
+                bars = db.get_bars(
                     symbol,
                     datetime.strptime(start_date, '%Y-%m-%d'),
                     datetime.strptime(end_date, '%Y-%m-%d'),
@@ -60,10 +50,10 @@ def run_backtest():
                     missing_symbols.append(symbol)
 
             if not all_data:
-                available_hk = db_provider.list_available_symbols('daily', 'hk')
-                available_us = db_provider.list_available_symbols('daily', 'us')
-                available_cn = db_provider.list_available_symbols('daily', 'cn')
-                db_provider.disconnect()
+                available_hk = db.get_symbols('daily', 'hk')
+                available_us = db.get_symbols('daily', 'us')
+                available_cn = db.get_symbols('daily', 'cn')
+                db.close()
                 with _backtest_lock:
                     _backtest_results[backtest_id] = {
                         "status": "error",
@@ -112,10 +102,8 @@ def run_backtest():
                 "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0, "max_orders_minute": 100},
             }
 
-            from quant.infrastructure.data.storage_duckdb import DuckDBStorage as _Storage
-            _storage = _Storage()
-            lot_sizes = {s: _storage.get_lot_size(s) for s in symbols}
-            _storage.close()
+            lot_sizes = {s: db.get_lot_size(s) for s in symbols}
+            db.close()
 
             backtester = Backtester(config, lot_sizes=lot_sizes)
             result = backtester.run(
