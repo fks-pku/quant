@@ -38,20 +38,36 @@ class TushareProvider(DataProvider):
         self._storage: Optional[DuckDBStorage] = None
         self.logger = setup_logger("TushareProvider")
 
+    def _load_config(self) -> dict:
+        try:
+            loader = ConfigLoader()
+            cfg = loader.load("config.yaml")
+            tushare_cfg = cfg.get("data", {}).get("tushare", {})
+            return {
+                "token": tushare_cfg.get("token", ""),
+                "api_url": tushare_cfg.get("api_url", ""),
+            }
+        except Exception:
+            return {"token": "", "api_url": ""}
+
     def connect(self) -> None:
         if not TUSHARE_AVAILABLE:
             self.logger.warning("tushare not installed")
             self._connected = True
             return
 
-        token = self._load_token()
+        cfg = self._load_config()
+        token = cfg.get("token", "")
         if not token:
             self.logger.warning("tushare token not configured")
             self._connected = True
             return
 
-        ts.set_token(token)
-        self._api = ts.pro_api()
+        self._api = ts.pro_api(token=token)
+        api_url = cfg.get("api_url", "")
+        if api_url:
+            self._api._DataApi__http_url = api_url
+
         self._storage = DuckDBStorage(self._db_path)
         self._connected = True
         self.logger.info("TushareProvider connected")
@@ -65,13 +81,6 @@ class TushareProvider(DataProvider):
 
     def is_connected(self) -> bool:
         return self._connected
-
-    def _load_token(self) -> str:
-        try:
-            loader = ConfigLoader()
-            return loader.get("config.yaml", "data", "tushare", "token", default="")
-        except Exception:
-            return ""
 
     def _rate_limit(self) -> None:
         elapsed = time.time() - self._last_request_time

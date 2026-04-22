@@ -42,7 +42,7 @@ def _make_tushare_index_df(rows=10):
 @pytest.fixture
 def provider():
     p = TushareProvider()
-    with patch.object(p, "_load_token", return_value="test_token"):
+    with patch.object(p, "_load_config", return_value={"token": "test_token", "api_url": ""}):
         with patch("quant.infrastructure.data.providers.tushare.TUSHARE_AVAILABLE", True):
             with patch("quant.infrastructure.data.providers.tushare.ts") as mock_ts:
                 mock_api = MagicMock()

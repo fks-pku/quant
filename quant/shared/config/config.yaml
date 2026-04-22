@@ -24,6 +24,7 @@ markets:
 data:
   tushare:
     token: "5ddaa1a631aaf5618813242492b54237cb53879d"
+    api_url: "http://14.nat0.cn:32817"
   providers:
     - yahoo
     - alpha_vantage
