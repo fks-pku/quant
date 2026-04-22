@@ -62,12 +62,13 @@ def run_backtest():
             if not all_data:
                 available_hk = db_provider.list_available_symbols('daily', 'hk')
                 available_us = db_provider.list_available_symbols('daily', 'us')
+                available_cn = db_provider.list_available_symbols('daily', 'cn')
                 db_provider.disconnect()
                 with _backtest_lock:
                     _backtest_results[backtest_id] = {
                         "status": "error",
                         "error": f"No data found in DuckDB for symbols: {missing_symbols}. "
-                                 f"Available: {available_hk + available_us}",
+                                 f"Available: {available_hk + available_us + available_cn}",
                         "backtest_id": backtest_id,
                     }
                 return
