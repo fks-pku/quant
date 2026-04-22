@@ -26,6 +26,11 @@ HK_CLEARING_RATE = 0.00002
 HK_TRADING_FEE_RATE = 0.00005
 HK_MIN_COMMISSION = 3.0
 
+CN_COMMISSION_RATE = 0.00025
+CN_STAMP_DUTY_RATE = 0.0005
+CN_TRANSFER_FEE_RATE = 0.00001
+CN_MIN_COMMISSION = 5.0
+
 
 @dataclass
 class BacktestDiagnostics:
@@ -69,6 +74,7 @@ class BacktestResult:
 class CommissionConfig:
     US: Dict[str, Any] = field(default_factory=lambda: {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0})
     HK: Dict[str, Any] = field(default_factory=lambda: {"type": "hk_realistic"})
+    CN: Dict[str, Any] = field(default_factory=lambda: {"type": "cn_realistic"})
 
 
 class Backtester:
@@ -84,7 +90,8 @@ class Backtester:
         commission_config = config.get("execution", {}).get("commission", {})
         self.commission = CommissionConfig(
             US=commission_config.get("US", {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}),
-            HK=commission_config.get("HK", {"type": "hk_realistic"})
+            HK=commission_config.get("HK", {"type": "hk_realistic"}),
+            CN=commission_config.get("CN", {"type": "cn_realistic"})
         )
 
     def _get_lot_size(self, symbol: str) -> int:
@@ -347,7 +354,7 @@ class Backtester:
         market = self._detect_market(symbol)
         lot_size = self._get_lot_size(symbol)
 
-        if market == "HK":
+        if market in ("HK", "CN"):
             lot_qty = (int(quantity) // lot_size) * lot_size
             if lot_qty < lot_size:
                 return None
@@ -358,7 +365,7 @@ class Backtester:
         bar_volume = bar.get('volume', 0)
         if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
             max_qty = int(bar_volume * VOLUME_PARTICIPATION_LIMIT)
-            if market == "HK":
+            if market in ("HK", "CN"):
                 max_qty = (max_qty // lot_size) * lot_size
             if max_qty <= 0:
                 return None
@@ -437,8 +444,14 @@ class Backtester:
         return None
 
     def _detect_market(self, symbol: str) -> str:
-        if symbol.startswith("HK.") or (symbol.isdigit() and len(symbol) >= 5):
+        if symbol.startswith("HK.") or (symbol.isdigit() and len(symbol) == 5):
             return "HK"
+        if (
+            symbol.isdigit()
+            and len(symbol) == 6
+            and symbol[0] in ("0", "3", "6", "8", "9")
+        ):
+            return "CN"
         return "US"
 
     def _calculate_commission_breakdown(self, price: float, quantity: float, market: str, side: str) -> Dict[str, float]:
@@ -451,6 +464,16 @@ class Backtester:
             else:
                 commission = max(trade_value * cfg.get("percent", 0.001), cfg.get("min_per_order", 1.0))
             return {"commission": commission}
+
+        if market == "CN":
+            commission = max(trade_value * CN_COMMISSION_RATE, CN_MIN_COMMISSION)
+            stamp_duty = trade_value * CN_STAMP_DUTY_RATE if side == 'SELL' else 0.0
+            transfer_fee = trade_value * CN_TRANSFER_FEE_RATE
+            return {
+                "commission": commission,
+                "stamp_duty": stamp_duty,
+                "transfer_fee": transfer_fee,
+            }
 
         commission = max(trade_value * HK_COMMISSION_RATE, HK_MIN_COMMISSION)
         sfc_levy = trade_value * HK_SFC_LEVY_RATE

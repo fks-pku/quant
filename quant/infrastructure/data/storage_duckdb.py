@@ -126,7 +126,20 @@ class DuckDBStorage:
 
     def _resolve_table(self, symbol: str, timeframe: str) -> str:
         freq = "daily" if timeframe in ("1d", "day", "daily") else "minute"
-        market = "hk" if (symbol.startswith("HK.") or (symbol.isdigit() and len(symbol) >= 5)) else "us"
+
+        if symbol.startswith("HK."):
+            market = "hk"
+        elif (
+            symbol.isdigit()
+            and len(symbol) == 6
+            and symbol[0] in ("0", "3", "6", "8", "9")
+        ):
+            market = "cn"
+        elif symbol.isdigit() and len(symbol) == 5:
+            market = "hk"
+        else:
+            market = "us"
+
         return f"{freq}_{market}"
 
     def save_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:
