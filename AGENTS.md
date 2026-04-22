@@ -4,6 +4,12 @@
 
 Hexagonal (Ports & Adapters) + Event-Driven 架构。Domain 居中，通过 Ports 定义接口，Infrastructure 实现适配器，Features 编排用例。
 
+**核心原则: Provider (DataFeed) 与 Storage 分离**
+- `DataFeed` port — 从外部 API 获取数据 (Tushare, Akshare, YFinance)
+- `Storage` port — 持久化和查询缓存数据 (DuckDBStorage)
+- Providers 获取数据后写入 Storage，Backtest 从 Storage 读取
+- DuckDB 不是 Provider，是 Storage 的实现
+
 ## Directory Structure
 
 ```
@@ -14,7 +20,9 @@ quant/
 │   └── ports/           # 抽象接口 (DataFeed, BrokerAdapter, Strategy, Storage, EventPublisher)
 ├── infrastructure/      # 实现 domain ports (ADAPTERS)
 │   ├── events/          # EventBus (implements EventPublisher)
-│   ├── data/            # 数据存储 + Provider
+│   ├── data/
+│   │   ├── storage_duckdb.py  # DuckDBStorage (implements Storage port)
+│   │   └── providers/        # External data fetchers (implement DataFeed port)
 │   ├── execution/       # 券商适配 + 订单执行
 │   └── var/             # 运行时数据 (DuckDB, gitignore)
 ├── features/            # 业务用例编排 (APPLICATION LAYER)
@@ -72,13 +80,87 @@ quant/
 
 ### Ports (`quant.domain.ports.*`)
 
-| Port | Description |
-|------|-------------|
-| DataFeed | 数据源接口 (get_bars, subscribe) |
-| BrokerAdapter | 券商接口 (submit_order, get_positions) |
-| Strategy | 策略接口 (on_bar, buy, sell) |
-| Storage | 持久化接口 (save_bars, get_orders) |
-| EventPublisher | 事件发布接口 (subscribe, publish) |
+| Port | Description | Implementations |
+|------|-------------|----------------|
+| DataFeed | 数据源接口 (get_bars, subscribe) | TushareProvider, AkshareProvider, YfinanceProvider |
+| BrokerAdapter | 券商接口 (submit_order, get_positions) | PaperBroker, FutuProvider |
+| Strategy | 策略接口 (on_bar, buy, sell) | VolatilityRegime, SimpleMomentum, CrossSectionalMeanReversion |
+| Storage | 持久化接口 (save_bars, get_bars, get_symbols, get_lot_size) | DuckDBStorage |
+| EventPublisher | 事件发布接口 (subscribe, publish) | EventBus |
+
+## Data Architecture
+
+### Two-Port Separation
+
+```
+DataFeed port (fetch from external)     Storage port (persist & query)
+┌─────────────────────┐                ┌─────────────────────┐
+│ TushareProvider     │──write──────→  │                     │
+│ AkshareProvider     │──write──────→  │   DuckDBStorage     │
+│ YfinanceProvider    │──write──────→  │   (implements       │
+└─────────────────────┘                │    Storage port)     │
+                                       │                     │
+┌─────────────────────┐                │                     │
+│ Backtester          │←──read────────│                     │
+│ API endpoints       │←──read────────│                     │
+└─────────────────────┘                └─────────────────────┘
+```
+
+- **Providers** fetch from external APIs, cache via Storage
+- **Backtest** reads from Storage only — doesn't care where data came from
+- **API layer** reads from Storage (read-only mode)
+
+### Providers
+
+| Provider | File | Markets | Storage |
+|----------|------|---------|---------|
+| TushareProvider | `infrastructure/data/providers/tushare.py` | CN | DuckDB (via Storage port) |
+| AkshareProvider | `infrastructure/data/providers/akshare.py` | CN | — |
+| YfinanceProvider | `infrastructure/data/providers/yfinance_provider.py` | US | Parquet |
+
+### Storage
+
+| Storage | File | Description |
+|---------|------|-------------|
+| DuckDBStorage | `infrastructure/data/storage_duckdb.py` | Implements Storage port. Supports `read_only=True` for readers. |
+
+### DuckDB Connection Rules
+
+- **Writers** (ingest scripts, providers): `DuckDBStorage()` — default read-write
+- **Readers** (API, backtest, providers reading cache): `DuckDBStorage(read_only=True)`
+- Only ingest scripts and providers with fresh data should write
+- **Never** open write connections from API endpoints — prevents data corruption
+
+### Symbol Registry Markets
+
+| Market | Code Pattern | Example | DuckDB Table |
+|--------|--------------|---------|--------------|
+| US | Letters | `AAPL`, `SPY` | `daily_us` / `minute_us` |
+| HK | 5-digit numeric | `00700` | `daily_hk` / `minute_hk` |
+| CN | 6-digit numeric (0/3/6/8/9 prefix) | `600519` | `daily_cn` / `minute_cn` |
+
+### Tushare Configuration
+
+```yaml
+data:
+  tushare:
+    token: "YOUR_TUSHARE_TOKEN"
+    api_url: "http://..."   # optional custom server URL
+```
+
+### CN Market Notes
+
+- Lot size: 100 shares (backtester enforces lot rounding)
+- CN stocks (e.g. 600519 茅台 ~¥1700/share) require higher `initial_cash` (500K+)
+- Default 100K is insufficient for high-price CN stocks
+
+### Backtest Commission Models
+
+| Market | Commission | Stamp Duty | Other Fees |
+|--------|-----------|------------|------------|
+| US | per-share $0.005 min $1 | — | — |
+| HK | 0.03% min HK$3 | 0.13% on SELL | SFC levy + clearing + trading fee |
+| CN | 0.025% min ¥5 | 0.05% on SELL | Transfer fee 0.001% |
 
 ## Feature Index
 
@@ -91,29 +173,17 @@ quant/
 | strategies | features/strategies/ | 策略基类、注册表、因子库、策略实现 |
 | research | features/research/ | 策略发现、评估、回测、候选池管理 |
 
-## Data Providers
+### Strategies (implemented)
 
-| Provider | File | Markets | Description |
-|----------|------|---------|-------------|
-| YfinanceProvider | `infrastructure/data/providers/yfinance_provider.py` | US | Yahoo Finance with parquet disk cache |
-| DuckDBProvider | `infrastructure/data/providers/duckdb_provider.py` | US / HK / CN | Local columnar storage (unified backtest source) |
-| AkshareProvider | `infrastructure/data/providers/akshare.py` | CN | China A-share daily bars via akshare |
+| Strategy | Directory | CN Compatible | Notes |
+|----------|-----------|---------------|-------|
+| SimpleMomentum | `strategies/simple_momentum/` | Yes | Cross-sectional momentum; single-stock mode auto-detects |
+| CrossSectionalMeanReversion | `strategies/cross_sectional_mr/` | Partially | Needs market_symbol=000300 |
+| VolatilityRegime | `strategies/volatility_regime/` | No | Requires VIX data |
 
-### Symbol Registry Markets
+### Frontend Strategy List
 
-| Market | Code Pattern | Example | DuckDB Table |
-|--------|--------------|---------|--------------|
-| US | Letters | `AAPL`, `SPY` | `daily_us` / `minute_us` |
-| HK | 5-digit numeric | `00700` | `daily_hk` / `minute_hk` |
-| CN | 6-digit numeric (0/3/6/8/9 prefix) | `600519` | `daily_cn` / `minute_cn` |
-
-### Backtest Commission Models
-
-| Market | Commission | Stamp Duty | Other Fees |
-|--------|-----------|------------|------------|
-| US | per-share $0.005 min $1 | — | — |
-| HK | 0.03% min HK$3 | 0.13% on SELL | SFC levy + clearing + trading fee |
-| CN | 0.025% min ¥5 | 0.05% on SELL | Transfer fee 0.001% |
+Frontend only shows strategies with implementations in `features/strategies/*/strategy.py`. Registry in `api/state/runtime.py`.
 
 ## Python Package
 
@@ -129,6 +199,7 @@ python -m pytest quant/tests/ -q                                  # 运行测试
 python quant/backtest_runner.py --strategy SimpleMomentum ...     # CLI 回测
 python quant/quant_system.py --mode paper                         # CLI 实盘/模拟
 python quant/scripts/ingest_akshare.py --symbol 600519 ...        # 从 akshare 抓取 A-share 数据存入 DuckDB
+python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 2025-01-01  # 从 tushare 抓取
 ```
 
 ## Import Path Reference
@@ -151,6 +222,8 @@ from quant.domain.ports.event_publisher import EventPublisher
 # Infrastructure (implements domain ports)
 from quant.infrastructure.events import EventBus, EventType, Event
 from quant.infrastructure.execution.brokers.paper import PaperBroker
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+from quant.infrastructure.data.providers.tushare import TushareProvider
 from quant.infrastructure.data.providers.akshare import AkshareProvider
 
 # Features (orchestrators)
@@ -177,6 +250,7 @@ from quant.shared.utils import setup_logger, ConfigLoader
 - `quant.strategies.*` → `quant.features.strategies.*`
 - `quant.cio.*` → `quant.features.cio.*`
 - `quant.config.*` → `quant.shared.config.*`
+- `DuckDBProvider` → 直接使用 `DuckDBStorage` (不再作为 provider)
 
 ## Key Conventions
 
@@ -186,3 +260,4 @@ from quant.shared.utils import setup_logger, ConfigLoader
 - ABC + abstract methods for ports (domain interfaces)
 - Thread safety: `threading.RLock()` for shared state
 - Logging: `from quant.shared.utils.logger import setup_logger`
+- DuckDB readers must use `read_only=True` to prevent write-lock conflicts
