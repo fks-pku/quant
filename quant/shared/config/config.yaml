@@ -23,7 +23,7 @@ markets:
 
 data:
   tushare:
-    token: ""
+    token: "5ddaa1a631aaf5618813242492b54237cb53879d"
   providers:
     - yahoo
     - alpha_vantage
