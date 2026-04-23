@@ -7,13 +7,9 @@ import uuid
 
 class EventType(Enum):
     ORDER_SUBMITTED = auto()
-    ORDER_SUBMIT = auto()
     ORDER_FILLED = auto()
-    ORDER_FILL = auto()
     ORDER_CANCELLED = auto()
-    ORDER_CANCEL = auto()
     ORDER_REJECTED = auto()
-    ORDER_REJECT = auto()
     TRADE_OPENED = auto()
     TRADE_CLOSED = auto()
     TRADE = auto()
@@ -27,6 +23,8 @@ class EventType(Enum):
     SYSTEM_STOP = auto()
     SYSTEM_SHUTDOWN = auto()
     RISK_CHECK = auto()
+    FILL_PROCESSED = auto()
+    ORDER_RECORDED = auto()
     RESEARCH_SEARCH_DONE = "research_search_done"
     RESEARCH_IDEA_SCORED = "research_idea_scored"
     RESEARCH_CODE_READY = "research_code_ready"

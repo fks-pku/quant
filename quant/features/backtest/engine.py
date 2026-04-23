@@ -7,11 +7,9 @@ import logging
 import pandas as pd
 import numpy as np
 
-from quant.infrastructure.events import EventBus, EventType
-from quant.features.trading.portfolio import Portfolio
-from quant.features.trading.risk import RiskEngine
+from quant.domain.ports.event_publisher import EventPublisher
+from quant.domain.models.trade import Trade
 from quant.features.backtest.analytics import calculate_performance_metrics, PerformanceMetrics
-from quant.shared.models.trade import Trade
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +78,10 @@ class CommissionConfig:
 class Backtester:
     """Backtester with realistic execution."""
 
-    def __init__(self, config: Dict[str, Any], event_bus: Optional[EventBus] = None,
+    def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None,
                  lot_sizes: Optional[Dict[str, int]] = None):
         self.config = config
-        self.event_bus = event_bus or EventBus()
+        self.event_bus = event_bus
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
         self.lot_sizes = lot_sizes or {}
 
@@ -124,6 +122,9 @@ class Backtester:
         Because step 2 runs before step 3, orders are always filled one day
         after the signal, using the fill day's open price.
         """
+        from quant.features.trading.portfolio import Portfolio
+        from quant.features.trading.risk import RiskEngine
+
         portfolio = Portfolio(initial_cash=initial_cash, currency="USD")
         risk_engine = RiskEngine(self.config, portfolio, self.event_bus)
         symbols = symbols or []
@@ -340,8 +341,15 @@ class Backtester:
                 pos.market_value = pos.quantity * last_prices[symbol]
                 pos.unrealized_pnl = pos.market_value - (pos.avg_cost * pos.quantity)
 
-    def _create_context(self, portfolio: Portfolio, risk_engine: RiskEngine, data_provider: Any) -> Any:
-        from quant.features.trading.engine import Context
+    def _create_context(self, portfolio: Any, risk_engine: Any, data_provider: Any) -> Any:
+        class BacktestContext:
+            def __init__(self, portfolio, risk_engine, event_bus, data_provider):
+                self.portfolio = portfolio
+                self.risk_engine = risk_engine
+                self.event_bus = event_bus
+                self.data_provider = data_provider
+                self.order_manager = BacktestOrderManager()
+                self.broker = BacktestBroker()
 
         class BacktestOrderManager:
             def __init__(self):
@@ -366,13 +374,11 @@ class Backtester:
             def is_connected(self):
                 return True
 
-        return Context(
+        return BacktestContext(
             portfolio=portfolio,
             risk_engine=risk_engine,
             event_bus=self.event_bus,
-            order_manager=BacktestOrderManager(),
             data_provider=data_provider,
-            broker=BacktestBroker()
         )
 
     def _execute_order(

@@ -1,14 +1,12 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, List, Optional
-
-import pandas as pd
+from typing import Any, Dict, List, Optional
 
 
 class Storage(ABC):
 
     @abstractmethod
-    def save_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:
+    def save_bars(self, df: Any, timeframe: str = "1d") -> int:
         pass
 
     @abstractmethod
@@ -18,7 +16,7 @@ class Storage(ABC):
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
         timeframe: str = "1d",
-    ) -> pd.DataFrame:
+    ) -> Any:
         pass
 
     @abstractmethod
@@ -38,7 +36,7 @@ class Storage(ABC):
         pass
 
     @abstractmethod
-    def get_orders(self, symbol: Optional[str] = None, status: Optional[str] = None) -> pd.DataFrame:
+    def get_orders(self, symbol: Optional[str] = None, status: Optional[str] = None) -> Any:
         pass
 
     @abstractmethod
@@ -50,7 +48,7 @@ class Storage(ABC):
         self,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
-    ) -> pd.DataFrame:
+    ) -> Any:
         pass
 
     @abstractmethod

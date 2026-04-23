@@ -18,7 +18,7 @@ def test_risk_checkresult_is_same_class():
 
 
 def test_check_combined_risk_returns_risk_checkresult():
-    from quant.shared.models.order import Order
+    from quant.domain.models.order import Order
 
     coord = PortfolioCoordinator(total_risk_budget=1.0, max_portfolio_leverage=1.5)
     coord.register_strategy("strat_a", priority=1, max_risk_pct=0.5)

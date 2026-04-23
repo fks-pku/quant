@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from quant.features.backtest.engine import Backtester, BacktestDiagnostics
 from quant.features.trading.portfolio import Portfolio
-from quant.shared.models.trade import Trade
+from quant.domain.models.trade import Trade
 
 
 def _make_diag():

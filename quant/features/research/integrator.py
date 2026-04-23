@@ -1,20 +1,29 @@
 import re
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from quant.features.research.models import RawStrategy, EvaluationReport
-from quant.api.state.runtime import AVAILABLE_STRATEGIES, STRATEGY_PARAMETERS, _STRATEGY_DIR_MAP, _save_strategy_state
 
 logger = logging.getLogger(__name__)
 
 
 class StrategyIntegrator:
-    def __init__(self, strategies_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        strategies_dir: Optional[Path] = None,
+        strategy_registry: Optional[Dict[str, Any]] = None,
+        strategy_params: Optional[Dict[str, Any]] = None,
+        on_register: Optional[Callable] = None,
+    ):
         if strategies_dir is None:
             from quant.features.strategies import __file__ as _strat_file
             strategies_dir = Path(_strat_file).parent
         self.strategies_dir = strategies_dir
+        self._registry = strategy_registry if strategy_registry is not None else {}
+        self._params = strategy_params if strategy_params is not None else {}
+        self._dir_map: Dict[str, str] = {}
+        self._on_register = on_register
 
     def integrate(self, raw: RawStrategy, report: EvaluationReport) -> Optional[str]:
         name = self._normalize_name(raw.title)
@@ -110,12 +119,12 @@ class {class_name}(Strategy):
 
     def _register_in_runtime(self, name: str, class_name: str, raw: RawStrategy, report: EvaluationReport) -> None:
         strategy_id = name
-        AVAILABLE_STRATEGIES[class_name] = {
+        self._registry[class_name] = {
             "id": strategy_id,
             "name": raw.title,
             "description": raw.description[:200],
             "status": "candidate",
-            "priority": max(info.get("priority", 0) for info in AVAILABLE_STRATEGIES.values()) + 1,
+            "priority": max(info.get("priority", 0) for info in self._registry.values()) + 1 if self._registry else 1,
             "doc_file": f"{name}.md",
             "backtest": {},
             "research_meta": {
@@ -130,9 +139,10 @@ class {class_name}(Strategy):
                 "evaluated_at": "",
             },
         }
-        _STRATEGY_DIR_MAP[strategy_id] = name
-        STRATEGY_PARAMETERS[strategy_id] = {
+        self._dir_map[strategy_id] = name
+        self._params[strategy_id] = {
             "lookback": {"type": "int", "default": 20, "description": "Default lookback period"},
         }
-        _save_strategy_state()
+        if self._on_register:
+            self._on_register(class_name, self._registry[class_name])
         logger.info(f"Registered candidate strategy {strategy_id}")

@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Callable, List
-
-import pandas as pd
+from typing import Any, Callable, List
 
 from quant.domain.models.bar import Bar
 
@@ -35,7 +33,7 @@ class DataFeed(ABC):
         start: datetime,
         end: datetime,
         timeframe: str = "1d",
-    ) -> pd.DataFrame:
+    ) -> Any:
         pass
 
     @abstractmethod

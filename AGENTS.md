@@ -46,12 +46,13 @@ quant/
 ## Dependency Rules (铁律)
 
 1. **domain/** 零外部依赖 — 不依赖任何其他层
-2. **features/** 只依赖 domain (通过 ports 注入，不直接访问 infrastructure)
-3. **infrastructure/** 实现 domain ports (依赖 domain)
-4. **shared/** 无业务语义，纯工具 (models/ 仅做兼容 re-export)
+2. **features/** 只依赖 domain (通过 ports 注入，不直接访问 infrastructure)。features 如需 EventBus 等实现，通过构造函数接受 `EventPublisher` port 并在运行时由上层注入 `EventBus` 实例
+3. **infrastructure/** 实现 domain ports (依赖 domain)。infrastructure 禁止 import features。如需跨层通信，通过 event bus 发布事件，由上层 feature 订阅
+4. **shared/** 无业务语义，纯工具 (models/ 仅做兼容 re-export，不定义独立的模型类)
 5. **api/** 只调 features
-6. **feature 之间禁止互 import**
+6. **feature 之间禁止互 import**。如需共享类型（如 RiskCheckResult），将其提升到 `domain/models/`
 7. 层间通信: 直接调用 + Event Bus (pub/sub) + 依赖注入 (DI)
+8. **domain ports 返回 `Any` 类型**而非 `pd.DataFrame`，保持 domain 零外部依赖。pandas 转换在 infrastructure 层处理
 
 ## Domain Layer
 
@@ -65,6 +66,7 @@ quant/
 | Fill | frozen dataclass | 订单成交 |
 | Bar | frozen dataclass | OHLCV 市场数据 |
 | AccountInfo | frozen dataclass | 账户信息 |
+| RiskCheckResult | frozen dataclass | 风控检查结果 |
 
 ### Events (`quant.domain.events.*`)
 
@@ -86,7 +88,7 @@ quant/
 | BrokerAdapter | 券商接口 (submit_order, get_positions) | PaperBroker, FutuProvider |
 | Strategy | 策略接口 (on_bar, buy, sell) | VolatilityRegime, SimpleMomentum, CrossSectionalMeanReversion |
 | Storage | 持久化接口 (save_bars, get_bars, get_symbols, get_lot_size) | DuckDBStorage |
-| EventPublisher | 事件发布接口 (subscribe, publish) | EventBus |
+| EventPublisher | 事件发布接口 (subscribe, publish, publish_nowait) | EventBus |
 
 ## Data Architecture
 
@@ -212,6 +214,7 @@ from quant.domain.models.trade import Trade
 from quant.domain.models.fill import Fill
 from quant.domain.models.bar import Bar
 from quant.domain.models.account import AccountInfo
+from quant.domain.models.risk_check import RiskCheckResult
 from quant.domain.events.base import Event, EventType
 from quant.domain.ports.data_feed import DataFeed
 from quant.domain.ports.broker import BrokerAdapter
@@ -220,7 +223,7 @@ from quant.domain.ports.storage import Storage
 from quant.domain.ports.event_publisher import EventPublisher
 
 # Infrastructure (implements domain ports)
-from quant.infrastructure.events import EventBus, EventType, Event
+from quant.infrastructure.events import EventBus
 from quant.infrastructure.execution.brokers.paper import PaperBroker
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.infrastructure.data.providers.tushare import TushareProvider
@@ -230,13 +233,13 @@ from quant.infrastructure.data.providers.akshare import AkshareProvider
 from quant.features.backtest.engine import Backtester
 from quant.features.trading.engine import Engine, SystemMode, Context
 from quant.features.trading.portfolio import Portfolio
-from quant.features.trading.risk import RiskEngine, RiskCheckResult
+from quant.features.trading.risk import RiskEngine
 from quant.features.strategies import Strategy, StrategyRegistry
 from quant.features.cio import CIOEngine
 from quant.features.research import ResearchEngine, CandidatePool, ResearchScheduler
 
 # Backward Compatibility (re-exports from domain)
-from quant.shared.models import Order, Position, Trade
+from quant.shared.models import Order, Position, Trade, Fill, Bar, AccountInfo
 from quant.shared.utils import setup_logger, ConfigLoader
 ```
 
@@ -251,6 +254,15 @@ from quant.shared.utils import setup_logger, ConfigLoader
 - `quant.cio.*` → `quant.features.cio.*`
 - `quant.config.*` → `quant.shared.config.*`
 - `DuckDBProvider` → 直接使用 `DuckDBStorage` (不再作为 provider)
+- `EventType.ORDER_SUBMIT` → `EventType.ORDER_SUBMITTED` (去重)
+- `EventType.ORDER_FILL` → `EventType.ORDER_FILLED` (去重)
+- `EventType.ORDER_CANCEL` → `EventType.ORDER_CANCELLED` (去重)
+- `EventType.ORDER_REJECT` → `EventType.ORDER_REJECTED` (去重)
+- `quant.shared.models.trade` (独立文件) → `quant.domain.models.trade` (shared/models/ 只保留 __init__.py re-export)
+- `quant.shared.models.order` (独立文件) → `quant.domain.models.order`
+- `quant.shared.models.fill` (独立文件) → `quant.domain.models.fill`
+- `quant.shared.models.position` (独立文件) → `quant.domain.models.position`
+- `from quant.features.trading.risk import RiskCheckResult` → `from quant.domain.models.risk_check import RiskCheckResult`
 
 ## Key Conventions
 
