@@ -368,7 +368,7 @@ def calculate_performance_metrics(
         calmar_ratio=calmar,
         payoff_ratio=payoff,
         expectancy=expectancy,
-        total_trades=len(trades),
+        total_trades=len(_round_trip_trades(trades)),
         winning_trades=winning_trades,
         losing_trades=losing_trades,
         equity_curve=equity_curve,

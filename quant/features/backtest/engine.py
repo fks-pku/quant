@@ -147,6 +147,7 @@ class Backtester:
                 continue
 
             today_bars: Dict[str, Dict] = {}
+            any_suspended_today = False
 
             for strategy in strategies:
                 if hasattr(strategy, "on_before_trading"):
@@ -166,7 +167,7 @@ class Backtester:
                             today_bars[symbol] = bar_data
 
                             if bar_data['_suspended']:
-                                diag.suspended_days += 1
+                                any_suspended_today = True
                             else:
                                 last_prices[symbol] = bar_data.get('close', 0)
 
@@ -191,7 +192,7 @@ class Backtester:
                                     today_bars[symbol] = bar_data
 
                                     if bar_data['_suspended']:
-                                        diag.suspended_days += 1
+                                        any_suspended_today = True
                                     else:
                                         last_prices[symbol] = bar_data.get('close', 0)
 
@@ -202,6 +203,11 @@ class Backtester:
                                     prev_bars[symbol] = bar_data
                     except Exception:
                         pass
+
+            if any_suspended_today:
+                diag.suspended_days += 1
+
+            self._process_dividends(data_provider, portfolio, symbols, current_date, last_prices)
 
             for order in deferred_orders:
                 order['_deferred_days'] = order.get('_deferred_days', 0) + 1
@@ -222,6 +228,11 @@ class Backtester:
             for order in fillable:
                 sym = order['symbol']
                 bar = today_bars.get(sym, {})
+                if not bar:
+                    order['_deferred_days'] = order.get('_deferred_days', 0) + 1
+                    if order['_deferred_days'] < MAX_FILL_DEFER_DAYS:
+                        deferred_orders.append(order)
+                    continue
                 trade = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag)
                 if trade:
                     all_trades.append(trade)
@@ -280,6 +291,37 @@ class Backtester:
             metrics=metrics,
             diagnostics=diag
         )
+
+    def _process_dividends(
+        self,
+        data_provider: Any,
+        portfolio: Portfolio,
+        symbols: List[str],
+        current_date: datetime,
+        last_prices: Dict[str, float],
+    ) -> None:
+        if not data_provider or not hasattr(data_provider, 'get_dividend_for_date'):
+            return
+        for symbol in symbols:
+            pos = portfolio.get_position(symbol)
+            if not pos or pos.quantity <= 0:
+                continue
+            div = data_provider.get_dividend_for_date(symbol, current_date)
+            if not div:
+                continue
+            cash_div = float(div.get('cash_dividend', 0) or 0)
+            stock_div = float(div.get('stock_dividend', 0) or 0)
+            if cash_div > 0:
+                payment = cash_div * pos.quantity
+                portfolio.cash += payment
+                logger.info(f"{symbol} ex-div: cash {cash_div:.4f}/share x {pos.quantity} = {payment:.2f}")
+            if stock_div > 0:
+                new_shares = stock_div * pos.quantity
+                portfolio.update_position(
+                    symbol, quantity=new_shares, price=last_prices.get(symbol, 0),
+                    cost=0,
+                )
+                logger.info(f"{symbol} ex-div: stock {stock_div:.4f}/share x {pos.quantity} = {new_shares:.0f} new shares")
 
     def _update_portfolio_prices(self, portfolio: Portfolio, last_prices: Dict[str, float]) -> None:
         for symbol, pos in portfolio.positions.items():
@@ -420,6 +462,10 @@ class Backtester:
 
             portfolio.cash += fill_price * sell_qty - commission
             portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0)
+
+            pos = portfolio.get_position(symbol)
+            if pos:
+                pos.realized_pnl += realized
 
             if pos.quantity <= 0:
                 entry_times.pop(symbol, None)

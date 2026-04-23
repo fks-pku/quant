@@ -4,7 +4,7 @@
       "MSFT": {
         "symbol": "MSFT",
         "strategy_name": "default",
-        "qty": 160.0,
+        "qty": 170.0,
         "avg_cost": 300.0,
         "market_value": 0.0,
         "unrealized_pnl": 0.0
@@ -12,7 +12,7 @@
     }
   },
   "realized_pnl": {
-    "default": 63199.999999999985
+    "default": 67149.99999999999
   },
   "order_map": {
     "2F218A7A-454": "default",
@@ -88,6 +88,10 @@
     "5E355FA0-291": "default",
     "F9B3A08B-46E": "default",
     "44F82EF6-25B": "default",
-    "FA37F124-38E": "default"
+    "FA37F124-38E": "default",
+    "117418D7-E79": "default",
+    "A9D7FA0C-685": "default",
+    "0E089AEB-013": "default",
+    "4C86EE1D-1E4": "default"
   }
 }
