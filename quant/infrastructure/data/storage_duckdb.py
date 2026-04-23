@@ -24,7 +24,7 @@ from quant.shared.utils.logger import setup_logger
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
 _DEFAULT_DB = str(_PKG_DIR / "var" / "duckdb" / "quant.duckdb")
 
-BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE"
+BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE"
 BAR_INDEX = "timestamp, symbol"
 
 
@@ -42,7 +42,7 @@ class DuckDBStorage(Storage):
         self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
         if not self._read_only:
             self._conn.execute("SET threads=4")
-            for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta"):
+            for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta", "cn_dividends"):
                 self._ensure_table(table)
         self.logger.info(f"DuckDB initialized at {self.db_path} (read_only={self._read_only})")
 
@@ -122,6 +122,21 @@ class DuckDBStorage(Storage):
                     realized_pnl DOUBLE
                 )
             """)
+        elif table_name == "cn_dividends":
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS cn_dividends (
+                    symbol VARCHAR,
+                    ex_date TIMESTAMP,
+                    cash_dividend DOUBLE DEFAULT 0,
+                    stock_dividend DOUBLE DEFAULT 0,
+                    allotment_ratio DOUBLE DEFAULT 0,
+                    allotment_price DOUBLE DEFAULT 0,
+                    record_date VARCHAR DEFAULT '',
+                    pay_date VARCHAR DEFAULT '',
+                    ann_date VARCHAR DEFAULT '',
+                    PRIMARY KEY (symbol, ex_date)
+                )
+            """)
 
     @property
     def conn(self) -> duckdb.DuckDBPyConnection:
@@ -156,12 +171,18 @@ class DuckDBStorage(Storage):
             df["timestamp"] = pd.to_datetime(df["timestamp"])
         if "turnover" not in df.columns:
             df["turnover"] = pd.NA
+        for adj_col in ("adj_open", "adj_high", "adj_low", "adj_close", "adj_factor"):
+            if adj_col not in df.columns:
+                df[adj_col] = pd.NA
 
         symbol = df["symbol"].iloc[0] if "symbol" in df.columns else ""
         table_name = self._resolve_table(symbol, timeframe)
         self._ensure_table(table_name)
 
-        cols = [c for c in ["timestamp", "symbol", "open", "high", "low", "close", "volume", "turnover"] if c in df.columns]
+        cols = [c for c in [
+            "timestamp", "symbol", "open", "high", "low", "close", "volume", "turnover",
+            "adj_open", "adj_high", "adj_low", "adj_close", "adj_factor",
+        ] if c in df.columns]
         df = df[cols]
 
         with self._lock:
@@ -187,7 +208,7 @@ class DuckDBStorage(Storage):
         except Exception:
             return pd.DataFrame()
 
-        query = f"SELECT timestamp, symbol, open, high, low, close, volume FROM {table_name} WHERE symbol = ?"
+        query = f"SELECT timestamp, symbol, open, high, low, close, volume, adj_open, adj_high, adj_low, adj_close, adj_factor FROM {table_name} WHERE symbol = ?"
         params: list = [symbol]
 
         if start is not None:
@@ -384,6 +405,48 @@ class DuckDBStorage(Storage):
         if df.empty:
             return []
         return df.to_dict(orient="records")
+
+    def save_cn_dividends(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        self._ensure_table("cn_dividends")
+        df = df.copy()
+        if "ex_date" in df.columns:
+            df["ex_date"] = pd.to_datetime(df["ex_date"])
+        cols = [c for c in [
+            "symbol", "ex_date", "cash_dividend", "stock_dividend",
+            "allotment_ratio", "allotment_price", "record_date", "pay_date", "ann_date",
+        ] if c in df.columns]
+        df = df[cols]
+        df = df.drop_duplicates(subset=["symbol", "ex_date"], keep="last")
+        with self._lock:
+            symbol = df["symbol"].iloc[0] if "symbol" in df.columns else ""
+            self.conn.execute("DELETE FROM cn_dividends WHERE symbol = ?", [symbol])
+            self.conn.execute("INSERT INTO cn_dividends SELECT * FROM df")
+        self.logger.info(f"Saved {len(df)} dividend records for {symbol}")
+        return len(df)
+
+    def get_cn_dividends(
+        self,
+        symbol: Optional[str] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        self._ensure_table("cn_dividends")
+        query = "SELECT * FROM cn_dividends WHERE 1=1"
+        params: list = []
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol)
+        if start:
+            query += " AND ex_date >= ?"
+            params.append(start)
+        if end:
+            query += " AND ex_date <= ?"
+            params.append(end)
+        query += " ORDER BY ex_date ASC"
+        with self._lock:
+            return self.conn.execute(query, params).fetchdf()
 
     def close(self) -> None:
         if self._conn:

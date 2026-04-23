@@ -2,11 +2,19 @@
 
 Implements the domain DataFeed port, fetching data from Tushare Pro API
 and caching all results via the Storage port.
+
+Supports:
+- Daily bars with TRUE (unadjusted) prices for execution
+- HFQ (后复权) prices via adj_factor for signal generation
+  - HFQ price = true_price * adj_factor (adjusted from IPO base)
+- Dividend history (cash + stock dividends) for portfolio simulation
+- Index constituents (point-in-time) for universe construction
+- Stock listing info
 """
 
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -107,11 +115,34 @@ class TushareProvider(DataProvider):
     def _from_ts_code(ts_code: str) -> str:
         return ts_code.split(".")[0]
 
+    _MAX_DAYS_PER_REQUEST = 2800
+
     def _fetch_daily(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         if self._api is None:
             return pd.DataFrame()
 
         ts_code = self._to_ts_code(symbol)
+        total_days = (end - start).days
+        if total_days <= self._MAX_DAYS_PER_REQUEST:
+            return self._fetch_daily_chunk(symbol, ts_code, start, end)
+
+        chunks: List[pd.DataFrame] = []
+        chunk_start = start
+        from datetime import timedelta
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=self._MAX_DAYS_PER_REQUEST), end)
+            chunk_df = self._fetch_daily_chunk(symbol, ts_code, chunk_start, chunk_end)
+            if not chunk_df.empty:
+                chunks.append(chunk_df)
+            chunk_start = chunk_end + timedelta(days=1)
+
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).drop_duplicates(
+            subset=["timestamp", "symbol"],
+        ).sort_values("timestamp").reset_index(drop=True)
+
+    def _fetch_daily_chunk(self, symbol: str, ts_code: str, start: datetime, end: datetime) -> pd.DataFrame:
         start_str = start.strftime("%Y%m%d")
         end_str = end.strftime("%Y%m%d")
 
@@ -127,7 +158,7 @@ class TushareProvider(DataProvider):
                     ts_code=ts_code, start_date=start_str, end_date=end_str,
                 )
         except Exception as e:
-            self.logger.warning(f"Error fetching bars for {symbol}: {e}")
+            self.logger.warning(f"Error fetching bars for {symbol} ({start_str}-{end_str}): {e}")
             return pd.DataFrame()
 
         if df is None or df.empty:
@@ -211,6 +242,217 @@ class TushareProvider(DataProvider):
         if not fresh.empty and self._storage is not None:
             self._storage.save_bars(fresh, timeframe)
         return fresh
+
+    def fetch_adj_factor(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        """Fetch HFQ adjustment factors for a stock.
+
+        Returns DataFrame with columns: trade_date, adj_factor
+        HFQ price = true_price * adj_factor
+        """
+        if self._api is None or self._is_index(symbol):
+            return pd.DataFrame()
+
+        ts_code = self._to_ts_code(symbol)
+        total_days = (end - start).days
+        if total_days <= self._MAX_DAYS_PER_REQUEST:
+            return self._fetch_adj_factor_chunk(ts_code, symbol, start, end)
+
+        chunks: List[pd.DataFrame] = []
+        chunk_start = start
+        from datetime import timedelta
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=self._MAX_DAYS_PER_REQUEST), end)
+            chunk_df = self._fetch_adj_factor_chunk(ts_code, symbol, chunk_start, chunk_end)
+            if not chunk_df.empty:
+                chunks.append(chunk_df)
+            chunk_start = chunk_end + timedelta(days=1)
+
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).drop_duplicates(
+            subset=["timestamp", "symbol"],
+        ).sort_values("timestamp").reset_index(drop=True)
+
+    def _fetch_adj_factor_chunk(self, ts_code: str, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        start_str = start.strftime("%Y%m%d")
+        end_str = end.strftime("%Y%m%d")
+
+        self._rate_limit()
+        try:
+            df = self._api.adj_factor(
+                ts_code=ts_code, start_date=start_str, end_date=end_str,
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching adj_factor for {symbol} ({start_str}-{end_str}): {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.rename(columns={"trade_date": "timestamp"})
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y%m%d")
+        df["symbol"] = symbol
+        df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
+        return df[["timestamp", "symbol", "adj_factor"]].sort_values("timestamp").reset_index(drop=True)
+
+    def fetch_dividends(self, symbol: str) -> pd.DataFrame:
+        """Fetch dividend history for a stock.
+
+        Only returns implemented dividends (div_proc=='实施').
+        All per-share amounts are divided by 10 (Tushare reports per 10 shares).
+
+        Returns DataFrame with columns:
+        - symbol, ex_date, cash_dividend (每股派息, per share),
+        - stock_dividend (每股送股, shares per share),
+        - allotment_ratio (每股配股), allotment_price (配股价格),
+        - record_date, pay_date, ann_date
+        """
+        if self._api is None or self._is_index(symbol):
+            return pd.DataFrame()
+
+        ts_code = self._to_ts_code(symbol)
+        self._rate_limit()
+        try:
+            df = self._api.dividend(ts_code=ts_code)
+        except Exception as e:
+            self.logger.warning(f"Error fetching dividends for {symbol}: {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.copy()
+        if "div_proc" in df.columns:
+            df = df[df["div_proc"] == "实施"]
+        if df.empty:
+            return pd.DataFrame()
+
+        df["symbol"] = df["ts_code"].apply(self._from_ts_code)
+        df["ex_date"] = pd.to_datetime(df["ex_date"], format="%Y%m%d", errors="coerce")
+        df = df.dropna(subset=["ex_date"])
+        df = df[df["ex_date"] > pd.Timestamp("2000-01-01")]
+
+        df["cash_dividend"] = pd.to_numeric(df.get("cash_div", pd.Series(dtype=float)), errors="coerce").fillna(0) / 10.0
+        df["stock_dividend"] = pd.to_numeric(df.get("stk_div", pd.Series(dtype=float)), errors="coerce").fillna(0) / 10.0
+        df["allotment_ratio"] = pd.to_numeric(df.get("stk_co_rate", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        df["allotment_price"] = pd.to_numeric(df.get("allot_price", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        for col in ("record_date", "pay_date", "ann_date"):
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str)
+            else:
+                df[col] = ""
+
+        df = df.dropna(subset=["ex_date"])
+        df = df[df["ex_date"] > pd.Timestamp("2000-01-01")]
+
+        return df[[
+            "symbol", "ex_date", "cash_dividend", "stock_dividend",
+            "allotment_ratio", "allotment_price", "record_date", "pay_date", "ann_date",
+        ]].sort_values("ex_date").reset_index(drop=True)
+
+    def fetch_index_constituents(self, index_code: str, trade_date: Optional[str] = None) -> List[str]:
+        """Fetch index constituent stock codes for a given date.
+
+        Args:
+            index_code: Index code like '000300', '000905'
+            trade_date: Date in YYYYMMDD format. If None, tries recent month-ends.
+
+        Returns:
+            List of stock symbols (6-digit strings)
+        """
+        if self._api is None:
+            return []
+
+        ts_code = self._to_ts_code(index_code)
+
+        dates_to_try: List[str] = []
+        if trade_date:
+            dates_to_try = [trade_date]
+        else:
+            from calendar import monthrange
+            today = datetime.now()
+            for _ in range(12):
+                y, m = today.year, today.month
+                last_day = monthrange(y, m)[1]
+                dates_to_try.append(f"{y}{m:02d}{last_day:02d}")
+                m -= 1
+                if m == 0:
+                    m = 12
+                    y -= 1
+                today = today.replace(year=y, month=m, day=1)
+
+        for td in dates_to_try:
+            self._rate_limit()
+            try:
+                df = self._api.index_weight(index_code=ts_code, trade_date=td)
+                if df is not None and not df.empty:
+                    self.logger.info(f"Got {len(df)} constituents for {index_code} on {td}")
+                    return sorted(df["con_code"].apply(self._from_ts_code).unique().tolist())
+            except Exception as e:
+                self.logger.warning(f"index_weight {index_code} date={td}: {e}")
+                continue
+
+        self.logger.warning(f"No constituents found for {index_code} after trying {len(dates_to_try)} dates")
+        return []
+
+    def fetch_stock_list(self, status: str = "L") -> pd.DataFrame:
+        """Fetch all A-share stock basic info.
+
+        Returns DataFrame with columns: symbol, name, market, list_date
+        """
+        if self._api is None:
+            return pd.DataFrame()
+
+        self._rate_limit()
+        try:
+            df = self._api.stock_basic(
+                exchange="", list_status=status,
+                fields="ts_code,symbol,name,area,industry,market,list_date",
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching stock list: {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.copy()
+        df["symbol"] = df["ts_code"].apply(self._from_ts_code)
+        return df
+
+    def fetch_daily_with_hfq(
+        self, symbol: str, start: datetime, end: datetime,
+    ) -> pd.DataFrame:
+        """Fetch daily bars with both true prices and HFQ adjusted prices.
+
+        Returns DataFrame with columns:
+        - timestamp, symbol, open, high, low, close, volume, turnover (true prices)
+        - adj_open, adj_high, adj_low, adj_close, adj_factor (HFQ adjusted)
+        """
+        bars = self._fetch_daily(symbol, start, end)
+        if bars.empty:
+            return bars
+
+        if self._is_index(symbol):
+            bars["adj_open"] = bars["open"]
+            bars["adj_high"] = bars["high"]
+            bars["adj_low"] = bars["low"]
+            bars["adj_close"] = bars["close"]
+            bars["adj_factor"] = 1.0
+            return bars
+
+        factors = self.fetch_adj_factor(symbol, start, end)
+        if factors.empty:
+            self.logger.warning(f"No adj_factor for {symbol}, using identity")
+            bars["adj_factor"] = 1.0
+        else:
+            bars = bars.merge(factors[["timestamp", "adj_factor"]], on="timestamp", how="left")
+            bars["adj_factor"] = bars["adj_factor"].ffill().bfill().fillna(1.0)
+
+        for col in ("open", "high", "low", "close"):
+            bars[f"adj_{col}"] = bars[col] * bars["adj_factor"]
+
+        return bars
 
     def get_quote(self, symbol: str) -> dict:
         if not self._connected:
