@@ -113,6 +113,17 @@ class Backtester:
         data_provider: Any = None,
         symbols: Optional[List[str]] = None,
     ) -> BacktestResult:
+        """Run backtest with T+1 execution.
+
+        Daily loop execution order (DO NOT REORDER — prevents look-ahead bias):
+          1. Feed today's bars to strategies → strategies generate signals
+          2. Fill deferred orders from YESTERDAY's signals at today's open price (T+1)
+          3. Collect NEW orders generated today → defer for tomorrow
+          4. Update portfolio prices, record NAV
+
+        Because step 2 runs before step 3, orders are always filled one day
+        after the signal, using the fill day's open price.
+        """
         portfolio = Portfolio(initial_cash=initial_cash, currency="USD")
         risk_engine = RiskEngine(self.config, portfolio, self.event_bus)
         symbols = symbols or []
@@ -463,11 +474,11 @@ class Backtester:
             portfolio.cash += fill_price * sell_qty - commission
             portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0)
 
-            pos = portfolio.get_position(symbol)
-            if pos:
-                pos.realized_pnl += realized
+            updated_pos = portfolio.get_position(symbol)
+            if updated_pos:
+                updated_pos.realized_pnl += realized
 
-            if pos.quantity <= 0:
+            if updated_pos is None or updated_pos.quantity <= 0:
                 entry_times.pop(symbol, None)
                 entry_prices.pop(symbol, None)
 

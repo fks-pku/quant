@@ -26,13 +26,13 @@ def calculate_sortino(returns: pd.Series, periods_per_year: int = 252) -> float:
     """Annualized Sortino ratio (downside deviation)."""
     if returns.empty:
         return 0.0
-    
-    downside_returns = returns[returns < 0]
-    if downside_returns.empty or downside_returns.std() == 0:
-        return 0.0
-    
-    downside_std = downside_returns.std()
-    return np.sqrt(periods_per_year) * returns.mean() / downside_std
+
+    downside_sq = np.minimum(returns, 0) ** 2
+    downside_dev = np.sqrt(downside_sq.mean())
+    if downside_dev == 0:
+        return float('inf') if returns.mean() > 0 else 0.0
+
+    return np.sqrt(periods_per_year) * returns.mean() / downside_dev
 
 
 def calculate_max_drawdown(equity_curve: pd.Series) -> Tuple[float, float, datetime, datetime]:

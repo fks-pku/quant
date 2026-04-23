@@ -153,8 +153,14 @@ class WalkForwardEngine:
         pct_profitable = float(len([w for w in window_results if w.test_return > 0]) / len(window_results)) if window_results else 0.0
         
         is_viable = avg_test > 0.5 and sharpe_degradation < 0.5 and pct_profitable > 0.5
-        
-        best_params = window_results[np.argmax([w.test_sharpe for w in window_results])].params
+
+        from collections import Counter
+        param_tuples = [tuple(sorted(w.params.items())) for w in window_results if w.params]
+        if param_tuples:
+            most_common_tuple, _ = Counter(param_tuples).most_common(1)[0]
+            best_params = dict(most_common_tuple)
+        else:
+            best_params = {}
         
         return WFResult(
             windows=window_results,
