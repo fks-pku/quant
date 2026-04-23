@@ -2,7 +2,7 @@ import uuid
 import threading
 from flask import Blueprint, jsonify, request
 
-from quant.features.research.models import ResearchConfig
+from quant.features.research.models import ResearchConfig, ResearchResult
 from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
@@ -86,15 +86,16 @@ def run_research():
 
     def _run():
         try:
-            result = engine.run_full_pipeline(sources=sources)
+            engine.run_full_pipeline(sources=sources, result=result_obj)
             with _research_lock:
-                _research_jobs[job_id] = {"status": "completed", "result": result}
+                _research_jobs[job_id]["status"] = "completed"
         except Exception as e:
             with _research_lock:
                 _research_jobs[job_id] = {"status": "error", "error": str(e)}
 
+    result_obj = ResearchResult()
     with _research_lock:
-        _research_jobs[job_id] = {"status": "running"}
+        _research_jobs[job_id] = {"status": "running", "result": result_obj}
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
@@ -108,16 +109,9 @@ def get_research_status(research_id):
     if job is None:
         return jsonify({"error": "Research job not found"}), 404
     response = {"research_id": research_id, "status": job["status"]}
-    if job["status"] == "completed":
-        result = job["result"]
-        response["result"] = {
-            "discovered": result.discovered,
-            "evaluated": result.evaluated,
-            "integrated": result.integrated,
-            "backtested": result.backtested,
-            "rejected": result.rejected,
-            "errors": result.errors,
-        }
+    result = job.get("result")
+    if result is not None:
+        response["result"] = result.to_dict()
     elif job["status"] == "error":
         response["error"] = job.get("error", "Unknown error")
     return jsonify(response)

@@ -25,6 +25,28 @@ class EvaluationReport:
 
 
 @dataclass
+class ResearchLogEntry:
+    phase: str
+    title: str
+    source: str
+    source_url: str
+    verdict: str
+    reason: str
+    scores: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "phase": self.phase,
+            "title": self.title,
+            "source": self.source,
+            "source_url": self.source_url,
+            "verdict": self.verdict,
+            "reason": self.reason,
+            "scores": self.scores,
+        }
+
+
+@dataclass
 class ResearchConfig:
     auto_run: bool = False
     interval_days: int = 7
@@ -53,3 +75,16 @@ class ResearchResult:
     promoted_auto: int = 0
     rejected: int = 0
     errors: List[str] = field(default_factory=list)
+    log: List[ResearchLogEntry] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "discovered": self.discovered,
+            "evaluated": self.evaluated,
+            "integrated": self.integrated,
+            "backtested": self.backtested,
+            "promoted_auto": self.promoted_auto,
+            "rejected": self.rejected,
+            "errors": self.errors,
+            "log": [e.to_dict() for e in self.log],
+        }

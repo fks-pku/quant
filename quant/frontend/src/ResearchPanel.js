@@ -157,14 +157,49 @@ export default function ResearchPanel() {
 
       {researchStatus && (
         <div className={`rs-job-bar ${researchStatus.status === 'error' ? 'rs-job-error' : ''}`}>
-          {researchStatus.status === 'running' && 'Scanning sources and evaluating strategies...'}
+          {researchStatus.status === 'running' && (
+            <div className="rs-progress-header">
+              <span className="rs-spinner" /> Scanning sources and evaluating strategies...
+            </div>
+          )}
           {researchStatus.status === 'completed' && researchStatus.result && (
-            <>
+            <div className="rs-progress-header">
               Done: {researchStatus.result.discovered} discovered, {researchStatus.result.evaluated} evaluated, {researchStatus.result.integrated} integrated
               {researchStatus.result.errors.length > 0 && ` (${researchStatus.result.errors.length} errors)`}
-            </>
+            </div>
           )}
           {researchStatus.status === 'error' && `Error: ${researchStatus.error}`}
+          {researchStatus.result && researchStatus.result.log && researchStatus.result.log.length > 0 && (
+            <div className="rs-log">
+              {researchStatus.result.log.map((entry, i) => (
+                <div key={i} className={`rs-log-entry rs-log-${entry.verdict}`}>
+                  <span className="rs-log-phase">{entry.phase.toUpperCase()}</span>
+                  <span className={`rs-log-verdict rs-log-verdict-${entry.verdict}`}>
+                    {entry.verdict === 'pass' ? 'PASS' : entry.verdict === 'fail' ? 'FAIL' : entry.verdict === 'error' ? 'ERR' : entry.verdict === 'info' ? 'INFO' : entry.verdict}
+                  </span>
+                  <span className="rs-log-title" title={entry.title}>
+                    {entry.title.length > 80 ? entry.title.slice(0, 77) + '...' : entry.title}
+                  </span>
+                  {entry.source && (
+                    <span className="rs-log-source" style={{ color: SOURCE_COLORS[entry.source] || SOURCE_COLORS.default }}>
+                      {entry.source}
+                    </span>
+                  )}
+                  <span className="rs-log-reason">{entry.reason}</span>
+                  {entry.scores && entry.scores.suitability != null && (
+                    <span className="rs-log-scores">
+                      S:{entry.scores.suitability.toFixed(1)} C:{entry.scores.complexity?.toFixed(1) || '-'} E:{entry.scores.edge != null ? (entry.scores.edge * 100).toFixed(1) + '%' : '-'}
+                    </span>
+                  )}
+                  {entry.scores && entry.scores.sharpe != null && (
+                    <span className="rs-log-scores">
+                      Sharpe:{entry.scores.sharpe} DD:{entry.scores.max_dd}% WR:{entry.scores.win_rate}%
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

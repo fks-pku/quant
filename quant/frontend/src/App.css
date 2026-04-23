@@ -2060,6 +2060,109 @@ body {
   border-radius: 8px;
   font-size: 12px;
   color: var(--text-secondary);
+  max-height: 320px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.rs-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.rs-log {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+
+.rs-log-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.rs-log-entry:hover {
+  background: var(--bg-tertiary);
+}
+
+.rs-log-phase {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.rs-log-verdict {
+  font-weight: 700;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.rs-log-verdict-pass {
+  background: rgba(0, 255, 136, 0.15);
+  color: var(--accent-green);
+}
+
+.rs-log-verdict-fail {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--accent-red);
+}
+
+.rs-log-verdict-error {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--accent-red);
+}
+
+.rs-log-verdict-info {
+  background: rgba(0, 212, 255, 0.15);
+  color: var(--accent-cyan);
+}
+
+.rs-log-title {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.rs-log-source {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.rs-log-reason {
+  color: var(--text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rs-log-scores {
+  color: var(--accent-cyan);
+  font-size: 10px;
+  flex-shrink: 0;
 }
 
 .rs-job-error {
