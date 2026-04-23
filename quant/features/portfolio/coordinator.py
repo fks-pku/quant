@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 import logging
 
-from quant.features.trading.risk import RiskCheckResult
-from quant.shared.models.position import Position
-from quant.shared.models.order import Order
+from quant.domain.models.risk_check import RiskCheckResult
+from quant.domain.models.position import Position
+from quant.domain.models.order import Order
 
 
 logger = logging.getLogger(__name__)

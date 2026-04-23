@@ -7,7 +7,7 @@ import threading
 
 import pandas as pd
 
-from quant.shared.models.position import Position
+from quant.domain.models.position import Position
 
 
 __all__ = ["Position", "PortfolioSnapshot", "Portfolio"]

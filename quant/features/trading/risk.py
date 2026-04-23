@@ -6,19 +6,10 @@ from typing import Dict, List, Optional, Tuple
 import threading
 import time
 
+from quant.domain.models.risk_check import RiskCheckResult
+from quant.domain.ports.event_publisher import EventPublisher
 from quant.features.trading.portfolio import Portfolio
 from quant.shared.utils.logger import setup_logger
-
-
-@dataclass
-class RiskCheckResult:
-    """Result of a risk check."""
-    passed: bool
-    is_hard_limit: bool
-    check_name: str
-    message: str
-    current_value: float
-    limit_value: float
 
 
 class RiskEngine:

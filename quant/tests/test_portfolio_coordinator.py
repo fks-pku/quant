@@ -3,8 +3,8 @@
 import pytest
 
 from quant.features.portfolio.coordinator import PortfolioCoordinator, StrategyAllocation
-from quant.shared.models.position import Position
-from quant.shared.models.order import Order
+from quant.domain.models.position import Position
+from quant.domain.models.order import Order
 
 
 def _make_coordinator():

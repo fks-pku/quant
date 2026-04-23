@@ -152,8 +152,7 @@ class ResearchEngine:
                 backtester = Backtester(config)
                 bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=100000, data_provider=data_provider, symbols=symbols)
 
-                from quant.api.state.runtime import AVAILABLE_STRATEGIES
-                for name, info in AVAILABLE_STRATEGIES.items():
+                for name, info in self.integrator._registry.items():
                     if info["id"] == sid:
                         info["backtest"] = {
                             "sharpe": round(bt_result.sharpe_ratio, 2),

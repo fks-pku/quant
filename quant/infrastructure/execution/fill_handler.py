@@ -1,34 +1,28 @@
 """Fill processing and reconciliation with portfolio updates."""
 
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional
 import threading
 
-from quant.shared.models.fill import Fill
-from quant.shared.models.order import OrderStatus
+from quant.domain.models.fill import Fill
+from quant.domain.models.order import OrderStatus
+from quant.domain.ports.event_publisher import EventPublisher
 from quant.shared.utils.logger import setup_logger
-
-if TYPE_CHECKING:
-    from quant.features.trading.portfolio import Portfolio
-    from quant.infrastructure.events import EventBus
 
 
 class FillHandler:
-    """
-    Reconciles broker fills with local order state.
-    Updates portfolio positions.
-    Triggers strategy callbacks on fill events.
-    """
 
     def __init__(
         self,
-        portfolio: "Portfolio",
-        event_bus: "EventBus",
+        portfolio: Any,
+        event_bus: EventPublisher,
         config: Dict[str, Any],
+        strategy_tracker: Any = None,
     ):
         self.portfolio = portfolio
         self.event_bus = event_bus
         self.config = config
+        self._strategy_tracker = strategy_tracker
 
         self._fills: List[Fill] = []
         self._fill_callbacks: List[Callable] = []
@@ -36,7 +30,6 @@ class FillHandler:
         self.logger = setup_logger("FillHandler")
 
     def register_fill_callback(self, callback: Callable) -> None:
-        """Register a callback to be called on each fill."""
         self._fill_callbacks.append(callback)
 
     def process_fill(
@@ -112,12 +105,10 @@ class FillHandler:
                 self.logger.error(f"Error in fill callback: {e}")
 
     def _publish_fill_event(self, fill: Fill) -> None:
-        """Publish fill event to the event bus."""
-        from quant.infrastructure.events import EventType
+        from quant.domain.events.base import EventType
 
-        self.event_bus.publish_nowait(
-            EventType.ORDER_FILL,
-            {
+        if self.event_bus:
+            self.event_bus.publish_nowait(EventType.ORDER_FILLED, {
                 "order_id": fill.order_id,
                 "symbol": fill.symbol,
                 "side": fill.side,
@@ -125,15 +116,15 @@ class FillHandler:
                 "price": fill.price,
                 "commission": fill.commission,
                 "timestamp": fill.timestamp,
-            }
-        )
+                "strategy_name": fill.strategy_name,
+            })
 
     def _update_tracker(self, fill: Fill) -> None:
+        if self._strategy_tracker is None:
+            return
         try:
-            from quant.features.portfolio.tracker import get_tracker
-            tracker = get_tracker()
-            strategy = fill.strategy_name or tracker.get_strategy_for_order(fill.order_id)
-            tracker.update_from_fill(
+            strategy = fill.strategy_name or self._strategy_tracker.get_strategy_for_order(fill.order_id)
+            self._strategy_tracker.update_from_fill(
                 strategy_name=strategy,
                 symbol=fill.symbol,
                 side=fill.side,

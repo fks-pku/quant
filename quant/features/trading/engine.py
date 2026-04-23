@@ -7,7 +7,8 @@ from typing import Dict, List, Optional, Any
 import threading
 import time
 
-from quant.infrastructure.events import EventBus, EventType
+from quant.domain.ports.event_publisher import EventPublisher
+from quant.domain.events.base import EventType
 from quant.features.trading.scheduler import Scheduler
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
@@ -26,7 +27,7 @@ class Context:
     """Strategy context providing access to system components."""
     portfolio: Portfolio
     risk_engine: RiskEngine
-    event_bus: EventBus
+    event_bus: EventPublisher
     order_manager: Any
     data_provider: Any
     broker: Any
@@ -35,12 +36,15 @@ class Context:
 class Engine:
     """Main event loop and orchestration engine."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None):
         self.config = config
         self.mode = SystemMode(config.get("system", {}).get("mode", "paper"))
         self.logger = setup_logger("Engine", config.get("system", {}).get("log_level", "INFO"))
 
-        self.event_bus = EventBus()
+        if event_bus is None:
+            from quant.infrastructure.events import EventBus
+            event_bus = EventBus()
+        self.event_bus = event_bus
         self.portfolio = Portfolio(
             initial_cash=config.get("system", {}).get("initial_cash", 100000),
             currency=config.get("system", {}).get("currency", "USD"),

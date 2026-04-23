@@ -30,9 +30,10 @@ def run_backtest():
             import pandas as pd
             from quant.features.backtest.engine import Backtester
             from quant.features.strategies.registry import StrategyRegistry
+            from quant.domain.ports.storage import Storage
             from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 
-            db = DuckDBStorage(read_only=True)
+            db: Storage = DuckDBStorage(read_only=True)
 
             all_data = []
             missing_symbols = []

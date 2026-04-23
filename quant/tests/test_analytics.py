@@ -18,7 +18,7 @@ from quant.features.backtest.analytics import (
     calculate_statistical_significance,
     calculate_performance_metrics,
 )
-from quant.shared.models.trade import Trade
+from quant.domain.models.trade import Trade
 
 
 def _make_equity_curve(initial=100000, days=100, daily_return=0.001):

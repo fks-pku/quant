@@ -2,25 +2,20 @@
 
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional
 import threading
 import time
 import uuid
 
 from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
 from quant.domain.ports.broker import BrokerAdapter
+from quant.domain.ports.event_publisher import EventPublisher
+from quant.domain.events.base import EventType, Event
 from quant.shared.utils.logger import setup_logger
-
-from quant.infrastructure.events import EventBus, EventType
-
-if TYPE_CHECKING:
-    from quant.features.trading.portfolio import Portfolio
-    from quant.features.trading.risk import RiskEngine
 
 
 @dataclass
 class OrderRequest:
-    """Internal order request before submission."""
     symbol: str
     quantity: float
     side: str
@@ -31,22 +26,20 @@ class OrderRequest:
 
 
 class OrderManager:
-    """
-    Routes orders to appropriate broker adapters.
-    Maintains order state machine with retry logic.
-    """
 
     def __init__(
         self,
-        portfolio: "Portfolio",
-        risk_engine: "RiskEngine",
-        event_bus: Any,
+        portfolio: Any,
+        risk_engine: Any,
+        event_bus: EventPublisher,
         config: Dict[str, Any],
+        strategy_tracker: Any = None,
     ):
         self.portfolio = portfolio
         self.risk_engine = risk_engine
         self.event_bus = event_bus
         self.config = config
+        self._strategy_tracker = strategy_tracker
 
         self._brokers: Dict[str, BrokerAdapter] = {}
         self._orders: Dict[str, Order] = {}
@@ -102,7 +95,7 @@ class OrderManager:
         if not approved:
             self.logger.warning(f"Order rejected by risk engine: {symbol} {side} {quantity}")
             self.event_bus.publish_nowait(
-                EventType.ORDER_REJECT,
+                EventType.ORDER_REJECTED,
                 {
                     "symbol": symbol,
                     "quantity": quantity,
@@ -151,7 +144,7 @@ class OrderManager:
                 self.logger.info(f"Order submitted: {broker_order_id} {order.symbol} {order.side} {order.quantity}")
 
                 self.event_bus.publish_nowait(
-                    EventType.ORDER_SUBMIT,
+                    EventType.ORDER_SUBMITTED,
                     {
                         "order_id": broker_order_id,
                         "symbol": order.symbol,
@@ -252,8 +245,9 @@ class OrderManager:
         return 100.0
 
     def _record_strategy(self, order_id: str, strategy_name: Optional[str]) -> None:
+        if self._strategy_tracker is None:
+            return
         try:
-            from quant.features.portfolio.tracker import get_tracker
-            get_tracker().record_order(order_id, strategy_name)
+            self._strategy_tracker.record_order(order_id, strategy_name)
         except Exception:
             pass

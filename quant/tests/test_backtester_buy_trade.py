@@ -4,7 +4,7 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 from quant.features.backtest.engine import Backtester
-from quant.shared.models.trade import Trade
+from quant.domain.models.trade import Trade
 
 
 def _make_backtester():

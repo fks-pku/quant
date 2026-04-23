@@ -1,7 +1,7 @@
 """Tests for Strategy base class on_fill accumulation."""
 
 from quant.features.strategies.base import Strategy
-from quant.shared.models.fill import Fill
+from quant.domain.models.fill import Fill
 from datetime import datetime
 
 

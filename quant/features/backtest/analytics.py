@@ -6,7 +6,7 @@ from typing import List, Tuple
 import pandas as pd
 import numpy as np
 
-from quant.shared.models.trade import Trade
+from quant.domain.models.trade import Trade
 
 
 __all__ = ["Trade", "calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
