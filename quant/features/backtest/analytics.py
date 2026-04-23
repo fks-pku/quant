@@ -74,31 +74,39 @@ def calculate_calmar(returns: pd.Series, max_dd: float, periods_per_year: int = 
     return annualized_return / abs(max_dd)
 
 
+def _round_trip_trades(trades: List[Trade]) -> List[Trade]:
+    """Filter to SELL-side trades only — these represent completed round-trips."""
+    return [t for t in trades if t.side == "SELL"]
+
+
 def calculate_win_rate(trades: List[Trade]) -> float:
-    """Percentage of profitable trades."""
-    if not trades:
+    """Percentage of profitable round-trip trades."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    winning_trades = sum(1 for t in trades if t.pnl > 0)
-    return winning_trades / len(trades)
+    winning_trades = sum(1 for t in rt if t.pnl > 0)
+    return winning_trades / len(rt)
 
 
 def calculate_profit_factor(trades: List[Trade]) -> float:
-    """Gross profit / gross loss."""
-    if not trades:
+    """Gross profit / gross loss (round-trip trades only)."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
-    gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
+    gross_profit = sum(t.pnl for t in rt if t.pnl > 0)
+    gross_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     if gross_loss == 0:
         return float('inf') if gross_profit > 0 else 0.0
     return gross_profit / gross_loss
 
 
 def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
-    """Average holding period."""
-    if not trades:
+    """Average holding period (round-trip trades only)."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return timedelta(0)
     durations = []
-    for t in trades:
+    for t in rt:
         d = t.exit_time - t.entry_time
         if not isinstance(d, timedelta):
             d = timedelta(seconds=int(d.total_seconds()) if hasattr(d, 'total_seconds') else int(d))
@@ -106,7 +114,7 @@ def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
     total_duration = timedelta(0)
     for d in durations:
         total_duration += d
-    return total_duration / len(trades)
+    return total_duration / len(rt)
 
 
 def calculate_max_adverse_excursion(trades: List[Trade]) -> float:
@@ -153,11 +161,12 @@ def calculate_downside_deviation(returns: pd.Series) -> float:
 
 
 def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
-    """Sum of gains / absolute value of sum of losses."""
-    if not trades:
+    """Sum of gains / absolute value of sum of losses (round-trip only)."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    total_gain = sum(t.pnl for t in trades if t.pnl > 0)
-    total_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
+    total_gain = sum(t.pnl for t in rt if t.pnl > 0)
+    total_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     if total_loss == 0:
         return float('inf') if total_gain > 0 else 0.0
     return total_gain / total_loss
@@ -175,45 +184,48 @@ def calculate_tail_ratio(returns: pd.Series) -> float:
 
 
 def calculate_recovery_factor(trades: List[Trade], max_dd: float) -> float:
-    """Total profit / max drawdown."""
-    if not trades:
+    """Total profit / max drawdown (round-trip only)."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    total_profit = sum(t.pnl for t in trades)
+    total_profit = sum(t.pnl for t in rt)
     if max_dd == 0:
         return float('inf') if total_profit > 0 else 0.0
     return total_profit / abs(max_dd)
 
 
 def calculate_payoff_ratio(trades: List[Trade]) -> float:
-    """Average win / average loss."""
-    winning_trades = [t.pnl for t in trades if t.pnl > 0]
-    losing_trades = [t.pnl for t in trades if t.pnl < 0]
-    
+    """Average win / average loss (round-trip only)."""
+    rt = _round_trip_trades(trades)
+    winning_trades = [t.pnl for t in rt if t.pnl > 0]
+    losing_trades = [t.pnl for t in rt if t.pnl < 0]
+
     if not winning_trades or not losing_trades:
         return 0.0
-    
+
     avg_win = sum(winning_trades) / len(winning_trades)
     avg_loss = abs(sum(losing_trades) / len(losing_trades))
-    
+
     if avg_loss == 0:
         return float('inf') if avg_win > 0 else 0.0
     return avg_win / avg_loss
 
 
 def calculate_expectancy(trades: List[Trade]) -> float:
-    """Expected value per trade = win_rate * avg_win - loss_rate * avg_loss."""
-    if not trades:
+    """Expected value per round-trip trade = win_rate * avg_win - loss_rate * avg_loss."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    
-    winning_trades = [t.pnl for t in trades if t.pnl > 0]
-    losing_trades = [t.pnl for t in trades if t.pnl < 0]
-    
-    win_rate = len(winning_trades) / len(trades)
-    loss_rate = len(losing_trades) / len(trades)
-    
+
+    winning_trades = [t.pnl for t in rt if t.pnl > 0]
+    losing_trades = [t.pnl for t in rt if t.pnl < 0]
+
+    win_rate = len(winning_trades) / len(rt)
+    loss_rate = len(losing_trades) / len(rt)
+
     avg_win = sum(winning_trades) / len(winning_trades) if winning_trades else 0
     avg_loss = abs(sum(losing_trades) / len(losing_trades)) if losing_trades else 0
-    
+
     return win_rate * avg_win - loss_rate * avg_loss
 
 
@@ -334,8 +346,8 @@ def calculate_performance_metrics(
     expectancy = calculate_expectancy(trades)
     avg_duration = calculate_avg_trade_duration(trades)
     
-    winning_trades = len([t for t in trades if t.pnl > 0])
-    losing_trades = len([t for t in trades if t.pnl < 0])
+    winning_trades = len([t for t in trades if t.pnl > 0 and t.side == "SELL"])
+    losing_trades = len([t for t in trades if t.pnl < 0 and t.side == "SELL"])
     
     rolling_sharpe = calculate_rolling_sharpe(returns)
     ulcer_idx = calculate_ulcer_index(equity_curve)

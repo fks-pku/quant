@@ -237,11 +237,14 @@ class WalkForwardEngine:
 class DataFrameProvider:
     """In-memory data provider for backtesting, with pre-indexed lookup."""
     
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame, dividends: Optional[pd.DataFrame] = None):
         self.data = data
+        self.dividends = dividends if dividends is not None else pd.DataFrame()
         self._bar_map: Dict[tuple, Dict] = {}
         self._trading_dates: set = set()
+        self._dividend_map: Dict[tuple, Dict] = {}
         self._build_index()
+        self._build_dividend_index()
 
     def _build_index(self) -> None:
         if self.data.empty:
@@ -262,6 +265,20 @@ class DataFrameProvider:
             dt = datetime(ts.year, ts.month, ts.day) if hasattr(ts, 'year') else ts
             self._trading_dates.add(dt)
 
+    def _build_dividend_index(self) -> None:
+        if self.dividends.empty:
+            return
+        df = self.dividends.copy()
+        if 'ex_date' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['ex_date']):
+            df['ex_date'] = pd.to_datetime(df['ex_date'])
+        for _, row in df.iterrows():
+            if 'ex_date' not in row or pd.isna(row['ex_date']):
+                continue
+            sym = row.get('symbol', '')
+            ex_dt = row['ex_date']
+            key = ex_dt.date() if hasattr(ex_dt, 'date') else ex_dt
+            self._dividend_map[(sym, key)] = row.to_dict()
+
     @property
     def trading_dates(self) -> set:
         return self._trading_dates
@@ -277,6 +294,11 @@ class DataFrameProvider:
         """O(1) lookup for a single bar by symbol + date."""
         key = date.date() if hasattr(date, 'date') else date
         return self._bar_map.get((symbol, key))
+
+    def get_dividend_for_date(self, symbol: str, date) -> Optional[Dict]:
+        """O(1) lookup for dividend by symbol + ex_date."""
+        key = date.date() if hasattr(date, 'date') else date
+        return self._dividend_map.get((symbol, key))
 
     def validate(self) -> List[str]:
         """Check data quality. Returns list of warning messages."""
