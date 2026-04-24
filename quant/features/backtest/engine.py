@@ -179,8 +179,7 @@ class Backtester:
 
                             if bar_data['_suspended']:
                                 any_suspended_today = True
-                            else:
-                                last_prices[symbol] = bar_data.get('close', 0)
+                            last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0))
 
                             for strategy in strategies:
                                 if hasattr(strategy, "on_data"):
@@ -204,8 +203,7 @@ class Backtester:
 
                                     if bar_data['_suspended']:
                                         any_suspended_today = True
-                                    else:
-                                        last_prices[symbol] = bar_data.get('close', 0)
+                                    last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0))
 
                                     for strategy in strategies:
                                         if hasattr(strategy, "on_data"):

@@ -22,7 +22,7 @@ class Position:
 
     @property
     def is_flat(self) -> bool:
-        return self.quantity == 0
+        return abs(self.quantity) < 1e-10
 
     @property
     def cost_basis(self) -> float:

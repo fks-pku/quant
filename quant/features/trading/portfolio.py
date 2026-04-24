@@ -43,7 +43,8 @@ class Portfolio:
     @property
     def nav(self) -> float:
         """Net Asset Value."""
-        return self.cash + sum(p.market_value for p in self.positions.values())
+        with self._lock:
+            return self.cash + sum(p.market_value for p in self.positions.values())
 
     @property
     def starting_nav(self) -> float:
