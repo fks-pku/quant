@@ -44,7 +44,7 @@ def calculate_max_drawdown(equity_curve: pd.Series) -> Tuple[float, float, datet
     
     running_max = equity_curve.expanding().max()
     drawdown = equity_curve - running_max
-    drawdown_pct = drawdown / running_max
+    drawdown_pct = drawdown / running_max.replace(0, np.nan)
     
     trough_idx = drawdown.idxmin()
     if pd.isna(trough_idx):
