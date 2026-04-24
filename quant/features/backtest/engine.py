@@ -153,7 +153,7 @@ class Backtester:
 
         current_date = start
         while current_date <= end:
-            if trading_dates_set and current_date not in trading_dates_set:
+            if trading_dates_set and datetime(current_date.year, current_date.month, current_date.day) not in trading_dates_set:
                 current_date += timedelta(days=1)
                 continue
 
@@ -240,8 +240,7 @@ class Backtester:
                 sym = order['symbol']
                 bar = today_bars.get(sym, {})
                 if not bar:
-                    order['_deferred_days'] = order.get('_deferred_days', 0) + 1
-                    if order['_deferred_days'] < MAX_FILL_DEFER_DAYS:
+                    if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
                         deferred_orders.append(order)
                     continue
                 trade = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag)
@@ -359,10 +358,11 @@ class Backtester:
                 if self._risk_engine and price and price > 0:
                     order_value = price * quantity
                     approved, _ = self._risk_engine.check_order(
-                        symbol, quantity, price, order_value
+                        symbol, quantity, price, order_value, side=side
                     )
                     if not approved:
                         return None
+                    self._risk_engine.record_order()
                 order = {
                     "symbol": symbol,
                     "quantity": quantity,
@@ -440,12 +440,13 @@ class Backtester:
 
         cost_breakdown = self._calculate_commission_breakdown(fill_price, quantity, market, order['side'])
         commission = sum(cost_breakdown.values())
-        diag.total_commission += commission
 
         if order['side'] == 'BUY':
             total_cost = fill_price * quantity + commission
             if portfolio.cash < total_cost:
                 return None
+
+            diag.total_commission += commission
 
             is_new_entry = symbol not in entry_times
             if is_new_entry:
@@ -478,6 +479,7 @@ class Backtester:
                 return None
 
             sell_qty = min(quantity, pos.quantity)
+            diag.total_commission += commission
             entry_price = pos.avg_cost
             entry_time = entry_times.get(symbol, datetime.now())
             if not isinstance(entry_time, datetime):
