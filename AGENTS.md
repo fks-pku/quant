@@ -2,167 +2,54 @@
 
 ## Architecture
 
-Hexagonal (Ports & Adapters) + Event-Driven 架构。Domain 居中，通过 Ports 定义接口，Infrastructure 实现适配器，Features 编排用例。
+Hexagonal (Ports & Adapters) + Event-Driven architecture. Domain is the center, Ports define interfaces, Infrastructure implements adapters, Features orchestrate use cases.
 
-**核心原则: Provider (DataFeed) 与 Storage 分离**
-- `DataFeed` port — 从外部 API 获取数据 (Tushare, Akshare, YFinance)
-- `Storage` port — 持久化和查询缓存数据 (DuckDBStorage)
-- Providers 获取数据后写入 Storage，Backtest 从 Storage 读取
-- DuckDB 不是 Provider，是 Storage 的实现
+**See `ARCHITECTURE.md`** for full code map, module boundaries, domain models/events/ports tables.
+
+**See `docs/AGENTS.md`** for categorized navigation of all reference documentation.
 
 ## Directory Structure
 
 ```
 quant/
-├── domain/              # 纯业务逻辑，零外部依赖 (CENTER)
-│   ├── models/          # 领域模型 (Order, Position, Trade, Fill, Bar, AccountInfo)
-│   ├── events/          # 领域事件 (EventType, Event, OrderEvents, MarketEvents...)
-│   └── ports/           # 抽象接口 (DataFeed, BrokerAdapter, Strategy, Storage, EventPublisher)
-├── infrastructure/      # 实现 domain ports (ADAPTERS)
+├── domain/              # Pure business logic, zero external dependencies (CENTER)
+│   ├── models/          # Domain models (Order, Position, Trade, Fill, Bar, AccountInfo)
+│   ├── events/          # Domain events (EventType, Event, OrderEvents, MarketEvents...)
+│   └── ports/           # Abstract interfaces (DataFeed, BrokerAdapter, Strategy, Storage, EventPublisher)
+├── infrastructure/      # Implements domain ports (ADAPTERS)
 │   ├── events/          # EventBus (implements EventPublisher)
 │   ├── data/
 │   │   ├── storage_duckdb.py  # DuckDBStorage (implements Storage port)
 │   │   └── providers/        # External data fetchers (implement DataFeed port)
-│   ├── execution/       # 券商适配 + 订单执行
-│   └── var/             # 运行时数据 (DuckDB, gitignore)
-├── features/            # 业务用例编排 (APPLICATION LAYER)
-│   ├── backtest/        # 回测完整闭环
-│   ├── trading/         # 实盘/模拟交易
-│   ├── portfolio/       # 仓位管理
-│   ├── cio/             # CIO 市场评估
-│   ├── strategies/      # 策略框架 + 实现
-│   └── research/        # 量化策略研究 (Quant Researcher)
-├── shared/              # 跨 feature 纯共享工具
-│   ├── models/          # 兼容层 → re-export from domain
-│   ├── utils/           # 工具 (logger, config_loader, datetime_utils)
-│   └── config/          # 配置 (config.yaml, brokers.yaml, strategies.yaml)
-├── api/                 # Flask 薄路由层
+│   ├── execution/       # Broker adapters + order execution
+│   └── var/             # Runtime data (DuckDB, gitignore)
+├── features/            # Business use case orchestration (APPLICATION LAYER)
+│   ├── backtest/        # Full backtest闭环
+│   ├── trading/         # Live/paper trading
+│   ├── portfolio/       # Position management
+│   ├── cio/             # CIO market assessment
+│   ├── strategies/      # Strategy framework + implementations
+│   └── research/        # Quantitative strategy research
+├── shared/              # Cross-feature pure shared utilities
+│   ├── models/          # Compatibility layer → re-export from domain
+│   ├── utils/           # Utilities (logger, config_loader, datetime_utils)
+│   └── config/          # Configuration (config.yaml, brokers.yaml, strategies.yaml)
+├── api/                 # Flask thin routing layer
 ├── frontend/            # React Dashboard UI
-├── scripts/             # CLI 工具脚本
-├── docs/                # 设计文档
-└── tests/               # 测试
+├── scripts/             # CLI utility scripts
+└── tests/              # Tests
 ```
 
 ## Dependency Rules (铁律)
 
-1. **domain/** 零外部依赖 — 不依赖任何其他层
-2. **features/** 只依赖 domain (通过 ports 注入，不直接访问 infrastructure)。features 如需 EventBus 等实现，通过构造函数接受 `EventPublisher` port 并在运行时由上层注入 `EventBus` 实例
-3. **infrastructure/** 实现 domain ports (依赖 domain)。infrastructure 禁止 import features。如需跨层通信，通过 event bus 发布事件，由上层 feature 订阅
-4. **shared/** 无业务语义，纯工具 (models/ 仅做兼容 re-export，不定义独立的模型类)
-5. **api/** 只调 features
-6. **feature 之间禁止互 import**。如需共享类型（如 RiskCheckResult），将其提升到 `domain/models/`
-7. 层间通信: 直接调用 + Event Bus (pub/sub) + 依赖注入 (DI)
-8. **domain ports 返回 `Any` 类型**而非 `pd.DataFrame`，保持 domain 零外部依赖。pandas 转换在 infrastructure 层处理
-
-## Domain Layer
-
-### Models (`quant.domain.models.*`)
-
-| Model | Type | Description |
-|-------|------|-------------|
-| Order | frozen dataclass | 交易订单，immutable value object |
-| Position | mutable dataclass | 持仓跟踪 (quantity, P&L) |
-| Trade | frozen dataclass | 已完成交易 round-trip |
-| Fill | frozen dataclass | 订单成交 |
-| Bar | frozen dataclass | OHLCV 市场数据 |
-| AccountInfo | frozen dataclass | 账户信息 |
-| RiskCheckResult | frozen dataclass | 风控检查结果 |
-
-### Events (`quant.domain.events.*`)
-
-| Event | Description |
-|-------|-------------|
-| Event (base) | 基础事件类 (EventType, event_id, timestamp) |
-| OrderSubmittedEvent | 订单提交 |
-| OrderFilledEvent | 订单成交 |
-| BarEvent | 市场数据更新 |
-| MarketOpenEvent / MarketCloseEvent | 市场开关 |
-| StrategySignalEvent | 策略信号 |
-| SystemStartEvent / SystemStopEvent | 系统生命周期 |
-
-### Ports (`quant.domain.ports.*`)
-
-| Port | Description | Implementations |
-|------|-------------|----------------|
-| DataFeed | 数据源接口 (get_bars, subscribe) | TushareProvider, AkshareProvider, YfinanceProvider |
-| BrokerAdapter | 券商接口 (submit_order, get_positions) | PaperBroker, FutuProvider |
-| Strategy | 策略接口 (on_bar, buy, sell) | VolatilityRegime, SimpleMomentum, CrossSectionalMeanReversion |
-| Storage | 持久化接口 (save_bars, get_bars, get_symbols, get_lot_size) | DuckDBStorage |
-| EventPublisher | 事件发布接口 (subscribe, publish, publish_nowait) | EventBus |
-
-## Data Architecture
-
-### Two-Port Separation
-
-```
-DataFeed port (fetch from external)     Storage port (persist & query)
-┌─────────────────────┐                ┌─────────────────────┐
-│ TushareProvider     │──write──────→  │                     │
-│ AkshareProvider     │──write──────→  │   DuckDBStorage     │
-│ YfinanceProvider    │──write──────→  │   (implements       │
-└─────────────────────┘                │    Storage port)     │
-                                       │                     │
-┌─────────────────────┐                │                     │
-│ Backtester          │←──read────────│                     │
-│ API endpoints       │←──read────────│                     │
-└─────────────────────┘                └─────────────────────┘
-```
-
-- **Providers** fetch from external APIs, cache via Storage
-- **Backtest** reads from Storage only — doesn't care where data came from
-- **API layer** reads from Storage (read-only mode)
-
-### Providers
-
-| Provider | File | Markets | Storage |
-|----------|------|---------|---------|
-| TushareProvider | `infrastructure/data/providers/tushare.py` | CN | DuckDB (via Storage port) |
-| AkshareProvider | `infrastructure/data/providers/akshare.py` | CN | — |
-| YfinanceProvider | `infrastructure/data/providers/yfinance_provider.py` | US | Parquet |
-
-### Storage
-
-| Storage | File | Description |
-|---------|------|-------------|
-| DuckDBStorage | `infrastructure/data/storage_duckdb.py` | Implements Storage port. Supports `read_only=True` for readers. |
-
-### DuckDB Connection Rules
-
-- **Writers** (ingest scripts, providers): `DuckDBStorage()` — default read-write
-- **Readers** (API, backtest, providers reading cache): `DuckDBStorage(read_only=True)`
-- Only ingest scripts and providers with fresh data should write
-- **Never** open write connections from API endpoints — prevents data corruption
-
-### Symbol Registry Markets
-
-| Market | Code Pattern | Example | DuckDB Table |
-|--------|--------------|---------|--------------|
-| US | Letters | `AAPL`, `SPY` | `daily_us` / `minute_us` |
-| HK | 5-digit numeric | `00700` | `daily_hk` / `minute_hk` |
-| CN | 6-digit numeric (0/3/6/8/9 prefix) | `600519` | `daily_cn` / `minute_cn` |
-
-### Tushare Configuration
-
-```yaml
-data:
-  tushare:
-    token: "YOUR_TUSHARE_TOKEN"
-    api_url: "http://..."   # optional custom server URL
-```
-
-### CN Market Notes
-
-- Lot size: 100 shares (backtester enforces lot rounding)
-- CN stocks (e.g. 600519 茅台 ~¥1700/share) require higher `initial_cash` (500K+)
-- Default 100K is insufficient for high-price CN stocks
-
-### Backtest Commission Models
-
-| Market | Commission | Stamp Duty | Other Fees |
-|--------|-----------|------------|------------|
-| US | per-share $0.005 min $1 | — | — |
-| HK | 0.03% min HK$3 | 0.13% on SELL | SFC levy + clearing + trading fee |
-| CN | 0.025% min ¥5 | 0.05% on SELL | Transfer fee 0.001% |
+1. **domain/ zero external dependencies** — does not depend on any other layer
+2. **features/ only depend on domain** — through ports injection. If EventBus is needed, accept `EventPublisher` port via constructor
+3. **infrastructure/ implements domain ports** — depends on domain. Cannot import features. Cross-layer via event bus
+4. **shared/ has no business semantics** — pure utilities (models/ only re-exports)
+5. **api/ only calls features**
+6. **Feature-to-feature import is forbidden** — shared types must be elevated to `domain/models/`
+7. **Inter-layer communication**: direct call + Event Bus + DI
+8. **domain ports return `Any` type**, not `pd.DataFrame` — pandas conversion in infrastructure layer
 
 ## Feature Index
 
@@ -170,28 +57,38 @@ data:
 |---------|------|-------------|
 | backtest | features/backtest/ | 回测引擎、步进验证、绩效分析 |
 | trading | features/trading/ | 交易引擎、风控、调度器、组合管理 |
-| portfolio | features/portfolio/ | 策略仓位跟踪、多策略协调 |
-| cio | features/cio/ | CIO 市场评估、新闻分析、权重分配 |
-| strategies | features/strategies/ | 策略基类、注册表、因子库、策略实现 |
-| research | features/research/ | 策略发现、评估、回测、候选池管理 |
+| portfolio | features/portfolio/ | 仓位管理 |
+| cio | features/cio/ | CIO 市场评估 |
+| strategies | features/strategies/ | 策略框架 + 实现 |
+| research | features/research/ | 量化策略研究 |
 
-### Strategies (implemented)
+### Module AGENTS.md
 
-| Strategy | Directory | CN Compatible | Notes |
-|----------|-----------|---------------|-------|
-| SimpleMomentum | `strategies/simple_momentum/` | Yes | Cross-sectional momentum; single-stock mode auto-detects |
-| CrossSectionalMeanReversion | `strategies/cross_sectional_mr/` | Partially | Needs market_symbol=000300 |
-| VolatilityRegime | `strategies/volatility_regime/` | No | Requires VIX data |
+Each module has its own `AGENTS.md` for local constraints:
 
-### Frontend Strategy List
+- `quant/domain/AGENTS.md` — domain models, events, ports contracts
+- `quant/infrastructure/AGENTS.md` — adapter patterns, DuckDB rules
+- `quant/features/backtest/AGENTS.md`
+- `quant/features/trading/AGENTS.md`
+- `quant/features/strategies/AGENTS.md`
+- `quant/features/research/AGENTS.md`
+- `quant/features/portfolio/AGENTS.md`
+- `quant/features/cio/AGENTS.md`
+- `quant/api/AGENTS.md` — Flask route conventions
+- `quant/frontend/AGENTS.md` — React conventions
+- `quant/shared/AGENTS.md` — re-export compatibility layer
 
-Frontend only shows strategies with implementations in `features/strategies/*/strategy.py`. Registry in `api/state/runtime.py`.
+## Reference Documentation
 
-## Python Package
-
-- 包名: `quant`
-- Import 格式: `from quant.domain.models.order import Order`
-- 禁止相对导入，必须使用完整 `quant.*` 路径
+| Doc | Path | Description |
+|-----|------|-------------|
+| Architecture | `ARCHITECTURE.md` | Code map, module boundaries, invariants |
+| Data Architecture | `docs/reference/data-architecture.md` | Two-port separation, providers, storage |
+| Symbol Registry | `docs/reference/symbol-registry.md` | Market code patterns |
+| Commission Models | `docs/reference/commission-models.md` | Per-market fees |
+| Import Paths | `docs/reference/import-paths.md` | All import reference |
+| Deprecated Paths | `docs/reference/deprecated-paths.md` | Old paths to avoid |
+| Docs Index | `docs/AGENTS.md` | Categorized reference navigation |
 
 ## Commands
 
@@ -201,75 +98,15 @@ python -m pytest quant/tests/ -q                                  # 运行测试
 python quant/backtest_runner.py --strategy SimpleMomentum ...     # CLI 回测
 python quant/quant_system.py --mode paper                         # CLI 实盘/模拟
 python quant/scripts/ingest_akshare.py --symbol 600519 ...        # 从 akshare 抓取 A-share 数据存入 DuckDB
-python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 2025-01-01  # 从 tushare 抓取
+python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 2025-01-01
 ```
-
-## Import Path Reference
-
-```python
-# Domain Layer (首选)
-from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
-from quant.domain.models.position import Position
-from quant.domain.models.trade import Trade
-from quant.domain.models.fill import Fill
-from quant.domain.models.bar import Bar
-from quant.domain.models.account import AccountInfo
-from quant.domain.models.risk_check import RiskCheckResult
-from quant.domain.events.base import Event, EventType
-from quant.domain.ports.data_feed import DataFeed
-from quant.domain.ports.broker import BrokerAdapter
-from quant.domain.ports.strategy import Strategy, StrategyContext
-from quant.domain.ports.storage import Storage
-from quant.domain.ports.event_publisher import EventPublisher
-
-# Infrastructure (implements domain ports)
-from quant.infrastructure.events import EventBus
-from quant.infrastructure.execution.brokers.paper import PaperBroker
-from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-from quant.infrastructure.data.providers.tushare import TushareProvider
-from quant.infrastructure.data.providers.akshare import AkshareProvider
-
-# Features (orchestrators)
-from quant.features.backtest.engine import Backtester
-from quant.features.trading.engine import Engine, SystemMode, Context
-from quant.features.trading.portfolio import Portfolio
-from quant.features.trading.risk import RiskEngine
-from quant.features.strategies import Strategy, StrategyRegistry
-from quant.features.cio import CIOEngine
-from quant.features.research import ResearchEngine, CandidatePool, ResearchScheduler
-
-# Backward Compatibility (re-exports from domain)
-from quant.shared.models import Order, Position, Trade, Fill, Bar, AccountInfo
-from quant.shared.utils import setup_logger, ConfigLoader
-```
-
-## 已清理的旧路径 (禁止使用)
-
-- `quant.core.*` → `quant.features.trading.*` / `quant.features.backtest.*`
-- `quant.data.*` → `quant.infrastructure.data.*`
-- `quant.execution.*` → `quant.infrastructure.execution.*`
-- `quant.models.*` → `quant.domain.models.*`
-- `quant.utils.*` → `quant.shared.utils.*`
-- `quant.strategies.*` → `quant.features.strategies.*`
-- `quant.cio.*` → `quant.features.cio.*`
-- `quant.config.*` → `quant.shared.config.*`
-- `DuckDBProvider` → 直接使用 `DuckDBStorage` (不再作为 provider)
-- `EventType.ORDER_SUBMIT` → `EventType.ORDER_SUBMITTED` (去重)
-- `EventType.ORDER_FILL` → `EventType.ORDER_FILLED` (去重)
-- `EventType.ORDER_CANCEL` → `EventType.ORDER_CANCELLED` (去重)
-- `EventType.ORDER_REJECT` → `EventType.ORDER_REJECTED` (去重)
-- `quant.shared.models.trade` (独立文件) → `quant.domain.models.trade` (shared/models/ 只保留 __init__.py re-export)
-- `quant.shared.models.order` (独立文件) → `quant.domain.models.order`
-- `quant.shared.models.fill` (独立文件) → `quant.domain.models.fill`
-- `quant.shared.models.position` (独立文件) → `quant.domain.models.position`
-- `from quant.features.trading.risk import RiskCheckResult` → `from quant.domain.models.risk_check import RiskCheckResult`
 
 ## Key Conventions
 
 - Python 3.10+ with type hints
 - No comments unless explicitly requested
-- Frozen dataclasses for immutable value objects (domain models)
-- ABC + abstract methods for ports (domain interfaces)
+- Frozen dataclasses for immutable value objects
+- ABC + abstract methods for ports
 - Thread safety: `threading.RLock()` for shared state
 - Logging: `from quant.shared.utils.logger import setup_logger`
-- DuckDB readers must use `read_only=True` to prevent write-lock conflicts
+- DuckDB readers must use `read_only=True`
