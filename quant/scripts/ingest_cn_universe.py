@@ -186,7 +186,7 @@ def main() -> None:
     end_dt = datetime.strptime(args.end, "%Y-%m-%d")
 
     storage = DuckDBStorage(db_path=args.db_path) if args.db_path else DuckDBStorage()
-    provider = TushareProvider(db_path=args.db_path) if args.db_path else TushareProvider()
+    provider = TushareProvider(storage=storage)
     provider.connect()
 
     try:

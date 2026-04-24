@@ -18,9 +18,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.domain.ports.storage import Storage
-from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
 from quant.shared.utils.config_loader import ConfigLoader
 from quant.shared.utils.logger import setup_logger
 
@@ -37,15 +36,18 @@ _CN_INDEX_CODES = {
 }
 
 
-class TushareProvider(DataProvider):
-    def __init__(self, db_path: str = _DEFAULT_DB, min_interval: float = 0.3):
-        super().__init__("tushare")
-        self._db_path = db_path
+class TushareProvider(DataFeed):
+    def __init__(self, storage: Optional[Storage] = None, min_interval: float = 0.3):
+        self._connected = False
         self._min_interval = min_interval
         self._last_request_time = 0.0
         self._api = None
-        self._storage: Optional[Storage] = None
+        self._storage: Optional[Storage] = storage
         self.logger = setup_logger("TushareProvider")
+
+    @property
+    def name(self) -> str:
+        return "tushare"
 
     def _load_config(self) -> dict:
         try:
@@ -77,7 +79,9 @@ class TushareProvider(DataProvider):
         if api_url:
             self._api._DataApi__http_url = api_url
 
-        self._storage = DuckDBStorage(self._db_path)
+        if self._storage is None:
+            from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+            self._storage = DuckDBStorage()
         self._connected = True
         self.logger.info("TushareProvider connected")
 
@@ -485,3 +489,9 @@ class TushareProvider(DataProvider):
         except Exception as e:
             self.logger.warning(f"Error fetching quote for {symbol}: {e}")
             return {"timestamp": None, "symbol": symbol, "bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0}
+
+    def subscribe(self, symbols: list, callback) -> None:
+        self.logger.warning("TushareProvider does not support real-time subscriptions")
+
+    def unsubscribe(self, symbols: list) -> None:
+        pass

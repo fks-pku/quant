@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.shared.utils.logger import setup_logger
 
 
@@ -18,7 +18,7 @@ class MarketStatus(Enum):
     UNKNOWN = "unknown"
 
 
-class FutuProvider(DataProvider):
+class FutuProvider(DataFeed):
     """Futu OpenAPI adapter for HK and US equity data."""
 
     SUBTYPE_MAP = {
@@ -34,7 +34,7 @@ class FutuProvider(DataProvider):
     }
 
     def __init__(self, host: str = "127.0.0.1", port: int = 11111):
-        super().__init__("futu")
+        self._connected = False
         self.host = host
         self.port = port
         self.logger = setup_logger("FutuProvider")
@@ -46,6 +46,10 @@ class FutuProvider(DataProvider):
             "orderbook": {},
             "trade": {},
         }
+
+    @property
+    def name(self) -> str:
+        return "futu"
 
     def connect(self) -> None:
         """Connect to Futu OpenAPI."""
