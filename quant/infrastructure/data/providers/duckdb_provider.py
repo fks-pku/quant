@@ -9,17 +9,21 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
 from quant.shared.utils.logger import setup_logger
 
 
-class DuckDBProvider(DataProvider):
+class DuckDBProvider(DataFeed):
     def __init__(self, db_path: str = _DEFAULT_DB):
-        super().__init__("DuckDB")
+        self._connected = False
         self._db_path = db_path
         self._storage: Optional[DuckDBStorage] = None
         self.logger = setup_logger("DuckDBProvider")
+
+    @property
+    def name(self) -> str:
+        return "DuckDB"
 
     def connect(self) -> None:
         self._storage = DuckDBStorage(self._db_path, read_only=True)
@@ -73,3 +77,9 @@ class DuckDBProvider(DataProvider):
         if self._storage is None:
             return None
         return self._storage.get_date_range(symbol, timeframe)
+
+    def subscribe(self, symbols: list, callback) -> None:
+        self.logger.warning("DuckDBProvider does not support real-time subscriptions")
+
+    def unsubscribe(self, symbols: list) -> None:
+        pass

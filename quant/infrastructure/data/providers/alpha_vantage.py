@@ -5,22 +5,26 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 import requests
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.shared.utils.logger import setup_logger
 
 
-class AlphaVantageProvider(DataProvider):
+class AlphaVantageProvider(DataFeed):
     """Alpha Vantage API adapter for historical and real-time data."""
 
     BASE_URL = "https://www.alphavantage.co/query"
 
     def __init__(self, api_key: Optional[str] = None):
-        super().__init__("alpha_vantage")
+        self._connected = False
         self.api_key = api_key or ""
         self.logger = setup_logger("AlphaVantageProvider")
         self._callbacks: List[Callable] = []
         self._rate_limit_calls = 0
         self._rate_limit_reset = datetime.now()
+
+    @property
+    def name(self) -> str:
+        return "alpha_vantage"
 
     def connect(self) -> None:
         """Connect to Alpha Vantage (validates API key)."""
@@ -158,3 +162,6 @@ class AlphaVantageProvider(DataProvider):
         """Alpha Vantage does not support real-time streaming."""
         self.logger.warning("Alpha Vantage does not support real-time subscriptions")
         self._callbacks.append(callback)
+
+    def unsubscribe(self, symbols: List[str]) -> None:
+        self.logger.warning("Alpha Vantage does not support real-time unsubscriptions")

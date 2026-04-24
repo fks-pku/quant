@@ -14,6 +14,7 @@ _pkg_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_pkg_dir.parent))
 
 from quant.infrastructure.data.providers.tushare import TushareProvider
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.shared.utils.logger import setup_logger
 
 logger = setup_logger("ingest_tushare")
@@ -30,7 +31,8 @@ def main() -> None:
     start_dt = datetime.strptime(args.start, "%Y-%m-%d")
     end_dt = datetime.strptime(args.end, "%Y-%m-%d")
 
-    provider = TushareProvider(db_path=args.db_path) if args.db_path else TushareProvider()
+    storage = DuckDBStorage(args.db_path) if args.db_path else DuckDBStorage()
+    provider = TushareProvider(storage=storage)
     provider.connect()
 
     logger.info(f"Fetching {args.symbol} from {args.start} to {args.end}")

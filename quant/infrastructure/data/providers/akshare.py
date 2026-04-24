@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.shared.utils.logger import setup_logger
 
 try:
@@ -17,14 +17,18 @@ except ImportError:
     AKSHARE_AVAILABLE = False
 
 
-class AkshareProvider(DataProvider):
+class AkshareProvider(DataFeed):
     """Data provider for China A-share via akshare."""
 
     def __init__(self, min_interval: float = 0.5):
-        super().__init__("akshare")
+        self._connected = False
         self._min_interval = min_interval
         self._last_request_time = 0.0
         self.logger = setup_logger("AkshareProvider")
+
+    @property
+    def name(self) -> str:
+        return "akshare"
 
     def connect(self) -> None:
         if not AKSHARE_AVAILABLE:
@@ -143,3 +147,9 @@ class AkshareProvider(DataProvider):
         except Exception as e:
             self.logger.warning(f"Error fetching quote for {symbol}: {e}")
             return {"timestamp": None, "symbol": symbol, "bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0}
+
+    def subscribe(self, symbols: list, callback) -> None:
+        self.logger.warning("AkshareProvider does not support real-time subscriptions")
+
+    def unsubscribe(self, symbols: list) -> None:
+        pass

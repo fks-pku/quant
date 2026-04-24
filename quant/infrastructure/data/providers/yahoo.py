@@ -10,17 +10,21 @@ try:
 except ImportError:
     YF_AVAILABLE = False
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.shared.utils.logger import setup_logger
 
 
-class YahooProvider(DataProvider):
+class YahooProvider(DataFeed):
     """Yahoo Finance adapter for historical and real-time data."""
 
     def __init__(self):
-        super().__init__("yahoo")
+        self._connected = False
         self.logger = setup_logger("YahooProvider")
         self._callbacks: List[Callable] = []
+
+    @property
+    def name(self) -> str:
+        return "yahoo"
 
     def connect(self) -> None:
         """Connect to Yahoo Finance (no-op for free API)."""
@@ -126,3 +130,6 @@ class YahooProvider(DataProvider):
         """Subscribe to real-time quotes via Yahoo Finance web socket."""
         self.logger.info(f"Subscribing to {symbols} (real-time via yfinance)")
         self._callbacks.append(callback)
+
+    def unsubscribe(self, symbols: List[str]) -> None:
+        self.logger.info(f"Unsubscribing from {symbols}")

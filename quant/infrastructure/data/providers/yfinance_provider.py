@@ -12,22 +12,26 @@ try:
 except ImportError:
     YF_AVAILABLE = False
 
-from quant.infrastructure.data.providers.base import DataProvider
+from quant.domain.ports.data_feed import DataFeed
 from quant.shared.utils.logger import setup_logger
 
 _PKG_DIR = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_CACHE = str(_PKG_DIR / "var" / "cache")
 
 
-class YfinanceProvider(DataProvider):
+class YfinanceProvider(DataFeed):
     def __init__(self, cache_dir: str = _DEFAULT_CACHE, cache_ttl_hours: int = 24):
-        super().__init__("yfinance")
+        self._connected = False
         self._cache_dir = cache_dir
         self._cache_ttl_hours = cache_ttl_hours
         self._last_download_time = 0.0
         self._min_download_interval = 0.5
         self.logger = setup_logger("YfinanceProvider")
         os.makedirs(cache_dir, exist_ok=True)
+
+    @property
+    def name(self) -> str:
+        return "yfinance"
 
     def connect(self) -> None:
         if not YF_AVAILABLE:
@@ -152,3 +156,9 @@ class YfinanceProvider(DataProvider):
         except Exception as e:
             self.logger.warning(f"Error fetching quote for {symbol}: {e}")
             return {"symbol": symbol, "price": 0.0, "bid": 0.0, "ask": 0.0}
+
+    def subscribe(self, symbols: list, callback) -> None:
+        self.logger.warning("YfinanceProvider does not support real-time subscriptions")
+
+    def unsubscribe(self, symbols: list) -> None:
+        pass
