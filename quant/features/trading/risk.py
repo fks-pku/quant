@@ -38,6 +38,7 @@ class RiskEngine:
         price: float,
         order_value: float,
         sector: Optional[str] = None,
+        side: Optional[str] = None,
     ) -> Tuple[bool, List[RiskCheckResult]]:
         """
         Run all risk checks before order submission.
@@ -46,14 +47,15 @@ class RiskEngine:
         results = []
         approved = True
 
-        results.append(self._check_position_size(symbol, order_value))
-        if not results[-1].passed:
-            approved = False
-
-        if sector:
-            results.append(self._check_sector_exposure(sector, order_value))
+        if side != 'SELL':
+            results.append(self._check_position_size(symbol, order_value))
             if not results[-1].passed:
                 approved = False
+
+            if sector:
+                results.append(self._check_sector_exposure(sector, order_value))
+                if not results[-1].passed:
+                    approved = False
 
         results.append(self._check_daily_loss())
         if not results[-1].passed:

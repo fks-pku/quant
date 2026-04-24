@@ -149,7 +149,12 @@ class WalkForwardEngine:
         avg_test = float(np.mean(test_sharpes)) if test_sharpes else 0.0
         test_std = float(np.std(test_sharpes)) if test_sharpes else 0.0
         
-        sharpe_degradation = 1.0 - (avg_test / avg_train) if avg_train != 0 else 1.0
+        if avg_train > 0:
+            sharpe_degradation = max(0.0, 1.0 - (avg_test / avg_train))
+        elif avg_test > 0:
+            sharpe_degradation = 0.0
+        else:
+            sharpe_degradation = 1.0
         pct_profitable = float(len([w for w in window_results if w.test_return > 0]) / len(window_results)) if window_results else 0.0
         
         is_viable = avg_test > 0.5 and sharpe_degradation < 0.5 and pct_profitable > 0.5
@@ -185,12 +190,12 @@ class WalkForwardEngine:
         config: Dict[str, Any]
     ) -> tuple[Dict[str, Any], float]:
         """Find best params using grid search on training data."""
-        best_params = {}
-        best_sharpe = float('-inf')
-        
         import itertools
         param_names = list(param_grid.keys())
         param_values = [param_grid[name] for name in param_names]
+        first_params = dict(zip(param_names, param_values[0])) if param_values else {}
+        best_params = first_params
+        best_sharpe = float('-inf')
         
         for values in itertools.product(*param_values):
             params = dict(zip(param_names, values))
