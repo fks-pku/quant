@@ -89,13 +89,18 @@ class Portfolio:
                 )
 
             pos = self.positions[symbol]
-            old_cost = pos.avg_cost * pos.quantity
 
             if quantity != 0:
-                new_cost = cost + old_cost
-                new_qty = quantity + pos.quantity
-                pos.avg_cost = new_cost / new_qty if new_qty != 0 else 0
-                pos.quantity = new_qty
+                if quantity > 0:
+                    new_cost = cost + pos.avg_cost * pos.quantity
+                    new_qty = quantity + pos.quantity
+                    pos.avg_cost = new_cost / new_qty if new_qty != 0 else 0
+                    pos.quantity = new_qty
+                else:
+                    pos.quantity += quantity
+                    if abs(pos.quantity) < 1e-10:
+                        pos.quantity = 0.0
+                        pos.avg_cost = 0.0
 
             pos.market_value = pos.quantity * price
             pos.unrealized_pnl = pos.market_value - (pos.avg_cost * pos.quantity)

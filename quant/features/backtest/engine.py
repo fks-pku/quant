@@ -98,8 +98,7 @@ class Backtester:
     @staticmethod
     def _is_suspended(bar: Dict, prev_bar: Optional[Dict]) -> bool:
         if bar.get("volume", 0) == 0:
-            if prev_bar and bar.get("close") == prev_bar.get("close"):
-                return True
+            return True
         return False
 
     def run(
@@ -213,8 +212,8 @@ class Backtester:
                                             strategy.on_data(strategy.context, bar_data)
 
                                     prev_bars[symbol] = bar_data
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Error loading bar data for %s on %s: %s", symbol, current_date, e)
 
             if any_suspended_today:
                 diag.suspended_days += 1
@@ -348,14 +347,22 @@ class Backtester:
                 self.risk_engine = risk_engine
                 self.event_bus = event_bus
                 self.data_provider = data_provider
-                self.order_manager = BacktestOrderManager()
+                self.order_manager = BacktestOrderManager(risk_engine)
                 self.broker = BacktestBroker()
 
         class BacktestOrderManager:
-            def __init__(self):
+            def __init__(self, risk_engine):
                 self._pending_orders: List[Dict] = []
+                self._risk_engine = risk_engine
 
             def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+                if self._risk_engine and price and price > 0:
+                    order_value = price * quantity
+                    approved, _ = self._risk_engine.check_order(
+                        symbol, quantity, price, order_value
+                    )
+                    if not approved:
+                        return None
                 order = {
                     "symbol": symbol,
                     "quantity": quantity,
@@ -457,6 +464,7 @@ class Backtester:
                 exit_price=fill_price,
                 quantity=quantity,
                 pnl=-commission,
+                realized_pnl=-commission,
                 signal_date=signal_date,
                 fill_date=fill_ts,
                 fill_price=fill_price,
@@ -497,6 +505,7 @@ class Backtester:
                 exit_price=fill_price,
                 quantity=sell_qty,
                 pnl=realized - commission,
+                realized_pnl=realized,
                 signal_date=signal_date,
                 fill_date=fill_ts,
                 fill_price=fill_price,
