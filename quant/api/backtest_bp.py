@@ -128,11 +128,25 @@ def run_backtest():
                     "entry_time": str(t.entry_time),
                     "exit_time": str(t.exit_time),
                     "symbol": t.symbol,
-                    "side": t.side,
+                    "side": "BUY",
+                    "status": "closed",
                     "entry_price": float(t.entry_price),
                     "exit_price": float(t.exit_price),
                     "quantity": int(t.quantity),
                     "pnl": float(t.pnl),
+                })
+
+            for pos in result.open_positions:
+                trades_list.append({
+                    "entry_time": str(pos["entry_time"]) if pos.get("entry_time") else "",
+                    "exit_time": None,
+                    "symbol": pos["symbol"],
+                    "side": "BUY",
+                    "status": "open",
+                    "entry_price": float(pos["entry_price"]),
+                    "exit_price": float(pos["current_price"]),
+                    "quantity": int(pos["quantity"]),
+                    "pnl": float(pos["unrealized_pnl"]),
                 })
 
             sell_trades = [t for t in result.trades if t.side == "SELL"]
