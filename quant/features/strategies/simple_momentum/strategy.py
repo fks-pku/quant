@@ -162,8 +162,20 @@ class SimpleMomentum(Strategy):
             n_long = max(1, int(n_stocks * self.top_pct))
             n_short = max(1, int(n_stocks * self.bottom_pct))
 
-            self._long_positions = [s[0] for s in sorted_by_momentum[:n_long]]
-            self._short_positions = [s[0] for s in sorted_by_momentum[-n_short:]]
+            new_long = [s[0] for s in sorted_by_momentum[:n_long]]
+            new_short = [s[0] for s in sorted_by_momentum[-n_short:]]
+
+            for sym in list(self._long_positions):
+                if sym not in new_long:
+                    self._close_position(context, sym, self._positions.get(sym, 0))
+            for sym in list(self._short_positions):
+                if sym not in new_short:
+                    pos_qty = self._positions.get(sym, 0)
+                    if pos_qty > 0:
+                        self.sell(sym, pos_qty)
+
+            self._long_positions = new_long
+            self._short_positions = new_short
 
             long_weight = self.max_position_pct / n_long if n_long > 0 else 0
             short_weight = self.max_position_pct / n_short if n_short > 0 else 0

@@ -41,17 +41,21 @@ class WFResult:
 class WalkForwardEngine:
     """Walk-forward analysis engine with configurable train/test windows."""
 
+    MIN_WF_TRADES = 3
+
     def __init__(
         self,
         train_window_days: int = 126,
         test_window_days: int = 21,
         step_days: int = 21,
-        rebalance_freq: str = "monthly"
+        rebalance_freq: str = "monthly",
+        min_trades: int = 3,
     ):
         self.train_window_days = train_window_days
         self.test_window_days = test_window_days
         self.step_days = step_days
         self.rebalance_freq = rebalance_freq
+        self.min_trades = min_trades
 
     def run(
         self,
@@ -204,6 +208,9 @@ class WalkForwardEngine:
                 strategy = strategy_factory(params)
                 backtester = Backtester(config)
                 result = self._run_single_backtest(backtester, strategy, train_data, initial_cash, config)
+                
+                if len(result.trades) < self.min_trades:
+                    continue
                 
                 if result.sharpe_ratio > best_sharpe:
                     best_sharpe = result.sharpe_ratio
