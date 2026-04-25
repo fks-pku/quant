@@ -394,6 +394,7 @@ export default function BacktestDashboard() {
                 <table className="bt-trades-table">
                   <thead>
                     <tr>
+                      <th>Status</th>
                       <th>Entry Date</th>
                       <th>Exit Date</th>
                       <th>Symbol</th>
@@ -407,23 +408,31 @@ export default function BacktestDashboard() {
                   </thead>
                   <tbody>
                     {result.trades.map((t, i) => {
+                      const isOpen = t.status === 'open';
                       const entryD = new Date(t.entry_time);
-                      const exitD = new Date(t.exit_time);
-                      const durMs = exitD - entryD;
+                      const exitD = t.exit_time ? new Date(t.exit_time) : null;
+                      const durMs = exitD ? exitD - entryD : 0;
                       const durDays = Math.round(durMs / 86400000);
                       return (
-                        <tr key={i}>
+                        <tr key={i} className={isOpen ? 'trade-open' : ''}>
+                          <td>
+                            <span className={`bt-status-badge ${isOpen ? 'bt-status-open' : 'bt-status-closed'}`}>
+                              {isOpen ? '持仓中' : '已完成'}
+                            </span>
+                          </td>
                           <td>{entryD.toLocaleDateString()}</td>
-                          <td>{exitD.toLocaleDateString()}</td>
+                          <td>{exitD ? exitD.toLocaleDateString() : '—'}</td>
                           <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.symbol}</td>
-                          <td style={{ color: t.side === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>{t.side}</td>
+                          <td style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{t.side}</td>
                           <td>{t.quantity}</td>
                           <td>{fmtCurrency(t.entry_price, isHK)}</td>
-                          <td>{fmtCurrency(t.exit_price, isHK)}</td>
-                          <td style={{ color: colorPnl(t.pnl), fontWeight: 600 }}>
+                          <td style={isOpen ? { color: '#3b82f6' } : {}}>
+                            {fmtCurrency(t.exit_price, isHK)}
+                          </td>
+                          <td className={isOpen ? 'bt-pnl-unrealized' : ''} style={{ color: isOpen ? '#f59e0b' : colorPnl(t.pnl), fontWeight: 600 }}>
                             {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
                           </td>
-                          <td>{durDays}d</td>
+                          <td>{isOpen ? '—' : `${durDays}d`}</td>
                         </tr>
                       );
                     })}

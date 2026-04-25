@@ -721,6 +721,39 @@ body {
   overflow-y: auto;
 }
 
+.bt-trades-table tr.trade-open {
+  background: rgba(59, 130, 246, 0.06);
+  border-left: 3px solid #3b82f6;
+}
+
+.bt-trades-table tr.trade-open td:first-child {
+  padding-left: 9px;
+}
+
+.bt-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bt-status-closed {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--accent-green);
+}
+
+.bt-status-open {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+}
+
+.bt-pnl-unrealized {
+  font-style: italic;
+}
+
 .bt-history {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
