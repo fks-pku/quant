@@ -1,0 +1,12 @@
+strategy:
+  name: VolatilityScaledTrend
+  enabled: true
+  priority: 6
+
+parameters:
+  symbols: ["000300", "000905", "399006"]
+  sma_lookback: 50
+  vol_lookback: 20
+  target_vol: 0.15
+  max_weight: 0.25
+  holding_days: 21

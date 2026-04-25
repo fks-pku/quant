@@ -1,0 +1,41 @@
+{
+  "strategy": "RegimeFilteredMomentum",
+  "start": "2015-01-01",
+  "end": "2024-12-31",
+  "symbols": [
+    "000333",
+    "000651",
+    "000858",
+    "000568",
+    "000001",
+    "000538",
+    "000895",
+    "000725",
+    "000625",
+    "000878",
+    "000709",
+    "000876",
+    "000786",
+    "000063",
+    "000938"
+  ],
+  "initial_cash": 1000000,
+  "final_nav": 1029693.41,
+  "total_return_pct": 2.97,
+  "sharpe_ratio": 0.28,
+  "sortino_ratio": 0.42,
+  "max_drawdown_pct": -3.73,
+  "win_rate_pct": 64.3,
+  "profit_factor": 2.63,
+  "total_trades": 14,
+  "calmar_ratio": 0.0,
+  "payoff_ratio": 1.46,
+  "expectancy": 2132.66,
+  "diagnostics": {
+    "volume_limited_trades": 21,
+    "lot_adjusted_trades": 13,
+    "t1_rejected_sells": 0,
+    "total_commission": 590.9,
+    "cost_drag_pct": 2.0
+  }
+}

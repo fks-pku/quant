@@ -1,0 +1,11 @@
+strategy:
+  name: DualMomentum
+  enabled: true
+  priority: 1
+
+parameters:
+  symbols: [SPY, QQQ, IWM, VGK, EEM]
+  safe_symbol: TLT
+  lookback_months: 12
+  holding_days: 21
+  max_position_pct: 0.90

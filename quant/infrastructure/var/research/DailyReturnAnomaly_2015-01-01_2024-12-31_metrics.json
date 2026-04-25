@@ -1,0 +1,41 @@
+{
+  "strategy": "DailyReturnAnomaly",
+  "start": "2015-01-01",
+  "end": "2024-12-31",
+  "symbols": [
+    "000333",
+    "000651",
+    "000858",
+    "000568",
+    "000001",
+    "000538",
+    "000895",
+    "000725",
+    "000625",
+    "000878",
+    "000709",
+    "000876",
+    "000786",
+    "000063",
+    "000938"
+  ],
+  "initial_cash": 1000000,
+  "final_nav": 1003403.62,
+  "total_return_pct": 0.34,
+  "sharpe_ratio": 0.08,
+  "sortino_ratio": 0.12,
+  "max_drawdown_pct": -1.23,
+  "win_rate_pct": 53.3,
+  "profit_factor": 1.29,
+  "total_trades": 15,
+  "calmar_ratio": 0.0,
+  "payoff_ratio": 1.13,
+  "expectancy": 240.19,
+  "diagnostics": {
+    "volume_limited_trades": 35,
+    "lot_adjusted_trades": 15,
+    "t1_rejected_sells": 0,
+    "total_commission": 844.13,
+    "cost_drag_pct": 19.9
+  }
+}

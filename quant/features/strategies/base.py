@@ -41,7 +41,10 @@ class Strategy(ABC):
     def on_fill(self, context: "Context", fill: Any) -> None:
         """Called when an order is filled."""
         if hasattr(fill, "symbol") and hasattr(fill, "quantity"):
-            self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + fill.quantity
+            qty = fill.quantity
+            if hasattr(fill, "side") and fill.side == "SELL":
+                qty = -qty
+            self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
 
     def on_order_rejected(self, context: "Context", order: Any, reason: str) -> None:
         """Called when an order is rejected."""

@@ -1,7 +1,8 @@
 import json
+import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 system_process = None
 system_thread = None
@@ -33,80 +34,156 @@ def _get_futu_broker():
     return _futu_broker
 
 
-# Strategy metadata (kept here for API backward compatibility)
 _STRATEGY_DEFAULT_SYMBOLS: Dict[str, str] = {}
-
-_STRATEGY_DIR_MAP = {
-    'volatility_regime': 'volatility_regime',
-    'simple_momentum': 'simple_momentum',
-    'cross_sectional_mean_reversion': 'cross_sectional_mr',
-}
 
 STRATEGIES_DIR = Path(__file__).resolve().parent.parent.parent / 'features' / 'strategies'
 DOCS_DIR = STRATEGIES_DIR / 'docs'
 
-AVAILABLE_STRATEGIES = {
-    'VolatilityRegime': {
-        'id': 'volatility_regime',
-        'name': 'Volatility Regime',
-        'description': 'Regime-based strategy switching based on VIX levels.',
-        'status': 'active',
-        'priority': 1,
-        'doc_file': 'volatility_regime.md',
-        'backtest': {'sharpe': 0.97, 'max_dd': 18.2, 'cagr': 14.5, 'win_rate': 62.5, 'period': '2015-2024 OOS', 'train_sharpe': 1.18, 'test_sharpe': 0.97, 'sharpe_degradation': 17.8, 'pct_profitable': 94.7}
-    },
-    'SimpleMomentum': {
-        'id': 'simple_momentum',
-        'name': 'Cross-Sectional Momentum',
-        'description': 'Long top decile, short bottom decile by momentum score.',
-        'status': 'paused',
-        'priority': 2,
-        'doc_file': 'simple_momentum.md',
-        'backtest': {'sharpe': 0.78, 'max_dd': 28.5, 'cagr': 11.2, 'win_rate': 55.0, 'period': '2015-2024 OOS', 'train_sharpe': 1.05, 'test_sharpe': 0.78, 'sharpe_degradation': 25.7, 'pct_profitable': 85.0}
-    },
-    'CrossSectionalMeanReversion': {
-        'id': 'cross_sectional_mean_reversion',
-        'name': 'Cross-Sectional Mean Reversion',
-        'description': 'Short-term mean reversion strategy based on cross-sectional z-scores.',
-        'status': 'paused',
-        'priority': 3,
-        'doc_file': 'cross_sectional_mean_reversion.md',
-        'backtest': {'sharpe': 0.65, 'max_dd': 25.0, 'cagr': 9.0, 'win_rate': 54.0, 'period': '2015-2024 OOS', 'train_sharpe': 0.90, 'test_sharpe': 0.65, 'sharpe_degradation': 27.8, 'pct_profitable': 78.0}
-    },
-}
-
 _STATE_FILE = Path(__file__).resolve().parent.parent.parent / 'var' / 'strategy_state.json'
 
-STRATEGY_ID_TO_REGISTRY = {
-    'volatility_regime': 'VolatilityRegime',
-    'simple_momentum': 'SimpleMomentum',
-    'cross_sectional_mean_reversion': 'CrossSectionalMeanReversion',
+_EMPTY_BACKTEST = {
+    'sharpe': 0.0, 'max_dd': 0.0, 'cagr': 0.0, 'win_rate': 0.0,
+    'period': 'Pending', 'train_sharpe': 0.0, 'test_sharpe': 0.0,
+    'sharpe_degradation': 0.0, 'pct_profitable': 0.0,
 }
 
-STRATEGY_PARAMETERS = {
-    'volatility_regime': {
-        'vix_lookback': {'type': 'int', 'default': 20, 'description': 'VIX lookback period for SMA calculation'},
-        'vix_bull_threshold': {'type': 'float', 'default': 15.0, 'description': 'VIX threshold for bull regime'},
-        'vix_bear_threshold': {'type': 'float', 'default': 25.0, 'description': 'VIX threshold for bear regime'},
-        'momentum_lookback': {'type': 'int', 'default': 20, 'description': 'Momentum calculation lookback'},
-        'momentum_top_n': {'type': 'int', 'default': 5, 'description': 'Number of top momentum stocks'},
-        'rsi_period': {'type': 'int', 'default': 14, 'description': 'RSI calculation period'},
-        'rsi_oversold': {'type': 'float', 'default': 30.0, 'description': 'RSI oversold threshold'},
-        'rsi_overbought': {'type': 'float', 'default': 70.0, 'description': 'RSI overbought threshold'},
-        'max_position_pct': {'type': 'float', 'default': 0.05, 'description': 'Max position size as % of NAV'},
-        'reduce_exposure_bear': {'type': 'float', 'default': 0.3, 'description': 'Exposure reduction in bear regime'},
-    },
-    'simple_momentum': {
-        'lookback_days': {'type': 'int', 'default': 20, 'description': 'Momentum lookback period'},
-        'top_n': {'type': 'int', 'default': 10, 'description': 'Number of top performers to long'},
-        'bottom_n': {'type': 'int', 'default': 10, 'description': 'Number of bottom performers to short'},
-        'rebalance_freq': {'type': 'str', 'default': 'monthly', 'description': 'Rebalancing frequency'},
-    },
-    'cross_sectional_mean_reversion': {
-        'lookback': {'type': 'int', 'default': 5, 'description': 'Return lookback period'},
-        'zscore_threshold': {'type': 'float', 'default': 1.5, 'description': 'Z-score entry threshold'},
-    },
-}
+
+def _to_snake_case(name: str) -> str:
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def _get_first_docstring(strategy_file: Path) -> str:
+    try:
+        content = strategy_file.read_text(encoding='utf-8')
+        match = re.search(r'"""(.*?)"""', content, re.DOTALL)
+        if match:
+            lines = match.group(1).strip().splitlines()
+            return lines[0] if lines else ''
+    except Exception:
+        pass
+    return ''
+
+
+def _extract_param_metadata(strategy_file: Path, config_params: dict) -> dict:
+    result = {}
+    for pname, pdefault in config_params.items():
+        if pname == 'symbols':
+            continue
+        ptype = type(pdefault).__name__
+        type_map = {'int': 'int', 'float': 'float', 'str': 'str', 'bool': 'bool'}
+        result[pname] = {
+            'type': type_map.get(ptype, 'str'),
+            'default': pdefault,
+        }
+    try:
+        content = strategy_file.read_text(encoding='utf-8')
+        param_docs = re.findall(r'(\w+):\s*(?:int|float|str|bool)\s*=.*?"""?(.*?)(?:"""|$)', content)
+    except Exception:
+        pass
+    return result
+
+
+def _discover_strategies_dynamic() -> tuple:
+    from quant.features.strategies.registry import StrategyRegistry
+
+    available: Dict[str, dict] = {}
+    id_to_registry: Dict[str, str] = {}
+    dir_map: Dict[str, str] = {}
+    parameters: Dict[str, dict] = {}
+
+    for name in StrategyRegistry.list_strategies():
+        sid = _to_snake_case(name)
+
+        strategy_dir = STRATEGIES_DIR / sid
+        if not strategy_dir.is_dir():
+            for item in STRATEGIES_DIR.iterdir():
+                if item.is_dir() and not item.name.startswith(('_' or '.')):
+                    cfg = item / 'config.yaml'
+                    if cfg.exists():
+                        try:
+                            import yaml
+                            with open(cfg) as f:
+                                data = yaml.safe_load(f)
+                            if data and data.get('strategy', {}).get('name') == name:
+                                strategy_dir = item
+                                break
+                        except Exception:
+                            pass
+
+        description = _get_first_docstring(strategy_dir / 'strategy.py') if strategy_dir.is_dir() else ''
+
+        dir_name = strategy_dir.name if strategy_dir.is_dir() else sid
+        doc_file = f'{sid}.md'
+
+        backtest = dict(_EMPTY_BACKTEST)
+        bt_file = STRATEGIES_DIR.parent.parent / 'infrastructure' / 'var' / 'research' / f'{name}_*_metrics.json'
+        bt_files = sorted(Path(str(bt_file).rsplit('*', 1)[0]).parent.glob(f'{name}_*_metrics.json'))
+        if bt_files:
+            try:
+                with open(bt_files[-1]) as f:
+                    m = json.load(f)
+                backtest = {
+                    'sharpe': m.get('sharpe_ratio', 0.0),
+                    'max_dd': abs(m.get('max_drawdown_pct', 0.0)),
+                    'cagr': m.get('total_return_pct', 0.0) / 10.0 if m.get('total_return_pct') else 0.0,
+                    'win_rate': m.get('win_rate_pct', 0.0),
+                    'period': m.get('start', 'Pending') + ' ~ ' + m.get('end', '') if m.get('start') else 'Pending',
+                    'train_sharpe': 0.0,
+                    'test_sharpe': m.get('sharpe_ratio', 0.0),
+                    'sharpe_degradation': 0.0,
+                    'pct_profitable': m.get('win_rate_pct', 0.0),
+                }
+            except Exception:
+                pass
+
+        config_params = {}
+        cfg_path = strategy_dir / 'config.yaml' if strategy_dir.is_dir() else None
+        if cfg_path and cfg_path.exists():
+            try:
+                import yaml
+                with open(cfg_path) as f:
+                    cfg_data = yaml.safe_load(f)
+                config_params = cfg_data.get('parameters', {}) if cfg_data else {}
+            except Exception:
+                pass
+
+        params = _extract_param_metadata(
+            strategy_dir / 'strategy.py' if strategy_dir.is_dir() else None,
+            config_params,
+        )
+
+        available[name] = {
+            'id': sid,
+            'name': name,
+            'description': description,
+            'status': 'active',
+            'priority': len(available) + 1,
+            'doc_file': doc_file,
+            'backtest': backtest,
+        }
+        id_to_registry[sid] = name
+        dir_map[sid] = dir_name
+        parameters[sid] = params
+
+    return available, id_to_registry, dir_map, parameters
+
+
+AVAILABLE_STRATEGIES: Dict[str, dict] = {}
+STRATEGY_ID_TO_REGISTRY: Dict[str, str] = {}
+_STRATEGY_DIR_MAP: Dict[str, str] = {}
+STRATEGY_PARAMETERS: Dict[str, dict] = {}
+
+
+def _build_strategy_state():
+    global AVAILABLE_STRATEGIES, STRATEGY_ID_TO_REGISTRY, _STRATEGY_DIR_MAP, STRATEGY_PARAMETERS
+    avail, id2reg, dmap, params = _discover_strategies_dynamic()
+    AVAILABLE_STRATEGIES = avail
+    STRATEGY_ID_TO_REGISTRY = id2reg
+    _STRATEGY_DIR_MAP = dmap
+    STRATEGY_PARAMETERS = params
+    _load_strategy_state()
+
 
 _cio_engine = None
 _last_snapshot_date = None
@@ -227,7 +304,7 @@ def run_quant_system():
 def _get_cio_engine():
     global _cio_engine
     if _cio_engine is None:
-        from quant.features.cio.cio_engine import CIOEngine
+        from quant.features.cio.cioengine import CIOEngine
         from quant.features.cio.market_assessor import MarketAssessor
         from quant.features.cio.news_analyzer import NewsAnalyzer
         from quant.features.cio.weight_allocator import WeightAllocator
@@ -257,3 +334,6 @@ def _maybe_snapshot(tracker, total_nav):
         _last_snapshot_date = today
     except Exception:
         pass
+
+
+_build_strategy_state()

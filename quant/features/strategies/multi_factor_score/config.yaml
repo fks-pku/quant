@@ -1,0 +1,16 @@
+strategy:
+  name: MultiFactorScore
+  enabled: true
+  priority: 5
+
+parameters:
+  symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, JPM, SPY, QQQ, IWM, XLF, XLE, XLK]
+  momentum_lookback: 20
+  rsi_period: 14
+  volume_lookback: 20
+  momentum_weight: 0.4
+  rsi_weight: 0.3
+  volume_weight: 0.3
+  top_pct: 0.2
+  holding_days: 5
+  max_position_pct: 0.10

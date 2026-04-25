@@ -1,0 +1,13 @@
+strategy:
+  name: ATRVolatilityBreakout
+  enabled: true
+  priority: 4
+
+parameters:
+  symbols: [AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, SPY, QQQ]
+  atr_period: 14
+  breakout_mult: 1.5
+  stop_atr_mult: 2.0
+  max_holding_days: 10
+  check_interval_days: 5
+  max_position_pct: 0.08

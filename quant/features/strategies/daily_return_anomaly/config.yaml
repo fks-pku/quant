@@ -1,0 +1,13 @@
+strategy:
+  name: DailyReturnAnomaly
+  enabled: true
+  priority: 7
+
+parameters:
+  symbols: ["000333", "000651", "000858", "000568", "000001", "000538", "000895", "000725", "000625", "000878", "000709", "000876", "000786", "000063", "000938"]
+  streak_short: 3
+  streak_long: 8
+  short_weight: 0.6
+  holding_days: 5
+  top_pct: 0.2
+  max_position_pct: 0.10

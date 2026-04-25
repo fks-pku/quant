@@ -1,0 +1,29 @@
+{
+  "strategy": "VolatilityScaledTrend",
+  "start": "2015-01-01",
+  "end": "2024-12-31",
+  "symbols": [
+    "000300",
+    "000905",
+    "399006"
+  ],
+  "initial_cash": 1000000,
+  "final_nav": 984573.86,
+  "total_return_pct": -1.54,
+  "sharpe_ratio": -0.09,
+  "sortino_ratio": -0.11,
+  "max_drawdown_pct": -6.24,
+  "win_rate_pct": 66.7,
+  "profit_factor": 0.34,
+  "total_trades": 3,
+  "calmar_ratio": -0.0,
+  "payoff_ratio": 0.17,
+  "expectancy": -5114.24,
+  "diagnostics": {
+    "volume_limited_trades": 0,
+    "lot_adjusted_trades": 1,
+    "t1_rejected_sells": 0,
+    "total_commission": 368.01,
+    "cost_drag_pct": 2.4
+  }
+}

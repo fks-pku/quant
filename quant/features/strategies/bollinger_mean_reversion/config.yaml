@@ -1,0 +1,16 @@
+strategy:
+  name: BollingerMeanReversion
+  enabled: true
+  priority: 3
+
+parameters:
+  symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, JPM]
+  bb_lookback: 20
+  bb_num_std: 2.0
+  rsi_period: 14
+  rsi_oversold: 30.0
+  rsi_overbought: 70.0
+  atr_period: 14
+  stop_atr_mult: 1.5
+  holding_days: 5
+  max_position_pct: 0.10

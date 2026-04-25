@@ -1,0 +1,15 @@
+strategy:
+  name: RegimeFilteredMomentum
+  enabled: true
+  priority: 8
+
+parameters:
+  symbols: ["000333", "000651", "000858", "000001", "000568", "000725", "000625", "000878", "000709", "000876", "000538", "000786", "000063", "000938", "000825"]
+  benchmark_symbol: "000300"
+  momentum_lookback: 20
+  vol_lookback: 20
+  vol_low_threshold: 0.15
+  vol_high_threshold: 0.25
+  holding_days: 21
+  top_pct: 0.2
+  max_position_pct: 0.10
