@@ -116,6 +116,57 @@ function DrawdownChart({ curve, isHK = false }) {
   );
 }
 
+function TimelineSection({ data, isHK }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button className="bt-timeline-toggle" onClick={() => setOpen(true)}>
+        Show Trade Timeline ({data.length} orders)
+      </button>
+    );
+  }
+  return (
+    <div className="bt-trades" style={{ marginTop: 20 }}>
+      <div className="bt-trades-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Trade Timeline ({data.length} orders)</span>
+        <button className="bt-timeline-toggle" style={{ width: 'auto', margin: 0, padding: '4px 12px' }} onClick={() => setOpen(false)}>
+          Collapse
+        </button>
+      </div>
+      <div className="bt-trades-scroll" style={{ maxHeight: 400 }}>
+        <table className="bt-timeline-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Action</th>
+              <th>Symbol</th>
+              <th>Qty</th>
+              <th>Price</th>
+              <th>Position</th>
+              <th>P&L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((t, i) => (
+              <tr key={i}>
+                <td>{new Date(t.date).toLocaleDateString()}</td>
+                <td style={{ color: t.action === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>{t.action}</td>
+                <td style={{ fontWeight: 600 }}>{t.symbol}</td>
+                <td>{t.action === 'BUY' ? '+' : '-'}{t.quantity}</td>
+                <td>{fmtCurrency(t.price, isHK)}</td>
+                <td style={{ fontWeight: 600 }}>{t.position}</td>
+                <td style={t.pnl != null ? { color: colorPnl(t.pnl), fontWeight: 600 } : { color: 'var(--text-muted)' }}>
+                  {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmtCurrency(t.pnl, isHK)}` : '\u2014'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function BacktestDashboard() {
   const [strategy, setStrategy] = useState('SimpleMomentum');
   const [startDate, setStartDate] = useState('2020-01-01');
@@ -387,60 +438,98 @@ export default function BacktestDashboard() {
             <DrawdownChart curve={result.equity_curve} isHK={isHK} />
           </div>
 
-          {result.trades && result.trades.length > 0 && (
-            <div className="bt-trades">
-              <div className="bt-trades-title">Trades ({result.trades.length})</div>
-              <div className="bt-trades-scroll">
-                <table className="bt-trades-table">
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Entry Date</th>
-                      <th>Exit Date</th>
-                      <th>Symbol</th>
-                      <th>Side</th>
-                      <th>Qty</th>
-                      <th>Entry Price</th>
-                      <th>Exit Price</th>
-                      <th>P&L</th>
-                      <th>Duration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.trades.map((t, i) => {
-                      const isOpen = t.status === 'open';
-                      const entryD = new Date(t.entry_time);
-                      const exitD = t.exit_time ? new Date(t.exit_time) : null;
-                      const durMs = exitD ? exitD - entryD : 0;
-                      const durDays = Math.round(durMs / 86400000);
+          {result.trades && result.trades.length > 0 && (() => {
+            const openTrades = result.trades.filter(t => t.status === 'open');
+            const closedTrades = result.trades.filter(t => t.status === 'closed');
+            return (
+              <>
+                {openTrades.length > 0 && (
+                  <div className="bt-position-cards">
+                    {openTrades.map((t, i) => {
+                      const mv = t.exit_price * t.quantity;
+                      const weight = result.metrics?.final_nav ? (mv / result.metrics.final_nav * 100) : 0;
+                      const pnlPct = t.entry_price > 0 ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : 0;
                       return (
-                        <tr key={i} className={isOpen ? 'trade-open' : ''}>
-                          <td>
-                            <span className={`bt-status-badge ${isOpen ? 'bt-status-open' : 'bt-status-closed'}`}>
-                              {isOpen ? '持仓中' : '已完成'}
-                            </span>
-                          </td>
-                          <td>{entryD.toLocaleDateString()}</td>
-                          <td>{exitD ? exitD.toLocaleDateString() : '—'}</td>
-                          <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.symbol}</td>
-                          <td style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{t.side}</td>
-                          <td>{t.quantity}</td>
-                          <td>{fmtCurrency(t.entry_price, isHK)}</td>
-                          <td style={isOpen ? { color: 'var(--accent-cyan)' } : {}}>
-                            {fmtCurrency(t.exit_price, isHK)}
-                          </td>
-                          <td className={isOpen ? 'bt-pnl-unrealized' : ''} style={{ color: isOpen ? 'var(--accent-amber)' : colorPnl(t.pnl), fontWeight: 600 }}>
+                        <div key={i} className={`bt-position-card ${t.pnl >= 0 ? 'bt-card-profit' : 'bt-card-loss'}`}>
+                          <div className="bt-card-symbol">{t.symbol}</div>
+                          <div className="bt-card-pnl" style={{ color: t.pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
                             {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
-                          </td>
-                          <td>{isOpen ? '—' : `${durDays}d`}</td>
-                        </tr>
+                            <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
+                              ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
+                            </span>
+                          </div>
+                          <div className="bt-card-details">
+                            <span className="bt-card-label">持仓</span>
+                            <span className="bt-card-value">{t.quantity.toLocaleString()} 股</span>
+                            <span className="bt-card-label">成本</span>
+                            <span className="bt-card-value">{fmtCurrency(t.entry_price, isHK)}</span>
+                            <span className="bt-card-label">现价</span>
+                            <span className="bt-card-value" style={{ color: 'var(--accent-cyan)' }}>{fmtCurrency(t.exit_price, isHK)}</span>
+                            <span className="bt-card-label">市值</span>
+                            <span className="bt-card-value">{fmtCurrency(mv, isHK)}</span>
+                            <span className="bt-card-label">权重</span>
+                            <span className="bt-card-value">{weight.toFixed(1)}%</span>
+                          </div>
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+                  </div>
+                )}
+
+                {closedTrades.length > 0 && (
+                  <div className="bt-trades">
+                    <div className="bt-trades-title">已完成交易 ({closedTrades.length})</div>
+                    <div className="bt-trades-scroll">
+                      <table className="bt-trades-table">
+                        <thead>
+                          <tr>
+                            <th>Entry Date</th>
+                            <th>Exit Date</th>
+                            <th>Symbol</th>
+                            <th>Qty</th>
+                            <th>Entry Price</th>
+                            <th>Exit Price</th>
+                            <th>P&L</th>
+                            <th>Return%</th>
+                            <th>Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {closedTrades.map((t, i) => {
+                            const entryD = new Date(t.entry_time);
+                            const exitD = new Date(t.exit_time);
+                            const durDays = Math.round((exitD - entryD) / 86400000);
+                            const retPct = t.entry_price > 0 ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : 0;
+                            return (
+                              <tr key={i}>
+                                <td>{entryD.toLocaleDateString()}</td>
+                                <td>{exitD.toLocaleDateString()}</td>
+                                <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.symbol}</td>
+                                <td>{t.quantity}</td>
+                                <td>{fmtCurrency(t.entry_price, isHK)}</td>
+                                <td>{fmtCurrency(t.exit_price, isHK)}</td>
+                                <td style={{ color: colorPnl(t.pnl), fontWeight: 600 }}>
+                                  {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
+                                </td>
+                                <td style={{ color: colorPnl(retPct), fontWeight: 600 }}>
+                                  {retPct >= 0 ? '+' : ''}{retPct.toFixed(1)}%
+                                </td>
+                                <td>{durDays}d</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {result.trade_timeline && result.trade_timeline.length > 0 && (
+                  <TimelineSection data={result.trade_timeline} isHK={isHK} />
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
     </div>
