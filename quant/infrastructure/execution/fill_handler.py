@@ -1,6 +1,6 @@
 """Fill processing and reconciliation with portfolio updates."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional
 import threading
 
@@ -8,6 +8,14 @@ from quant.domain.models.fill import Fill
 from quant.domain.models.order import OrderStatus
 from quant.domain.ports.event_publisher import EventPublisher
 from quant.shared.utils.logger import setup_logger
+
+
+def _is_cn_symbol(symbol: str) -> bool:
+    return (
+        symbol.isdigit()
+        and len(symbol) == 6
+        and symbol[0] in ("0", "3", "6", "8", "9")
+    )
 
 
 class FillHandler:
@@ -73,18 +81,26 @@ class FillHandler:
         return fill
 
     def _update_portfolio(self, fill: Fill) -> None:
-        """Update portfolio positions based on fill."""
         if fill.side.upper() == "BUY":
             cost = fill.price * fill.quantity + fill.commission
+            today = fill.timestamp.date() if hasattr(fill.timestamp, 'date') else date.today()
             self.portfolio.update_position(
                 symbol=fill.symbol,
                 quantity=fill.quantity,
                 price=fill.price,
                 cost=cost,
+                trade_date=today,
             )
         elif fill.side.upper() == "SELL":
             pos = self.portfolio.get_position(fill.symbol)
-            sell_qty = min(fill.quantity, pos.quantity if pos else 0)
+            available = pos.quantity if pos else 0
+
+            if _is_cn_symbol(fill.symbol) and pos and hasattr(fill.timestamp, 'date'):
+                today = fill.timestamp.date()
+                settled = pos.settled_quantity(today)
+                available = min(available, settled)
+
+            sell_qty = min(fill.quantity, available)
             if sell_qty <= 0:
                 return
             proceeds = fill.price * sell_qty - fill.commission

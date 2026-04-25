@@ -1,7 +1,7 @@
 """Portfolio tracker for positions, NAV, and P&L."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Any
 import threading
 
@@ -75,6 +75,7 @@ class Portfolio:
         price: float,
         cost: float,
         sector: Optional[str] = None,
+        trade_date: Optional[date] = None,
     ) -> None:
         """Update or create a position."""
         with self._lock:
@@ -97,8 +98,11 @@ class Portfolio:
                     new_qty = quantity + pos.quantity
                     pos.avg_cost = new_cost / new_qty if new_qty != 0 else 0
                     pos.quantity = new_qty
+                    if trade_date is not None:
+                        pos.add_buy_lot(trade_date, quantity)
                 else:
                     pos.quantity += quantity
+                    pos.remove_sell_lots(abs(quantity))
                     if abs(pos.quantity) < 1e-10:
                         pos.quantity = 0.0
                         pos.avg_cost = 0.0
@@ -138,6 +142,21 @@ class Portfolio:
             return [
                 pos for pos in self.positions.values() if pos.quantity != 0
             ]
+
+    @staticmethod
+    def is_cn_symbol(symbol: str) -> bool:
+        return (
+            symbol.isdigit()
+            and len(symbol) == 6
+            and symbol[0] in ("0", "3", "6", "8", "9")
+        )
+
+    def settled_quantity(self, symbol: str, as_of: date) -> float:
+        with self._lock:
+            pos = self.positions.get(symbol)
+            if pos is None:
+                return 0.0
+            return pos.settled_quantity(as_of)
 
     def get_sector_exposure(self) -> Dict[str, float]:
         """Get exposure by sector as percentage of NAV."""
