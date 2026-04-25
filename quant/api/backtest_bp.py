@@ -149,6 +149,23 @@ def run_backtest():
                     "pnl": float(pos["unrealized_pnl"]),
                 })
 
+            timeline_list = []
+            position_tracker = {}
+            for t in sorted(result.trades, key=lambda x: x.fill_date or x.entry_time):
+                if t.side == "BUY":
+                    position_tracker[t.symbol] = position_tracker.get(t.symbol, 0) + t.quantity
+                else:
+                    position_tracker[t.symbol] = position_tracker.get(t.symbol, 0) - t.quantity
+                timeline_list.append({
+                    "date": str(t.fill_date or t.entry_time),
+                    "action": t.side,
+                    "symbol": t.symbol,
+                    "quantity": int(t.quantity),
+                    "price": float(t.fill_price if t.fill_price else (t.entry_price if t.side == "BUY" else t.exit_price)),
+                    "position": int(position_tracker.get(t.symbol, 0)),
+                    "pnl": float(t.pnl) if t.side == "SELL" else None,
+                })
+
             sell_trades = [t for t in result.trades if t.side == "SELL"]
             winning = [t for t in sell_trades if t.pnl > 0]
             losing = [t for t in sell_trades if t.pnl < 0]
@@ -182,6 +199,7 @@ def run_backtest():
                     "metrics": metrics,
                     "equity_curve": equity_serializable,
                     "trades": trades_list,
+                    "trade_timeline": timeline_list,
                     "description": f"{strategy_id} backtest from {start_date} to {end_date} on {', '.join(symbols)}",
                 }
         except Exception as e:
