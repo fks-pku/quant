@@ -122,6 +122,8 @@ def run_backtest():
 
             trades_list = []
             for t in result.trades:
+                if t.side != "SELL":
+                    continue
                 trades_list.append({
                     "entry_time": str(t.entry_time),
                     "exit_time": str(t.exit_time),
@@ -133,8 +135,9 @@ def run_backtest():
                     "pnl": float(t.pnl),
                 })
 
-            winning = [t for t in result.trades if t.pnl > 0]
-            losing = [t for t in result.trades if t.pnl < 0]
+            sell_trades = [t for t in result.trades if t.side == "SELL"]
+            winning = [t for t in sell_trades if t.pnl > 0]
+            losing = [t for t in sell_trades if t.pnl < 0]
             days = max(1, (datetime.strptime(end_date, '%Y-%m-%d') - datetime.strptime(start_date, '%Y-%m-%d')).days)
             cagr = float(result.total_return * 100 / max(1, days / 365.25))
 
