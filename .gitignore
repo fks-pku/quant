@@ -28,6 +28,9 @@ var/
 .DS_Store
 Thumbs.db
 
+# Playwright browser snapshots
+.playwright-mcp/
+
 # Local launchers (platform-specific)
 start_ui.ps1
 start_ui_windows.bat
