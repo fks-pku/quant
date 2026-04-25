@@ -22,7 +22,7 @@ class TestMultiBuyAveragesEntryPrice:
         entry_prices = {}
         diag = _make_diag()
 
-        bar1 = {"close": 100, "timestamp": datetime(2024, 1, 1)}
+        bar1 = {"open": 100, "close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
             portfolio, "AAPL", bar1, entry_times, entry_prices, diag,
@@ -31,7 +31,7 @@ class TestMultiBuyAveragesEntryPrice:
         assert portfolio.positions["AAPL"].avg_cost == 100
         assert portfolio.positions["AAPL"].quantity == 10
 
-        bar2 = {"close": 110, "timestamp": datetime(2024, 1, 2)}
+        bar2 = {"open": 110, "close": 110, "timestamp": datetime(2024, 1, 2)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 110},
             portfolio, "AAPL", bar2, entry_times, entry_prices, diag,
@@ -49,19 +49,19 @@ class TestSellPnlUsesAvgCost:
         entry_prices = {}
         diag = _make_diag()
 
-        bar1 = {"close": 100, "timestamp": datetime(2024, 1, 1)}
+        bar1 = {"open": 100, "close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
             portfolio, "AAPL", bar1, entry_times, entry_prices, diag,
         )
 
-        bar2 = {"close": 110, "timestamp": datetime(2024, 1, 2)}
+        bar2 = {"open": 110, "close": 110, "timestamp": datetime(2024, 1, 2)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 110},
             portfolio, "AAPL", bar2, entry_times, entry_prices, diag,
         )
 
-        bar3 = {"close": 120, "timestamp": datetime(2024, 1, 3)}
+        bar3 = {"open": 120, "close": 120, "timestamp": datetime(2024, 1, 3)}
         trade = bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "SELL", "order_type": "market", "price": 120},
             portfolio, "AAPL", bar3, entry_times, entry_prices, diag,
@@ -69,7 +69,8 @@ class TestSellPnlUsesAvgCost:
 
         assert trade is not None
         assert trade.entry_price == 105
-        expected_pnl = (120 - 105) * 10 - max(10 * 0.005, 1.0)
+        sell_commission = sum(trade.cost_breakdown.values())
+        expected_pnl = (120 - 105) * 10 - sell_commission
         assert trade.pnl == pytest.approx(expected_pnl)
 
 
@@ -139,7 +140,7 @@ class TestSlippageDirectionCorrect:
 
         slippage = 100 * (100 / 10000)
 
-        bar = {"close": 100, "timestamp": datetime(2024, 1, 1)}
+        bar = {"open": 100, "close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
             portfolio, "AAPL", bar, entry_times, entry_prices, diag,
@@ -167,7 +168,7 @@ class TestCashTrackingAfterBuyAndSell:
         entry_prices = {}
         diag = _make_diag()
 
-        bar1 = {"close": 100, "timestamp": datetime(2024, 1, 1)}
+        bar1 = {"open": 100, "close": 100, "timestamp": datetime(2024, 1, 1)}
         bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "BUY", "order_type": "market", "price": 100},
             portfolio, "AAPL", bar1, entry_times, entry_prices, diag,
@@ -176,7 +177,7 @@ class TestCashTrackingAfterBuyAndSell:
         buy_commission = max(10 * 0.005, 1.0)
         assert portfolio.cash == 100000 - 100 * 10 - buy_commission
 
-        bar2 = {"close": 110, "timestamp": datetime(2024, 1, 2)}
+        bar2 = {"open": 110, "close": 110, "timestamp": datetime(2024, 1, 2)}
         trade = bt._execute_order(
             {"symbol": "AAPL", "quantity": 10, "side": "SELL", "order_type": "market", "price": 110},
             portfolio, "AAPL", bar2, entry_times, entry_prices, diag,

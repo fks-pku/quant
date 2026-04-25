@@ -39,6 +39,7 @@ class RiskEngine:
         order_value: float,
         sector: Optional[str] = None,
         side: Optional[str] = None,
+        as_of_date: Optional[date] = None,
     ) -> Tuple[bool, List[RiskCheckResult]]:
         """
         Run all risk checks before order submission.
@@ -48,7 +49,7 @@ class RiskEngine:
         approved = True
 
         if side == 'SELL':
-            results.append(self._check_cn_t1_settlement(symbol, quantity))
+            results.append(self._check_cn_t1_settlement(symbol, quantity, as_of_date))
             if not results[-1].passed:
                 approved = False
 
@@ -76,7 +77,7 @@ class RiskEngine:
 
         return approved, results
 
-    def _check_cn_t1_settlement(self, symbol: str, quantity: float) -> RiskCheckResult:
+    def _check_cn_t1_settlement(self, symbol: str, quantity: float, as_of_date: Optional[date] = None) -> RiskCheckResult:
         if not Portfolio.is_cn_symbol(symbol):
             return RiskCheckResult(
                 passed=True, is_hard_limit=False,
@@ -85,7 +86,7 @@ class RiskEngine:
                 current_value=0, limit_value=0,
             )
 
-        today = date.today()
+        today = as_of_date or date.today()
         settled = self.portfolio.settled_quantity(symbol, today)
         pos = self.portfolio.get_position(symbol)
         total_qty = pos.quantity if pos else 0

@@ -23,11 +23,24 @@ HK_SFC_LEVY_RATE = 0.0000278
 HK_CLEARING_RATE = 0.00002
 HK_TRADING_FEE_RATE = 0.00005
 HK_MIN_COMMISSION = 3.0
+HK_TRADING_SYSTEM_FEE = 0.50
 
 CN_COMMISSION_RATE = 0.00025
 CN_STAMP_DUTY_RATE = 0.0005
-CN_TRANSFER_FEE_RATE = 0.00001
+CN_TRANSFER_FEE_RATE = 0.0000341
+CN_REGULATOR_FEE_RATE = 0.0000541
 CN_MIN_COMMISSION = 5.0
+
+US_SEC_FEE_RATE = 0.000000278
+US_FINRA_TAF_PER_SHARE = 0.000166
+
+DEFAULT_EXCHANGE_RATES = {
+    "HKD": 0.128,
+    "CNY": 0.138,
+}
+
+CN_DIVIDEND_TAX_SHORT_DAYS = 30
+CN_DIVIDEND_TAX_MEDIUM_DAYS = 365
 
 
 @dataclass
@@ -86,6 +99,10 @@ class Backtester:
         self.event_bus = event_bus
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
         self.lot_sizes = lot_sizes or {}
+        self.exchange_rates = {
+            **DEFAULT_EXCHANGE_RATES,
+            **config.get("backtest", {}).get("exchange_rates", {}),
+        }
 
         commission_config = config.get("execution", {}).get("commission", {})
         self.commission = CommissionConfig(
@@ -96,6 +113,25 @@ class Backtester:
 
     def _get_lot_size(self, symbol: str) -> int:
         return self.lot_sizes.get(symbol, DEFAULT_LOT_SIZE)
+
+    def _get_fx_rate(self, market: str) -> float:
+        if market == "HK":
+            return self.exchange_rates.get("HKD", 0.128)
+        if market == "CN":
+            return self.exchange_rates.get("CNY", 0.138)
+        return 1.0
+
+    @staticmethod
+    def _is_cn_price_at_limit(symbol: str, open_price: float, prev_close: float) -> bool:
+        if prev_close <= 0:
+            return False
+        if symbol.startswith("688") or symbol.startswith("300"):
+            limit_pct = 0.20
+        else:
+            limit_pct = 0.10
+        upper = round(prev_close * (1 + limit_pct), 2)
+        lower = round(prev_close * (1 - limit_pct), 2)
+        return open_price >= upper or open_price <= lower
 
     @staticmethod
     def _is_suspended(bar: Dict, prev_bar: Optional[Dict]) -> bool:
@@ -181,7 +217,7 @@ class Backtester:
 
                             if bar_data['_suspended']:
                                 any_suspended_today = True
-                            last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0))
+                            last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0)) * self._get_fx_rate(self._detect_market(symbol))
 
                             for strategy in strategies:
                                 if hasattr(strategy, "on_data"):
@@ -205,7 +241,7 @@ class Backtester:
 
                                     if bar_data['_suspended']:
                                         any_suspended_today = True
-                                    last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0))
+                                    last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0)) * self._get_fx_rate(self._detect_market(symbol))
 
                                     for strategy in strategies:
                                         if hasattr(strategy, "on_data"):
@@ -218,7 +254,7 @@ class Backtester:
             if any_suspended_today:
                 diag.suspended_days += 1
 
-            self._process_dividends(data_provider, portfolio, symbols, current_date, last_prices)
+            self._process_dividends(data_provider, portfolio, symbols, current_date, last_prices, entry_times)
 
             for order in deferred_orders:
                 order['_deferred_days'] = order.get('_deferred_days', 0) + 1
@@ -243,7 +279,7 @@ class Backtester:
                     if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
                         deferred_orders.append(order)
                     continue
-                trade = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag)
+                trade = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_bars.get(sym))
                 if trade:
                     all_trades.append(trade)
                     for s in strategies:
@@ -251,6 +287,8 @@ class Backtester:
                             s.on_fill(s.context, trade)
 
             for strategy in strategies:
+                if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
+                    strategy.context.order_manager._current_date = current_date.date()
                 if hasattr(strategy, "on_after_trading"):
                     strategy.on_after_trading(strategy.context, current_date.date())
 
@@ -324,6 +362,7 @@ class Backtester:
         symbols: List[str],
         current_date: datetime,
         last_prices: Dict[str, float],
+        entry_times: Dict[str, datetime],
     ) -> None:
         if not data_provider or not hasattr(data_provider, 'get_dividend_for_date'):
             return
@@ -334,12 +373,17 @@ class Backtester:
             div = data_provider.get_dividend_for_date(symbol, current_date)
             if not div:
                 continue
+            market = self._detect_market(symbol)
+            fx = self._get_fx_rate(market)
             cash_div = float(div.get('cash_dividend', 0) or 0)
             stock_div = float(div.get('stock_dividend', 0) or 0)
             if cash_div > 0:
-                payment = cash_div * pos.quantity
-                portfolio.cash += payment
-                logger.info(f"{symbol} ex-div: cash {cash_div:.4f}/share x {pos.quantity} = {payment:.2f}")
+                payment = cash_div * pos.quantity * fx
+                tax = 0.0
+                if market == "CN":
+                    tax = self._calculate_cn_dividend_tax(pos, cash_div, current_date, fx)
+                portfolio.cash += payment - tax
+                logger.info(f"{symbol} ex-div: cash {cash_div:.4f}/share x {pos.quantity} = {payment:.2f}, tax={tax:.2f}")
             if stock_div > 0:
                 new_shares = stock_div * pos.quantity
                 portfolio.update_position(
@@ -347,6 +391,20 @@ class Backtester:
                     cost=0,
                 )
                 logger.info(f"{symbol} ex-div: stock {stock_div:.4f}/share x {pos.quantity} = {new_shares:.0f} new shares")
+
+    def _calculate_cn_dividend_tax(self, pos: Any, cash_div: float, current_date: datetime, fx: float) -> float:
+        total_tax = 0.0
+        today = current_date.date() if hasattr(current_date, 'date') else current_date
+        for lot_date, lot_qty in pos._lots.items():
+            holding_days = (today - lot_date).days
+            if holding_days <= CN_DIVIDEND_TAX_SHORT_DAYS:
+                rate = 0.20
+            elif holding_days <= CN_DIVIDEND_TAX_MEDIUM_DAYS:
+                rate = 0.10
+            else:
+                rate = 0.0
+            total_tax += cash_div * lot_qty * rate * fx
+        return total_tax
 
     def _update_portfolio_prices(self, portfolio: Portfolio, last_prices: Dict[str, float]) -> None:
         for symbol, pos in portfolio.positions.items():
@@ -368,12 +426,14 @@ class Backtester:
             def __init__(self, risk_engine):
                 self._pending_orders: List[Dict] = []
                 self._risk_engine = risk_engine
+                self._current_date: Optional[date] = None
 
             def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
                 if self._risk_engine and price and price > 0:
                     order_value = price * quantity
                     approved, _ = self._risk_engine.check_order(
-                        symbol, quantity, price, order_value, side=side
+                        symbol, quantity, price, order_value, side=side,
+                        as_of_date=self._current_date,
                     )
                     if not approved:
                         return None
@@ -412,15 +472,26 @@ class Backtester:
         entry_times: Dict[str, datetime],
         entry_prices: Dict[str, float],
         diag: BacktestDiagnostics,
+        prev_bar: Optional[Dict] = None,
     ) -> Optional[Trade]:
-        fill_price = bar.get('open', bar.get('close', 0))
-        if not fill_price or fill_price <= 0:
+        raw_open = bar.get('open')
+        if not raw_open or raw_open <= 0:
             return None
 
         signal_date = order.get('_signal_date')
         fill_ts = bar.get('timestamp', datetime.now())
         if not isinstance(fill_ts, datetime):
             fill_ts = pd.Timestamp(fill_ts).to_pydatetime()
+
+        market = self._detect_market(symbol)
+        fx = self._get_fx_rate(market)
+
+        if market == "CN" and prev_bar:
+            prev_close = prev_bar.get('close', 0)
+            if self._is_cn_price_at_limit(symbol, raw_open, prev_close):
+                return None
+
+        fill_price = raw_open * fx
 
         diag.total_fill_delay_days += order.get('_deferred_days', 0)
         diag.fill_count += 1
@@ -432,28 +503,40 @@ class Backtester:
             fill_price -= slippage
 
         quantity = order['quantity']
-        market = self._detect_market(symbol)
         lot_size = self._get_lot_size(symbol)
 
         if market in ("HK", "CN"):
-            lot_qty = (int(quantity) // lot_size) * lot_size
-            if lot_qty < lot_size:
-                return None
-            if lot_qty != int(quantity):
-                diag.lot_adjusted_trades += 1
-            quantity = float(lot_qty)
+            if order['side'] == 'BUY':
+                lot_qty = (int(quantity) // lot_size) * lot_size
+                if lot_qty < lot_size:
+                    return None
+                if lot_qty != int(quantity):
+                    diag.lot_adjusted_trades += 1
+                quantity = float(lot_qty)
+            else:
+                lot_qty = (int(quantity) // lot_size) * lot_size
+                remainder = int(quantity) - lot_qty
+                if lot_qty > 0:
+                    adjusted = lot_qty + remainder
+                elif remainder > 0:
+                    adjusted = remainder
+                else:
+                    return None
+                if adjusted != int(quantity):
+                    diag.lot_adjusted_trades += 1
+                quantity = float(adjusted)
 
         bar_volume = bar.get('volume', 0)
         if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
             max_qty = int(bar_volume * VOLUME_PARTICIPATION_LIMIT)
-            if market in ("HK", "CN"):
+            if order['side'] == 'BUY' and market in ("HK", "CN"):
                 max_qty = (max_qty // lot_size) * lot_size
             if max_qty <= 0:
                 return None
             quantity = float(max_qty)
             diag.volume_limited_trades += 1
 
-        cost_breakdown = self._calculate_commission_breakdown(fill_price, quantity, market, order['side'])
+        cost_breakdown = self._calculate_commission_breakdown(fill_price, quantity, market, order['side'], fx)
         commission = sum(cost_breakdown.values())
 
         if order['side'] == 'BUY':
@@ -552,7 +635,7 @@ class Backtester:
             return "CN"
         return "US"
 
-    def _calculate_commission_breakdown(self, price: float, quantity: float, market: str, side: str) -> Dict[str, float]:
+    def _calculate_commission_breakdown(self, price: float, quantity: float, market: str, side: str, fx: float = 1.0) -> Dict[str, float]:
         trade_value = price * quantity
         if market == "US":
             cfg = self.commission.US
@@ -561,23 +644,34 @@ class Backtester:
                 commission = max(commission, cfg.get("min_per_order", 1.0))
             else:
                 commission = max(trade_value * cfg.get("percent", 0.001), cfg.get("min_per_order", 1.0))
-            return {"commission": commission}
+            result: Dict[str, float] = {"commission": commission}
+            if side == 'SELL':
+                sec_fee = max(trade_value * US_SEC_FEE_RATE, 0.0)
+                finra_taf = quantity * US_FINRA_TAF_PER_SHARE
+                result["sec_fee"] = sec_fee
+                result["finra_taf"] = finra_taf
+            return result
 
         if market == "CN":
-            commission = max(trade_value * CN_COMMISSION_RATE, CN_MIN_COMMISSION)
+            min_commission = CN_MIN_COMMISSION * fx
+            commission = max(trade_value * CN_COMMISSION_RATE, min_commission)
             stamp_duty = trade_value * CN_STAMP_DUTY_RATE if side == 'SELL' else 0.0
             transfer_fee = trade_value * CN_TRANSFER_FEE_RATE
+            regulator_fee = trade_value * CN_REGULATOR_FEE_RATE
             return {
                 "commission": commission,
                 "stamp_duty": stamp_duty,
                 "transfer_fee": transfer_fee,
+                "regulator_fee": regulator_fee,
             }
 
-        commission = max(trade_value * HK_COMMISSION_RATE, HK_MIN_COMMISSION)
+        min_commission = HK_MIN_COMMISSION * fx
+        commission = max(trade_value * HK_COMMISSION_RATE, min_commission)
         sfc_levy = trade_value * HK_SFC_LEVY_RATE
         clearing = trade_value * HK_CLEARING_RATE
         trading_fee = trade_value * HK_TRADING_FEE_RATE
         stamp_duty = trade_value * HK_STAMP_DUTY_RATE if side == 'SELL' else 0.0
+        system_fee = HK_TRADING_SYSTEM_FEE * fx
 
         return {
             "commission": commission,
@@ -585,6 +679,7 @@ class Backtester:
             "sfc_levy": sfc_levy,
             "clearing": clearing,
             "trading_fee": trading_fee,
+            "system_fee": system_fee,
         }
 
 
