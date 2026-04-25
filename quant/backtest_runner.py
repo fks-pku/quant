@@ -19,7 +19,9 @@ from quant.features.strategies.registry import StrategyRegistry
 def _normalize_symbol(symbol):
     if symbol.startswith("HK.") or symbol.startswith("US."):
         return symbol
-    if symbol.isdigit() and len(symbol) >= 5:
+    if symbol.isdigit() and len(symbol) == 6 and symbol[0] in ("0", "3", "6", "8", "9"):
+        return symbol
+    if symbol.isdigit() and len(symbol) == 5:
         return f"HK.{symbol}"
     return f"US.{symbol}"
 
@@ -86,6 +88,7 @@ def main(argv=None):
             "commission": {
                 "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
                 "HK": {"type": "hk_realistic"},
+                "CN": {"type": "cn_realistic"},
             }
         },
         "data": {"default_timeframe": "1d"},
@@ -144,6 +147,7 @@ def main(argv=None):
     print(f"  Suspended days:       {diag.suspended_days}")
     print(f"  Volume-limited:       {diag.volume_limited_trades}")
     print(f"  Lot-adjusted:         {diag.lot_adjusted_trades}")
+    print(f"  T+1 rejected sells:   {diag.t1_rejected_sells}")
     print(f"  Avg fill delay:       {diag.avg_fill_delay_days:.1f} days")
     print(f"  Total costs:          ${diag.total_commission:,.2f}")
     print(f"  Cost drag:            {diag.cost_drag_pct:.1f}%")
