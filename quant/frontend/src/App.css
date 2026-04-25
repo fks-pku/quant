@@ -722,8 +722,8 @@ body {
 }
 
 .bt-trades-table tr.trade-open {
-  background: rgba(59, 130, 246, 0.06);
-  border-left: 3px solid #3b82f6;
+  background: rgba(0, 212, 255, 0.06);
+  border-left: 3px solid var(--accent-cyan);
 }
 
 .bt-trades-table tr.trade-open td:first-child {
@@ -746,8 +746,8 @@ body {
 }
 
 .bt-status-open {
-  background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  background: rgba(0, 212, 255, 0.12);
+  color: var(--accent-cyan);
 }
 
 .bt-pnl-unrealized {

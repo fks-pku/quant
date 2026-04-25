@@ -426,10 +426,10 @@ export default function BacktestDashboard() {
                           <td style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{t.side}</td>
                           <td>{t.quantity}</td>
                           <td>{fmtCurrency(t.entry_price, isHK)}</td>
-                          <td style={isOpen ? { color: '#3b82f6' } : {}}>
+                          <td style={isOpen ? { color: 'var(--accent-cyan)' } : {}}>
                             {fmtCurrency(t.exit_price, isHK)}
                           </td>
-                          <td className={isOpen ? 'bt-pnl-unrealized' : ''} style={{ color: isOpen ? '#f59e0b' : colorPnl(t.pnl), fontWeight: 600 }}>
+                          <td className={isOpen ? 'bt-pnl-unrealized' : ''} style={{ color: isOpen ? 'var(--accent-amber)' : colorPnl(t.pnl), fontWeight: 600 }}>
                             {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
                           </td>
                           <td>{isOpen ? '—' : `${durDays}d`}</td>
