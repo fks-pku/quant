@@ -98,6 +98,7 @@ def run_backtest():
                 "execution": {"commission": {
                     "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
                     "HK": {"type": "percent", "percent": 0.001, "min_per_order": 2.0},
+                    "CN": {"type": "cn_realistic"},
                 }},
                 "data": {"default_timeframe": "1d"},
                 "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0, "max_orders_minute": 100},

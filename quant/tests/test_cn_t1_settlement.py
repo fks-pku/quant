@@ -1,6 +1,10 @@
 import pytest
 from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from quant.domain.models.position import Position
 from quant.domain.models.order import Order, OrderSide, OrderType, OrderStatus
@@ -10,6 +14,29 @@ from quant.features.backtest.engine import Backtester, BacktestDiagnostics
 from quant.infrastructure.events import EventBus
 from quant.infrastructure.execution.brokers.paper import PaperBroker
 from quant.infrastructure.execution.fill_handler import FillHandler
+
+
+class TestNormalizeSymbol:
+    def test_cn_6digit_stays_as_is(self):
+        from quant.backtest_runner import _normalize_symbol
+        assert _normalize_symbol("600519") == "600519"
+        assert _normalize_symbol("000001") == "000001"
+        assert _normalize_symbol("300750") == "300750"
+
+    def test_hk_5digit_gets_prefix(self):
+        from quant.backtest_runner import _normalize_symbol
+        assert _normalize_symbol("00700") == "HK.00700"
+        assert _normalize_symbol("00005") == "HK.00005"
+
+    def test_us_alpha_stays_no_prefix(self):
+        from quant.backtest_runner import _normalize_symbol
+        assert _normalize_symbol("AAPL") == "US.AAPL"
+        assert _normalize_symbol("MSFT") == "US.MSFT"
+
+    def test_already_prefixed_stays(self):
+        from quant.backtest_runner import _normalize_symbol
+        assert _normalize_symbol("HK.00700") == "HK.00700"
+        assert _normalize_symbol("US.AAPL") == "US.AAPL"
 
 
 class TestPositionSettledQuantity:
