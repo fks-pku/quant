@@ -1,6 +1,6 @@
 """Paper trading broker adapter with simulated execution using real market data."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Any
 import threading
 
@@ -9,6 +9,14 @@ from quant.domain.models.position import Position
 from quant.domain.models.account import AccountInfo
 from quant.domain.ports.broker import BrokerAdapter
 from quant.shared.utils.logger import setup_logger
+
+
+def _is_cn_symbol(symbol: str) -> bool:
+    return (
+        symbol.isdigit()
+        and len(symbol) == 6
+        and symbol[0] in ("0", "3", "6", "8", "9")
+    )
 
 
 class PaperBroker(BrokerAdapter):
@@ -66,9 +74,10 @@ class PaperBroker(BrokerAdapter):
             self.orders[order_id] = filled
 
             self.order_history.append(filled)
+            fill_price_str = f"{filled.avg_fill_price:.2f}" if filled.avg_fill_price is not None else "N/A"
             self.logger.info(
                 f"Order submitted: {order_id} {filled.side.value} {filled.quantity} {filled.symbol} "
-                f"@ {filled.avg_fill_price:.2f}"
+                f"@ {fill_price_str}"
             )
 
             return order_id
@@ -94,8 +103,23 @@ class PaperBroker(BrokerAdapter):
     def _simulate_fill(self, order: Order) -> Order:
         current_price = self._get_current_price(order.symbol)
 
-        slippage = current_price * (self.slippage_bps / 10000)
         side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
+
+        if side_value == "SELL" and _is_cn_symbol(order.symbol):
+            pos = self.positions.get(order.symbol)
+            if pos and pos.quantity > 0:
+                today = date.today()
+                settled = pos.settled_quantity(today)
+                if order.quantity > settled:
+                    self.logger.warning(
+                        f"CN T+1 rejected: sell {order.quantity} {order.symbol}, "
+                        f"only {settled} settled (bought before today)"
+                    )
+                    return self._set_order_attrs(order, {
+                        'status': OrderStatus.REJECTED,
+                    })
+
+        slippage = current_price * (self.slippage_bps / 10000)
         if side_value == "BUY":
             fill_price = current_price + slippage
         else:
@@ -155,11 +179,13 @@ class PaperBroker(BrokerAdapter):
             total_cost = pos.avg_cost * pos.quantity + fill_price * order.quantity
             pos.quantity += order.quantity
             pos.avg_cost = total_cost / pos.quantity if pos.quantity > 0 else 0
+            pos.add_buy_lot(date.today(), order.quantity)
             self.cash -= fill_price * order.quantity
         else:
             sell_qty = min(order.quantity, pos.quantity)
             self.cash += fill_price * sell_qty
             pos.quantity -= sell_qty
+            pos.remove_sell_lots(sell_qty)
             if pos.quantity <= 0:
                 pos.quantity = 0
                 pos.avg_cost = 0

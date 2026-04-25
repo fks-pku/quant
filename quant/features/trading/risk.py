@@ -1,7 +1,7 @@
 """Risk engine for pre-order checks and position limits."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 import threading
 import time
@@ -47,6 +47,11 @@ class RiskEngine:
         results = []
         approved = True
 
+        if side == 'SELL':
+            results.append(self._check_cn_t1_settlement(symbol, quantity))
+            if not results[-1].passed:
+                approved = False
+
         if side != 'SELL':
             results.append(self._check_position_size(symbol, order_value))
             if not results[-1].passed:
@@ -70,6 +75,34 @@ class RiskEngine:
             approved = False
 
         return approved, results
+
+    def _check_cn_t1_settlement(self, symbol: str, quantity: float) -> RiskCheckResult:
+        if not Portfolio.is_cn_symbol(symbol):
+            return RiskCheckResult(
+                passed=True, is_hard_limit=False,
+                check_name="cn_t1_settlement",
+                message="Not a CN symbol, T+1 does not apply",
+                current_value=0, limit_value=0,
+            )
+
+        today = date.today()
+        settled = self.portfolio.settled_quantity(symbol, today)
+        pos = self.portfolio.get_position(symbol)
+        total_qty = pos.quantity if pos else 0
+
+        passed = quantity <= settled
+
+        return RiskCheckResult(
+            passed=passed,
+            is_hard_limit=True,
+            check_name="cn_t1_settlement",
+            message=(
+                f"CN T+1: sell {quantity} shares of {symbol} but only "
+                f"{settled}/{total_qty} settled (bought before today)"
+            ),
+            current_value=quantity,
+            limit_value=settled,
+        )
 
     def _check_position_size(self, symbol: str, order_value: float) -> RiskCheckResult:
         """Check max position size (5% of NAV per symbol)."""

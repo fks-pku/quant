@@ -1,7 +1,7 @@
 """Backtest engine with realistic execution: T+1 fills, suspension handling, lot sizes."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Optional
 import logging
 import pandas as pd
@@ -39,6 +39,7 @@ class BacktestDiagnostics:
     fill_count: int = 0
     total_commission: float = 0.0
     total_gross_pnl: float = 0.0
+    t1_rejected_sells: int = 0
 
     @property
     def avg_fill_delay_days(self) -> float:
@@ -451,7 +452,8 @@ class Backtester:
                 entry_times[symbol] = fill_ts
                 entry_prices[symbol] = fill_price
 
-            portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity)
+            fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
+            portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)
             portfolio.cash -= total_cost
 
             return Trade(
@@ -476,7 +478,15 @@ class Backtester:
             if not pos or pos.quantity <= 0:
                 return None
 
-            sell_qty = min(quantity, pos.quantity)
+            if market == "CN":
+                fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
+                settled_qty = pos.settled_quantity(fill_date_val)
+                if settled_qty <= 0:
+                    diag.t1_rejected_sells += 1
+                    return None
+                sell_qty = min(quantity, settled_qty)
+            else:
+                sell_qty = min(quantity, pos.quantity)
             diag.total_commission += commission
             entry_price = pos.avg_cost
             entry_time = entry_times.get(symbol, datetime.now())
