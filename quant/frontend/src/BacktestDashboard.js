@@ -3,9 +3,20 @@ import axios from 'axios';
 
 const API_BASE = 'http://localhost:5000/api';
 
-const fmtCurrency = (v, isHK) => {
+const detectCurrency = (symbols) => {
+  const list = symbols.split(',').map(s => s.trim()).filter(Boolean);
+  const markets = new Set(list.map(s => {
+    if (s.startsWith('HK.')) return 'HKD';
+    if (/^\d{6}$/.test(s) && '03689'.includes(s[0])) return 'CNY';
+    return 'USD';
+  }));
+  if (markets.size === 1) return [...markets][0];
+  return 'USD';
+};
+
+const fmtCurrency = (v, currency) => {
   const n = parseFloat(v) || 0;
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: isHK ? 'HKD' : 'USD' }).format(n);
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD' }).format(n);
 };
 
 const fmtPct = (v) => {
@@ -15,7 +26,7 @@ const fmtPct = (v) => {
 
 const colorPnl = (v) => v >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
-function EquityChart({ curve, isHK = false }) {
+function EquityChart({ curve, currency = false }) {
   if (!curve || curve.length < 2) return null;
 
   const W = 700;
@@ -61,7 +72,7 @@ function EquityChart({ curve, isHK = false }) {
           <g key={i}>
             <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#333355" strokeWidth="0.5" />
             <text x={padL - 6} y={y + 3} textAnchor="end" fill="#666680" fontSize="9">
-              {fmtCurrency(v, isHK)}
+              {fmtCurrency(v, currency)}
             </text>
           </g>
         );
@@ -77,7 +88,7 @@ function EquityChart({ curve, isHK = false }) {
   );
 }
 
-function DrawdownChart({ curve, isHK = false }) {
+function DrawdownChart({ curve, currency = false }) {
   if (!curve || curve.length < 2) return null;
 
   const W = 700;
@@ -116,53 +127,15 @@ function DrawdownChart({ curve, isHK = false }) {
   );
 }
 
-function TimelineSection({ data, isHK }) {
-  const [open, setOpen] = useState(false);
-  if (!open) {
-    return (
-      <button className="bt-timeline-toggle" onClick={() => setOpen(true)}>
-        Show Trade Timeline ({data.length} orders)
-      </button>
-    );
-  }
+function CollapsibleSection({ title, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="bt-trades" style={{ marginTop: 20 }}>
-      <div className="bt-trades-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Trade Timeline ({data.length} orders)</span>
-        <button className="bt-timeline-toggle" style={{ width: 'auto', margin: 0, padding: '4px 12px' }} onClick={() => setOpen(false)}>
-          Collapse
-        </button>
-      </div>
-      <div className="bt-trades-scroll" style={{ maxHeight: 400 }}>
-        <table className="bt-timeline-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Action</th>
-              <th>Symbol</th>
-              <th>Qty</th>
-              <th>Price</th>
-              <th>Position</th>
-              <th>P&L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((t, i) => (
-              <tr key={i}>
-                <td>{new Date(t.date).toLocaleDateString()}</td>
-                <td style={{ color: t.action === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>{t.action}</td>
-                <td style={{ fontWeight: 600 }}>{t.symbol}</td>
-                <td>{t.action === 'BUY' ? '+' : '-'}{t.quantity}</td>
-                <td>{fmtCurrency(t.price, isHK)}</td>
-                <td style={{ fontWeight: 600 }}>{t.position}</td>
-                <td style={t.pnl != null ? { color: colorPnl(t.pnl), fontWeight: 600 } : { color: 'var(--text-muted)' }}>
-                  {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmtCurrency(t.pnl, isHK)}` : '\u2014'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div className="bt-collapsible">
+      <button className="bt-collapsible-header" onClick={() => setOpen(!open)}>
+        <span>{title}</span>
+        <span className="bt-collapsible-arrow">{open ? '▼' : '▶'}</span>
+      </button>
+      {open && <div className="bt-collapsible-body">{children}</div>}
     </div>
   );
 }
@@ -318,7 +291,7 @@ export default function BacktestDashboard() {
   const statusText = { idle: 'Idle', running: 'Running...', completed: 'Completed', error: 'Error' };
   const statusColor = { idle: 'var(--text-muted)', running: 'var(--accent-amber)', completed: 'var(--accent-green)', error: 'var(--accent-red)' };
 
-  const isHK = symbols.split(',').map(s => s.trim()).some(s => s.startsWith('HK.'));
+  const currency = detectCurrency(symbols);
 
   return (
     <div className="bt-dashboard">
@@ -412,7 +385,7 @@ export default function BacktestDashboard() {
         <div className="bt-results">
           <div className="bt-metrics">
             {[
-              { label: 'Final NAV', value: fmtCurrency(result.metrics.final_nav, isHK) },
+              { label: 'Final NAV', value: fmtCurrency(result.metrics.final_nav, currency) },
               { label: 'Total Return', value: fmtPct(result.metrics.total_return_pct), color: colorPnl(result.metrics.total_return_pct) },
               { label: 'Sharpe Ratio', value: (result.metrics.sharpe_ratio || 0).toFixed(2) },
               { label: 'Sortino Ratio', value: (result.metrics.sortino_ratio || 0).toFixed(2) },
@@ -430,12 +403,12 @@ export default function BacktestDashboard() {
 
           <div className="bt-chart">
             <div className="bt-chart-title">Equity Curve</div>
-            <EquityChart curve={result.equity_curve} isHK={isHK} />
+            <EquityChart curve={result.equity_curve} currency={currency} />
           </div>
 
           <div className="bt-chart">
             <div className="bt-chart-title">Drawdown</div>
-            <DrawdownChart curve={result.equity_curve} isHK={isHK} />
+            <DrawdownChart curve={result.equity_curve} currency={currency} />
           </div>
 
           {result.trades && result.trades.length > 0 && (() => {
@@ -443,42 +416,43 @@ export default function BacktestDashboard() {
             const closedTrades = result.trades.filter(t => t.status === 'closed');
             return (
               <>
-                {openTrades.length > 0 && (
-                  <div className="bt-position-cards">
-                    {openTrades.map((t, i) => {
-                      const mv = t.exit_price * t.quantity;
-                      const weight = result.metrics?.final_nav ? (mv / result.metrics.final_nav * 100) : 0;
-                      const pnlPct = t.entry_price > 0 ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : 0;
-                      return (
-                        <div key={i} className={`bt-position-card ${t.pnl >= 0 ? 'bt-card-profit' : 'bt-card-loss'}`}>
-                          <div className="bt-card-symbol">{t.symbol}</div>
-                          <div className="bt-card-pnl" style={{ color: t.pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                            {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
-                            <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
-                              ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
-                            </span>
+                <CollapsibleSection title={`持仓 (${openTrades.length})`} defaultOpen={false}>
+                  {openTrades.length > 0 ? (
+                    <div className="bt-position-cards">
+                      {openTrades.map((t, i) => {
+                        const mv = t.exit_price * t.quantity;
+                        const weight = result.metrics?.final_nav ? (mv / result.metrics.final_nav * 100) : 0;
+                        const pnlPct = t.entry_price > 0 ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : 0;
+                        return (
+                          <div key={i} className={`bt-position-card ${t.pnl >= 0 ? 'bt-card-profit' : 'bt-card-loss'}`}>
+                            <div className="bt-card-symbol">{t.symbol}</div>
+                            <div className="bt-card-pnl" style={{ color: t.pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, currency)}
+                              <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
+                                ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
+                              </span>
+                            </div>
+                            <div className="bt-card-details">
+                              <span className="bt-card-label">持仓</span>
+                              <span className="bt-card-value">{t.quantity.toLocaleString()} 股</span>
+                              <span className="bt-card-label">成本</span>
+                              <span className="bt-card-value">{fmtCurrency(t.entry_price, currency)}</span>
+                              <span className="bt-card-label">现价</span>
+                              <span className="bt-card-value" style={{ color: 'var(--accent-cyan)' }}>{fmtCurrency(t.exit_price, currency)}</span>
+                              <span className="bt-card-label">市值</span>
+                              <span className="bt-card-value">{fmtCurrency(mv, currency)}</span>
+                              <span className="bt-card-label">权重</span>
+                              <span className="bt-card-value">{weight.toFixed(1)}%</span>
+                            </div>
                           </div>
-                          <div className="bt-card-details">
-                            <span className="bt-card-label">持仓</span>
-                            <span className="bt-card-value">{t.quantity.toLocaleString()} 股</span>
-                            <span className="bt-card-label">成本</span>
-                            <span className="bt-card-value">{fmtCurrency(t.entry_price, isHK)}</span>
-                            <span className="bt-card-label">现价</span>
-                            <span className="bt-card-value" style={{ color: 'var(--accent-cyan)' }}>{fmtCurrency(t.exit_price, isHK)}</span>
-                            <span className="bt-card-label">市值</span>
-                            <span className="bt-card-value">{fmtCurrency(mv, isHK)}</span>
-                            <span className="bt-card-label">权重</span>
-                            <span className="bt-card-value">{weight.toFixed(1)}%</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        );
+                      })}
+                    </div>
+                  ) : <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: 8 }}>无持仓</div>}
+                </CollapsibleSection>
 
-                {closedTrades.length > 0 && (
-                  <div className="bt-trades">
-                    <div className="bt-trades-title">已完成交易 ({closedTrades.length})</div>
+                <CollapsibleSection title={`已完成交易 (${closedTrades.length})`} defaultOpen={false}>
+                  {closedTrades.length > 0 ? (
                     <div className="bt-trades-scroll">
                       <table className="bt-trades-table">
                         <thead>
@@ -506,10 +480,10 @@ export default function BacktestDashboard() {
                                 <td>{exitD.toLocaleDateString()}</td>
                                 <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.symbol}</td>
                                 <td>{t.quantity}</td>
-                                <td>{fmtCurrency(t.entry_price, isHK)}</td>
-                                <td>{fmtCurrency(t.exit_price, isHK)}</td>
+                                <td>{fmtCurrency(t.entry_price, currency)}</td>
+                                <td>{fmtCurrency(t.exit_price, currency)}</td>
                                 <td style={{ color: colorPnl(t.pnl), fontWeight: 600 }}>
-                                  {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, isHK)}
+                                  {t.pnl >= 0 ? '+' : ''}{fmtCurrency(t.pnl, currency)}
                                 </td>
                                 <td style={{ color: colorPnl(retPct), fontWeight: 600 }}>
                                   {retPct >= 0 ? '+' : ''}{retPct.toFixed(1)}%
@@ -521,11 +495,42 @@ export default function BacktestDashboard() {
                         </tbody>
                       </table>
                     </div>
-                  </div>
-                )}
+                  ) : <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: 8 }}>无已完成交易</div>}
+                </CollapsibleSection>
 
                 {result.trade_timeline && result.trade_timeline.length > 0 && (
-                  <TimelineSection data={result.trade_timeline} isHK={isHK} />
+                  <CollapsibleSection title={`交易流水 (${result.trade_timeline.length})`} defaultOpen={false}>
+                    <div className="bt-trades-scroll" style={{ maxHeight: 400 }}>
+                      <table className="bt-timeline-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Action</th>
+                            <th>Symbol</th>
+                            <th>Qty</th>
+                            <th>Price</th>
+                            <th>Position</th>
+                            <th>P&L</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.trade_timeline.map((t, i) => (
+                            <tr key={i}>
+                              <td>{new Date(t.date).toLocaleDateString()}</td>
+                              <td style={{ color: t.action === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>{t.action}</td>
+                              <td style={{ fontWeight: 600 }}>{t.symbol}</td>
+                              <td>{t.action === 'BUY' ? '+' : '-'}{t.quantity}</td>
+                              <td>{fmtCurrency(t.price, currency)}</td>
+                              <td style={{ fontWeight: 600 }}>{t.position}</td>
+                              <td style={t.pnl != null ? { color: colorPnl(t.pnl), fontWeight: 600 } : { color: 'var(--text-muted)' }}>
+                                {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmtCurrency(t.pnl, currency)}` : '\u2014'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CollapsibleSection>
                 )}
               </>
             );

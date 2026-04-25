@@ -825,6 +825,47 @@ body {
   color: var(--accent-cyan);
 }
 
+.bt-collapsible {
+  margin-bottom: 12px;
+}
+
+.bt-collapsible-header {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.bt-collapsible-header:hover {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+.bt-collapsible-arrow {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.bt-collapsible-body {
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 12px;
+  background: var(--bg-card);
+}
+
 .bt-timeline-table {
   width: 100%;
   border-collapse: collapse;
