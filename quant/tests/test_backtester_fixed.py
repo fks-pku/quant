@@ -186,3 +186,68 @@ class TestCashTrackingAfterBuyAndSell:
         expected_cash = 100000 - 100 * 10 - buy_commission + 110 * 10 - sell_commission
         assert portfolio.cash == pytest.approx(expected_cash)
         assert trade is not None
+
+
+class TestOpenPositionsExtracted:
+    def test_open_positions_in_result(self):
+        bt = Backtester(config={"backtest": {"slippage_bps": 0}, "execution": {}, "risk": {"max_position_pct": 1.0}})
+
+        dates = [datetime(2024, 1, d) for d in range(1, 11)]
+        prices = [100, 102, 104, 106, 108, 110, 112, 114, 116, 118]
+        df = pd.DataFrame({
+            "symbol": ["AAPL"] * 10,
+            "timestamp": dates,
+            "open": prices,
+            "high": [p + 1 for p in prices],
+            "low": [p - 1 for p in prices],
+            "close": prices,
+            "volume": [1000000] * 10,
+        })
+
+        from quant.features.backtest.walkforward import DataFrameProvider
+        dp = DataFrameProvider(df)
+
+        class BuyAndHoldStrategy:
+            def __init__(self):
+                self.context = None
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, date):
+                pass
+
+            def on_data(self, ctx, bar):
+                sym = bar.get("symbol", "AAPL")
+                if sym not in ctx.portfolio.positions:
+                    price = bar.get("open", bar.get("close", 100))
+                    qty = int(ctx.portfolio.cash / price / 2)
+                    if qty > 0:
+                        ctx.order_manager.submit_order(sym, qty, "BUY", "market", price, "BuyAndHold")
+
+            def on_after_trading(self, ctx, date):
+                pass
+
+        strat = BuyAndHoldStrategy()
+
+        result = bt.run(
+            start=datetime(2024, 1, 1),
+            end=datetime(2024, 1, 10),
+            strategies=[strat],
+            initial_cash=100000,
+            data_provider=dp,
+            symbols=["AAPL"],
+        )
+
+        assert hasattr(result, 'open_positions')
+        assert isinstance(result.open_positions, list)
+        assert len(result.open_positions) >= 1
+        for pos in result.open_positions:
+            assert "symbol" in pos
+            assert "quantity" in pos
+            assert "entry_price" in pos
+            assert "entry_time" in pos
+            assert "current_price" in pos
+            assert "unrealized_pnl" in pos
+            assert "market_value" in pos
+            assert pos["quantity"] > 0

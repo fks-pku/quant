@@ -67,6 +67,7 @@ class BacktestResult:
     trades: List[Trade]
     metrics: PerformanceMetrics
     diagnostics: BacktestDiagnostics = field(default_factory=BacktestDiagnostics)
+    open_positions: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -285,6 +286,20 @@ class Backtester:
 
         diag.total_gross_pnl = sum(t.pnl for t in all_trades) + diag.total_commission
 
+        open_positions = []
+        for sym, pos in portfolio.positions.items():
+            if pos.quantity > 0:
+                last_price = last_prices.get(sym, pos.avg_cost)
+                open_positions.append({
+                    "symbol": sym,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.avg_cost,
+                    "entry_time": entry_times.get(sym),
+                    "current_price": last_price,
+                    "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
+                    "market_value": pos.quantity * last_price,
+                })
+
         return BacktestResult(
             final_nav=metrics.equity_curve.iloc[-1] if not metrics.equity_curve.empty else initial_cash,
             total_return=metrics.total_return,
@@ -298,7 +313,8 @@ class Backtester:
             equity_curve=equity_curve,
             trades=all_trades,
             metrics=metrics,
-            diagnostics=diag
+            diagnostics=diag,
+            open_positions=open_positions,
         )
 
     def _process_dividends(
