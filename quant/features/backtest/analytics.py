@@ -338,7 +338,7 @@ def calculate_performance_metrics(
     sharpe = calculate_sharpe(returns)
     sortino = calculate_sortino(returns)
     max_dd, max_dd_pct, _, _ = calculate_max_drawdown(equity_curve)
-    calmar = calculate_calmar(returns, max_dd)
+    calmar = calculate_calmar(returns, max_dd_pct)
     
     win_rate = calculate_win_rate(trades)
     profit_factor = calculate_profit_factor(trades)

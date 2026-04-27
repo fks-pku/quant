@@ -137,7 +137,28 @@ class Backtester:
             limit_pct = 0.10
         upper = round(prev_close * (1 + limit_pct), 2)
         lower = round(prev_close * (1 - limit_pct), 2)
-        return open_price >= upper or open_price <= lower
+        open_rounded = round(open_price, 2)
+        return open_rounded >= upper or open_rounded <= lower
+
+    @staticmethod
+    def _earliest_lot_time(pos) -> Optional[datetime]:
+        if not pos._lots:
+            return None
+        earliest = min(pos._lots.keys())
+        return datetime(earliest.year, earliest.month, earliest.day)
+
+    @staticmethod
+    def _fifo_lot_slices(pos, sell_qty: float) -> List[tuple]:
+        slices = []
+        remaining = sell_qty
+        for lot_date in sorted(pos._lots.keys()):
+            if remaining <= 0:
+                break
+            lot = pos._lots[lot_date]
+            take = min(lot.qty, remaining)
+            slices.append((lot_date, take, lot.price))
+            remaining -= take
+        return slices
 
     @staticmethod
     def _is_suspended(bar: Dict, prev_bar: Optional[Dict]) -> bool:
@@ -287,12 +308,13 @@ class Backtester:
                     if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
                         deferred_orders.append(order)
                     continue
-                trade = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_bars.get(sym))
-                if trade:
-                    all_trades.append(trade)
+                trades = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_bars.get(sym))
+                if trades:
+                    all_trades.extend(trades)
                     for s in strategies:
                         if hasattr(s, "on_fill"):
-                            s.on_fill(s.context, trade)
+                            for t in trades:
+                                s.on_fill(s.context, t)
 
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
@@ -340,7 +362,7 @@ class Backtester:
                     "symbol": sym,
                     "quantity": pos.quantity,
                     "entry_price": pos.avg_cost,
-                    "entry_time": entry_times.get(sym),
+                    "entry_time": self._earliest_lot_time(pos) or entry_times.get(sym),
                     "current_price": last_price,
                     "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
                     "market_value": pos.quantity * last_price,
@@ -366,7 +388,7 @@ class Backtester:
     def _process_dividends(
         self,
         data_provider: Any,
-        portfolio: Portfolio,
+        portfolio: Any,
         symbols: List[str],
         current_date: datetime,
         last_prices: Dict[str, float],
@@ -402,7 +424,7 @@ class Backtester:
     def _calculate_cn_dividend_tax(self, pos: Any, cash_div: float, current_date: datetime) -> float:
         total_tax = 0.0
         today = current_date.date() if hasattr(current_date, 'date') else current_date
-        for lot_date, lot_qty in pos._lots.items():
+        for lot_date, lot in pos._lots.items():
             holding_days = (today - lot_date).days
             if holding_days <= CN_DIVIDEND_TAX_SHORT_DAYS:
                 rate = 0.20
@@ -410,10 +432,10 @@ class Backtester:
                 rate = 0.10
             else:
                 rate = 0.0
-            total_tax += cash_div * lot_qty * rate
+            total_tax += cash_div * lot.qty * rate
         return total_tax
 
-    def _update_portfolio_prices(self, portfolio: Portfolio, last_prices: Dict[str, float]) -> None:
+    def _update_portfolio_prices(self, portfolio: Any, last_prices: Dict[str, float]) -> None:
         for symbol, pos in portfolio.positions.items():
             if pos.quantity != 0 and symbol in last_prices:
                 pos.market_value = pos.quantity * last_prices[symbol]
@@ -473,17 +495,17 @@ class Backtester:
     def _execute_order(
         self,
         order: Dict,
-        portfolio: Portfolio,
+        portfolio: Any,
         symbol: str,
         bar: Dict,
         entry_times: Dict[str, datetime],
         entry_prices: Dict[str, float],
         diag: BacktestDiagnostics,
         prev_bar: Optional[Dict] = None,
-    ) -> Optional[Trade]:
+    ) -> List[Trade]:
         raw_open = bar.get('open')
         if not raw_open or raw_open <= 0:
-            return None
+            return []
 
         signal_date = order.get('_signal_date')
         fill_ts = bar.get('timestamp', datetime.now())
@@ -496,7 +518,7 @@ class Backtester:
             prev_close = prev_bar.get('close', 0)
             fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
             if self._is_cn_price_at_limit(symbol, raw_open, prev_close, fill_date_val):
-                return None
+                return []
 
         fill_price = raw_open
 
@@ -516,7 +538,7 @@ class Backtester:
             if order['side'] == 'BUY':
                 lot_qty = (int(quantity) // lot_size) * lot_size
                 if lot_qty < lot_size:
-                    return None
+                    return []
                 if lot_qty != int(quantity):
                     diag.lot_adjusted_trades += 1
                 quantity = float(lot_qty)
@@ -528,7 +550,7 @@ class Backtester:
                 elif remainder > 0:
                     adjusted = remainder
                 else:
-                    return None
+                    return []
                 if adjusted != int(quantity):
                     diag.lot_adjusted_trades += 1
                 quantity = float(adjusted)
@@ -539,17 +561,17 @@ class Backtester:
             if order['side'] == 'BUY' and market in ("HK", "CN"):
                 max_qty = (max_qty // lot_size) * lot_size
             if max_qty <= 0:
-                return None
+                return []
             quantity = float(max_qty)
             diag.volume_limited_trades += 1
 
-        cost_breakdown = self._calculate_commission_breakdown(fill_price, quantity, market, order['side'])
-        commission = sum(cost_breakdown.values())
-
         if order['side'] == 'BUY':
+            cost_breakdown = self._calculate_commission_breakdown(fill_price, quantity, market, order['side'])
+            commission = sum(cost_breakdown.values())
+
             total_cost = fill_price * quantity + commission
             if portfolio.cash < total_cost:
-                return None
+                return []
 
             diag.total_commission += commission
 
@@ -562,7 +584,7 @@ class Backtester:
             portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)
             portfolio.cash -= total_cost
 
-            return Trade(
+            return [Trade(
                 entry_time=fill_ts,
                 exit_time=fill_ts,
                 symbol=symbol,
@@ -577,7 +599,7 @@ class Backtester:
                 fill_price=fill_price,
                 intended_qty=order['quantity'],
                 cost_breakdown=cost_breakdown,
-            )
+            )]
 
         elif order['side'] == 'SELL':
             pos = portfolio.get_position(symbol)
@@ -585,54 +607,65 @@ class Backtester:
                 logger.warning(
                     "SELL rejected for %s: no position to sell (short not supported)", symbol
                 )
-                return None
+                return []
 
             if market == "CN":
                 fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
                 settled_qty = pos.settled_quantity(fill_date_val)
                 if settled_qty <= 0:
                     diag.t1_rejected_sells += 1
-                    return None
+                    return []
                 sell_qty = min(quantity, settled_qty)
             else:
                 sell_qty = min(quantity, pos.quantity)
-            diag.total_commission += commission
-            entry_price = pos.avg_cost
-            entry_time = entry_times.get(symbol, datetime.now())
-            if not isinstance(entry_time, datetime):
-                entry_time = pd.Timestamp(entry_time).to_pydatetime()
 
-            realized = (fill_price - pos.avg_cost) * sell_qty
+            cost_breakdown = self._calculate_commission_breakdown(fill_price, sell_qty, market, order['side'])
+            commission = sum(cost_breakdown.values())
+
+            diag.total_commission += commission
+
+            lot_slices = self._fifo_lot_slices(pos, sell_qty)
 
             portfolio.cash += fill_price * sell_qty - commission
             portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0)
 
+            trades = []
+            total_realized = 0.0
+            for lot_date, sub_qty, lot_price in lot_slices:
+                sub_ratio = sub_qty / sell_qty
+                sub_commission = commission * sub_ratio
+                sub_realized = (fill_price - lot_price) * sub_qty
+                total_realized += sub_realized
+                sub_cost_breakdown = {k: v * sub_ratio for k, v in cost_breakdown.items()}
+                entry_time = datetime(lot_date.year, lot_date.month, lot_date.day)
+                trades.append(Trade(
+                    entry_time=entry_time,
+                    exit_time=fill_ts,
+                    symbol=symbol,
+                    side=order['side'],
+                    entry_price=lot_price,
+                    exit_price=fill_price,
+                    quantity=sub_qty,
+                    pnl=sub_realized - sub_commission,
+                    realized_pnl=sub_realized,
+                    signal_date=signal_date,
+                    fill_date=fill_ts,
+                    fill_price=fill_price,
+                    intended_qty=order['quantity'],
+                    cost_breakdown=sub_cost_breakdown,
+                ))
+
             updated_pos = portfolio.get_position(symbol)
             if updated_pos:
-                updated_pos.realized_pnl += realized
+                updated_pos.realized_pnl += total_realized
 
             if updated_pos is None or updated_pos.quantity <= 0:
                 entry_times.pop(symbol, None)
                 entry_prices.pop(symbol, None)
 
-            return Trade(
-                entry_time=entry_time,
-                exit_time=fill_ts,
-                symbol=symbol,
-                side=order['side'],
-                entry_price=entry_price,
-                exit_price=fill_price,
-                quantity=sell_qty,
-                pnl=realized - commission,
-                realized_pnl=realized,
-                signal_date=signal_date,
-                fill_date=fill_ts,
-                fill_price=fill_price,
-                intended_qty=order['quantity'],
-                cost_breakdown=cost_breakdown,
-            )
+            return trades
 
-        return None
+        return []
 
     def _detect_market(self, symbol: str) -> str:
         if symbol.startswith("HK.") or (symbol.isdigit() and len(symbol) == 5):

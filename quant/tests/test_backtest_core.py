@@ -285,7 +285,7 @@ class TestPositionModel:
         pos.remove_sell_lots(50)
         assert pos.quantity == 100
         assert len(pos._lots) == 1
-        assert sum(pos._lots.values()) == 50
+        assert sum(lot.qty for lot in pos._lots.values()) == 50
 
     def test_flat_position(self):
         pos = Position(symbol="AAPL", quantity=0)

@@ -99,7 +99,7 @@ class Portfolio:
                     pos.avg_cost = new_cost / new_qty if new_qty != 0 else 0
                     pos.quantity = new_qty
                     if trade_date is not None:
-                        pos.add_buy_lot(trade_date, quantity)
+                        pos.add_buy_lot(trade_date, quantity, price)
                 else:
                     pos.quantity += quantity
                     pos.remove_sell_lots(abs(quantity))

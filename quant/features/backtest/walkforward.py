@@ -107,8 +107,9 @@ class WalkForwardEngine:
             
             strategy = strategy_factory(best_params)
             
+            backtester = Backtester(config)
             test_result = self._run_single_backtest(
-                Backtester(config), strategy, test_data, initial_cash, config
+                backtester, strategy, test_data, initial_cash, config
             )
             
             test_max_dd = test_result.max_drawdown_pct if hasattr(test_result, 'max_drawdown_pct') else 0.0
@@ -197,8 +198,8 @@ class WalkForwardEngine:
         import itertools
         param_names = list(param_grid.keys())
         param_values = [param_grid[name] for name in param_names]
-        first_params = dict(zip(param_names, param_values[0])) if param_values else {}
-        best_params = first_params
+        first_values = [v[0] for v in param_values] if param_values else []
+        best_params = dict(zip(param_names, first_values)) if first_values else {}
         best_sharpe = float('-inf')
         
         for values in itertools.product(*param_values):
@@ -231,13 +232,17 @@ class WalkForwardEngine:
         """Run a single backtest on given data."""
         from quant.infrastructure.events import EventBus
 
-        if isinstance(backtester_or_config, Backtester):
-            backtester = backtester_or_config
-        else:
-            backtester = Backtester(config or {})
-
         event_bus = EventBus()
-        
+        if isinstance(backtester_or_config, Backtester):
+            backtester = Backtester(
+                backtester_or_config.config,
+                event_bus=event_bus,
+                lot_sizes=backtester_or_config.lot_sizes,
+                ipo_dates=backtester_or_config.ipo_dates,
+            )
+        else:
+            backtester = Backtester(config or {}, event_bus=event_bus)
+
         symbols = data['symbol'].unique().tolist()
         
         result = backtester.run(
