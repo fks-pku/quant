@@ -29,6 +29,8 @@ class RiskEngine:
         self.max_orders_per_minute = self.risk_config.get("max_orders_minute", 30)
 
         self._order_timestamps: List[datetime] = []
+        self._pending_order_values: Dict[str, float] = {}
+        self._daily_order_count: int = 0
         self._lock = threading.RLock()
 
     def check_order(
@@ -71,7 +73,7 @@ class RiskEngine:
         if not results[-1].passed:
             approved = False
 
-        results.append(self._check_order_rate())
+        results.append(self._check_order_rate(as_of_date))
         if not results[-1].passed:
             approved = False
 
@@ -112,7 +114,8 @@ class RiskEngine:
 
         existing_pos = self.portfolio.get_position(symbol)
         existing_value = existing_pos.market_value if existing_pos else 0
-        total_value = existing_value + order_value
+        pending_value = self._pending_order_values.get(symbol, 0)
+        total_value = existing_value + pending_value + order_value
 
         passed = total_value <= limit
 
@@ -178,8 +181,20 @@ class RiskEngine:
             limit_value=self.max_leverage,
         )
 
-    def _check_order_rate(self) -> RiskCheckResult:
-        """Check max orders per minute (30)."""
+    def _check_order_rate(self, as_of_date: Optional[date] = None) -> RiskCheckResult:
+        """Check max orders per minute (30). Uses daily counter in backtest mode."""
+        if as_of_date is not None:
+            order_count = self._daily_order_count
+            passed = order_count < self.max_orders_per_minute
+            return RiskCheckResult(
+                passed=passed,
+                is_hard_limit=False,
+                check_name="max_order_rate",
+                message=f"Order rate {order_count}/day exceeds limit {self.max_orders_per_minute}/day",
+                current_value=order_count,
+                limit_value=self.max_orders_per_minute,
+            )
+
         now = datetime.now()
         cutoff = now.timestamp() - 60
 
@@ -199,10 +214,20 @@ class RiskEngine:
             limit_value=self.max_orders_per_minute,
         )
 
-    def record_order(self) -> None:
-        """Record an order submission for rate limiting."""
-        with self._lock:
-            self._order_timestamps.append(datetime.now())
+    def record_order(self, symbol: Optional[str] = None, order_value: float = 0.0,
+                     as_of_date: Optional[date] = None) -> None:
+        """Record an order submission for rate limiting and pending tracking."""
+        if as_of_date is not None:
+            self._daily_order_count += 1
+        else:
+            with self._lock:
+                self._order_timestamps.append(datetime.now())
+        if symbol is not None and order_value > 0:
+            self._pending_order_values[symbol] = self._pending_order_values.get(symbol, 0) + order_value
+
+    def reset_daily(self) -> None:
+        self._daily_order_count = 0
+        self._pending_order_values.clear()
 
     def log_result(self, results: List[RiskCheckResult]) -> None:
         """Log risk check results."""

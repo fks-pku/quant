@@ -76,6 +76,7 @@ class Portfolio:
         cost: float,
         sector: Optional[str] = None,
         trade_date: Optional[date] = None,
+        realized_pnl: Optional[float] = None,
     ) -> None:
         """Update or create a position."""
         with self._lock:
@@ -103,6 +104,8 @@ class Portfolio:
                 else:
                     pos.quantity += quantity
                     pos.remove_sell_lots(abs(quantity))
+                    if realized_pnl is not None:
+                        pos.realized_pnl += realized_pnl
                     if abs(pos.quantity) < 1e-10:
                         pos.quantity = 0.0
                         pos.avg_cost = 0.0

@@ -25,6 +25,8 @@
 - Engine 在单独线程运行，通过 EventBus 与策略通信
 - Portfolio 是线程安全的（使用 RLock）
 - RiskEngine 在订单提交前进行风控检查
+- `risk_engine.reset_daily()` 在每个交易日结束时调用，重置订单计数器和 pending 追踪
+- `portfolio.update_position()` SELL 路径通过 `realized_pnl` 参数跟踪已实现盈亏
 
 ## 修改守则
 
@@ -37,3 +39,6 @@
 
 - `Engine._on_data()` 使用 `hasattr(self.broker, 'update_price')` 多态调用，不使用 isinstance
 - 策略通过 Context 访问所有系统组件，不要直接引用 Engine
+- `RiskEngine._check_order_rate()` 回测模式（as_of_date != None）用 `_daily_order_count` 日计数器替代 wall clock，实盘模式仍用 `_order_timestamps` 时间戳列表
+- `RiskEngine._check_position_size()` 累计 `_pending_order_values[symbol]` 防止同日多次下单绕过仓位限制，`record_order()` 负责更新此字典
+- `Portfolio.update_position()` 的 `realized_pnl` 参数仅对 SELL（quantity < 0）路径生效，BUY 路径忽略该参数

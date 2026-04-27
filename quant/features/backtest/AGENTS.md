@@ -36,8 +36,9 @@ while current_date ≤ end:
        for each deferred_order:
          ├ 停牌且 < 5 天 → 继续延迟
          ├ 停牌 ≥ 5 天 → 丢弃
-         ├ 涨跌停（CN 专属）→ 跳过
-         └ 正常执行 → _execute_order()
+         ├ 涨跌停（CN 专属）→ 延迟重试（≤5天），计入 limit_rejected_orders
+         ├ _execute_order 返回 None → 延迟重试（≤5天）
+         └ 正常执行 → _execute_order() 返回 Trade 列表
 
     ④ 收集策略今日生成的新订单 → 进入 pending_orders
        strategy.on_after_trading(ctx, today)
@@ -48,7 +49,8 @@ while current_date ≤ end:
        pos.update_market_price(close)
        equity_curve.append(nav)
 
-    ⑦ portfolio.reset_daily()   # 重置日内亏损基准
+     ⑦ portfolio.reset_daily()   # 重置日内亏损基准
+     ⑧ risk_engine.reset_daily() # 重置日内订单计数器和 pending 追踪
 ```
 
 ### 为什么 ③ 在 ④ 之前
@@ -62,14 +64,15 @@ while current_date ≤ end:
 ```
 ① 开盘价有效性检查（≤0 → 丢弃）
 ② 涨跌停检查（CN 专属：±10/20/30%，IPO 5 天豁免）
+   → 返回 None（should-defer 哨兵），调用方延迟重试
 ③ 滑点修正：fill_price = open ± slippage
 ④ 手数取整（HK/CN）：
    BUY：向下取整手（<1手 → 丢弃）
-   SELL：保留碎股（整手+零碎）
+   SELL：保留原数量（允许碎股）
 ⑤ 成交量上限：≤ 日成交量 × 5%（不足 → 丢弃）
 ⑥ 仅校验：计算佣金 → 拼 total_cost/cash_check
 ⑦ 资金不足（BUY）/ 无可卖仓位或 T+1 未结算（SELL）→ 丢弃
-⑧ 以上全部通过 → 记录佣金、更新持仓、扣/加 cash、生成 Trade
+⑧ 以上全部通过 → 记录佣金、更新持仓（含 realized_pnl）、扣/加 cash、生成 Trade
 ```
 
 佣金只在第 ⑧ 步确认成交后才计入 `diag.total_commission`，不会出现先扣佣金后判定无法成交的情况。
@@ -98,7 +101,7 @@ while current_date ≤ end:
 ## Trade 记录约定
 
 - **BUY Trade**：`entry_time == exit_time`，`pnl = realized_pnl = -commission`（已实现佣金支出）。分析模块通过 `_round_trip_trades()` 过滤 SELL 成交来计算胜率/盈亏比，BUY 不计入。
-- **SELL Trade**：按 FIFO lot 切片，每 lot 生成一条 Trade。`pnl = (fill_price - lot_price) * qty - sub_commission`，`realized_pnl = (fill_price - lot_price) * qty`（不含佣金）。
+- **SELL Trade**：按 FIFO lot 切片，每 lot 生成一条 Trade。`pnl = (fill_price - lot_price) * qty - sub_commission`，`realized_pnl = (fill_price - lot_price) * qty`（不含佣金）。realized_pnl 通过 `portfolio.update_position(realized_pnl=...)` 传入，由 Portfolio 层跟踪。
 - **total_gross_pnl**：`sum(t.pnl for all trades) + diag.total_commission` = 还原除佣金前毛利润。
 
 ## 诊断追踪（`BacktestDiagnostics`）
@@ -110,6 +113,7 @@ while current_date ≤ end:
 | `lot_adjusted_trades` | 因手数取整被调整的订单数 |
 | `total_fill_delay_days / fill_count` | 平均延迟天数（通常 =1，即 T+1） |
 | `t1_rejected_sells` | 因 T+1 未结算被拒绝的卖单 |
+| `limit_rejected_orders` | 因 CN 涨跌停被延迟的订单（延迟重试，非丢弃） |
 | `total_commission` | 累计佣金 |
 | `cost_drag_pct` | 佣金 / |毛利润| × 100% |
 
@@ -125,11 +129,19 @@ while current_date ≤ end:
 - 改绩效指标计算：只动 `analytics.py`
 - 改进退验证逻辑：只动 `walkforward.py`
 
+## `_execute_order` 返回值约定
+
+- `List[Trade]`（非空）→ 成交，调用方处理 Trade 和 on_fill 回调
+- `[]`（空列表）→ 永久丢弃（资金不足、无仓位等不可恢复原因）
+- `None` → 应延迟重试（CN 涨跌停），调用方将订单放回 deferred_orders（≤5天）
+
 ## Known Pitfalls
 
 - `Backtester._create_context()` 使用了内部类 `BacktestOrderManager`/`BacktestBroker`，不要暴露到外部
 - `lot_sizes` 字典的 key 格式要与 symbol 一致（包含 `HK.`/`US.` 前缀，CN 为纯数字）
-- `portfolio.reset_daily()` 在每个日循环末尾调用，勿遗漏否则日内亏损限额不重置
+- `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` 在每个日循环末尾调用，勿遗漏否则日内亏损限额和风控计数器不重置
 - `pos.update_market_price(price)` 应替代直接写 `pos.market_value`/`pos.unrealized_pnl`
-- `RiskEngine._check_order_rate()` 的 `passed` 判断必须在 `with self._lock` 块内执行
+- `RiskEngine._check_order_rate()` 在回测模式（as_of_date != None）使用日计数器替代 wall clock，实盘模式仍用时间戳
+- `_check_position_size()` 会累计当日同标的的 pending 订单金额，防止多次下单绕过仓位限制
+- `portfolio.update_position()` 的 SELL 路径接受 `realized_pnl` 参数，不要在外部手动修改 `pos.realized_pnl`
 - `entry_times` 每次 BUY 都会刷新，`open_positions` 优先使用 `_earliest_lot_time(pos)`

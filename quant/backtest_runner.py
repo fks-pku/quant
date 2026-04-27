@@ -147,6 +147,7 @@ def main(argv=None):
     print(f"  Suspended days:       {diag.suspended_days}")
     print(f"  Volume-limited:       {diag.volume_limited_trades}")
     print(f"  Lot-adjusted:         {diag.lot_adjusted_trades}")
+    print(f"  Limit-rejected:       {diag.limit_rejected_orders}")
     print(f"  T+1 rejected sells:   {diag.t1_rejected_sells}")
     print(f"  Avg fill delay:       {diag.avg_fill_delay_days:.1f} days")
     print(f"  Total costs:          ${diag.total_commission:,.2f}")
@@ -175,6 +176,8 @@ def main(argv=None):
             "suspended_days": diag.suspended_days,
             "volume_limited_trades": diag.volume_limited_trades,
             "lot_adjusted_trades": diag.lot_adjusted_trades,
+            "limit_rejected_orders": diag.limit_rejected_orders,
+            "t1_rejected_sells": diag.t1_rejected_sells,
             "avg_fill_delay_days": diag.avg_fill_delay_days,
             "total_commission": diag.total_commission,
             "cost_drag_pct": diag.cost_drag_pct,

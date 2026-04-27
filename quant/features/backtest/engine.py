@@ -50,6 +50,7 @@ class BacktestDiagnostics:
     total_commission: float = 0.0
     total_gross_pnl: float = 0.0
     t1_rejected_sells: int = 0
+    limit_rejected_orders: int = 0
 
     @property
     def avg_fill_delay_days(self) -> float:
@@ -193,7 +194,6 @@ class Backtester:
         currency = self._detect_currency(symbols)
         portfolio = Portfolio(initial_cash=initial_cash, currency=currency)
         risk_engine = RiskEngine(self.config, portfolio, self.event_bus)
-        symbols = symbols or []
         diag = BacktestDiagnostics()
 
         equity_curve_dates: List[datetime] = []
@@ -309,6 +309,10 @@ class Backtester:
                         deferred_orders.append(order)
                     continue
                 trades = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_bars.get(sym))
+                if trades is None:
+                    if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
+                        deferred_orders.append(order)
+                    continue
                 if trades:
                     all_trades.extend(trades)
                     for s in strategies:
@@ -344,6 +348,7 @@ class Backtester:
             equity_curve_values.append(nav)
 
             portfolio.reset_daily()
+            risk_engine.reset_daily()
 
             current_date += timedelta(days=1)
 
@@ -467,7 +472,9 @@ class Backtester:
                     )
                     if not approved:
                         return None
-                    self._risk_engine.record_order()
+                    self._risk_engine.record_order(
+                        symbol=symbol, order_value=order_value, as_of_date=self._current_date,
+                    )
                 order = {
                     "symbol": symbol,
                     "quantity": quantity,
@@ -503,7 +510,7 @@ class Backtester:
         entry_prices: Dict[str, float],
         diag: BacktestDiagnostics,
         prev_bar: Optional[Dict] = None,
-    ) -> List[Trade]:
+    ) -> Optional[List[Trade]]:
         raw_open = bar.get('open')
         if not raw_open or raw_open <= 0:
             return []
@@ -519,7 +526,8 @@ class Backtester:
             prev_close = prev_bar.get('close', 0)
             fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
             if self._is_cn_price_at_limit(symbol, raw_open, prev_close, fill_date_val):
-                return []
+                    diag.limit_rejected_orders += 1
+                    return None
 
         fill_price = raw_open
 
@@ -544,17 +552,8 @@ class Backtester:
                     diag.lot_adjusted_trades += 1
                 quantity = float(lot_qty)
             else:
-                lot_qty = (int(quantity) // lot_size) * lot_size
-                remainder = int(quantity) - lot_qty
-                if lot_qty > 0:
-                    adjusted = lot_qty + remainder
-                elif remainder > 0:
-                    adjusted = remainder
-                else:
+                if int(quantity) < 1:
                     return []
-                if adjusted != int(quantity):
-                    diag.lot_adjusted_trades += 1
-                quantity = float(adjusted)
 
         bar_volume = bar.get('volume', 0)
         if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
@@ -625,9 +624,6 @@ class Backtester:
 
             lot_slices = self._fifo_lot_slices(pos, sell_qty)
 
-            portfolio.cash += fill_price * sell_qty - commission
-            portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0)
-
             trades = []
             total_realized = 0.0
             for lot_date, sub_qty, lot_price in lot_slices:
@@ -654,10 +650,10 @@ class Backtester:
                     cost_breakdown=sub_cost_breakdown,
                 ))
 
-            updated_pos = portfolio.get_position(symbol)
-            if updated_pos:
-                updated_pos.realized_pnl += total_realized
+            portfolio.cash += fill_price * sell_qty - commission
+            portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0, realized_pnl=total_realized)
 
+            updated_pos = portfolio.get_position(symbol)
             if updated_pos is None or updated_pos.quantity <= 0:
                 entry_times.pop(symbol, None)
                 entry_prices.pop(symbol, None)
