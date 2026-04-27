@@ -1,7 +1,7 @@
 """Risk engine for pre-order checks and position limits."""
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import threading
 import time
@@ -89,7 +89,8 @@ class RiskEngine:
             )
 
         today = as_of_date or date.today()
-        settled = self.portfolio.settled_quantity(symbol, today)
+        fill_date = today + timedelta(days=1) if as_of_date is not None else today
+        settled = self.portfolio.settled_quantity(symbol, fill_date)
         pos = self.portfolio.get_position(symbol)
         total_qty = pos.quantity if pos else 0
 

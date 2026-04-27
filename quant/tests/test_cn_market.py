@@ -270,7 +270,7 @@ class TestCNT1Settlement:
         if sell_trades:
             sell_date = sell_trades[0].fill_date
             buy_date = buy_trades[0].fill_date
-            assert (sell_date.date() - buy_date.date()).days >= 2
+            assert (sell_date.date() - buy_date.date()).days >= 1
 
 
 class TestCNPriceLimit:

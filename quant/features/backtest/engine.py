@@ -51,6 +51,8 @@ class BacktestDiagnostics:
     total_gross_pnl: float = 0.0
     t1_rejected_sells: int = 0
     limit_rejected_orders: int = 0
+    expired_orders: int = 0
+    risk_skipped_orders: int = 0
 
     @property
     def avg_fill_delay_days(self) -> float:
@@ -58,7 +60,7 @@ class BacktestDiagnostics:
 
     @property
     def cost_drag_pct(self) -> float:
-        if self.total_gross_pnl == 0:
+        if abs(self.total_gross_pnl) < 1e-10:
             return 0.0
         return self.total_commission / abs(self.total_gross_pnl) * 100
 
@@ -164,6 +166,8 @@ class Backtester:
     @staticmethod
     def _is_suspended(bar: Dict, prev_bar: Optional[Dict]) -> bool:
         if bar.get("volume", 0) == 0:
+            return True
+        if bar.get("close", 0) == 0 and bar.get("open", 0) == 0:
             return True
         return False
 
@@ -295,6 +299,11 @@ class Backtester:
                 bar = today_bars.get(sym, {})
                 if bar.get('_suspended'):
                     if order.get('_deferred_days', 0) >= MAX_FILL_DEFER_DAYS:
+                        diag.expired_orders += 1
+                        logger.warning(
+                            "Order expired for %s after %d deferred days (suspended)",
+                            order['symbol'], MAX_FILL_DEFER_DAYS
+                        )
                         continue
                     still_deferred.append(order)
                 else:
@@ -464,17 +473,19 @@ class Backtester:
                 self._current_date: Optional[date] = None
 
             def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
-                if self._risk_engine and price and price > 0:
-                    order_value = price * quantity
+                effective_price = price if price and price > 0 else 0
+                if self._risk_engine:
+                    order_value = effective_price * quantity if effective_price > 0 else quantity
                     approved, _ = self._risk_engine.check_order(
-                        symbol, quantity, price, order_value, side=side,
+                        symbol, quantity, effective_price, order_value, side=side,
                         as_of_date=self._current_date,
                     )
                     if not approved:
                         return None
-                    self._risk_engine.record_order(
-                        symbol=symbol, order_value=order_value, as_of_date=self._current_date,
-                    )
+                    if effective_price > 0:
+                        self._risk_engine.record_order(
+                            symbol=symbol, order_value=order_value, as_of_date=self._current_date,
+                        )
                 order = {
                     "symbol": symbol,
                     "quantity": quantity,

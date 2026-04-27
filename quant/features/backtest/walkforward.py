@@ -1,5 +1,6 @@
 """Walk-forward analysis framework with 6m train / 1m test / monthly step."""
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Callable, Optional
@@ -8,6 +9,8 @@ import numpy as np
 
 from quant.features.backtest.engine import Backtester, BacktestResult
 from quant.features.backtest.analytics import calculate_sharpe, calculate_max_drawdown
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,7 +69,7 @@ class WalkForwardEngine:
         config: Optional[Dict[str, Any]] = None
     ) -> WFResult:
         """
-        Run walk-forward analysis.
+        Run walk-forward analysis using trading-day-based windows.
         
         Args:
             strategy_factory: Function that creates strategy with given params
@@ -82,28 +85,48 @@ class WalkForwardEngine:
         window_results: List[WFWindowResult] = []
         
         data = data.sort_values('timestamp')
-        min_date = data['timestamp'].min()
-        max_date = data['timestamp'].max()
+        unique_dates = sorted(data['timestamp'].dt.normalize().unique())
+        if hasattr(unique_dates[0], 'to_pydatetime'):
+            unique_dates = [d.to_pydatetime() for d in unique_dates]
+        n_dates = len(unique_dates)
         
-        train_start = min_date
+        if n_dates < self.train_window_days + self.test_window_days:
+            return WFResult(
+                windows=[], aggregate_sharpe=0.0, aggregate_max_dd=0.0,
+                consistency=0.0, best_params={}, sharpe_degradation=0.0,
+                avg_train_sharpe=0.0, avg_test_sharpe=0.0, test_sharpe_std=0.0,
+                pct_profitable=0.0, is_viable=False
+            )
+        
+        step_idx = 0
         while True:
-            train_end = train_start + timedelta(days=self.train_window_days)
-            test_start = train_end
-            test_end = test_start + timedelta(days=self.test_window_days)
+            train_start_idx = step_idx
+            train_end_idx = train_start_idx + self.train_window_days
+            test_start_idx = train_end_idx
+            test_end_idx = test_start_idx + self.test_window_days
             
-            if test_end > max_date:
+            if test_end_idx > n_dates:
                 break
+            
+            train_start = unique_dates[train_start_idx]
+            train_end = unique_dates[train_end_idx]
+            test_start = unique_dates[test_start_idx]
+            test_end = unique_dates[test_end_idx] if test_end_idx < n_dates else unique_dates[-1] + timedelta(days=1)
             
             train_data = data[(data['timestamp'] >= train_start) & (data['timestamp'] < train_end)]
             test_data = data[(data['timestamp'] >= test_start) & (data['timestamp'] < test_end)]
             
             if len(train_data) < 50 or len(test_data) < 10:
-                train_start += timedelta(days=self.step_days)
+                step_idx += self.step_days
                 continue
             
             best_params, best_train_sharpe = self._find_best_params(
                 strategy_factory, train_data, param_grid, initial_cash, config
             )
+            
+            if best_train_sharpe == float('-inf'):
+                step_idx += self.step_days
+                continue
             
             strategy = strategy_factory(best_params)
             
@@ -126,7 +149,7 @@ class WalkForwardEngine:
                 params=best_params
             ))
             
-            train_start += timedelta(days=self.step_days)
+            step_idx += self.step_days
         
         if not window_results:
             return WFResult(
@@ -198,8 +221,7 @@ class WalkForwardEngine:
         import itertools
         param_names = list(param_grid.keys())
         param_values = [param_grid[name] for name in param_names]
-        first_values = [v[0] for v in param_values] if param_values else []
-        best_params = dict(zip(param_names, first_values)) if first_values else {}
+        best_params: Dict[str, Any] = {}
         best_sharpe = float('-inf')
         
         for values in itertools.product(*param_values):
@@ -216,7 +238,8 @@ class WalkForwardEngine:
                 if result.sharpe_ratio > best_sharpe:
                     best_sharpe = result.sharpe_ratio
                     best_params = params
-            except Exception:
+            except Exception as e:
+                logger.warning("WalkForward grid search failed for params %s: %s", params, e)
                 continue
         
         return best_params, best_sharpe
