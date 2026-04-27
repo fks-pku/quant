@@ -343,6 +343,8 @@ class Backtester:
             equity_curve_dates.append(current_date)
             equity_curve_values.append(nav)
 
+            portfolio.reset_daily()
+
             current_date += timedelta(days=1)
 
         for strategy in strategies:
@@ -438,8 +440,7 @@ class Backtester:
     def _update_portfolio_prices(self, portfolio: Any, last_prices: Dict[str, float]) -> None:
         for symbol, pos in portfolio.positions.items():
             if pos.quantity != 0 and symbol in last_prices:
-                pos.market_value = pos.quantity * last_prices[symbol]
-                pos.unrealized_pnl = pos.market_value - (pos.avg_cost * pos.quantity)
+                pos.update_market_price(last_prices[symbol])
 
     def _create_context(self, portfolio: Any, risk_engine: Any, data_provider: Any) -> Any:
         class BacktestContext:
@@ -575,10 +576,8 @@ class Backtester:
 
             diag.total_commission += commission
 
-            is_new_entry = symbol not in entry_times
-            if is_new_entry:
-                entry_times[symbol] = fill_ts
-                entry_prices[symbol] = fill_price
+            entry_times[symbol] = fill_ts
+            entry_prices[symbol] = fill_price
 
             fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
             portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)

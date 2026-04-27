@@ -188,8 +188,7 @@ class RiskEngine:
                 ts for ts in self._order_timestamps if ts.timestamp() > cutoff
             ]
             order_count = len(self._order_timestamps)
-
-        passed = order_count < self.max_orders_per_minute
+            passed = order_count < self.max_orders_per_minute
 
         return RiskCheckResult(
             passed=passed,
