@@ -65,13 +65,7 @@ class DualMomentum(Strategy):
 
     def _get_closes(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
-        closes = []
-        for bar in bars:
-            if isinstance(bar, dict):
-                closes.append(bar.get("close", 0))
-            elif hasattr(bar, "close"):
-                closes.append(bar.close)
-        return closes
+        return [self._adj(bar, "close") for bar in bars]
 
     def _get_last_price(self, symbol: str) -> float:
         closes = self._get_closes(symbol)

@@ -129,7 +129,7 @@ class VolatilityRegime(Strategy):
         for symbol in self._symbols:
             bars = self._day_data.get(symbol, [])
             if len(bars) >= self.momentum_lookback:
-                prices = [b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0) for b in bars]
+                prices = [self._adj(b, "close") for b in bars]
                 past = prices[-self.momentum_lookback]
                 if past > 0:
                     self._momentum_scores[symbol] = (prices[-1] - past) / past
@@ -142,7 +142,7 @@ class VolatilityRegime(Strategy):
         for symbol in self._symbols:
             bars = self._day_data.get(symbol, [])
             if len(bars) >= self.rsi_period + 1:
-                prices = [b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0) for b in bars[-(self.rsi_period + 1):]]
+                prices = [self._adj(b, "close") for b in bars[-(self.rsi_period + 1):]]
                 deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
                 gains = [d if d > 0 else 0 for d in deltas]
                 losses = [-d if d < 0 else 0 for d in deltas]

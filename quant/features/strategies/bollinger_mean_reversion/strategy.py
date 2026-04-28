@@ -79,24 +79,15 @@ class BollingerMeanReversion(Strategy):
 
     def _get_closes(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
-        return [
-            b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0)
-            for b in bars
-        ]
+        return [self._adj(b, "close") for b in bars]
 
     def _get_highs(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
-        return [
-            b.get("high", 0) if isinstance(b, dict) else getattr(b, "high", 0)
-            for b in bars
-        ]
+        return [self._adj(b, "high") for b in bars]
 
     def _get_lows(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
-        return [
-            b.get("low", 0) if isinstance(b, dict) else getattr(b, "low", 0)
-            for b in bars
-        ]
+        return [self._adj(b, "low") for b in bars]
 
     def _get_last_price(self, symbol: str) -> float:
         closes = self._get_closes(symbol)

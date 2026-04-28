@@ -7,6 +7,13 @@ import pandas as pd
 import numpy as np
 
 
+def _adj_col(data: pd.DataFrame, field: str) -> pd.Series:
+    adj = f"adj_{field}"
+    if adj in data.columns and data[adj].notna().any():
+        return data[adj]
+    return data[field]
+
+
 @dataclass
 class FactorResult:
     name: str
@@ -46,7 +53,7 @@ class MomentumFactor(Factor):
         if len(data) < self.lookback:
             return 0.0
         
-        close = data['close']
+        close = _adj_col(data, 'close')
         current = close.iloc[-1]
         past = close.iloc[-self.lookback]
         
@@ -67,7 +74,7 @@ class MeanReversionFactor(Factor):
         if len(data) < self.lookback:
             return 0.0
         
-        close = data['close']
+        close = _adj_col(data, 'close')
         sma = close.rolling(self.lookback).mean().iloc[-1]
         current = close.iloc[-1]
         
@@ -89,7 +96,7 @@ class VolatilityFactor(Factor):
         if len(data) < self.lookback:
             return 0.0
         
-        returns = data['close'].pct_change().dropna()
+        returns = _adj_col(data, 'close').pct_change().dropna()
         
         if len(returns) < 2:
             return 0.0
@@ -133,7 +140,7 @@ class RSIFactor(Factor):
         if len(data) < self.lookback + 1:
             return 50.0
         
-        close = data['close']
+        close = _adj_col(data, 'close')
         delta = close.diff()
         
         gain = delta.where(delta > 0, 0).rolling(self.lookback).mean()
@@ -159,7 +166,7 @@ class MACDFactor(Factor):
         if len(data) < self.slow:
             return 0.0
         
-        close = data['close']
+        close = _adj_col(data, 'close')
         ema_fast = close.ewm(span=self.fast).mean()
         ema_slow = close.ewm(span=self.slow).mean()
         
@@ -182,7 +189,7 @@ class BollingerBandFactor(Factor):
         if len(data) < self.lookback:
             return 0.0
         
-        close = data['close']
+        close = _adj_col(data, 'close')
         sma = close.rolling(self.lookback).mean().iloc[-1]
         std = close.rolling(self.lookback).std().iloc[-1]
         
@@ -209,9 +216,9 @@ class ATRFactor(Factor):
         if len(data) < self.lookback + 1:
             return 0.0
         
-        high = data['high']
-        low = data['low']
-        close = data['close']
+        high = _adj_col(data, 'high')
+        low = _adj_col(data, 'low')
+        close = _adj_col(data, 'close')
         
         tr1 = high - low
         tr2 = abs(high - close.shift())
@@ -253,7 +260,7 @@ class VolatilityRegimeFactor(Factor):
         if len(data) < self.lookback:
             return self.REGIME_CHOP
 
-        returns = data['close'].pct_change().dropna()
+        returns = _adj_col(data, 'close').pct_change().dropna()
         if len(returns) < self.lookback:
             return self.REGIME_CHOP
 

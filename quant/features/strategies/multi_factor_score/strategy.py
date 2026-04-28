@@ -84,10 +84,7 @@ class MultiFactorScore(Strategy):
 
     def _get_closes(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
-        return [
-            b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0)
-            for b in bars
-        ]
+        return [self._adj(b, "close") for b in bars]
 
     def _get_volumes(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])

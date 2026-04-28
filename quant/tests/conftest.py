@@ -59,14 +59,20 @@ def make_bars_df(
         price = max(price, 1.0)
         high = price * (1 + abs(np.random.normal(0, 0.005)))
         low = price * (1 - abs(np.random.normal(0, 0.005)))
+        open_price = round(price * (1 + np.random.normal(0, 0.003)), 4)
         rows.append({
             "symbol": symbol,
             "timestamp": ts,
-            "open": round(price * (1 + np.random.normal(0, 0.003)), 4),
+            "open": open_price,
             "high": round(high, 4),
             "low": round(low, 4),
             "close": round(price, 4),
             "volume": volume,
+            "adj_open": open_price,
+            "adj_high": round(high, 4),
+            "adj_low": round(low, 4),
+            "adj_close": round(price, 4),
+            "adj_factor": 1.0,
         })
     return pd.DataFrame(rows)
 

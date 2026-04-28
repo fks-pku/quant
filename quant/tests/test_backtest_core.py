@@ -13,6 +13,7 @@ from quant.tests.conftest import (
     make_dividends_df,
     run_simple_backtest,
 )
+from quant.features.strategies.registry import StrategyRegistry
 from quant.features.backtest.engine import (
     Backtester,
     BacktestDiagnostics,
@@ -388,3 +389,95 @@ class TestWalkForwardEngine:
         assert hasattr(result, "windows")
         assert hasattr(result, "aggregate_sharpe")
         assert hasattr(result, "is_viable")
+
+
+class TestAdjustedPriceSeparation:
+
+    def test_adj_helper_prefers_adj_close(self):
+        from quant.features.strategies.base import Strategy
+        bar = {"close": 100.0, "adj_close": 105.0}
+        assert Strategy._adj(bar, "close") == 105.0
+
+    def test_adj_helper_falls_back_to_close(self):
+        from quant.features.strategies.base import Strategy
+        bar = {"close": 100.0}
+        assert Strategy._adj(bar, "close") == 100.0
+
+    def test_adj_helper_handles_nan(self):
+        from quant.features.strategies.base import Strategy
+        bar = {"close": 100.0, "adj_close": float("nan")}
+        assert Strategy._adj(bar, "close") == 100.0
+
+    def test_adj_helper_handles_none(self):
+        from quant.features.strategies.base import Strategy
+        bar = {"close": 100.0, "adj_close": None}
+        assert Strategy._adj(bar, "close") == 100.0
+
+    def test_adj_helper_high_low(self):
+        from quant.features.strategies.base import Strategy
+        bar = {"high": 105.0, "adj_high": 110.0, "low": 95.0, "adj_low": 99.0}
+        assert Strategy._adj(bar, "high") == 110.0
+        assert Strategy._adj(bar, "low") == 99.0
+
+    def test_momentum_uses_adj_close(self):
+        from quant.features.strategies.base import Strategy
+        strategy = StrategyRegistry.create("SimpleMomentum", symbols=["TEST"], momentum_lookback=2)
+        strategy.context = None
+        bar_real_drop = {"symbol": "TEST", "close": 90.0, "adj_close": 101.0, "open": 90.0, "high": 91.0, "low": 89.0, "volume": 1000000}
+        bar_earlier = {"symbol": "TEST", "close": 100.0, "adj_close": 100.0, "open": 99.0, "high": 101.0, "low": 99.0, "volume": 1000000}
+        strategy._day_data["TEST"] = [bar_earlier, bar_real_drop]
+        strategy._calculate_momentum_scores()
+        score = strategy._momentum_scores.get("TEST", 0)
+        assert score > 0
+
+    def test_engine_fill_uses_real_open(self):
+        rows = []
+        for i in range(5):
+            ts = START + timedelta(days=i)
+            rows.append({
+                "symbol": "AAPL", "timestamp": ts,
+                "open": 150.0, "high": 151.0, "low": 149.0, "close": 150.0,
+                "adj_open": 300.0, "adj_high": 301.0, "adj_low": 299.0, "adj_close": 300.0,
+                "adj_factor": 2.0, "volume": 1000000,
+            })
+        data = pd.DataFrame(rows)
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+        result = run_simple_backtest(
+            bt, data,
+            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["AAPL"], momentum_lookback=2, holding_period=1)],
+            symbols=["AAPL"],
+        )
+        for trade in result.trades:
+            assert trade.fill_price == 150.0
+
+    def test_nav_uses_real_close(self):
+        rows = []
+        for i in range(5):
+            ts = START + timedelta(days=i)
+            rows.append({
+                "symbol": "AAPL", "timestamp": ts,
+                "open": 150.0, "high": 151.0, "low": 149.0, "close": 150.0,
+                "adj_open": 300.0, "adj_high": 301.0, "adj_low": 299.0, "adj_close": 300.0,
+                "adj_factor": 2.0, "volume": 1000000,
+            })
+        data = pd.DataFrame(rows)
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+        result = run_simple_backtest(
+            bt, data,
+            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["AAPL"], momentum_lookback=2, holding_period=1)],
+            symbols=["AAPL"],
+            initial_cash=1000000,
+        )
+        if result.open_positions:
+            for pos in result.open_positions:
+                assert pos["current_price"] == 150.0

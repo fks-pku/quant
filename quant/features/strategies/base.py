@@ -82,6 +82,18 @@ class Strategy(ABC):
         """Get all current positions."""
         return self._positions.copy()
 
+    @staticmethod
+    def _adj(bar, field: str = "close", default: float = 0.0) -> float:
+        if isinstance(bar, dict):
+            v = bar.get(f"adj_{field}")
+            if v is not None and v == v:
+                return float(v)
+            return float(bar.get(field, default))
+        v = getattr(bar, f"adj_{field}", None)
+        if v is not None and v == v:
+            return float(v)
+        return float(getattr(bar, field, default))
+
     def _load_data(self) -> None:
         """Load historical data for strategy initialization."""
         pass

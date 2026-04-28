@@ -36,7 +36,7 @@ def main() -> None:
     provider.connect()
 
     logger.info(f"Fetching {args.symbol} from {args.start} to {args.end}")
-    df = provider.get_bars(args.symbol, start_dt, end_dt, timeframe="1d")
+    df = provider.fetch_daily_with_hfq(args.symbol, start_dt, end_dt)
 
     if df.empty:
         logger.warning("No data returned. Exiting.")

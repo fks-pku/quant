@@ -71,7 +71,7 @@ class VolatilityScaledTrend(Strategy):
     def _get_closes(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
         return [
-            b.get("close", 0) if isinstance(b, dict) else getattr(b, "close", 0)
+            self._adj(b, "close")
             for b in bars
         ]
 

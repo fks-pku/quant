@@ -92,9 +92,9 @@ class ATRVolatilityBreakout(Strategy):
             return 0.0
         trs = []
         for i in range(-self.atr_period, 0):
-            h = self._get_bar_fields(bars[i], "high")
-            l = self._get_bar_fields(bars[i], "low")
-            pc = self._get_bar_fields(bars[i - 1], "close")
+            h = self._adj(bars[i], "high")
+            l = self._adj(bars[i], "low")
+            pc = self._adj(bars[i - 1], "close")
             tr = max(h - l, abs(h - pc), abs(l - pc))
             trs.append(tr)
         return float(np.mean(trs)) if trs else 0.0
@@ -105,8 +105,8 @@ class ATRVolatilityBreakout(Strategy):
             return False
 
         last_bar = bars[-1]
-        open_price = self._get_bar_fields(last_bar, "open")
-        close_price = self._get_bar_fields(last_bar, "close")
+        open_price = self._adj(last_bar, "open")
+        close_price = self._adj(last_bar, "close")
 
         if open_price <= 0:
             return False

@@ -75,12 +75,7 @@ class SimpleMomentum(Strategy):
             if symbol in self._day_data and len(self._day_data[symbol]) >= self.momentum_lookback:
                 prices = []
                 for bar in self._day_data[symbol]:
-                    if isinstance(bar, dict):
-                        prices.append(bar.get("close", 0))
-                    elif hasattr(bar, "close"):
-                        prices.append(bar.close)
-                    else:
-                        prices.append(0)
+                    prices.append(self._adj(bar, "close"))
                 if len(prices) >= self.momentum_lookback:
                     current_price = prices[-1]
                     past_price = prices[-self.momentum_lookback]
