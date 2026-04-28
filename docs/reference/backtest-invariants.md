@@ -13,10 +13,10 @@
 | # | Invariant | 验证 | 测试 |
 |---|-----------|------|------|
 | E-1 | 信号日 T 的订单在 T+1 以开盘价成交 | `[AUTO]` | `test_backtest_core::TestBacktesterExecution` |
-| E-2 | `on_before_trading` → `on_data` → `on_after_trading` 顺序不可变 | `[MANUAL]` | `engine.py` 日循环步骤 ①②③④ |
-| E-3 | 延迟订单填充在策略新订单收集之前 | `[MANUAL]` | `engine.py:288-342` |
-| E-4 | 每日循环末尾调用 `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` | `[MANUAL]` | `engine.py:350-351` |
-| E-5 | `current_date` 步进后非交易日由 `trading_dates_set` 跳过 | `[MANUAL]` | `engine.py:221-225` |
+| E-2 | `on_before_trading` → `on_data` → `on_after_trading` 顺序不可变 | `[AUTO]` | `test_bug_fixes::TestE2CallbackOrder` |
+| E-3 | 延迟订单填充在策略新订单收集之前 | `[AUTO]` | `test_bug_fixes::TestE3DeferredFillBeforeNewSignal` |
+| E-4 | 每日循环末尾调用 `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` | `[AUTO]` | `test_bug_fixes::TestE4ResetDailyCalled` |
+| E-5 | `current_date` 步进后非交易日由 `trading_dates_set` 跳过 | `[AUTO]` | `test_bug_fixes::TestE5NonTradingDaysSkipped` |
 
 ## 成交规则
 
@@ -73,13 +73,14 @@
 | R-2 | price=0 时风控仍生效 | `[AUTO]` | `test_bug_fixes::TestR2PriceZeroRiskCheck` |
 | R-3 | `_pending_order_values` 累计同日同标的 pending 金额 | `[AUTO]` | `test_bug_fixes::TestR3PendingOrderValuesAccumulate` |
 | R-4 | CN T+1 预检使用 fill_date（as_of_date+1），非 submission_date | `[AUTO]` | `test_bug_fixes::test_cn_sell_passes_when_buy_settles_by_fill_date` |
-| R-5 | `reset_daily()` 清零 `_daily_order_count` 和 `_pending_order_values` | `[AUTO]` | `test_bug_fixes::TestR5ResetDaily` |
+| R-5 | `reset_daily()` 清零 `_daily_order_count`、`_risk_rejected_count` 和 `_pending_order_values` | `[AUTO]` | `test_bug_fixes::TestR5ResetDaily` |
+| R-6 | `risk_skipped_orders` 累计风控拒绝的订单数（含 price=None 场景） | `[AUTO]` | `test_bug_fixes::test_risk_skipped_orders_increments_on_position_limit` |
 
 ## WalkForward
 
 | # | Invariant | 验证 | 测试 |
 |---|-----------|------|------|
-| WF-1 | 训练/测试窗口基于交易日索引，不是日历天 | `[MANUAL]` | `walkforward.py:88-95` unique_dates 索引 |
+| WF-1 | 训练/测试窗口基于交易日索引，不是日历天 | `[AUTO]` | `test_bug_fixes::TestWF1TradingDayIndices` |
 | WF-2 | 无有效参数时（best_sharpe == -inf）跳过窗口 | `[AUTO]` | `test_bug_fixes::test_no_valid_params_returns_not_viable` |
 | WF-3 | 空数据返回 `is_viable=False` | `[AUTO]` | `test_backtest_core::test_empty_data_returns_not_viable` |
 
@@ -90,11 +91,12 @@
 | D-1 | 超期订单有 `expired_orders` 计数 | `[AUTO]` | `test_bug_fixes::test_expired_order_counted_in_diagnostics` |
 | D-2 | T+1 拒绝有 `t1_rejected_sells` 计数 | `[AUTO]` | `test_cn_market::TestCNT1Settlement` |
 | D-3 | 涨跌停拒绝有 `limit_rejected_orders` 计数 | `[AUTO]` | `test_bug_fixes::test_cn_limit_up_returns_none_for_retry` |
-| D-4 | 手数调整有 `lot_adjusted_trades` 计数 | `[MANUAL]` | `engine.py` lot_qty != int(quantity) 时 +1 |
+| D-4 | 手数调整有 `lot_adjusted_trades` 计数 | `[AUTO]` | `test_bug_fixes::TestD4LotAdjustedTrades` |
 | D-5 | 成交量限制有 `volume_limited_trades` 计数 | `[AUTO]` | `test_bug_fixes::TestCN7VolumeParticipationLimit` |
 | D-6 | `cost_drag_pct` 在 \|gross_pnl\| < 1e-10 时返回 0 | `[AUTO]` | `test_bug_fixes::test_near_zero_gross_pnl_returns_zero` |
 | D-7 | `cost_drag_pct` 始终有限且非负 | `[AUTO]` | `test_bug_fixes::test_cost_drag_finite_and_non_negative` (hypothesis) |
 | D-8 | `avg_fill_delay_days` 在无成交时返回 0 | `[AUTO]` | `test_backtest_core::test_avg_fill_delay_zero_when_no_fills` |
+| D-9 | `total_gross_pnl = sum(trade.pnl) + diag.total_commission`（毛利润还原公式） | `[AUTO]` | `test_bug_fixes::TestD9TotalGrossPnl` |
 
 ## 模型不变量
 
@@ -103,8 +105,56 @@
 | M-1 | Position.settled_quantity 只算 lot_date < as_of 的 lot | `[AUTO]` | `test_backtest_core::test_settled_quantity_t1` |
 | M-2 | Position.remove_sell_lots 按 FIFO 切片 | `[AUTO]` | `test_backtest_core::test_remove_sell_lots` |
 | M-3 | Position 平仓后（is_flat）`_lots.clear()` | `[AUTO]` | `test_backtest_core::test_update_from_fill_sell_closes` |
-| M-4 | Trade (frozen dataclass) 不可变 | `[MANUAL]` | `trade.py:6 @dataclass(frozen=True)` |
+| M-4 | Trade (frozen dataclass) 不可变 | `[AUTO]` | `test_bug_fixes::TestM4TradeFrozen` |
 | M-5 | `_is_suspended`: volume=0 → True, open=0 且 close=0 → True | `[AUTO]` | `test_bug_fixes::TestBugFix5SuspendedCheck` |
+
+## 成交内部步骤
+
+| # | Invariant | 验证 | 测试 |
+|---|-----------|------|------|
+| X-1 | `_execute_order` 内部顺序：开盘价检查 → 涨跌停 → 滑点 → 手数 → 成交量 → 佣金 → 资金/仓位 → 确认成交 | `[AUTO]` | `test_bug_fixes::TestX1ExecutionStepOrder` |
+| X-2 | 滑点在涨跌停检查之后应用（涨跌停不触发滑点） | `[AUTO]` | `test_bug_fixes::TestX1ExecutionStepOrder::test_slippage_applied_after_limit_check` |
+| X-3 | 手数取整在滑点之后、成交量上限之前 | `[AUTO]` | `test_bug_fixes::TestX1ExecutionStepOrder::test_lot_rounding_after_slippage_cn` |
+| X-4 | 佣金仅在确认成交后计入 `diag.total_commission`（不扣后退） | `[AUTO]` | `test_bug_fixes::TestD9TotalGrossPnl`（公式正确隐含佣金正确计入） |
+
+## 除权除息
+
+| # | Invariant | 验证 | 测试 |
+|---|-----------|------|------|
+| DIV-1 | 现金红利：`portfolio.cash += cash_div × quantity - tax` | `[AUTO]` | `test_bug_fixes::TestDIV1CashDividendProcessing` |
+| DIV-2 | CN 红利税按 lot 持仓天数分层（≤30d/31-365d/>365d） | `[AUTO]` | `test_cn_market::TestCNDividendTax` |
+| DIV-3 | 送股：`portfolio.update_position(quantity=new_shares, cost=0)` | `[MANUAL]` | `engine.py:432-438` |
+| DIV-4 | 除权除息在延迟订单填充之前处理 | `[AUTO]` | `test_bug_fixes::TestDIV4DividendsBeforeFills` |
+
+## 市场收盘
+
+| # | Invariant | 验证 | 测试 |
+|---|-----------|------|------|
+| MTM-1 | 每日循环末尾 `_update_portfolio_prices` 用 `last_prices` 更新所有持仓市价 | `[AUTO]` | `test_bug_fixes::TestMTM1PortfolioPricesUpdated` |
+| MTM-2 | NAV 在市价更新后记录（`equity_curve.append(nav)` 在 `_update_portfolio_prices` 之后） | `[AUTO]` | `test_bug_fixes::TestMTM1PortfolioPricesUpdated`（market_value 与 close 对齐即证明） |
+| MTM-3 | `entry_times`/`entry_prices` 在全仓平仓后清理（`pos.quantity <= 0`） | `[AUTO]` | `test_bug_fixes::TestMTM3EntryTimesCleanup` |
+
+## 开放持仓报告
+
+| # | Invariant | 验证 | 测试 |
+|---|-----------|------|------|
+| OP-1 | `open_positions` 含 symbol/quantity/entry_price/current_price/unrealized_pnl/market_value | `[AUTO]` | `test_bug_fixes::TestF7NavWithOpenPositions` |
+| OP-2 | `open_positions` 优先使用 `_earliest_lot_time(pos)` 而非 `entry_times` | `[AUTO]` | `test_bug_fixes::TestOP2EarliestLotTimePreference` |
+
+## 延迟订单边界
+
+| # | Invariant | 验证 | 测试 |
+|---|-----------|------|------|
+| DEF-1 | `_deferred_days >= MAX_FILL_DEFER_DAYS`（5）时订单过期丢弃 | `[AUTO]` | `test_bug_fixes::test_expired_order_counted_in_diagnostics` |
+| DEF-2 | 首日 CN 标的无 prev_bar 时跳过涨跌停检查（prev_close 不可用） | `[AUTO]` | `test_bug_fixes::TestDEF2FirstDayNoPrevBar` |
+
+## 佣金率精确性
+
+| # | Invariant | 验证 | 测试 |
+|---|-----------|------|------|
+| COM-1 | US per_share $0.005/股 最低 $1.0/单 | `[AUTO]` | `test_us_market::TestUSCommission` |
+| COM-2 | CN 佣金 0.025% 最低 ¥5 + 印花税（仅 SELL）0.05% + 过户费 0.00341% + 规管费 0.00541% | `[AUTO]` | `test_cn_market::TestCNCommission` |
+| COM-3 | HK 佣金 0.03% 最低 HK$3 + 印花税（仅 SELL）0.13% + SFC levy + 清算费 + 交易费 + 系统费 HK$0.50 | `[AUTO]` | `test_hk_market::TestHKCommission` |
 
 ## 已知限制
 
@@ -112,7 +162,7 @@
 |---|------|------|-----------|
 | K-1 | 多策略共享 portfolio 时，所有策略接收所有 fills，`_positions` 追踪的是组合仓位而非策略自身仓位 | 多策略回测时策略无法知道自己的独立持仓 | HIGH |
 | K-2 | `WalkForward._find_best_params` 异常仅记录日志，未抛出 | 策略 bug 可能被隐藏 | LOW |
-| K-3 | D-4 手数调整计数无专项测试 | 仅代码审查覆盖 | LOW |
+| K-3 | CN IPO 5 天豁免使用日历天（`(current_date - ipo_d).days`），非交易日 | 5 个日历天可能仅含 3-4 个交易日 | LOW |
 
 ---
 
@@ -127,4 +177,4 @@
 5. 新增功能 → 在对应分区新增 Invariant 行 + 测试
 6. 修复新 Bug → 在 `test_bug_fixes.py` 新增回归测试 + 在本清单增加 Invariant
 
-**统计**: `[AUTO]` 条目占比应持续提升。当前目标：> 85%。
+**统计**: 72/73 = **98.6%** `[AUTO]`。仅 DIV-3（送股）仍为 `[MANUAL]`，需 stock_dividend 数据构造后补测试。

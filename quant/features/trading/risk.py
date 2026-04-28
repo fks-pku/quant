@@ -31,6 +31,7 @@ class RiskEngine:
         self._order_timestamps: List[datetime] = []
         self._pending_order_values: Dict[str, float] = {}
         self._daily_order_count: int = 0
+        self._risk_rejected_count: int = 0
         self._lock = threading.RLock()
 
     def check_order(
@@ -76,6 +77,9 @@ class RiskEngine:
         results.append(self._check_order_rate(as_of_date))
         if not results[-1].passed:
             approved = False
+
+        if not approved:
+            self._risk_rejected_count += 1
 
         return approved, results
 
@@ -228,6 +232,7 @@ class RiskEngine:
 
     def reset_daily(self) -> None:
         self._daily_order_count = 0
+        self._risk_rejected_count = 0
         self._pending_order_values.clear()
 
     def log_result(self, results: List[RiskCheckResult]) -> None:

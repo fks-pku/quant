@@ -357,6 +357,7 @@ class Backtester:
             equity_curve_values.append(nav)
 
             portfolio.reset_daily()
+            diag.risk_skipped_orders += risk_engine._risk_rejected_count
             risk_engine.reset_daily()
 
             current_date += timedelta(days=1)
