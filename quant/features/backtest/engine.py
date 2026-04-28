@@ -183,13 +183,18 @@ class Backtester:
         """Run backtest with T+1 execution.
 
         Daily loop execution order (DO NOT REORDER — prevents look-ahead bias):
-          1. Feed today's bars to strategies → strategies generate signals
-          2. Fill deferred orders from YESTERDAY's signals at today's open price (T+1)
-          3. Collect NEW orders generated today → defer for tomorrow
-          4. Update portfolio prices, record NAV
+          1. on_before_trading — strategy pre-computation (optional hook)
+          2. on_data — feed today's bars to strategies
+          3. _process_dividends — handle cash dividends + stock splits
+          4. Fill deferred orders from YESTERDAY's signals at today's open price (T+1)
+          5. _update_portfolio_prices — mark positions to today's close
+          6. on_after_trading — strategies generate signals, submit orders
+          7. Collect pending orders → defer for tomorrow
+          8. Record NAV, reset_daily
 
-        Because step 2 runs before step 3, orders are always filled one day
-        after the signal, using the fill day's open price.
+        Steps 4-6-7 ordering ensures: today's close prices are known before
+        risk checks run in step 6, and orders are always filled one day after
+        the signal (step 4 runs before step 6).
         """
         from quant.features.trading.portfolio import Portfolio
         from quant.features.trading.risk import RiskEngine
@@ -340,9 +345,12 @@ class Backtester:
                             for t in trades:
                                 s.on_fill(s.context, t)
 
+            self._update_portfolio_prices(portfolio, last_prices)
+
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
                     strategy.context.order_manager._current_date = current_date.date()
+                    strategy.context.order_manager._last_prices = last_prices
                 if hasattr(strategy, "on_after_trading"):
                     strategy.on_after_trading(strategy.context, current_date.date())
 
@@ -360,8 +368,6 @@ class Backtester:
             for order in pending_orders:
                 deferred_orders.append(order)
             pending_orders = []
-
-            self._update_portfolio_prices(portfolio, last_prices)
 
             nav = portfolio.nav
             equity_curve_dates.append(current_date)
@@ -443,9 +449,10 @@ class Backtester:
                 logger.info(f"{symbol} ex-div: cash {cash_div:.4f}/share x {pos.quantity} = {payment:.2f}, tax={tax:.2f}")
             if stock_div > 0:
                 new_shares = stock_div * pos.quantity
+                ex_date = current_date.date() if hasattr(current_date, 'date') else current_date
                 portfolio.update_position(
                     symbol, quantity=new_shares, price=last_prices.get(symbol, 0),
-                    cost=0,
+                    cost=0, trade_date=ex_date, lot_price=0,
                 )
                 logger.info(f"{symbol} ex-div: stock {stock_div:.4f}/share x {pos.quantity} = {new_shares:.0f} new shares")
 
@@ -483,9 +490,12 @@ class Backtester:
                 self._pending_orders: List[Dict] = []
                 self._risk_engine = risk_engine
                 self._current_date: Optional[date] = None
+                self._last_prices: Dict[str, float] = {}
 
             def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
                 effective_price = price if price and price > 0 else 0
+                if effective_price == 0:
+                    effective_price = self._last_prices.get(symbol, 0)
                 if self._risk_engine:
                     order_value = effective_price * quantity if effective_price > 0 else quantity
                     approved, _ = self._risk_engine.check_order(

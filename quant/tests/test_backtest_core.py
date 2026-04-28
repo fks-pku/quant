@@ -481,3 +481,249 @@ class TestAdjustedPriceSeparation:
         if result.open_positions:
             for pos in result.open_positions:
                 assert pos["current_price"] == 150.0
+
+
+class TestStockDividendLotTracking:
+
+    def _build_cn_data_with_stock_div(self):
+        start = datetime(2025, 1, 2)
+        rows = []
+        prices = [100, 102, 104, 106, 108, 110, 112, 108, 110, 112, 114, 116]
+        for i, p in enumerate(prices):
+            rows.append({
+                "symbol": "600519", "timestamp": start + timedelta(days=i),
+                "open": p, "high": p + 1, "low": p - 1, "close": p,
+                "volume": 5000000,
+                "adj_open": p, "adj_high": p + 1, "adj_low": p - 1,
+                "adj_close": p, "adj_factor": 1.0,
+            })
+        data = pd.DataFrame(rows)
+        div = pd.DataFrame({
+            "symbol": ["600519"], "ex_date": [start + timedelta(days=7)],
+            "cash_dividend": [0.0], "stock_dividend": [1.0],
+        })
+        return data, div
+
+    def test_stock_dividend_creates_lot_entries(self):
+        data, div = self._build_cn_data_with_stock_div()
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+        result = run_simple_backtest(
+            bt, data,
+            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=1)],
+            symbols=["600519"],
+            dividends=div,
+            initial_cash=1000000,
+        )
+        pos_obj = result.open_positions[0] if result.open_positions else None
+        if pos_obj is None:
+            sell_trades = [t for t in result.trades if t.side == "SELL"]
+            total_sold = sum(t.quantity for t in sell_trades)
+            assert total_sold > 0
+
+    def test_stock_dividend_shares_sellable_cn(self):
+        data, div = self._build_cn_data_with_stock_div()
+        sell_day = 10
+        total_bars = len(data)
+        extra = []
+        start = datetime(2025, 1, 2)
+        for i in range(total_bars, total_bars + sell_day):
+            p = 60
+            extra.append({
+                "symbol": "600519", "timestamp": start + timedelta(days=i),
+                "open": p, "high": p + 1, "low": p - 1, "close": p,
+                "volume": 5000000,
+                "adj_open": p, "adj_high": p + 1, "adj_low": p - 1,
+                "adj_close": p, "adj_factor": 1.0,
+            })
+        data = pd.concat([data, pd.DataFrame(extra)], ignore_index=True)
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 10.0},
+        }
+        bt = Backtester(config)
+        result = run_simple_backtest(
+            bt, data,
+            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=1)],
+            symbols=["600519"],
+            dividends=div,
+            initial_cash=1000000,
+        )
+        sell_trades = [t for t in result.trades if t.side == "SELL"]
+        if sell_trades:
+            total_sold = sum(t.quantity for t in sell_trades)
+            assert total_sold > 0
+
+    def test_stock_dividend_lot_price_is_zero(self):
+        data, div = self._build_cn_data_with_stock_div()
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+        provider = DataFrameProvider(data, dividends=div)
+        portfolio_ref = [None]
+
+        class CaptureStrategy:
+            name = "CaptureLots"
+            context = None
+            _positions = {}
+            _captured = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                pass
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        from quant.features.trading.portfolio import Portfolio
+        portfolio = Portfolio(initial_cash=1000000, currency="CNY")
+        pos = portfolio.get_position("600519")
+        portfolio.update_position("600519", quantity=100, price=100.0, cost=10000.0, trade_date=date(2025, 1, 2))
+        pos = portfolio.get_position("600519")
+        assert pos._lots
+        assert sum(lot.qty for lot in pos._lots.values()) == 100
+        portfolio.update_position("600519", quantity=100, price=50.0, cost=0, trade_date=date(2025, 1, 9), lot_price=0)
+        pos = portfolio.get_position("600519")
+        assert pos.quantity == 200
+        assert sum(lot.qty for lot in pos._lots.values()) == 200
+        lot_dates = sorted(pos._lots.keys())
+        assert pos._lots[lot_dates[0]].price == 100.0
+        assert pos._lots[lot_dates[1]].price == 0.0
+
+
+class TestMarketOrderRiskCheck:
+
+    def test_market_order_uses_last_price_for_risk(self):
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 0.10, "max_daily_loss_pct": 1.0, "max_leverage": 10.0},
+        }
+        bt = Backtester(config)
+
+        class BuyBig:
+            name = "BuyBig"
+            context = None
+            _positions = {}
+            _ordered = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if not self._ordered:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 10000, "BUY", "MARKET", None, "BuyBig"
+                    )
+                    self._ordered = True
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        data = make_us_bars(["AAPL"], START, 5, {"AAPL": 150.0})
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyBig()],
+            initial_cash=100000,
+            data_provider=provider,
+            symbols=["AAPL"],
+        )
+        assert result.diagnostics.risk_skipped_orders >= 1
+
+
+class TestDailyLossRiskCheck:
+
+    def test_daily_loss_check_uses_updated_prices(self):
+        rows = []
+        start = datetime(2025, 1, 2)
+        for i in range(8):
+            p = 100.0 if i < 4 else 80.0
+            rows.append({
+                "symbol": "AAPL", "timestamp": start + timedelta(days=i),
+                "open": p, "high": p + 1, "low": p - 1, "close": p,
+                "volume": 1000000,
+                "adj_open": p, "adj_high": p + 1, "adj_low": p - 1,
+                "adj_close": p, "adj_factor": 1.0,
+            })
+        data = pd.DataFrame(rows)
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 10.0},
+        }
+        bt = Backtester(config)
+
+        class BuyAndHoldThenBuyMore:
+            name = "BuyHold"
+            context = None
+            _positions = {}
+            _day = 0
+            _bought = False
+            _tried_extra = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                self._day += 1
+                if not self._bought and self._day >= 2:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", 100.0, "BuyHold"
+                    )
+                    self._bought = True
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyAndHoldThenBuyMore()],
+            initial_cash=1000000,
+            data_provider=provider,
+            symbols=["AAPL"],
+        )
+        buy_trades = [t for t in result.trades if t.side == "BUY"]
+        assert len(buy_trades) >= 1

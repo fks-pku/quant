@@ -77,6 +77,7 @@ class Portfolio:
         sector: Optional[str] = None,
         trade_date: Optional[date] = None,
         realized_pnl: Optional[float] = None,
+        lot_price: Optional[float] = None,
     ) -> None:
         """Update or create a position."""
         with self._lock:
@@ -100,7 +101,8 @@ class Portfolio:
                     pos.avg_cost = new_cost / new_qty if new_qty != 0 else 0
                     pos.quantity = new_qty
                     if trade_date is not None:
-                        pos.add_buy_lot(trade_date, quantity, price)
+                        effective_lot_price = lot_price if lot_price is not None else price
+                        pos.add_buy_lot(trade_date, quantity, effective_lot_price)
                 else:
                     pos.quantity += quantity
                     pos.remove_sell_lots(abs(quantity))

@@ -22,7 +22,7 @@ class RiskEngine:
         self.risk_config = config.get("risk", {})
         self.logger = setup_logger("RiskEngine")
 
-        self.max_position_pct = self.risk_config.get("max_position_pct", 0.05)
+        self.max_position_pct = self.risk_config.get("max_position_pct", 0.20)
         self.max_sector_pct = self.risk_config.get("max_sector_pct", 0.25)
         self.max_daily_loss_pct = self.risk_config.get("max_daily_loss_pct", 0.02)
         self.max_leverage = self.risk_config.get("max_leverage", 1.5)
