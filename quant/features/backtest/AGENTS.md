@@ -16,7 +16,7 @@
 
 - `Backtester(config, event_bus=None, lot_sizes=None, ipo_dates=None)` - 回测引擎
 - `BacktestResult(final_nav, total_return, sharpe_ratio, ...)` - 回测结果
-- `BacktestDiagnostics` - 成交质量诊断（停牌、成交量限制、延迟等）
+- `BacktestDiagnostics` - 成交质量诊断（停牌、成交量限制、丢弃等）
 - `BacktestResultExporter.to_csv(result, output_path)` - 导出 equity + trades CSV
 - `WalkForwardEngine(train_window_days, test_window_days, step_days)` - 步进验证
 - `DataFrameProvider(data, dividends)` - DataFrame → OHLCV 查询适配层
@@ -27,37 +27,48 @@
 while current_date ≤ end:
     if 非交易日 → skip
 
-    ① 喂入当日 Bar 给策略
-       strategy.on_data(ctx, bar)   # 策略生成信号
-       ⚠️ on_data 时昨日 fill 尚未执行，portfolio.positions 为截至昨日 fill 前的状态
-          策略应基于 bar 数据生成信号，不依赖当日持仓变化
+    ① on_before_trading（可选 hook，策略预计算）
 
-    ② 处理除权除息（现金/送股 + CN 红利税）
+    ② 加载当日 Bar 数据
+       today_bars / last_prices / prev_bars / _suspended
+       ⚠️ 此步骤只加载数据，不调用 strategy.on_data()
 
-    ③ 填充昨日延迟订单（T+1，当日开盘价成交）
+    ③ 处理除权除息（现金/送股 + CN 红利税）
+
+    ④ 执行昨日延迟订单（T+1，当日开盘价成交）
        for each deferred_order:
-         ├ 停牌且 < 5 天 → 继续延迟
-         ├ 停牌 ≥ 5 天 → 丢弃
-         ├ 涨跌停（CN 专属）→ 延迟重试（≤5天），计入 limit_rejected_orders
-         ├ _execute_order 返回 None → 延迟重试（≤5天）
-         └ 正常执行 → _execute_order() 返回 Trade 列表
+         ├ 无 bar 数据或停牌 → 丢弃，diag.discarded_orders++
+         ├ _execute_order 返回 [] → 丢弃，diag.discarded_orders++
+         └ _execute_order 返回 Trade 列表 → 成交，on_fill 回调
+       deferred_orders = []  （清空，不重试）
 
-    ④ 收集策略今日生成的新订单 → 进入 pending_orders
+    ⑤ 喂入当日 Bar 给策略
+       strategy.on_data(ctx, bar)
+       ⚠️ 在 fill 之后调用，portfolio.positions 已反映当日成交结果
+          策略在 on_data 中看到的持仓是最新状态
+
+    ⑥ 更新组合市价
+       pos.update_market_price(close)
+
+    ⑦ 策略生成信号
        strategy.on_after_trading(ctx, today)
 
-    ⑤ pending_orders → deferred_orders（打上 _signal_date）
+    ⑧ 收集新订单 → deferred_orders
+       pending_orders 打上 _signal_date
 
-    ⑥ 更新组合市价 + 记录 NAV
-       pos.update_market_price(close)
+    ⑨ 记录 NAV + reset_daily
        equity_curve.append(nav)
-
-     ⑦ portfolio.reset_daily()   # 重置日内亏损基准
-     ⑧ risk_engine.reset_daily() # 重置日内订单计数器和 pending 追踪
+       portfolio.reset_daily()
+       risk_engine.reset_daily()
 ```
 
-### 为什么 ③ 在 ④ 之前
+### 执行顺序设计原理
 
-策略今天看到 Bar → 生成信号 → 订单推迟到明天。明天先执行昨天的延迟订单，再收集今天的新信号。确保订单总是在信号日后一天以开盘价成交。
+1. **④ 在 ⑤ 之前**：先执行昨日订单再喂数据，策略看到的持仓是成交后的最新状态
+2. **⑤ 在 ⑦ 之前**：先喂数据再生成信号，策略基于完整的市场数据做决策
+3. **⑦ 在 ⑧ 之前**：信号生成后立即收集，确保不遗漏
+4. **⑨ 在最后**：NAV 和日状态重置放在所有操作完成后
+5. **④ 不重试**：未成交订单直接丢弃，策略在 ⑦ 中基于最新数据重新判断是否下单
 
 ## 单笔订单执行流程（`_execute_order`）
 
@@ -66,7 +77,7 @@ while current_date ≤ end:
 ```
 ① 开盘价有效性检查（≤0 → 丢弃）
 ② 涨跌停检查（CN 专属：±10/20/30%，IPO 5 天豁免）
-   → 返回 None（should-defer 哨兵），调用方延迟重试
+   → 返回 []（丢弃），计入 limit_rejected_orders
 ③ 滑点修正：fill_price = open ± slippage
 ④ 手数取整（HK/CN）：
    BUY：向下取整手（<1手 → 丢弃）
@@ -113,10 +124,12 @@ while current_date ≤ end:
 | `suspended_days` | 停牌日数（当日有任意标的 volume=0） |
 | `volume_limited_trades` | 因超 5% 成交量上限被截断的订单数 |
 | `lot_adjusted_trades` | 因手数取整被调整的订单数 |
-| `total_fill_delay_days / fill_count` | 平均延迟天数（通常 =1，即 T+1） |
-| `t1_rejected_sells` | 因 T+1 未结算被拒绝的卖单 |
-| `limit_rejected_orders` | 因 CN 涨跌停被延迟的订单（延迟重试，非丢弃） |
+| `fill_count` | 成交笔数 |
+| `discarded_orders` | 被丢弃的订单总数（含停牌、涨跌停、资金不足等所有原因） |
+| `t1_rejected_sells` | 因 T+1 未结算被拒绝的卖单（含在 discarded_orders 中） |
+| `limit_rejected_orders` | 因 CN 涨跌停被丢弃的订单（含在 discarded_orders 中） |
 | `total_commission` | 累计佣金 |
+| `risk_skipped_orders` | 被风控拒绝的订单 |
 | `cost_drag_pct` | 佣金 / |毛利润| × 100% |
 
 ## 依赖
@@ -134,8 +147,7 @@ while current_date ≤ end:
 ## `_execute_order` 返回值约定
 
 - `List[Trade]`（非空）→ 成交，调用方处理 Trade 和 on_fill 回调
-- `[]`（空列表）→ 永久丢弃（资金不足、无仓位等不可恢复原因）
-- `None` → 应延迟重试（CN 涨跌停），调用方将订单放回 deferred_orders（≤5天）
+- `[]`（空列表）→ 丢弃（资金不足、无仓位、涨跌停、开盘价无效等所有不可成交原因）
 
 ## Known Pitfalls
 
@@ -147,3 +159,4 @@ while current_date ≤ end:
 - `_check_position_size()` 会累计当日同标的的 pending 订单金额，防止多次下单绕过仓位限制
 - `portfolio.update_position()` 的 SELL 路径接受 `realized_pnl` 参数，不要在外部手动修改 `pos.realized_pnl`
 - `entry_times` 每次 BUY 都会刷新，`open_positions` 优先使用 `_earliest_lot_time(pos)`
+- 未成交订单不重试：策略应自行在 `on_after_trading` 中基于最新数据重新判断是否下单

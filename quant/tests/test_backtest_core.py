@@ -21,7 +21,6 @@ from quant.features.backtest.engine import (
     CommissionConfig,
     DEFAULT_LOT_SIZE,
     VOLUME_PARTICIPATION_LIMIT,
-    MAX_FILL_DEFER_DAYS,
 )
 from quant.features.backtest.walkforward import DataFrameProvider, WalkForwardEngine
 from quant.domain.models.trade import Trade
@@ -32,13 +31,9 @@ START = datetime(2025, 1, 2)
 
 
 class TestBacktestDiagnostics:
-    def test_avg_fill_delay_zero_when_no_fills(self):
+    def test_discarded_orders_default_zero(self):
         diag = BacktestDiagnostics()
-        assert diag.avg_fill_delay_days == 0.0
-
-    def test_avg_fill_delay_with_fills(self):
-        diag = BacktestDiagnostics(total_fill_delay_days=10, fill_count=5)
-        assert diag.avg_fill_delay_days == 2.0
+        assert diag.discarded_orders == 0
 
     def test_cost_drag_zero_when_no_pnl(self):
         diag = BacktestDiagnostics()

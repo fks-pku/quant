@@ -13,7 +13,6 @@ from quant.features.backtest.analytics import calculate_performance_metrics, Per
 
 logger = logging.getLogger(__name__)
 
-MAX_FILL_DEFER_DAYS = 5
 VOLUME_PARTICIPATION_LIMIT = 0.05
 DEFAULT_LOT_SIZE = 100
 
@@ -45,18 +44,13 @@ class BacktestDiagnostics:
     suspended_days: int = 0
     volume_limited_trades: int = 0
     lot_adjusted_trades: int = 0
-    total_fill_delay_days: int = 0
     fill_count: int = 0
     total_commission: float = 0.0
     total_gross_pnl: float = 0.0
     t1_rejected_sells: int = 0
     limit_rejected_orders: int = 0
-    expired_orders: int = 0
+    discarded_orders: int = 0
     risk_skipped_orders: int = 0
-
-    @property
-    def avg_fill_delay_days(self) -> float:
-        return self.total_fill_delay_days / self.fill_count if self.fill_count > 0 else 0.0
 
     @property
     def cost_drag_pct(self) -> float:
@@ -184,17 +178,16 @@ class Backtester:
 
         Daily loop execution order (DO NOT REORDER — prevents look-ahead bias):
           1. on_before_trading — strategy pre-computation (optional hook)
-          2. on_data — feed today's bars to strategies
+          2. Load today's bar data — populate today_bars, last_prices, prev_bars
           3. _process_dividends — handle cash dividends + stock splits
-          4. Fill deferred orders from YESTERDAY's signals at today's open price (T+1)
-          5. _update_portfolio_prices — mark positions to today's close
-          6. on_after_trading — strategies generate signals, submit orders
-          7. Collect pending orders → defer for tomorrow
-          8. Record NAV, reset_daily
+          4. Execute deferred orders from YESTERDAY's signals at today's open price (T+1)
+             → unexecuted orders are DISCARDED (strategy re-evaluates with fresh data)
+          5. on_data — feed today's bars to strategies (after fills, portfolio is up to date)
+          6. _update_portfolio_prices — mark positions to today's close
+          7. on_after_trading — strategies generate signals, submit orders
+          8. Collect pending orders → defer for tomorrow
+          9. Record NAV, reset_daily
 
-        Steps 4-6-7 ordering ensures: today's close prices are known before
-        risk checks run in step 6, and orders are always filled one day after
-        the signal (step 4 runs before step 6).
         """
         from quant.features.trading.portfolio import Portfolio
         from quant.features.trading.risk import RiskEngine
@@ -233,13 +226,15 @@ class Backtester:
                 current_date += timedelta(days=1)
                 continue
 
-            today_bars: Dict[str, Dict] = {}
-            any_suspended_today = False
-            prev_close_bars: Dict[str, Dict] = dict(prev_bars)
-
+            # --- Step 1: on_before_trading ---
             for strategy in strategies:
                 if hasattr(strategy, "on_before_trading"):
                     strategy.on_before_trading(strategy.context, current_date.date())
+
+            # --- Step 2: Load today's bar data ---
+            today_bars: Dict[str, Dict] = {}
+            any_suspended_today = False
+            prev_close_bars: Dict[str, Dict] = dict(prev_bars)
 
             if data_provider:
                 has_fast_lookup = hasattr(data_provider, 'get_bar_for_date')
@@ -259,10 +254,6 @@ class Backtester:
                             bar_close = bar_data.get('close', 0)
                             if bar_close > 0:
                                 last_prices[symbol] = bar_close
-
-                            for strategy in strategies:
-                                if hasattr(strategy, "on_data"):
-                                    strategy.on_data(strategy.context, bar_data)
 
                             prev_bars[symbol] = bar_data
                         else:
@@ -286,10 +277,6 @@ class Backtester:
                                     if bar_close > 0:
                                         last_prices[symbol] = bar_close
 
-                                    for strategy in strategies:
-                                        if hasattr(strategy, "on_data"):
-                                            strategy.on_data(strategy.context, bar_data)
-
                                     prev_bars[symbol] = bar_data
                     except Exception as e:
                         logger.warning("Error loading bar data for %s on %s: %s", symbol, current_date, e)
@@ -297,56 +284,37 @@ class Backtester:
             if any_suspended_today:
                 diag.suspended_days += 1
 
+            # --- Step 3: Process dividends ---
             self._process_dividends(data_provider, portfolio, symbols, current_date, last_prices, entry_times)
 
-            for order in deferred_orders:
-                order['_deferred_days'] = order.get('_deferred_days', 0) + 1
-
-            fillable = []
-            still_deferred = []
+            # --- Step 4: Execute deferred orders from T-1 ---
             for order in deferred_orders:
                 sym = order['symbol']
                 bar = today_bars.get(sym, {})
-                if bar.get('_suspended'):
-                    if order.get('_deferred_days', 0) >= MAX_FILL_DEFER_DAYS:
-                        diag.expired_orders += 1
-                        logger.warning(
-                            "Order expired for %s after %d deferred days (suspended)",
-                            order['symbol'], MAX_FILL_DEFER_DAYS
-                        )
-                        continue
-                    still_deferred.append(order)
-                else:
-                    fillable.append(order)
-            deferred_orders = still_deferred
-
-            for order in fillable:
-                sym = order['symbol']
-                bar = today_bars.get(sym, {})
-                if not bar:
-                    if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
-                        deferred_orders.append(order)
+                if not bar or bar.get('_suspended'):
+                    diag.discarded_orders += 1
                     continue
                 trades = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_close_bars.get(sym))
-                if trades is None:
-                    if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
-                        deferred_orders.append(order)
-                    else:
-                        diag.expired_orders += 1
-                        logger.warning(
-                            "Order expired for %s after %d deferred days (limit hit)",
-                            order['symbol'], MAX_FILL_DEFER_DAYS
-                        )
+                if not trades:
+                    diag.discarded_orders += 1
                     continue
-                if trades:
-                    all_trades.extend(trades)
-                    for s in strategies:
-                        if hasattr(s, "on_fill"):
-                            for t in trades:
-                                s.on_fill(s.context, t)
+                all_trades.extend(trades)
+                for s in strategies:
+                    if hasattr(s, "on_fill"):
+                        for t in trades:
+                            s.on_fill(s.context, t)
+            deferred_orders = []
 
+            # --- Step 5: Feed bar data to strategies ---
+            for sym, bar_data in today_bars.items():
+                for strategy in strategies:
+                    if hasattr(strategy, "on_data"):
+                        strategy.on_data(strategy.context, bar_data)
+
+            # --- Step 6: Update portfolio prices ---
             self._update_portfolio_prices(portfolio, last_prices)
 
+            # --- Step 7: Strategy signal generation ---
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
                     strategy.context.order_manager._current_date = current_date.date()
@@ -354,6 +322,7 @@ class Backtester:
                 if hasattr(strategy, "on_after_trading"):
                     strategy.on_after_trading(strategy.context, current_date.date())
 
+            # --- Step 8: Collect pending orders → deferred_orders ---
             if data_provider:
                 for strategy in strategies:
                     if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
@@ -361,7 +330,6 @@ class Backtester:
                         if om and hasattr(om, "_pending_orders") and om._pending_orders:
                             for order in om._pending_orders:
                                 order['_signal_date'] = current_date
-                                order['_deferred_days'] = 0
                                 pending_orders.append(order)
                             om.clear_pending()
 
@@ -369,6 +337,7 @@ class Backtester:
                 deferred_orders.append(order)
             pending_orders = []
 
+            # --- Step 9: Record NAV + reset daily state ---
             nav = portfolio.nav
             equity_curve_dates.append(current_date)
             equity_curve_values.append(nav)
@@ -543,7 +512,7 @@ class Backtester:
         entry_prices: Dict[str, float],
         diag: BacktestDiagnostics,
         prev_bar: Optional[Dict] = None,
-    ) -> Optional[List[Trade]]:
+    ) -> List[Trade]:
         raw_open = bar.get('open')
         if not raw_open or raw_open <= 0:
             return []
@@ -560,7 +529,7 @@ class Backtester:
             fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
             if self._is_cn_price_at_limit(symbol, raw_open, prev_close, fill_date_val):
                     diag.limit_rejected_orders += 1
-                    return None
+                    return []
 
         fill_price = raw_open
 
@@ -612,7 +581,6 @@ class Backtester:
             portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)
             portfolio.cash -= total_cost
 
-            diag.total_fill_delay_days += order.get('_deferred_days', 0)
             diag.fill_count += 1
 
             return [Trade(
@@ -691,7 +659,6 @@ class Backtester:
                 entry_times.pop(symbol, None)
                 entry_prices.pop(symbol, None)
 
-            diag.total_fill_delay_days += order.get('_deferred_days', 0)
             diag.fill_count += 1
 
             return trades

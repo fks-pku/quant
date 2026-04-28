@@ -17,7 +17,6 @@ from quant.features.backtest.engine import (
     Backtester,
     BacktestDiagnostics,
     BacktestResult,
-    MAX_FILL_DEFER_DAYS,
 )
 from quant.features.backtest.walkforward import DataFrameProvider, WalkForwardEngine
 from quant.features.trading.portfolio import Portfolio
@@ -218,13 +217,13 @@ class TestBugFix1RiskCheckPriceNone:
         assert result.diagnostics.risk_skipped_orders >= 1
 
 
-class TestBugFix3ExpiredOrdersDiagnostic:
-    """BUG-3: Expired deferred orders must be counted."""
+class TestBugFix3DiscardedOrdersDiagnostic:
+    """BUG-3: Discarded orders must be counted."""
 
-    def test_expired_order_counted_in_diagnostics(self):
+    def test_discarded_orders_field_exists(self):
         diag = BacktestDiagnostics()
-        assert diag.expired_orders == 0
-        assert hasattr(diag, 'expired_orders')
+        assert diag.discarded_orders == 0
+        assert hasattr(diag, 'discarded_orders')
 
     def test_risk_skipped_orders_field_exists(self):
         diag = BacktestDiagnostics()
@@ -434,7 +433,7 @@ class TestF3LimitHitReturnsNone:
         entry_prices = {}
         result = bt._execute_order(order, portfolio, "600519", bar, entry_times, entry_prices, diag, prev_bar)
 
-        assert result is None, f"Expected None (retry), got {result!r}"
+        assert result == [], f"Expected [] (discarded), got {result!r}"
         assert diag.limit_rejected_orders == 1
 
 
@@ -735,7 +734,7 @@ class TestF10ExecuteOrderReturnConvention:
         result = bt._execute_order(order, portfolio, "AAPL", bar, entry_times, entry_prices, diag)
         assert result == []
 
-    def test_limit_hit_returns_none(self):
+    def test_limit_hit_returns_empty_list(self):
         bt = make_backtester()
         portfolio = Portfolio(initial_cash=1000000)
         portfolio.update_position("600519", quantity=100, price=50.0, cost=5000.0, trade_date=(START + timedelta(days=1)).date())
@@ -748,7 +747,7 @@ class TestF10ExecuteOrderReturnConvention:
         entry_prices = {}
 
         result = bt._execute_order(order, portfolio, "600519", bar, entry_times, entry_prices, diag, prev_bar)
-        assert result is None
+        assert result == []
 
 
 class TestF11SlippageDirectionAllMarkets:
@@ -1954,10 +1953,10 @@ class TestBugAPrevCloseBarsNotOverwritten:
         assert result.diagnostics.limit_rejected_orders >= 1, "CN limit-up should be detected with yesterday's close"
 
 
-class TestBug1LimitExpiredCounted:
-    """Bug 1: Limit-hit orders that exceed MAX_FILL_DEFER_DAYS must increment expired_orders."""
+class TestBug1LimitDiscardedCounted:
+    """Bug 1: Limit-hit orders must be discarded and counted in discarded_orders."""
 
-    def test_limit_expired_order_counted(self):
+    def test_limit_discarded_order_counted(self):
         config = {
             "backtest": {"slippage_bps": 0},
             "execution": {"commission": {}},
@@ -2014,7 +2013,7 @@ class TestBug1LimitExpiredCounted:
         )
         sell_trades = [t for t in result.trades if t.side == "SELL"]
         if len(sell_trades) == 0:
-            assert result.diagnostics.expired_orders >= 1
+            assert result.diagnostics.discarded_orders >= 1
 
 
 class TestBug2FillCountOnlyOnSuccess:

@@ -149,7 +149,7 @@ def main(argv=None):
     print(f"  Lot-adjusted:         {diag.lot_adjusted_trades}")
     print(f"  Limit-rejected:       {diag.limit_rejected_orders}")
     print(f"  T+1 rejected sells:   {diag.t1_rejected_sells}")
-    print(f"  Avg fill delay:       {diag.avg_fill_delay_days:.1f} days")
+    print(f"  Discarded orders:     {diag.discarded_orders}")
     print(f"  Total costs:          ${diag.total_commission:,.2f}")
     print(f"  Cost drag:            {diag.cost_drag_pct:.1f}%")
     print(f"\nResults saved to: {base_path}_*.csv")
@@ -178,7 +178,7 @@ def main(argv=None):
             "lot_adjusted_trades": diag.lot_adjusted_trades,
             "limit_rejected_orders": diag.limit_rejected_orders,
             "t1_rejected_sells": diag.t1_rejected_sells,
-            "avg_fill_delay_days": diag.avg_fill_delay_days,
+            "discarded_orders": diag.discarded_orders,
             "total_commission": diag.total_commission,
             "cost_drag_pct": diag.cost_drag_pct,
         }

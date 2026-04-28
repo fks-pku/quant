@@ -100,7 +100,7 @@ print(f"\nDiagnostics:")
 print(f"  Suspended days:       {diag.suspended_days}")
 print(f"  Volume-limited:       {diag.volume_limited_trades}")
 print(f"  Lot-adjusted:         {diag.lot_adjusted_trades}")
-print(f"  Avg fill delay:       {diag.avg_fill_delay_days:.1f} days")
+print(f"  Discarded orders:     {diag.discarded_orders}")
 print(f"  Total costs:          ${diag.total_commission:,.2f}")
 print(f"  Cost drag:            {diag.cost_drag_pct:.1f}%")
 
