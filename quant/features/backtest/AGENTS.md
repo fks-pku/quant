@@ -29,6 +29,8 @@ while current_date ≤ end:
 
     ① 喂入当日 Bar 给策略
        strategy.on_data(ctx, bar)   # 策略生成信号
+       ⚠️ on_data 时昨日 fill 尚未执行，portfolio.positions 为截至昨日 fill 前的状态
+          策略应基于 bar 数据生成信号，不依赖当日持仓变化
 
     ② 处理除权除息（现金/送股 + CN 红利税）
 

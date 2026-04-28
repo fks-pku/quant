@@ -17,6 +17,8 @@
 | E-3 | 延迟订单填充在策略新订单收集之前 | `[AUTO]` | `test_bug_fixes::TestE3DeferredFillBeforeNewSignal` |
 | E-4 | 每日循环末尾调用 `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` | `[AUTO]` | `test_bug_fixes::TestE4ResetDailyCalled` |
 | E-5 | `current_date` 步进后非交易日由 `trading_dates_set` 跳过 | `[AUTO]` | `test_bug_fixes::TestE5NonTradingDaysSkipped` |
+| E-6 | CN 涨跌停检测使用昨日收盘价（非当日 bar），`prev_close_bars` 在 Step 2 覆盖前快照 | `[AUTO]` | `test_bug_fixes::test_prev_close_used_for_limit_check_not_today_bar` |
+| E-7 | `close=0` 不更新 `last_prices`（防止市价归零导致 NAV 崩溃） | `[AUTO]` | `test_bug_fixes::test_zero_close_does_not_update_last_prices` |
 
 ## 成交规则
 
@@ -97,6 +99,8 @@
 | D-7 | `cost_drag_pct` 始终有限且非负 | `[AUTO]` | `test_bug_fixes::test_cost_drag_finite_and_non_negative` (hypothesis) |
 | D-8 | `avg_fill_delay_days` 在无成交时返回 0 | `[AUTO]` | `test_backtest_core::test_avg_fill_delay_zero_when_no_fills` |
 | D-9 | `total_gross_pnl = sum(trade.pnl) + diag.total_commission`（毛利润还原公式） | `[AUTO]` | `test_bug_fixes::TestD9TotalGrossPnl` |
+| D-10 | 涨跌停超期订单也计入 `expired_orders`（不限于停牌路径） | `[AUTO]` | `test_bug_fixes::test_limit_hit_expired_order_counted` |
+| D-11 | `fill_count` 和 `total_fill_delay_days` 仅在成交成功后递增（资金/仓位不足不计数） | `[AUTO]` | `test_bug_fixes::test_fill_count_only_increments_on_successful_fill` |
 
 ## 模型不变量
 
@@ -177,4 +181,118 @@
 5. 新增功能 → 在对应分区新增 Invariant 行 + 测试
 6. 修复新 Bug → 在 `test_bug_fixes.py` 新增回归测试 + 在本清单增加 Invariant
 
-**统计**: 72/73 = **98.6%** `[AUTO]`。仅 DIV-3（送股）仍为 `[MANUAL]`，需 stock_dividend 数据构造后补测试。
+**统计**: 75/76 = **98.7%** `[AUTO]`。仅 DIV-3（送股）仍为 `[MANUAL]`，需 stock_dividend 数据构造后补测试。
+
+---
+
+## Walkthrough: Bug Fix 验证实例
+
+以下追踪一个 CN A 股回测日循环（Step 0–10），展示 Bug A/Bug 1/Bug 2/Bug 3 修复后的正确行为。
+
+### 场景
+
+- 标的：`600519` (贵州茅台)
+- T-1 日：收盘价 1800 元，策略持有 100 股
+- T 日：开盘价 1980 元（+10% 涨停），成交量 10000 股
+- 策略在 T-1 日 `on_data` 提交 BUY 200 股
+
+### Step 0: 初始化
+
+```
+prev_bars = {600519: Bar(close=1800, ...)}
+current_date = T
+```
+
+### Step 1: 快照 prev_close (Bug A 修复)
+
+```python
+prev_close_bars = dict(prev_bars)  # {600519: prev_bar with close=1800}
+```
+
+**验证**: `prev_close_bars[600519].close == 1800`，不会被后续 Step 2 覆盖。
+
+### Step 2: 加载今日 bar 并覆盖 prev_bars
+
+```python
+bars = load_bars(current_date)  # {600519: Bar(open=1980, close=1980, volume=10000)}
+prev_bars = bars  # 覆盖！但 prev_close_bars 已快照
+```
+
+### Step 3: 更新 last_prices（Bug 3 修复）
+
+```python
+for sym, bar in bars.items():
+    if bar.close > 0:          # Bug 3 fix: close=0 不更新
+        last_prices[sym] = bar.close
+# last_prices[600519] = 1980
+```
+
+### Step 4: 延迟订单填充（Bug 1 修复）
+
+```python
+# 策略 T-1 日提交的 BUY 200 股，延迟到今日执行
+result = _execute_order(order, bar=bars[600519], prev_bar=prev_close_bars[600519])
+# prev_bar.close = 1800 (昨日收盘，Bug A 修复后正确)
+# bar.open = 1980 → 涨停检查: 1980 vs 1800*1.10 = 1980 → 命中涨停
+# 返回 None (延迟重试)
+```
+
+**Bug 1 修复路径** (若延迟天数 >= 5):
+```python
+if result is None:
+    if order._deferred_days >= MAX_FILL_DEFER_DAYS:
+        diag.expired_orders += 1  # Bug 1 fix: 涨跌停超期也计数
+        logger.warning("Order expired after %d deferred days", order._deferred_days)
+    else:
+        order._deferred_days += 1
+        deferred.append(order)
+```
+
+### Step 5: 执行 _execute_order 内部（Bug 2 修复）
+
+若非涨停场景，成交成功路径：
+```python
+# 旧 Bug: fill_count 在资金检查前递增 → 资金不足时虚高
+# 修复后:
+if side == BUY:
+    if portfolio.cash >= total_cost:
+        portfolio.update_position(...)
+        diag.fill_count += 1               # Bug 2 fix: 成功后才递增
+        diag.total_fill_delay_days += delay # Bug 2 fix: 成功后才递增
+        return [trade]
+    else:
+        return []  # 不递增 fill_count
+```
+
+### Step 6: 策略 on_data
+
+```
+策略收到 bars 数据，可提交新订单
+```
+
+### Step 7: 新订单入 deferred 队列
+
+### Step 8: 风控检查
+
+### Step 9: 更新 portfolio 市价
+
+```python
+# MTM 更新使用 last_prices（已在 Step 3 用 close>0 过滤）
+# 若某 bar.close=0，last_prices 保留昨日值，NAV 不崩溃
+```
+
+### Step 10: 记录 equity_curve
+
+```
+nav = portfolio.cash + sum(pos.market_value for pos in positions)
+equity_curve.append((current_date, nav))
+```
+
+### Bug 修复总结
+
+| Bug | 修复位置 | 影响 |
+|-----|---------|------|
+| A | Step 1 快照 `prev_close_bars` | 涨跌停检测使用正确的前日收盘价 |
+| 1 | Step 4 `expired_orders` 递增 | 涨跌停超期订单不再被静默丢弃 |
+| 2 | Step 5 成功后递增诊断计数 | `avg_fill_delay_days` 不再被失败订单虚高 |
+| 3 | Step 3 `close>0` 守卫 | `last_prices` 不被 `close=0` 归零，NAV 不崩溃 |

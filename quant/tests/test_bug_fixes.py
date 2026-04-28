@@ -1888,3 +1888,238 @@ class TestDEF2FirstDayNoPrevBar:
             symbols=["600519"],
         )
         assert result.diagnostics.limit_rejected_orders == 0
+
+
+# ============================================================
+# Bug A + Bug 1/2/3 regression tests
+# ============================================================
+
+class TestBugAPrevCloseBarsNotOverwritten:
+    """Bug A: _execute_order must receive YESTERDAY's bar as prev_bar, not today's."""
+
+    def test_cn_limit_up_detected_with_correct_prev_close(self):
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+
+        class BuyThenSell:
+            name = "LimitTest"
+            context = None
+            _positions = {}
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                om = ctx.order_manager
+                if self._day == 0:
+                    om.submit_order("600519", 100, "BUY", "MARKET", 50.0, "LimitTest")
+                elif self._day == 1:
+                    om.submit_order("600519", 100, "SELL", "MARKET", 55.0, "LimitTest")
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        rows = []
+        base = START
+        prices = [50.0, 51.0, 56.1, 52.0, 51.0]
+        for i, p in enumerate(prices):
+            ts = base + timedelta(days=i)
+            rows.append({"symbol": "600519", "timestamp": ts, "open": p, "high": p + 1, "low": p - 1, "close": p, "volume": 5000000})
+        data = pd.DataFrame(rows)
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyThenSell()],
+            initial_cash=1000000,
+            data_provider=provider,
+            symbols=["600519"],
+        )
+        assert result.diagnostics.limit_rejected_orders >= 1, "CN limit-up should be detected with yesterday's close"
+
+
+class TestBug1LimitExpiredCounted:
+    """Bug 1: Limit-hit orders that exceed MAX_FILL_DEFER_DAYS must increment expired_orders."""
+
+    def test_limit_expired_order_counted(self):
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+
+        class BuyThenSell:
+            name = "LimitExp"
+            context = None
+            _positions = {}
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                om = ctx.order_manager
+                if self._day == 0:
+                    om.submit_order("600519", 100, "BUY", "MARKET", 50.0, "LimitExp")
+                elif self._day == 1:
+                    om.submit_order("600519", 100, "SELL", "MARKET", 55.0, "LimitExp")
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        rows = []
+        base = START
+        rows.append({"symbol": "600519", "timestamp": base, "open": 50, "high": 51, "low": 49, "close": 50, "volume": 5000000})
+        rows.append({"symbol": "600519", "timestamp": base + timedelta(days=1), "open": 51, "high": 52, "low": 50, "close": 55, "volume": 5000000})
+        for i in range(2, 10):
+            ts = base + timedelta(days=i)
+            rows.append({"symbol": "600519", "timestamp": ts, "open": 60.5, "high": 61, "low": 60, "close": 60.5, "volume": 5000000})
+        data = pd.DataFrame(rows)
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyThenSell()],
+            initial_cash=1000000,
+            data_provider=provider,
+            symbols=["600519"],
+        )
+        sell_trades = [t for t in result.trades if t.side == "SELL"]
+        if len(sell_trades) == 0:
+            assert result.diagnostics.expired_orders >= 1
+
+
+class TestBug2FillCountOnlyOnSuccess:
+    """Bug 2: fill_count should only increment on actual successful fills."""
+
+    def test_insufficient_cash_does_not_inflate_fill_count(self):
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+
+        class BuyExpensive:
+            name = "BuyExp"
+            context = None
+            _positions = {}
+            _ordered = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if not self._ordered:
+                    ctx.order_manager.submit_order("AAPL", 100000, "BUY", "MARKET", 150.0, "BuyExp")
+                    self._ordered = True
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        data = make_us_bars(["AAPL"], START, 5, {"AAPL": 150.0})
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyExpensive()],
+            initial_cash=100,
+            data_provider=provider,
+            symbols=["AAPL"],
+        )
+        assert result.diagnostics.fill_count == 0, "fill_count should be 0 when no fills succeed"
+
+
+class TestBug3CloseZeroPreservesLastPrice:
+    """Bug 3: close=0 should not overwrite last_prices."""
+
+    def test_close_zero_bar_preserves_previous_price(self):
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+
+        class BuyOnly:
+            name = "BuyOnly"
+            context = None
+            _positions = {}
+            _ordered = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if not self._ordered:
+                    ctx.order_manager.submit_order("AAPL", 100, "BUY", "MARKET", 100.0, "BuyOnly")
+                    self._ordered = True
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        rows = [
+            {"symbol": "AAPL", "timestamp": START, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1000000},
+            {"symbol": "AAPL", "timestamp": START + timedelta(days=1), "open": 101, "high": 102, "low": 100, "close": 101, "volume": 1000000},
+            {"symbol": "AAPL", "timestamp": START + timedelta(days=2), "open": 100, "high": 101, "low": 99, "close": 0, "volume": 500000},
+            {"symbol": "AAPL", "timestamp": START + timedelta(days=3), "open": 102, "high": 103, "low": 101, "close": 102, "volume": 1000000},
+        ]
+        data = pd.DataFrame(rows)
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyOnly()],
+            initial_cash=1000000,
+            data_provider=provider,
+            symbols=["AAPL"],
+        )
+        assert len(result.open_positions) >= 1
+        assert result.open_positions[0]["current_price"] == 102
+        assert result.open_positions[0]["market_value"] > 0

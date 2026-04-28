@@ -230,6 +230,7 @@ class Backtester:
 
             today_bars: Dict[str, Dict] = {}
             any_suspended_today = False
+            prev_close_bars: Dict[str, Dict] = dict(prev_bars)
 
             for strategy in strategies:
                 if hasattr(strategy, "on_before_trading"):
@@ -250,7 +251,9 @@ class Backtester:
 
                             if bar_data['_suspended']:
                                 any_suspended_today = True
-                            last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0))
+                            bar_close = bar_data.get('close', 0)
+                            if bar_close > 0:
+                                last_prices[symbol] = bar_close
 
                             for strategy in strategies:
                                 if hasattr(strategy, "on_data"):
@@ -274,7 +277,9 @@ class Backtester:
 
                                     if bar_data['_suspended']:
                                         any_suspended_today = True
-                                    last_prices[symbol] = bar_data.get('close', last_prices.get(symbol, 0))
+                                    bar_close = bar_data.get('close', 0)
+                                    if bar_close > 0:
+                                        last_prices[symbol] = bar_close
 
                                     for strategy in strategies:
                                         if hasattr(strategy, "on_data"):
@@ -317,10 +322,16 @@ class Backtester:
                     if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
                         deferred_orders.append(order)
                     continue
-                trades = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_bars.get(sym))
+                trades = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_close_bars.get(sym))
                 if trades is None:
                     if order.get('_deferred_days', 0) < MAX_FILL_DEFER_DAYS:
                         deferred_orders.append(order)
+                    else:
+                        diag.expired_orders += 1
+                        logger.warning(
+                            "Order expired for %s after %d deferred days (limit hit)",
+                            order['symbol'], MAX_FILL_DEFER_DAYS
+                        )
                     continue
                 if trades:
                     all_trades.extend(trades)
@@ -543,9 +554,6 @@ class Backtester:
 
         fill_price = raw_open
 
-        diag.total_fill_delay_days += order.get('_deferred_days', 0)
-        diag.fill_count += 1
-
         slippage = fill_price * (self.slippage_bps / 10000)
         if order['side'] == 'BUY':
             fill_price += slippage
@@ -593,6 +601,9 @@ class Backtester:
             fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
             portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)
             portfolio.cash -= total_cost
+
+            diag.total_fill_delay_days += order.get('_deferred_days', 0)
+            diag.fill_count += 1
 
             return [Trade(
                 entry_time=fill_ts,
@@ -669,6 +680,9 @@ class Backtester:
             if updated_pos is None or updated_pos.quantity <= 0:
                 entry_times.pop(symbol, None)
                 entry_prices.pop(symbol, None)
+
+            diag.total_fill_delay_days += order.get('_deferred_days', 0)
+            diag.fill_count += 1
 
             return trades
 
