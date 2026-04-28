@@ -12,11 +12,6 @@ frontend.log
 quant/frontend/node_modules/
 
 # Runtime data
-quant/var/
-var/
-!quant/infrastructure/var/
-!quant/infrastructure/var/duckdb/
-!quant/infrastructure/var/duckdb/quant.duckdb
 
 # Local workspace
 .vibe-kanban-workspaces/

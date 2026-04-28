@@ -1,0 +1,1 @@
+quant/infrastructure/var/duckdb/quant.duckdb filter=lfs diff=lfs merge=lfs -text
