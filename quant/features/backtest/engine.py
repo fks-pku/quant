@@ -415,15 +415,11 @@ class Backtester:
                 if market == "CN":
                     tax = self._calculate_cn_dividend_tax(pos, cash_div, current_date)
                 portfolio.cash += payment - tax
+                pos.adjust_lots_for_cash_dividend(cash_div)
                 logger.info(f"{symbol} ex-div: cash {cash_div:.4f}/share x {pos.quantity} = {payment:.2f}, tax={tax:.2f}")
             if stock_div > 0:
-                new_shares = stock_div * pos.quantity
-                ex_date = current_date.date() if hasattr(current_date, 'date') else current_date
-                portfolio.update_position(
-                    symbol, quantity=new_shares, price=last_prices.get(symbol, 0),
-                    cost=0, trade_date=ex_date, lot_price=0,
-                )
-                logger.info(f"{symbol} ex-div: stock {stock_div:.4f}/share x {pos.quantity} = {new_shares:.0f} new shares")
+                pos.adjust_lots_for_stock_dividend(stock_div)
+                logger.info(f"{symbol} ex-div: stock {stock_div:.4f}/share adjusted lots, new qty={pos.quantity:.0f}, avg_cost={pos.avg_cost:.4f}")
 
     def _calculate_cn_dividend_tax(self, pos: Any, cash_div: float, current_date: datetime) -> float:
         total_tax = 0.0
@@ -592,12 +588,14 @@ class Backtester:
                 exit_price=fill_price,
                 quantity=quantity,
                 pnl=-commission,
+                commission=commission,
                 realized_pnl=-commission,
                 signal_date=signal_date,
                 fill_date=fill_ts,
                 fill_price=fill_price,
                 intended_qty=order['quantity'],
                 cost_breakdown=cost_breakdown,
+                strategy_name=order.get('strategy'),
             )]
 
         elif order['side'] == 'SELL':
@@ -643,12 +641,14 @@ class Backtester:
                     exit_price=fill_price,
                     quantity=sub_qty,
                     pnl=sub_realized - sub_commission,
+                    commission=sub_commission,
                     realized_pnl=sub_realized,
                     signal_date=signal_date,
                     fill_date=fill_ts,
                     fill_price=fill_price,
                     intended_qty=order['quantity'],
                     cost_breakdown=sub_cost_breakdown,
+                    strategy_name=order.get('strategy'),
                 ))
 
             portfolio.cash += fill_price * sell_qty - commission

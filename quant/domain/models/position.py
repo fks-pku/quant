@@ -97,6 +97,39 @@ class Position:
             else:
                 self.remove_sell_lots(abs(fill_quantity))
 
+    def adjust_lots_for_stock_dividend(self, ratio: float) -> None:
+        if not self._lots or ratio <= 0:
+            return
+        factor = 1.0 + ratio
+        new_lots: Dict[date, LotEntry] = {}
+        total_cost = 0.0
+        total_qty = 0.0
+        for lot_date, lot in self._lots.items():
+            new_qty = lot.qty * factor
+            new_price = lot.price / factor
+            new_lots[lot_date] = LotEntry(new_qty, new_price)
+            total_cost += new_qty * new_price
+            total_qty += new_qty
+        self._lots = new_lots
+        self.quantity = self.quantity * factor
+        if total_qty > 0:
+            self.avg_cost = total_cost / total_qty
+
+    def adjust_lots_for_cash_dividend(self, cash_per_share: float) -> None:
+        if not self._lots or cash_per_share <= 0:
+            return
+        new_lots: Dict[date, LotEntry] = {}
+        total_cost = 0.0
+        total_qty = 0.0
+        for lot_date, lot in self._lots.items():
+            new_price = max(0.0, lot.price - cash_per_share)
+            new_lots[lot_date] = LotEntry(lot.qty, new_price)
+            total_cost += lot.qty * new_price
+            total_qty += lot.qty
+        self._lots = new_lots
+        if total_qty > 0:
+            self.avg_cost = total_cost / total_qty
+
     def update_market_price(self, price: float) -> None:
         self.market_value = self.quantity * price
         if self.quantity != 0:

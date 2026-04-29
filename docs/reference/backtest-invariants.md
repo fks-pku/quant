@@ -127,7 +127,7 @@
 |---|-----------|------|------|
 | DIV-1 | 现金红利：`portfolio.cash += cash_div × quantity - tax` | `[AUTO]` | `test_bug_fixes::TestDIV1CashDividendProcessing` |
 | DIV-2 | CN 红利税按 lot 持仓天数分层（≤30d/31-365d/>365d） | `[AUTO]` | `test_cn_market::TestCNDividendTax` |
-| DIV-3 | 送股：`portfolio.update_position(quantity=new_shares, cost=0)` | `[MANUAL]` | `engine.py:432-438` |
+| DIV-3 | 送股：`pos.adjust_lots_for_stock_dividend(ratio)` 按比例调整已有 lot 的 qty×(1+ratio) / price÷(1+ratio)，不新增 lot | `[AUTO]` | `test_backtest_core::TestStockDividendLotTracking::test_stock_dividend_adjusts_lots_proportionally` |
 | DIV-4 | 除权除息在延迟订单填充之前处理 | `[AUTO]` | `test_bug_fixes::TestDIV4DividendsBeforeFills` |
 
 ## 市场收盘
@@ -181,7 +181,7 @@
 5. 新增功能 → 在对应分区新增 Invariant 行 + 测试
 6. 修复新 Bug → 在 `test_bug_fixes.py` 新增回归测试 + 在本清单增加 Invariant
 
-**统计**: 75/76 = **98.7%** `[AUTO]`。仅 DIV-3（送股）仍为 `[MANUAL]`，需 stock_dividend 数据构造后补测试。
+**统计**: 76/76 = **100%** `[AUTO]`。所有不变量已覆盖自动化测试。
 
 ---
 

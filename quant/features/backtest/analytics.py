@@ -234,7 +234,8 @@ def calculate_rolling_sharpe(returns: pd.Series, window: int = 63, periods_per_y
         return pd.Series(dtype=float)
     rolling_mean = returns.rolling(window).mean()
     rolling_std = returns.rolling(window).std()
-    return (rolling_mean / rolling_std) * np.sqrt(periods_per_year)
+    result = (rolling_mean / rolling_std.replace(0, np.nan)) * np.sqrt(periods_per_year)
+    return result.fillna(0.0)
 
 
 def calculate_rolling_sortino(returns: pd.Series, window: int = 63, periods_per_year: int = 252) -> pd.Series:

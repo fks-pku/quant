@@ -554,55 +554,38 @@ class TestStockDividendLotTracking:
             total_sold = sum(t.quantity for t in sell_trades)
             assert total_sold > 0
 
-    def test_stock_dividend_lot_price_is_zero(self):
-        data, div = self._build_cn_data_with_stock_div()
-        config = {
-            "backtest": {"slippage_bps": 0},
-            "execution": {"commission": {}},
-            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
-        }
-        bt = Backtester(config)
-        provider = DataFrameProvider(data, dividends=div)
-        portfolio_ref = [None]
-
-        class CaptureStrategy:
-            name = "CaptureLots"
-            context = None
-            _positions = {}
-            _captured = False
-
-            def on_start(self, ctx):
-                self.context = ctx
-
-            def on_before_trading(self, ctx, td):
-                pass
-
-            def on_data(self, ctx, data):
-                pass
-
-            def on_after_trading(self, ctx, td):
-                pass
-
-            def on_fill(self, ctx, fill):
-                pass
-
-            def on_stop(self, ctx):
-                pass
-
+    def test_stock_dividend_adjusts_lots_proportionally(self):
         from quant.features.trading.portfolio import Portfolio
         portfolio = Portfolio(initial_cash=1000000, currency="CNY")
-        pos = portfolio.get_position("600519")
         portfolio.update_position("600519", quantity=100, price=100.0, cost=10000.0, trade_date=date(2025, 1, 2))
         pos = portfolio.get_position("600519")
         assert pos._lots
         assert sum(lot.qty for lot in pos._lots.values()) == 100
-        portfolio.update_position("600519", quantity=100, price=50.0, cost=0, trade_date=date(2025, 1, 9), lot_price=0)
-        pos = portfolio.get_position("600519")
+        assert pos.avg_cost == 100.0
+
+        pos.adjust_lots_for_stock_dividend(1.0)
+
         assert pos.quantity == 200
         assert sum(lot.qty for lot in pos._lots.values()) == 200
         lot_dates = sorted(pos._lots.keys())
-        assert pos._lots[lot_dates[0]].price == 100.0
-        assert pos._lots[lot_dates[1]].price == 0.0
+        assert len(lot_dates) == 1
+        assert pos._lots[lot_dates[0]].qty == 200
+        assert pos._lots[lot_dates[0]].price == 50.0
+        assert pos.avg_cost == 50.0
+
+    def test_cash_dividend_adjusts_lot_prices_down(self):
+        from quant.features.trading.portfolio import Portfolio
+        portfolio = Portfolio(initial_cash=1000000, currency="CNY")
+        portfolio.update_position("600519", quantity=100, price=100.0, cost=10000.0, trade_date=date(2025, 1, 2))
+        pos = portfolio.get_position("600519")
+
+        pos.adjust_lots_for_cash_dividend(2.0)
+
+        lot_dates = sorted(pos._lots.keys())
+        assert len(lot_dates) == 1
+        assert pos._lots[lot_dates[0]].price == 98.0
+        assert pos.avg_cost == 98.0
+        assert pos.quantity == 100
 
 
 class TestMarketOrderRiskCheck:
