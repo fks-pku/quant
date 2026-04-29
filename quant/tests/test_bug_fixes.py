@@ -411,10 +411,10 @@ class TestF2SellPnlDecomposition:
             assert t.pnl == pytest.approx(t.realized_pnl - comm, rel=1e-6)
 
 
-class TestF3LimitHitReturnsNone:
-    """F-3: CN limit-hit order returns None (retry), not [] (permanent drop)."""
+class TestF3LimitHitReturnsEmpty:
+    """F-3/F-4: CN limit-hit order returns [] (discarded, no retry)."""
 
-    def test_cn_limit_up_returns_none_for_retry(self):
+    def test_cn_limit_up_returns_empty_list(self):
         bt = make_backtester()
         portfolio = Portfolio(initial_cash=1000000)
         risk_engine = RiskEngine({}, portfolio, None)

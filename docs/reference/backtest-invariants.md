@@ -26,8 +26,8 @@
 |---|-----------|------|------|
 | F-1 | BUY trade.pnl == -commission | `[AUTO]` | `test_backtest_core::test_buy_creates_trade_with_negative_pnl` |
 | F-2 | SELL trade.pnl == realized_pnl - proportional_commission | `[AUTO]` | `test_bug_fixes::TestF2SellPnlDecomposition` |
-| F-3 | `_execute_order` 返回约定：`List[Trade]`=成交, `[]`=永久丢弃, `None`=延迟重试 | `[AUTO]` | `test_bug_fixes::TestF10ExecuteOrderReturnConvention` |
-| F-4 | CN 涨跌停订单返回 `None`（延迟重试），非 `[]` | `[AUTO]` | `test_bug_fixes::TestF3LimitHitReturnsNone` |
+| F-3 | `_execute_order` 返回约定：`List[Trade]`=成交, `[]`=永久丢弃（所有不可成交原因统一返回空列表） | `[AUTO]` | `test_bug_fixes::TestF3LimitHitReturnsEmpty` |
+| F-4 | CN 涨跌停订单返回 `[]`（丢弃），不重试，策略在 `on_after_trading` 中基于最新数据重新判断 | `[AUTO]` | `test_bug_fixes::TestF3LimitHitReturnsEmpty` |
 | F-5 | 资金不足返回 `[]` | `[AUTO]` | `test_backtest_core::test_insufficient_cash_rejects_buy` |
 | F-6 | 无仓位 SELL 返回 `[]` | `[AUTO]` | `test_backtest_core::test_sell_without_position_is_noop` |
 | F-7 | 开盘价 <= 0 返回 `[]` | `[AUTO]` | `test_bug_fixes::TestF6ZeroOpenPriceReturnsEmpty` |

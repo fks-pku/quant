@@ -30,7 +30,7 @@ def calculate_sortino(returns: pd.Series, periods_per_year: int = 252) -> float:
     downside_sq = np.minimum(returns, 0) ** 2
     downside_dev = np.sqrt(downside_sq.mean())
     if downside_dev == 0:
-        return float('inf') if returns.mean() > 0 else 0.0
+        return 0.0
 
     return np.sqrt(periods_per_year) * returns.mean() / downside_dev
 
@@ -96,7 +96,7 @@ def calculate_profit_factor(trades: List[Trade]) -> float:
     gross_profit = sum(t.pnl for t in rt if t.pnl > 0)
     gross_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     if gross_loss == 0:
-        return float('inf') if gross_profit > 0 else 0.0
+        return 0.0
     return gross_profit / gross_loss
 
 
@@ -168,7 +168,7 @@ def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
     total_gain = sum(t.pnl for t in rt if t.pnl > 0)
     total_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     if total_loss == 0:
-        return float('inf') if total_gain > 0 else 0.0
+        return 0.0
     return total_gain / total_loss
 
 
@@ -179,7 +179,7 @@ def calculate_tail_ratio(returns: pd.Series) -> float:
     percentile_95 = returns.quantile(0.95)
     percentile_5 = returns.quantile(0.05)
     if percentile_5 == 0:
-        return float('inf') if percentile_95 > 0 else 1.0
+        return 1.0
     return abs(percentile_95 / percentile_5)
 
 
@@ -190,7 +190,7 @@ def calculate_recovery_factor(trades: List[Trade], max_dd: float) -> float:
         return 0.0
     total_profit = sum(t.pnl for t in rt)
     if max_dd == 0:
-        return float('inf') if total_profit > 0 else 0.0
+        return 0.0
     return total_profit / abs(max_dd)
 
 
@@ -207,7 +207,7 @@ def calculate_payoff_ratio(trades: List[Trade]) -> float:
     avg_loss = abs(sum(losing_trades) / len(losing_trades))
 
     if avg_loss == 0:
-        return float('inf') if avg_win > 0 else 0.0
+        return 0.0
     return avg_win / avg_loss
 
 
@@ -242,7 +242,8 @@ def calculate_rolling_sortino(returns: pd.Series, window: int = 63, periods_per_
         return pd.Series(dtype=float)
     rolling_mean = returns.rolling(window).mean()
     rolling_downside = returns.rolling(window).apply(lambda x: x[x < 0].std() if len(x[x < 0]) > 0 else 0, raw=False)
-    return (rolling_mean / rolling_downside.replace(0, np.nan)) * np.sqrt(periods_per_year)
+    result = (rolling_mean / rolling_downside.replace(0, np.nan)) * np.sqrt(periods_per_year)
+    return result.fillna(0.0)
 
 
 def _erf_approx(x: float) -> float:

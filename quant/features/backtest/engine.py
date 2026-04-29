@@ -106,7 +106,7 @@ class Backtester:
         )
 
     def _get_lot_size(self, symbol: str) -> int:
-        return self.lot_sizes.get(symbol, DEFAULT_LOT_SIZE)
+        return self.lot_sizes.get(symbol, DEFAULT_LOT_SIZE) or DEFAULT_LOT_SIZE
 
     def _detect_currency(self, symbols: List[str]) -> str:
         if not symbols:

@@ -97,7 +97,7 @@ def run_backtest():
                 "backtest": {"slippage_bps": slippage_bps},
                 "execution": {"commission": {
                     "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
-                    "HK": {"type": "percent", "percent": 0.001, "min_per_order": 2.0},
+                    "HK": {"type": "hk_realistic"},
                     "CN": {"type": "cn_realistic"},
                 }},
                 "data": {"default_timeframe": "1d"},
@@ -170,7 +170,8 @@ def run_backtest():
             winning = [t for t in sell_trades if t.pnl > 0]
             losing = [t for t in sell_trades if t.pnl < 0]
             days = max(1, (datetime.strptime(end_date, '%Y-%m-%d') - datetime.strptime(start_date, '%Y-%m-%d')).days)
-            cagr = float(result.total_return * 100 / max(1, days / 365.25))
+            years = days / 365.25
+            cagr = float(((1 + result.total_return) ** (1.0 / max(years, 1e-9)) - 1) * 100)
 
             metrics = {
                 "final_nav": float(result.final_nav),

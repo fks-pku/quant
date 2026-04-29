@@ -65,9 +65,9 @@ class TestSortino:
     def test_empty_returns_zero(self):
         assert calculate_sortino(pd.Series(dtype=float)) == 0.0
 
-    def test_all_positive_returns_inf(self):
+    def test_all_positive_returns_zero(self):
         returns = pd.Series([0.01, 0.02, 0.015])
-        assert calculate_sortino(returns) == float('inf')
+        assert calculate_sortino(returns) == 0.0
 
     def test_mixed_returns(self):
         returns = pd.Series([0.02, -0.01, 0.03, -0.005, 0.01])
@@ -135,9 +135,9 @@ class TestProfitFactor:
     def test_no_trades(self):
         assert calculate_profit_factor([]) == 0.0
 
-    def test_all_winners_inf(self):
+    def test_all_winners_returns_zero(self):
         trades = [make_trade("A", 100, 10, 12, "SELL", pnl=100)]
-        assert calculate_profit_factor(trades) == float('inf')
+        assert calculate_profit_factor(trades) == 0.0
 
     def test_profit_factor_calc(self):
         trades = [
@@ -222,7 +222,7 @@ class TestRecoveryFactor:
 
     def test_zero_dd(self):
         trades = [make_trade("A", 100, 10, 12, "SELL", pnl=100)]
-        assert calculate_recovery_factor(trades, 0.0) == float('inf')
+        assert calculate_recovery_factor(trades, 0.0) == 0.0
 
 
 class TestStatisticalSignificance:
