@@ -20,6 +20,7 @@ import pandas as pd
 
 from quant.domain.ports.storage import Storage
 from quant.shared.utils.logger import setup_logger
+from quant.shared.utils.symbol_utils import detect_market as _detect_market
 
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
 _DEFAULT_DB = str(_PKG_DIR / "var" / "duckdb" / "quant.duckdb")
@@ -146,20 +147,7 @@ class DuckDBStorage(Storage):
 
     def _resolve_table(self, symbol: str, timeframe: str) -> str:
         freq = "daily" if timeframe in ("1d", "day", "daily") else "minute"
-
-        if symbol.startswith("HK."):
-            market = "hk"
-        elif (
-            symbol.isdigit()
-            and len(symbol) == 6
-            and symbol[0] in ("0", "3", "6", "8", "9")
-        ):
-            market = "cn"
-        elif symbol.isdigit() and len(symbol) == 5:
-            market = "hk"
-        else:
-            market = "us"
-
+        market = _detect_market(symbol).lower()
         return f"{freq}_{market}"
 
     def save_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:

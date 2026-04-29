@@ -10,6 +10,7 @@ import numpy as np
 from quant.domain.ports.event_publisher import EventPublisher
 from quant.domain.models.trade import Trade
 from quant.features.backtest.analytics import calculate_performance_metrics, PerformanceMetrics
+from quant.shared.utils.symbol_utils import detect_market, is_cn_symbol, cn_price_limit_pct
 
 logger = logging.getLogger(__name__)
 
@@ -126,12 +127,7 @@ class Backtester:
             trading_days_since_ipo = (current_date - ipo_d).days
             if trading_days_since_ipo <= self.IPO_NO_LIMIT_DAYS:
                 return False
-        if symbol.startswith("8"):
-            limit_pct = 0.30
-        elif symbol.startswith("688") or symbol.startswith("300"):
-            limit_pct = 0.20
-        else:
-            limit_pct = 0.10
+        limit_pct = cn_price_limit_pct(symbol)
         upper = round(prev_close * (1 + limit_pct), 2)
         lower = round(prev_close * (1 - limit_pct), 2)
         open_rounded = round(open_price, 2)
@@ -666,15 +662,7 @@ class Backtester:
         return []
 
     def _detect_market(self, symbol: str) -> str:
-        if symbol.startswith("HK.") or (symbol.isdigit() and len(symbol) == 5):
-            return "HK"
-        if (
-            symbol.isdigit()
-            and len(symbol) == 6
-            and symbol[0] in ("0", "3", "6", "8", "9")
-        ):
-            return "CN"
-        return "US"
+        return detect_market(symbol)
 
     def _calculate_commission_breakdown(self, price: float, quantity: float, market: str, side: str) -> Dict[str, float]:
         trade_value = price * quantity

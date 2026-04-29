@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Optional
 
+from quant.shared.utils.symbol_utils import (
+    is_cn_symbol as _is_cn_symbol,
+    is_hk_symbol as _is_hk_symbol,
+    detect_market as _detect_market_str,
+)
+
 
 class Market(Enum):
     US = "US"
@@ -52,18 +58,10 @@ class SymbolRegistry:
         }
 
     def _is_cn_symbol(self, symbol: str) -> bool:
-        """Detect A-share symbol: 6-digit numeric starting with 0/3/6/8/9."""
-        return (
-            symbol.isdigit()
-            and len(symbol) == 6
-            and symbol[0] in ("0", "3", "6", "8", "9")
-        )
+        return _is_cn_symbol(symbol)
 
     def _is_hk_symbol(self, symbol: str) -> bool:
-        """Detect HK symbol: 5-digit numeric, or prefixed with HK."""
-        if symbol.startswith("HK."):
-            return True
-        return symbol.isdigit() and len(symbol) == 5
+        return _is_hk_symbol(symbol)
 
     def format_for_provider(self, symbol: str, provider: str) -> str:
         """Convert internal symbol to provider-specific format."""

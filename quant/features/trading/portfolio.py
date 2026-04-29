@@ -8,6 +8,7 @@ import threading
 import pandas as pd
 
 from quant.domain.models.position import Position
+from quant.shared.utils.symbol_utils import is_cn_symbol as _is_cn_symbol
 
 
 __all__ = ["Position", "PortfolioSnapshot", "Portfolio"]
@@ -150,11 +151,7 @@ class Portfolio:
 
     @staticmethod
     def is_cn_symbol(symbol: str) -> bool:
-        return (
-            symbol.isdigit()
-            and len(symbol) == 6
-            and symbol[0] in ("0", "3", "6", "8", "9")
-        )
+        return _is_cn_symbol(symbol)
 
     def settled_quantity(self, symbol: str, as_of: date) -> float:
         with self._lock:

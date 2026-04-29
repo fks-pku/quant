@@ -8,14 +8,7 @@ from quant.domain.models.fill import Fill
 from quant.domain.models.order import OrderStatus
 from quant.domain.ports.event_publisher import EventPublisher
 from quant.shared.utils.logger import setup_logger
-
-
-def _is_cn_symbol(symbol: str) -> bool:
-    return (
-        symbol.isdigit()
-        and len(symbol) == 6
-        and symbol[0] in ("0", "3", "6", "8", "9")
-    )
+from quant.shared.utils.symbol_utils import is_cn_symbol as _is_cn_symbol
 
 
 class FillHandler:

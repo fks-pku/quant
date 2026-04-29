@@ -38,6 +38,15 @@ class TestHKMarketDetection:
     def test_not_cn_not_us(self):
         assert Backtester._detect_market(None, "00700") == "HK"
 
+    def test_four_digit_numeric(self):
+        assert Backtester._detect_market(None, "0388") == "HK"
+
+    def test_three_digit_numeric(self):
+        assert Backtester._detect_market(None, "001") == "HK"
+
+    def test_single_digit_numeric(self):
+        assert Backtester._detect_market(None, "1") == "HK"
+
     def test_currency_hkd(self):
         bt = make_backtester()
         assert bt._detect_currency(["00700"]) == "HKD"

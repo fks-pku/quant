@@ -14,16 +14,7 @@ from quant.features.backtest.engine import Backtester, BacktestResultExporter
 from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.features.strategies.registry import StrategyRegistry
-
-
-def _normalize_symbol(symbol):
-    if symbol.startswith("HK.") or symbol.startswith("US."):
-        return symbol
-    if symbol.isdigit() and len(symbol) == 6 and symbol[0] in ("0", "3", "6", "8", "9"):
-        return symbol
-    if symbol.isdigit() and len(symbol) == 5:
-        return f"HK.{symbol}"
-    return f"US.{symbol}"
+from quant.shared.utils.symbol_utils import normalize_symbol_for_backtest as _normalize_symbol
 
 
 def parse_args(argv=None):
