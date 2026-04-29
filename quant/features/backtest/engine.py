@@ -169,8 +169,14 @@ class Backtester:
         initial_cash: float = 100000,
         data_provider: Any = None,
         symbols: Optional[List[str]] = None,
+        strategy_allocations: Optional[Dict[str, float]] = None,
     ) -> BacktestResult:
         """Run backtest with T+1 execution.
+
+        strategy_allocations: map of strategy name → fraction of initial_cash.
+            e.g. {"MomentumA": 0.4, "MomentumB": 0.6}
+            Fractions must sum to <= 1.0. Unallocated capital stays in reserve.
+            If None, all strategies share a single Portfolio (legacy mode).
 
         Daily loop execution order (DO NOT REORDER — prevents look-ahead bias):
           1. on_before_trading — strategy pre-computation (optional hook)
@@ -187,12 +193,34 @@ class Backtester:
         """
         from quant.features.trading.portfolio import Portfolio
         from quant.features.trading.risk import RiskEngine
+        from quant.features.trading.sub_portfolio import SubPortfolio
 
         symbols = symbols or []
         currency = self._detect_currency(symbols)
-        portfolio = Portfolio(initial_cash=initial_cash, currency=currency)
-        risk_engine = RiskEngine(self.config, portfolio, self.event_bus)
+        master = Portfolio(initial_cash=initial_cash, currency=currency)
         diag = BacktestDiagnostics()
+
+        use_subs = strategy_allocations is not None and len(strategies) > 1
+
+        if use_subs:
+            portfolio_map: Dict[str, Any] = {}
+            risk_map: Dict[str, RiskEngine] = {}
+            for strategy in strategies:
+                sname = getattr(strategy, 'name', strategy.__class__.__name__)
+                alloc_pct = strategy_allocations.get(sname, 0.0)
+                alloc_cash = initial_cash * alloc_pct
+                sub = SubPortfolio(strategy_name=sname, allocated_capital=alloc_cash, master=master)
+                portfolio_map[sname] = sub
+                risk_map[sname] = RiskEngine(self.config, sub, self.event_bus)
+            primary_portfolio = master
+        else:
+            portfolio_map = {}
+            risk_map = {}
+            for strategy in strategies:
+                sname = getattr(strategy, 'name', strategy.__class__.__name__)
+                portfolio_map[sname] = master
+                risk_map[sname] = RiskEngine(self.config, master, self.event_bus)
+            primary_portfolio = master
 
         equity_curve_dates: List[datetime] = []
         equity_curve_values: List[float] = []
@@ -207,7 +235,10 @@ class Backtester:
         pending_orders: List[Dict] = []
 
         for strategy in strategies:
-            strategy.context = self._create_context(portfolio, risk_engine, data_provider)
+            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            pf = portfolio_map[sname]
+            re = risk_map[sname]
+            strategy.context = self._create_context(pf, re, data_provider)
             if hasattr(strategy, "on_start"):
                 strategy.on_start(strategy.context)
 
@@ -281,7 +312,11 @@ class Backtester:
                 diag.suspended_days += 1
 
             # --- Step 3: Process dividends ---
-            self._process_dividends(data_provider, portfolio, symbols, current_date, last_prices, entry_times)
+            if use_subs:
+                for pf in portfolio_map.values():
+                    self._process_dividends(data_provider, pf, symbols, current_date, last_prices, entry_times)
+            else:
+                self._process_dividends(data_provider, primary_portfolio, symbols, current_date, last_prices, entry_times)
 
             # --- Step 4: Execute deferred orders from T-1 ---
             for order in deferred_orders:
@@ -290,13 +325,16 @@ class Backtester:
                 if not bar or bar.get('_suspended'):
                     diag.discarded_orders += 1
                     continue
-                trades = self._execute_order(order, portfolio, sym, bar, entry_times, entry_prices, diag, prev_close_bars.get(sym))
+                order_pf = portfolio_map.get(order.get('strategy'), primary_portfolio)
+                trades = self._execute_order(order, order_pf, sym, bar, entry_times, entry_prices, diag, prev_close_bars.get(sym))
                 if not trades:
                     diag.discarded_orders += 1
                     continue
                 all_trades.extend(trades)
+                target_sname = order.get('strategy')
                 for s in strategies:
-                    if hasattr(s, "on_fill"):
+                    sname = getattr(s, 'name', s.__class__.__name__)
+                    if hasattr(s, "on_fill") and (target_sname is None or sname == target_sname):
                         for t in trades:
                             s.on_fill(s.context, t)
             deferred_orders = []
@@ -308,7 +346,11 @@ class Backtester:
                         strategy.on_data(strategy.context, bar_data)
 
             # --- Step 6: Update portfolio prices ---
-            self._update_portfolio_prices(portfolio, last_prices)
+            if use_subs:
+                for pf in portfolio_map.values():
+                    self._update_portfolio_prices(pf, last_prices)
+            else:
+                self._update_portfolio_prices(primary_portfolio, last_prices)
 
             # --- Step 7: Strategy signal generation ---
             for strategy in strategies:
@@ -334,13 +376,27 @@ class Backtester:
             pending_orders = []
 
             # --- Step 9: Record NAV + reset daily state ---
-            nav = portfolio.nav
+            if use_subs:
+                nav = master.cash + sum(
+                    sum(p.market_value for p in pf.positions.values())
+                    for pf in portfolio_map.values()
+                )
+            else:
+                nav = primary_portfolio.nav
             equity_curve_dates.append(current_date)
             equity_curve_values.append(nav)
 
-            portfolio.reset_daily()
-            diag.risk_skipped_orders += risk_engine._risk_rejected_count
-            risk_engine.reset_daily()
+            if use_subs:
+                for pf in portfolio_map.values():
+                    pf.reset_daily()
+                for re in risk_map.values():
+                    diag.risk_skipped_orders += re._risk_rejected_count
+                    re.reset_daily()
+            else:
+                primary_portfolio.reset_daily()
+                diag.risk_skipped_orders += risk_map[strategies[0].name if hasattr(strategies[0], 'name') else strategies[0].__class__.__name__]._risk_rejected_count
+                for re in risk_map.values():
+                    re.reset_daily()
 
             current_date += timedelta(days=1)
 
@@ -349,23 +405,39 @@ class Backtester:
                 strategy.on_stop(strategy.context)
 
         equity_curve = pd.Series(equity_curve_values, index=equity_curve_dates)
-        metrics = calculate_performance_metrics(equity_curve, all_trades)
+        metrics = calculate_performance_metrics(equity_curve, all_trades, initial_cash)
 
         diag.total_gross_pnl = sum(t.pnl for t in all_trades) + diag.total_commission
 
         open_positions = []
-        for sym, pos in portfolio.positions.items():
-            if pos.quantity > 0:
-                last_price = last_prices.get(sym, pos.avg_cost)
-                open_positions.append({
-                    "symbol": sym,
-                    "quantity": pos.quantity,
-                    "entry_price": pos.avg_cost,
-                    "entry_time": self._earliest_lot_time(pos) or entry_times.get(sym),
-                    "current_price": last_price,
-                    "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
-                    "market_value": pos.quantity * last_price,
-                })
+        if use_subs:
+            for pf in portfolio_map.values():
+                for sym, pos in pf.positions.items():
+                    if pos.quantity > 0:
+                        last_price = last_prices.get(sym, pos.avg_cost)
+                        open_positions.append({
+                            "symbol": sym,
+                            "quantity": pos.quantity,
+                            "entry_price": pos.avg_cost,
+                            "entry_time": self._earliest_lot_time(pos) or entry_times.get(sym),
+                            "current_price": last_price,
+                            "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
+                            "market_value": pos.quantity * last_price,
+                            "strategy": pf.strategy_name,
+                        })
+        else:
+            for sym, pos in primary_portfolio.positions.items():
+                if pos.quantity > 0:
+                    last_price = last_prices.get(sym, pos.avg_cost)
+                    open_positions.append({
+                        "symbol": sym,
+                        "quantity": pos.quantity,
+                        "entry_price": pos.avg_cost,
+                        "entry_time": self._earliest_lot_time(pos) or entry_times.get(sym),
+                        "current_price": last_price,
+                        "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
+                        "market_value": pos.quantity * last_price,
+                    })
 
         return BacktestResult(
             final_nav=metrics.equity_curve.iloc[-1] if not metrics.equity_curve.empty else initial_cash,

@@ -907,7 +907,7 @@ class TestE7MultiStrategyIsolation:
         )
         assert result.open_positions or len([t for t in result.trades if t.side == "BUY"]) >= 2
 
-    def test_all_strategies_receive_all_fills(self):
+    def test_each_strategy_receives_own_fills_only(self):
         config = {
             "backtest": {"slippage_bps": 0},
             "execution": {"commission": {}},
@@ -982,8 +982,8 @@ class TestE7MultiStrategyIsolation:
             symbols=["AAPL", "MSFT"],
         )
         assert sA._positions.get("AAPL", 0) == 100
-        assert sA._positions.get("MSFT", 0) == 100
-        assert sB._positions.get("AAPL", 0) == 100
+        assert sA._positions.get("MSFT", 0) == 0
+        assert sB._positions.get("AAPL", 0) == 0
         assert sB._positions.get("MSFT", 0) == 100
 
 

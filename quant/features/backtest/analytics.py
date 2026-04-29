@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
@@ -305,7 +305,8 @@ class PerformanceMetrics:
 
 def calculate_performance_metrics(
     equity_curve: pd.Series,
-    trades: List[Trade]
+    trades: List[Trade],
+    initial_cash: Optional[float] = None,
 ) -> PerformanceMetrics:
     """Calculate all performance metrics from equity curve and trades."""
     if equity_curve.empty:
@@ -336,7 +337,8 @@ def calculate_performance_metrics(
     
     returns = equity_curve.pct_change().dropna()
     
-    total_return = float((equity_curve.iloc[-1] - equity_curve.iloc[0]) / equity_curve.iloc[0])
+    base = initial_cash if initial_cash is not None and initial_cash > 0 else equity_curve.iloc[0]
+    total_return = float((equity_curve.iloc[-1] - base) / base)
     sharpe = calculate_sharpe(returns)
     sortino = calculate_sortino(returns)
     max_dd, max_dd_pct, _, _ = calculate_max_drawdown(equity_curve)

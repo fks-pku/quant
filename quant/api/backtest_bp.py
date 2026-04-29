@@ -128,7 +128,7 @@ def run_backtest():
                     "entry_time": str(t.entry_time),
                     "exit_time": str(t.exit_time),
                     "symbol": t.symbol,
-                    "side": "BUY",
+                    "side": t.side,
                     "status": "closed",
                     "entry_price": float(t.entry_price),
                     "exit_price": float(t.exit_price),

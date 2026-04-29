@@ -57,6 +57,9 @@ class Engine:
         self.data_providers: Dict[str, Any] = {}
         self.broker: Optional[Any] = None
 
+        self._sub_portfolios: Dict[str, Any] = {}
+        self._sub_risk_engines: Dict[str, RiskEngine] = {}
+
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._subscribed_symbols: List[str] = []
@@ -73,11 +76,31 @@ class Engine:
         """Set the order manager."""
         self.order_manager = order_manager
 
-    def add_strategy(self, strategy: Any) -> None:
-        """Add a strategy to the engine and wire it to the event bus."""
+    def add_strategy(self, strategy: Any, allocation_pct: Optional[float] = None) -> None:
+        """Add a strategy to the engine and wire it to the event bus.
+
+        allocation_pct: fraction of initial_cash allocated to this strategy (0.0-1.0).
+            If provided, strategy gets a SubPortfolio with its own isolated capital.
+            If None, strategy shares the master Portfolio (legacy mode).
+        """
+        sname = getattr(strategy, 'name', strategy.__class__.__name__)
+
+        if allocation_pct is not None:
+            from quant.features.trading.sub_portfolio import SubPortfolio
+            alloc_cash = self.portfolio.initial_cash * allocation_pct
+            sub = SubPortfolio(strategy_name=sname, allocated_capital=alloc_cash, master=self.portfolio)
+            sub_risk = RiskEngine(self.config, sub, self.event_bus)
+            self._sub_portfolios[sname] = sub
+            self._sub_risk_engines[sname] = sub_risk
+            pf = sub
+            re = sub_risk
+        else:
+            pf = self.portfolio
+            re = self.risk_engine
+
         strategy.context = Context(
-            portfolio=self.portfolio,
-            risk_engine=self.risk_engine,
+            portfolio=pf,
+            risk_engine=re,
             event_bus=self.event_bus,
             order_manager=self.order_manager,
             data_provider=self.data_providers.get("default"),
