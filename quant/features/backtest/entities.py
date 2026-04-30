@@ -110,7 +110,8 @@ class _BacktestOrderManager:
             "side": side,
             "order_type": order_type,
             "price": price,
-            "strategy": strategy_name
+            "strategy": strategy_name,
+            "_risk_check_price": effective_price,
         }
         self._pending_orders.append(order)
         return f"bt_{len(self._pending_orders)}"

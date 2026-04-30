@@ -46,22 +46,17 @@ def calculate_max_drawdown(equity_curve: pd.Series) -> Tuple[float, float, datet
     drawdown = equity_curve - running_max
     drawdown_pct = drawdown / running_max.replace(0, np.nan)
     
-    trough_idx = drawdown.idxmin()
-    if pd.isna(trough_idx):
+    trough_pos = int(drawdown.values.argmin())
+    if pd.isna(drawdown.iloc[trough_pos]):
         return 0.0, 0.0, datetime.now(), datetime.now()
     
-    trough_date = equity_curve.index[trough_idx] if isinstance(trough_idx, int) else trough_idx
+    trough_date = equity_curve.index[trough_pos]
     
-    if isinstance(trough_idx, int):
-        peak_idx = equity_curve[:trough_idx].idxmax() if trough_idx > 0 else 0
+    if trough_pos > 0:
+        peak_pos = int(equity_curve.iloc[:trough_pos].values.argmax())
+        peak_date = equity_curve.index[peak_pos]
     else:
-        trough_pos = equity_curve.index.get_loc(trough_idx)
-        if trough_pos > 0:
-            peak_idx = equity_curve.iloc[:trough_pos].idxmax()
-        else:
-            peak_idx = equity_curve.index[0]
-    
-    peak_date = equity_curve.index[peak_idx] if isinstance(peak_idx, int) else peak_idx
+        peak_date = equity_curve.index[0]
     
     return float(drawdown.min()), float(drawdown_pct.min()), peak_date, trough_date
 

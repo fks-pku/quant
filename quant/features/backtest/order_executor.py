@@ -20,6 +20,9 @@ from quant.features.backtest.market_rules import (
 logger = logging.getLogger(__name__)
 
 
+_RISK_PRICE_DEVIATION_LIMIT = 0.15
+
+
 def execute_order(
     order: Dict,
     portfolio: Any,
@@ -53,6 +56,11 @@ def execute_order(
             return []
 
     fill_price = apply_slippage(raw_open, order['side'], slippage_bps)
+
+    risk_price = order.get('_risk_check_price', 0)
+    if risk_price > 0 and abs(fill_price - risk_price) / risk_price > _RISK_PRICE_DEVIATION_LIMIT:
+        diag.discarded_orders += 1
+        return []
     quantity = order['quantity']
     lot_size = get_lot_size(symbol, lot_sizes)
 

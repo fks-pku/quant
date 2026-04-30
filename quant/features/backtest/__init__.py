@@ -12,6 +12,7 @@ from quant.features.backtest.analytics import (
     calculate_performance_metrics,
     PerformanceMetrics,
 )
+from quant.features.backtest.data_validator import DataValidator, ValidationReport
 
 __all__ = [
     "Backtester",
@@ -25,4 +26,6 @@ __all__ = [
     "calculate_max_drawdown",
     "calculate_performance_metrics",
     "PerformanceMetrics",
+    "DataValidator",
+    "ValidationReport",
 ]

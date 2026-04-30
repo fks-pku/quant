@@ -93,14 +93,20 @@ def main(argv=None):
     }
 
     from quant.features.backtest.walkforward import DataFrameProvider
+    from quant.features.backtest.data_validator import DataValidator
 
     data_provider = DataFrameProvider(data)
 
-    warnings = data_provider.validate()
-    if warnings:
+    report = DataValidator.validate(data)
+    if report.has_warnings:
         print("\nData quality warnings:")
-        for w in warnings:
+        for w in report.warnings:
             print(f"  - {w}")
+    if not report.ok:
+        print("\nData quality ERRORS:")
+        for e in report.errors:
+            print(f"  - {e}")
+        sys.exit(1)
 
     backtester = Backtester(config, lot_sizes=lot_sizes)
     result = backtester.run(

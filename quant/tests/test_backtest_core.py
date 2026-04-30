@@ -250,7 +250,7 @@ class TestDataFrameProvider:
     def test_validate_empty_data(self):
         provider = DataFrameProvider(pd.DataFrame())
         warnings = provider.validate()
-        assert "Data is empty" in warnings
+        assert any("empty" in w.lower() for w in warnings)
 
     def test_dividend_lookup(self):
         data = make_cn_bars(["600519"], START, 10, {"600519": 50.0})

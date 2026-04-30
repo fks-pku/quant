@@ -210,7 +210,12 @@ class Backtester:
                 if not bar or bar.get('_suspended'):
                     diag.discarded_orders += 1
                     continue
-                order_pf = portfolio_map.get(order.get('strategy'), primary_portfolio)
+                order_strategy = order.get('strategy')
+                if order_strategy and order_strategy not in portfolio_map:
+                    logger.warning("Order strategy '%s' not in portfolio_map, discarding order for %s", order_strategy, sym)
+                    diag.discarded_orders += 1
+                    continue
+                order_pf = portfolio_map.get(order_strategy, primary_portfolio)
                 trades = execute_order(
                     order=order,
                     portfolio=order_pf,

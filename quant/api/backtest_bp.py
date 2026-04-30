@@ -34,78 +34,89 @@ def run_backtest():
             from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 
             db: Storage = DuckDBStorage(read_only=True)
+            try:
+                all_data = []
+                missing_symbols = []
 
-            all_data = []
-            missing_symbols = []
+                for symbol in symbols:
+                    bars = db.get_bars(
+                        symbol,
+                        datetime.strptime(start_date, '%Y-%m-%d'),
+                        datetime.strptime(end_date, '%Y-%m-%d'),
+                        "1d",
+                    )
+                    if not bars.empty:
+                        all_data.append(bars)
+                    else:
+                        missing_symbols.append(symbol)
 
-            for symbol in symbols:
-                bars = db.get_bars(
-                    symbol,
-                    datetime.strptime(start_date, '%Y-%m-%d'),
-                    datetime.strptime(end_date, '%Y-%m-%d'),
-                    "1d",
-                )
-                if not bars.empty:
-                    all_data.append(bars)
-                else:
-                    missing_symbols.append(symbol)
+                if not all_data:
+                    available_hk = db.get_symbols('daily', 'hk')
+                    available_us = db.get_symbols('daily', 'us')
+                    available_cn = db.get_symbols('daily', 'cn')
+                    with _backtest_lock:
+                        _backtest_results[backtest_id] = {
+                            "status": "error",
+                            "error": f"No data found in DuckDB for symbols: {missing_symbols}. "
+                                     f"Available: {available_hk + available_us + available_cn}",
+                            "backtest_id": backtest_id,
+                        }
+                    return
 
-            if not all_data:
-                available_hk = db.get_symbols('daily', 'hk')
-                available_us = db.get_symbols('daily', 'us')
-                available_cn = db.get_symbols('daily', 'cn')
+                from quant.features.backtest.walkforward import DataFrameProvider
+                from quant.features.backtest.data_validator import DataValidator
+
+                data_df = pd.concat(all_data, ignore_index=True)
+                data_provider = DataFrameProvider(data_df)
+
+                validation_report = DataValidator.validate(data_df)
+                if not validation_report.ok:
+                    with _backtest_lock:
+                        _backtest_results[backtest_id] = {
+                            "status": "error",
+                            "error": f"Data validation failed: {'; '.join(validation_report.errors)}",
+                            "backtest_id": backtest_id,
+                        }
+                    return
+
+                import inspect as _inspect
+
+                registry = StrategyRegistry()
+                registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
+                strategy_class = registry.get(registry_key)
+                if strategy_class is None:
+                    sid_norm = strategy_id.lower().replace('_', '').replace('-', '')
+                    for name in registry.list_strategies():
+                        if name.lower().replace('_', '').replace('-', '') == sid_norm:
+                            strategy_class = registry.get(name)
+                            break
+                if strategy_class is None:
+                    with _backtest_lock:
+                        _backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}
+                    return
+                sig = _inspect.signature(strategy_class.__init__)
+                accepted = set(list(sig.parameters.keys())[1:])
+                strategy_kwargs = {"symbols": symbols}
+                if strategy_params:
+                    for k, v in strategy_params.items():
+                        if k in accepted:
+                            strategy_kwargs[k] = v
+                strategy = strategy_class(**strategy_kwargs)
+
+                config = {
+                    "backtest": {"slippage_bps": slippage_bps},
+                    "execution": {"commission": {
+                        "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                        "HK": {"type": "hk_realistic"},
+                        "CN": {"type": "cn_realistic"},
+                    }},
+                    "data": {"default_timeframe": "1d"},
+                    "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0, "max_orders_minute": 100},
+                }
+
+                lot_sizes = {s: db.get_lot_size(s) for s in symbols}
+            finally:
                 db.close()
-                with _backtest_lock:
-                    _backtest_results[backtest_id] = {
-                        "status": "error",
-                        "error": f"No data found in DuckDB for symbols: {missing_symbols}. "
-                                 f"Available: {available_hk + available_us + available_cn}",
-                        "backtest_id": backtest_id,
-                    }
-                return
-
-            from quant.features.backtest.walkforward import DataFrameProvider
-
-            data_df = pd.concat(all_data, ignore_index=True)
-            data_provider = DataFrameProvider(data_df)
-
-            import inspect as _inspect
-
-            registry = StrategyRegistry()
-            registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
-            strategy_class = registry.get(registry_key)
-            if strategy_class is None:
-                sid_norm = strategy_id.lower().replace('_', '').replace('-', '')
-                for name in registry.list_strategies():
-                    if name.lower().replace('_', '').replace('-', '') == sid_norm:
-                        strategy_class = registry.get(name)
-                        break
-            if strategy_class is None:
-                with _backtest_lock:
-                    _backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}
-                return
-            sig = _inspect.signature(strategy_class.__init__)
-            accepted = set(list(sig.parameters.keys())[1:])
-            strategy_kwargs = {"symbols": symbols}
-            if strategy_params:
-                for k, v in strategy_params.items():
-                    if k in accepted:
-                        strategy_kwargs[k] = v
-            strategy = strategy_class(**strategy_kwargs)
-
-            config = {
-                "backtest": {"slippage_bps": slippage_bps},
-                "execution": {"commission": {
-                    "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
-                    "HK": {"type": "hk_realistic"},
-                    "CN": {"type": "cn_realistic"},
-                }},
-                "data": {"default_timeframe": "1d"},
-                "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0, "max_orders_minute": 100},
-            }
-
-            lot_sizes = {s: db.get_lot_size(s) for s in symbols}
-            db.close()
 
             backtester = Backtester(config, lot_sizes=lot_sizes)
             result = backtester.run(

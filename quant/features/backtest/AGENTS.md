@@ -17,6 +17,7 @@
 | `portfolio_factory.py` | 组合/风控创建：单 Portfolio 和 SubPortfolio 模式 |
 | `nav_calculator.py` | NAV 计算 + 未平仓提取 |
 | `analytics.py` | 绩效指标：Sharpe、Sortino、MaxDD、胜率、盈亏比等 |
+| `data_validator.py` | 数据校验：列完整性、重复检测、OHLC 逻辑、价格跳变、日期缺口等 |
 | `walkforward.py` | 步进验证 + `DataFrameProvider` 内存数据适配层 |
 
 ## 模块依赖链（严格 DAG）
@@ -47,6 +48,8 @@ walkforward.py            (依赖 engine + analytics)
 - `BacktestResultExporter.to_csv(result, output_path)` - 导出 equity + trades CSV
 - `WalkForwardEngine(train_window_days, test_window_days, step_days)` - 步进验证
 - `DataFrameProvider(data, dividends)` - DataFrame → OHLCV 查询适配层
+- `DataValidator.validate(data)` → `ValidationReport` - 数据校验（errors + warnings + stats）
+- `DataValidator.preflight(data)` - 回测前必检，有 error 直接 raise
 
 ## 日循环执行顺序（严禁重排 — 防未来信息泄露）
 
@@ -89,6 +92,7 @@ while current_date ≤ end:
 | NAV/未平仓计算 | `nav_calculator.py` |
 | 数据结构定义 | `entities.py` |
 | 绩效指标计算 | `analytics.py` |
+| 数据校验规则 | `data_validator.py` |
 | 步进验证逻辑 | `walkforward.py` |
 
 ## Known Pitfalls

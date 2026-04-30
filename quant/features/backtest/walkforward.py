@@ -313,14 +313,26 @@ class DataFrameProvider:
         for col in ('open', 'high', 'low', 'close', 'volume'):
             if col not in df.columns:
                 return
+        seen_keys: set = set()
         records = df.to_dict('records')
         symbols = df['symbol'].tolist()
         timestamps = df['timestamp'].tolist()
+        dup_count = 0
         for rec, sym, ts in zip(records, symbols, timestamps):
             key = ts.date() if hasattr(ts, 'date') else ts
-            self._bar_map[(sym, key)] = rec
+            dict_key = (sym, key)
+            if dict_key in seen_keys:
+                dup_count += 1
+                continue
+            seen_keys.add(dict_key)
+            self._bar_map[dict_key] = rec
             dt = datetime(ts.year, ts.month, ts.day) if hasattr(ts, 'year') else ts
             self._trading_dates.add(dt)
+        if dup_count > 0:
+            import logging
+            logging.getLogger(__name__).warning(
+                "DataFrameProvider._build_index: dropped %d duplicate (symbol, date) rows", dup_count,
+            )
 
     def _build_dividend_index(self) -> None:
         if self.dividends.empty:
@@ -358,36 +370,10 @@ class DataFrameProvider:
         return self._dividend_map.get((symbol, key))
 
     def validate(self) -> List[str]:
-        """Check data quality. Returns list of warning messages."""
-        warnings = []
-        if self.data.empty:
-            return ["Data is empty"]
-
-        for col in ['open', 'high', 'low', 'close']:
-            mask_neg = self.data[col] < 0
-            if mask_neg.any():
-                warnings.append(f"Negative {col}: {mask_neg.sum()} rows")
-
-        mask_zero = self.data['close'] == 0
-        if mask_zero.any():
-            warnings.append(f"Zero close price: {mask_zero.sum()} rows")
-
-        ohlc_invalid = (
-            (self.data['high'] < self.data['low']) |
-            (self.data['high'] < self.data[['open', 'close']].max(axis=1)) |
-            (self.data['low'] > self.data[['open', 'close']].min(axis=1))
-        )
-        if ohlc_invalid.any():
-            warnings.append(f"OHLC logic violation: {ohlc_invalid.sum()} rows")
-
-        for symbol in self.data['symbol'].unique():
-            sym_data = self.data[self.data['symbol'] == symbol].sort_values('timestamp')
-            same_close = (sym_data['close'] == sym_data['close'].shift(1)) & (sym_data['volume'] > 0)
-            consecutive = same_close.rolling(20).sum()
-            if (consecutive >= 20).any():
-                warnings.append(f"{symbol}: 20+ consecutive same close with volume > 0")
-
-        return warnings
+        """Check data quality. Delegates to DataValidator, returns all messages for backward compat."""
+        from quant.features.backtest.data_validator import DataValidator
+        report = DataValidator.validate(self.data)
+        return report.errors + report.warnings
 
 
 class WalkForwardExporter:
