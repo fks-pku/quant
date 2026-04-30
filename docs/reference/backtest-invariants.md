@@ -97,8 +97,8 @@
 | D-5 | 成交量限制有 `volume_limited_trades` 计数 | `[AUTO]` | `test_bug_fixes::TestCN7VolumeParticipationLimit` |
 | D-6 | `cost_drag_pct` 在 \|gross_pnl\| < 1e-10 时返回 0 | `[AUTO]` | `test_bug_fixes::test_near_zero_gross_pnl_returns_zero` |
 | D-7 | `cost_drag_pct` 始终有限且非负 | `[AUTO]` | `test_bug_fixes::test_cost_drag_finite_and_non_negative` (hypothesis) |
-| D-9 | `total_gross_pnl = sum(trade.pnl) + diag.total_commission`（毛利润还原公式） | `[AUTO]` | `test_bug_fixes::TestD9TotalGrossPnl` |
-| D-11 | `fill_count` 仅在成交成功后递增（资金/仓位不足不计数） | `[AUTO]` | `test_bug_fixes::test_fill_count_only_increments_on_successful_fill` |
+| D-8 | `total_gross_pnl = sum(trade.pnl) + diag.total_commission`（毛利润还原公式） | `[AUTO]` | `test_bug_fixes::TestD9TotalGrossPnl` |
+| D-9 | `fill_count` 仅在成交成功后递增（资金/仓位不足不计数） | `[AUTO]` | `test_bug_fixes::test_fill_count_only_increments_on_successful_fill` |
 
 ## 模型不变量
 
@@ -156,15 +156,55 @@
 |---|-----------|------|------|
 | COM-1 | US per_share $0.005/股 最低 $1.0/单 | `[AUTO]` | `test_us_market::TestUSCommission` |
 | COM-2 | CN 佣金 0.025% 最低 ¥5 + 印花税（仅 SELL）0.05% + 过户费 0.001% + 规管费 0.002% | `[AUTO]` | `test_cn_market::TestCNCommission` |
-| COM-3 | HK 佣金 0.03% 最低 HK$3 + 印花税（仅 SELL）0.1% + SFC levy + 清算费 + 交易费 + 系统费 HK$0.50 | `[AUTO]` | `test_hk_market::TestHKCommission` |
+| COM-3 | HK 佣金 0.03% 最低 HK$3 + 印花税（仅 SELL）0.1%（`HK_STAMP_DUTY_RATE=0.001`） + SFC levy + 清算费 + 交易费 + 系统费 HK$0.50 | `[AUTO]` | `test_hk_market::TestHKCommission` |
+
+## 现金守恒
+
+| # | Invariant | 验证 |
+|---|-----------|------|
+| CASH-1 | `master.cash >= 0` 贯穿整个回测周期（SubPortfolio 模式下也不可为负） | `[MANUAL]` |
+| CASH-2 | `Σ(sub.allocated_capital) <= initial_cash` — 创建 SubPortfolio 时校验，防止超额分配 | `[MANUAL]` |
+| CASH-3 | `NAV_total = master.cash + Σ(sub.position.market_value)` 每日守恒（仅在佣金扣除、价格变动、分红时改变） | `[MANUAL]` |
+
+## FIFO 持仓队列
+
+| # | Invariant | 验证 |
+|---|-----------|------|
+| FIFO-1 | `Σ(lot.qty) == pos.quantity` — 所有活跃持仓的 lot 数量之和等于持仓总量（非仅平仓场景） | `[MANUAL]` |
+| FIFO-2 | `pos.avg_cost == Σ(lot.qty × lot.price) / Σ(lot.qty)` — 平均成本由 FIFO lots 加权推导，计算路径唯一 | `[MANUAL]` |
+| FIFO-3 | BUY 后 `lot.price` 应含佣金/share（`fill_price + commission / quantity`），保证成本基准完整 | `[MANUAL]` |
+
+## 持仓账簿平衡
+
+| # | Invariant | 验证 |
+|---|-----------|------|
+| ACCT-1 | BUY: `Δportfolio.cash + Δ(pos.cost_basis) = -(commission + slippage_cost)` — 现金流出 = 持仓成本增加 + 费用 | `[MANUAL]` |
+| ACCT-2 | SELL: `pos.realized_pnl == fills_proceeds - cost_basis_removed - commission` — 已实现盈亏与现金变动一致 | `[MANUAL]` |
+
+## SubPortfolio 隔离
+
+| # | Invariant | 验证 |
+|---|-----------|------|
+| SUB-1 | `sub.cash >= 0` 始终成立（cash setter 有 clamp） | `[MANUAL]` |
+| SUB-2 | `Δsub.cash == Δmaster.cash` — 每次 sub.cash 变动通过 setter 同步到 master | `[MANUAL]` |
+| SUB-3 | sub 买入 `total_cost`（含佣金）不能超过 `sub.cash` | `[MANUAL]` |
+| SUB-4 | sub 买入 `total_cost`（含佣金）不能超过 `master.cash`（防止共享池超支） | `[MANUAL]` |
+| SUB-5 | `open_positions[].entry_price == pos.avg_cost`（含佣金后的加权成本） | `[MANUAL]` |
+
+## 订单收集
+
+| # | Invariant | 验证 |
+|---|-----------|------|
+| ORD-1 | pending orders 收集不依赖 `data_provider` 是否为 truthy — 即使 `data_provider=None` 也不丢失已提交订单 | `[MANUAL]` |
 
 ## 已知限制
 
 | # | 限制 | 影响 | 修复优先级 |
 |---|------|------|-----------|
-| K-1 | 多策略共享 portfolio 时，所有策略接收所有 fills，`_positions` 追踪的是组合仓位而非策略自身仓位 | 多策略回测时策略无法知道自己的独立持仓 | HIGH |
+| K-1 | ~~多策略共享 portfolio~~ 已通过 `strategy_allocations` + SubPortfolio 解决 | 已修复 | ~~HIGH~~ CLOSED |
 | K-2 | `WalkForward._find_best_params` 异常仅记录日志，未抛出 | 策略 bug 可能被隐藏 | LOW |
 | K-3 | CN IPO 5 天豁免使用日历天（`(current_date - ipo_d).days`），非交易日 | 5 个日历天可能仅含 3-4 个交易日 | LOW |
+| K-4 | `_is_suspended` 将 `volume=0` 判定为停牌，低流动性标的零成交日可能误判 | 有效订单被丢弃 | LOW |
 
 ---
 
@@ -178,119 +218,6 @@
 4. `[MANUAL]` 标记的条目需要人工审查对应代码路径
 5. 新增功能 → 在对应分区新增 Invariant 行 + 测试
 6. 修复新 Bug → 在 `test_bug_fixes.py` 新增回归测试 + 在本清单增加 Invariant
+7. `[MANUAL]` 条目补齐测试后升级为 `[AUTO]`
 
-**统计**: 73/73 = **100%** `[AUTO]`。所有不变量已覆盖自动化测试。
-
----
-
-## Walkthrough: Bug Fix 验证实例
-
-以下追踪一个 CN A 股回测日循环（Step 0–10），展示 Bug A/Bug 1/Bug 2/Bug 3 修复后的正确行为。
-
-### 场景
-
-- 标的：`600519` (贵州茅台)
-- T-1 日：收盘价 1800 元，策略持有 100 股
-- T 日：开盘价 1980 元（+10% 涨停），成交量 10000 股
-- 策略在 T-1 日 `on_data` 提交 BUY 200 股
-
-### Step 0: 初始化
-
-```
-prev_bars = {600519: Bar(close=1800, ...)}
-current_date = T
-```
-
-### Step 1: 快照 prev_close (Bug A 修复)
-
-```python
-prev_close_bars = dict(prev_bars)  # {600519: prev_bar with close=1800}
-```
-
-**验证**: `prev_close_bars[600519].close == 1800`，不会被后续 Step 2 覆盖。
-
-### Step 2: 加载今日 bar 并覆盖 prev_bars
-
-```python
-bars = load_bars(current_date)  # {600519: Bar(open=1980, close=1980, volume=10000)}
-prev_bars = bars  # 覆盖！但 prev_close_bars 已快照
-```
-
-### Step 3: 更新 last_prices（Bug 3 修复）
-
-```python
-for sym, bar in bars.items():
-    if bar.close > 0:          # Bug 3 fix: close=0 不更新
-        last_prices[sym] = bar.close
-# last_prices[600519] = 1980
-```
-
-### Step 4: 延迟订单填充（Bug 1 修复）
-
-```python
-# 策略 T-1 日提交的 BUY 200 股，延迟到今日执行
-result = _execute_order(order, bar=bars[600519], prev_bar=prev_close_bars[600519])
-# prev_bar.close = 1800 (昨日收盘，Bug A 修复后正确)
-# bar.open = 1980 → 涨停检查: 1980 vs 1800*1.10 = 1980 → 命中涨停
-# 返回 None (延迟重试)
-```
-
-**Bug 1 修复路径** (若延迟天数 >= 5):
-```python
-if result is None:
-    if order._deferred_days >= MAX_FILL_DEFER_DAYS:
-        diag.expired_orders += 1  # Bug 1 fix: 涨跌停超期也计数
-        logger.warning("Order expired after %d deferred days", order._deferred_days)
-    else:
-        order._deferred_days += 1
-        deferred.append(order)
-```
-
-### Step 5: 执行 _execute_order 内部（Bug 2 修复）
-
-若非涨停场景，成交成功路径：
-```python
-# 旧 Bug: fill_count 在资金检查前递增 → 资金不足时虚高
-# 修复后:
-if side == BUY:
-    if portfolio.cash >= total_cost:
-        portfolio.update_position(...)
-        diag.fill_count += 1               # Bug 2 fix: 成功后才递增
-        diag.total_fill_delay_days += delay # Bug 2 fix: 成功后才递增
-        return [trade]
-    else:
-        return []  # 不递增 fill_count
-```
-
-### Step 6: 策略 on_data
-
-```
-策略收到 bars 数据，可提交新订单
-```
-
-### Step 7: 新订单入 deferred 队列
-
-### Step 8: 风控检查
-
-### Step 9: 更新 portfolio 市价
-
-```python
-# MTM 更新使用 last_prices（已在 Step 3 用 close>0 过滤）
-# 若某 bar.close=0，last_prices 保留昨日值，NAV 不崩溃
-```
-
-### Step 10: 记录 equity_curve
-
-```
-nav = portfolio.cash + sum(pos.market_value for pos in positions)
-equity_curve.append((current_date, nav))
-```
-
-### Bug 修复总结
-
-| Bug | 修复位置 | 影响 |
-|-----|---------|------|
-| A | Step 1 快照 `prev_close_bars` | 涨跌停检测使用正确的前日收盘价 |
-| 1 | Step 4 `expired_orders` 递增 | 涨跌停超期订单不再被静默丢弃 |
-| 2 | Step 5 成功后递增诊断计数 | `avg_fill_delay_days` 不再被失败订单虚高 |
-| 3 | Step 3 `close>0` 守卫 | `last_prices` 不被 `close=0` 归零，NAV 不崩溃 |
+**统计**: 73 `[AUTO]` + 14 `[MANUAL]` = **87** 条不变量。`[MANUAL]` 条目标记了当前无自动化测试覆盖的关键约束，应逐步补齐测试后升级为 `[AUTO]`。

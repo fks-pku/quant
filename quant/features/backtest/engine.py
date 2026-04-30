@@ -363,15 +363,14 @@ class Backtester:
                     strategy.on_after_trading(strategy.context, current_date.date())
 
             # --- Step 8: Collect pending orders → deferred_orders ---
-            if data_provider:
-                for strategy in strategies:
-                    if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
-                        om = strategy.context.order_manager
-                        if om and hasattr(om, "_pending_orders") and om._pending_orders:
-                            for order in om._pending_orders:
-                                order['_signal_date'] = current_date
-                                pending_orders.append(order)
-                            om.clear_pending()
+            for strategy in strategies:
+                if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
+                    om = strategy.context.order_manager
+                    if om and hasattr(om, "_pending_orders") and om._pending_orders:
+                        for order in om._pending_orders:
+                            order['_signal_date'] = current_date
+                            pending_orders.append(order)
+                        om.clear_pending()
 
             for order in pending_orders:
                 deferred_orders.append(order)
@@ -588,7 +587,10 @@ class Backtester:
             commission = sum(cost_breakdown.values())
 
             total_cost = fill_price * quantity + commission
-            if portfolio.cash < total_cost:
+            if hasattr(portfolio, 'can_afford'):
+                if not portfolio.can_afford(total_cost):
+                    return []
+            elif portfolio.cash < total_cost:
                 return []
 
             diag.total_commission += commission
@@ -679,7 +681,7 @@ class Backtester:
                 ))
 
             portfolio.cash += fill_price * sell_qty - commission
-            portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0, realized_pnl=total_realized)
+            portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0, realized_pnl=total_realized - commission)
 
             updated_pos = portfolio.get_position(symbol)
             if updated_pos is None or updated_pos.quantity <= 0:
