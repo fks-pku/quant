@@ -32,21 +32,29 @@ def extract_open_positions(
                         "symbol": sym,
                         "quantity": pos.quantity,
                         "entry_price": pos.avg_cost,
-                        "entry_time": get_earliest_lot_time(pos) or entry_times.get(sym),
+                        "entry_time": get_earliest_lot_time(pos) or entry_times.get((pf.strategy_name, sym)),
                         "current_price": last_price,
                         "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
                         "market_value": pos.quantity * last_price,
                         "strategy": pf.strategy_name,
                     })
     else:
+        strategy_names = list(portfolio_map.keys())
         for sym, pos in primary_portfolio.positions.items():
             if pos.quantity > 0:
                 last_price = last_prices.get(sym, pos.avg_cost)
+                et = get_earliest_lot_time(pos)
+                if et is None:
+                    for sn in strategy_names:
+                        candidate = entry_times.get((sn, sym))
+                        if candidate is not None:
+                            et = candidate
+                            break
                 open_positions.append({
                     "symbol": sym,
                     "quantity": pos.quantity,
                     "entry_price": pos.avg_cost,
-                    "entry_time": get_earliest_lot_time(pos) or entry_times.get(sym),
+                    "entry_time": et,
                     "current_price": last_price,
                     "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
                     "market_value": pos.quantity * last_price,

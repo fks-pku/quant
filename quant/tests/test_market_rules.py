@@ -12,7 +12,7 @@ from quant.features.backtest.market_rules import (
     is_suspended,
     DEFAULT_LOT_SIZE,
     MARKET_CURRENCY,
-    IPO_NO_LIMIT_DAYS,
+    IPO_NO_LIMIT_CALENDAR_DAYS,
     fifo_lot_slices,
     get_earliest_lot_time,
 )
@@ -99,14 +99,14 @@ class TestPriceLimit:
             date(2025, 1, 3), {"600519": ipo_date}
         ) is False
 
-    def test_ipo_no_exempt_after_5_days(self):
+    def test_ipo_no_exempt_after_grace_period(self):
         ipo_date = date(2025, 1, 2)
         prev_close = 100.0
         limit_price = prev_close * 1.10 + 0.05
         limit_rounded = round(limit_price, 2)
         assert is_price_at_limit(
             "600519", limit_rounded, prev_close,
-            date(2025, 1, 10), {"600519": ipo_date}
+            date(2025, 1, 12), {"600519": ipo_date}
         ) is True
 
     def test_zero_prev_close(self):

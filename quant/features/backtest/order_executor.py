@@ -105,6 +105,13 @@ def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -
             return float(lot_qty), True
         return float(lot_qty), False
     else:
+        if market == "HK":
+            lot_qty = (int(quantity) // lot_size) * lot_size
+            if lot_qty < lot_size:
+                return None, False
+            if lot_qty != int(quantity):
+                return float(lot_qty), True
+            return float(lot_qty), False
         if int(quantity) < 1:
             return None, False
         return float(quantity), False
@@ -126,8 +133,9 @@ def _execute_buy(
 
     diag.total_commission += commission
 
-    entry_times[symbol] = fill_ts
-    entry_prices[symbol] = fill_price
+    strategy_key = order.get('strategy')
+    entry_times.setdefault((strategy_key, symbol), fill_ts)
+    entry_prices.setdefault((strategy_key, symbol), fill_price)
 
     fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
     portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)
@@ -217,8 +225,9 @@ def _execute_sell(
 
     updated_pos = portfolio.get_position(symbol)
     if updated_pos is None or updated_pos.quantity <= 0:
-        entry_times.pop(symbol, None)
-        entry_prices.pop(symbol, None)
+        strategy_key = order.get('strategy')
+        entry_times.pop((strategy_key, symbol), None)
+        entry_prices.pop((strategy_key, symbol), None)
 
     diag.fill_count += 1
 

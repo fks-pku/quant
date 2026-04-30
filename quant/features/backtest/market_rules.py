@@ -8,7 +8,7 @@ from quant.shared.utils.symbol_utils import detect_market, is_cn_symbol, cn_pric
 
 MARKET_CURRENCY = {"CN": "CNY", "HK": "HKD", "US": "USD"}
 DEFAULT_LOT_SIZE = 100
-IPO_NO_LIMIT_DAYS = 5
+IPO_NO_LIMIT_CALENDAR_DAYS = 9
 
 
 def get_market(symbol: str) -> str:
@@ -37,8 +37,8 @@ def is_price_at_limit(
         return False
     if current_date and ipo_dates and symbol in ipo_dates:
         ipo_d = ipo_dates[symbol]
-        trading_days_since_ipo = (current_date - ipo_d).days
-        if trading_days_since_ipo <= IPO_NO_LIMIT_DAYS:
+        calendar_days_since_ipo = (current_date - ipo_d).days
+        if calendar_days_since_ipo <= IPO_NO_LIMIT_CALENDAR_DAYS:
             return False
     limit_pct = cn_price_limit_pct(symbol)
     upper = round(prev_close * (1 + limit_pct), 2)

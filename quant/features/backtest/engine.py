@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 class Backtester:
     """Backtester with realistic execution."""
 
-    IPO_NO_LIMIT_DAYS = 5
+    IPO_NO_LIMIT_DAYS = 9
 
     @staticmethod
     def _is_suspended(bar: Dict) -> bool:
