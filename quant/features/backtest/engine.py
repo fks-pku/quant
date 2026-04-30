@@ -180,6 +180,16 @@ class Backtester:
             if hasattr(strategy, "on_start"):
                 strategy.on_start(strategy.context)
 
+        seen_names = set()
+        for strategy in strategies:
+            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            if sname in seen_names:
+                raise ValueError(
+                    f"Duplicate strategy name '{sname}'. Each strategy must have a unique name "
+                    f"to prevent fill cross-talk."
+                )
+            seen_names.add(sname)
+
         trading_dates_set = None
         if data_provider and hasattr(data_provider, 'trading_dates'):
             trading_dates_set = data_provider.trading_dates

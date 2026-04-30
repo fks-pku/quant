@@ -108,3 +108,7 @@ while current_date ≤ end:
 - `DataFrameProvider._build_index()` 遇到重复 (symbol, date) 时保留 volume 更高的行，而非先到先得
 - `domain.ports.strategy.Strategy` 是架构端口定义，实际策略必须继承 `features.strategies.base.Strategy`
 - 非 SubPortfolio 模式下 `portfolio_map` 的多个 key 指向同一个 master Portfolio，`_reset_daily` 已做 id 去重
+- 重复策略名称会在 `engine.py run()` 开头抛出 `ValueError`，防止 fills 交叉到错误策略
+- `_BacktestOrderManager` 用 `_pending_buy_symbols` 集合拒绝同一天同一策略对同一 symbol 的重复 BUY 订单（日线策略去重）
+- `profit_factor` 在 gross_loss==0（全胜）时返回 `float('inf')` 而非 0.0
+- `risk_price_deviation_limit` 从 config 读取（键名 `risk_price_deviation_limit`），而非硬编码 0.15

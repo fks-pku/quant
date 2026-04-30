@@ -11,7 +11,6 @@ quant/tests/
 ├── test_hk_market.py          # 港股集成测试 (~5 tests)
 ├── test_us_market.py          # 美股集成测试 (~8 tests)
 ├── test_backtest_core.py      # 回测引擎核心集成测试 (~32 tests)
-├── test_bug_fixes.py          # 回归测试 (~96 tests)
 ├── test_strategies.py         # 策略注册与单元测试 (~25 tests)
 ├── test_analytics.py          # 分析指标测试 (~41 tests)
 ├── test_infrastructure.py     # 基础设施测试 (~25 tests)
@@ -22,7 +21,7 @@ quant/tests/
 ## 运行
 
 ```bash
-python3 -m pytest quant/tests/ -q                      # 全部 (~334 tests, ~2s)
+python3 -m pytest quant/tests/ -q                      # 全部 (~315 tests, ~2s)
 python3 -m pytest quant/tests/test_market_rules.py -q  # 市场规则单元测试
 python3 -m pytest quant/tests/test_commission.py -q    # 佣金单元测试
 python3 -m pytest quant/tests/test_cn_market.py -q     # A股集成测试
@@ -121,5 +120,5 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 - 新增市场集成测试 → 对应 `test_<market>_market.py`
 - 新增通用引擎功能 → `test_backtest_core.py`
 - 新增分析指标 → `test_analytics.py`
-- 新增回归测试 → `test_bug_fixes.py`
+- 新增回归测试 → 对应功能测试文件（如 `test_backtest_core.py`、`test_analytics.py`）
 - 共享数据生成逻辑 → `conftest.py`

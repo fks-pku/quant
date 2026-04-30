@@ -91,8 +91,11 @@ class _BacktestOrderManager:
         self._risk_engine = risk_engine
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
+        self._pending_buy_symbols: set = set()
 
     def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+        if side == 'BUY' and symbol in self._pending_buy_symbols:
+            return None
         effective_price = price if price and price > 0 else 0
         if effective_price == 0:
             effective_price = self._last_prices.get(symbol, 0)
@@ -119,11 +122,14 @@ class _BacktestOrderManager:
             "_risk_check_price": effective_price,
         }
         self._pending_orders.append(order)
+        if side == 'BUY':
+            self._pending_buy_symbols.add(symbol)
         return f"bt_{len(self._pending_orders)}"
 
     def drain_pending(self):
         orders = list(self._pending_orders)
         self._pending_orders.clear()
+        self._pending_buy_symbols.clear()
         return orders
 
 

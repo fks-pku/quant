@@ -135,9 +135,9 @@ class TestProfitFactor:
     def test_no_trades(self):
         assert calculate_profit_factor([]) == 0.0
 
-    def test_all_winners_returns_zero(self):
+    def test_all_winners_returns_inf(self):
         trades = [make_trade("A", 100, 10, 12, "SELL", pnl=100)]
-        assert calculate_profit_factor(trades) == 0.0
+        assert calculate_profit_factor(trades) == float('inf')
 
     def test_profit_factor_calc(self):
         trades = [

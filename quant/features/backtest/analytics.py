@@ -95,7 +95,7 @@ def calculate_profit_factor(trades: List[Trade]) -> float:
     """Gross profit / gross loss (all trades, includes buy-side commissions)."""
     gross_profit, gross_loss = _gross_profit_loss(trades)
     if gross_loss == 0:
-        return 0.0
+        return float('inf') if gross_profit > 0 else 0.0
     return gross_profit / gross_loss
 
 

@@ -241,7 +241,7 @@ class WalkForwardEngine:
             
             try:
                 strategy = strategy_factory(params)
-                result = self._run_single_backtest(config, strategy, train_data, initial_cash, config)
+                result = self._run_single_backtest(config, strategy, train_data, initial_cash)
                 
                 if len(result.trades) < self.min_trades:
                     continue
