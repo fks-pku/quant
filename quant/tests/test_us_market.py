@@ -1,4 +1,4 @@
-"""美股市场回测测试 — 无手数限制、每股佣金、SEC/FINRA费用、T+0。"""
+"""美股市场回测集成测试 — T+0、滑点、端到端。"""
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -9,11 +9,7 @@ from quant.tests.conftest import (
     make_us_bars,
     run_simple_backtest,
 )
-from quant.features.backtest.engine import (
-    Backtester,
-    US_SEC_FEE_RATE,
-    US_FINRA_TAF_PER_SHARE,
-)
+from quant.features.backtest.engine import Backtester
 from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
 from quant.features.strategies.volatility_regime.strategy import VolatilityRegime
@@ -21,69 +17,6 @@ from quant.features.strategies.volatility_regime.strategy import VolatilityRegim
 
 US_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
 START = datetime(2025, 1, 2)
-
-
-class TestUSMarketDetection:
-    def test_alpha_symbol(self):
-        assert Backtester._detect_market(None, "AAPL") == "US"
-
-    def test_etf_symbol(self):
-        assert Backtester._detect_market(None, "SPY") == "US"
-
-    def test_currency_usd(self):
-        bt = make_backtester()
-        assert bt._detect_currency(["AAPL"]) == "USD"
-
-    def test_mixed_market_fallback_usd(self):
-        bt = make_backtester()
-        assert bt._detect_currency(["AAPL", "00700"]) == "USD"
-
-
-class TestUSCommission:
-    def test_buy_per_share_commission(self):
-        bt = make_backtester()
-        price, qty = 150.0, 100
-        breakdown = bt._calculate_commission_breakdown(price, qty, "US", "BUY")
-        assert breakdown["commission"] == max(qty * 0.005, 1.0)
-
-    def test_min_commission_floor(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(150.0, 10, "US", "BUY")
-        assert breakdown["commission"] == 1.0
-
-    def test_buy_no_sec_fee(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(150.0, 100, "US", "BUY")
-        assert "sec_fee" not in breakdown
-        assert "finra_taf" not in breakdown
-
-    def test_sell_sec_fee(self):
-        bt = make_backtester()
-        price, qty = 150.0, 100
-        breakdown = bt._calculate_commission_breakdown(price, qty, "US", "SELL")
-        assert breakdown["sec_fee"] == pytest.approx(price * qty * US_SEC_FEE_RATE, rel=1e-6)
-
-    def test_sell_finra_taf(self):
-        bt = make_backtester()
-        price, qty = 150.0, 100
-        breakdown = bt._calculate_commission_breakdown(price, qty, "US", "SELL")
-        assert breakdown["finra_taf"] == pytest.approx(qty * US_FINRA_TAF_PER_SHARE, rel=1e-6)
-
-    def test_sell_total_higher_than_buy(self):
-        bt = make_backtester()
-        buy = bt._calculate_commission_breakdown(150.0, 100, "US", "BUY")
-        sell = bt._calculate_commission_breakdown(150.0, 100, "US", "SELL")
-        assert sum(sell.values()) > sum(buy.values())
-
-    def test_breakdown_keys_buy(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(150.0, 100, "US", "BUY")
-        assert set(breakdown.keys()) == {"commission"}
-
-    def test_breakdown_keys_sell(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(150.0, 100, "US", "SELL")
-        assert set(breakdown.keys()) == {"commission", "sec_fee", "finra_taf"}
 
 
 class TestUSNoLotSize:

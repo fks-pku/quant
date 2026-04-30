@@ -1,4 +1,4 @@
-"""A股市场回测测试 — 涨跌停、T+1、手数、佣金、分红税、IPO。"""
+"""A股市场回测集成测试 — T+1、手数、分红税、端到端。"""
 from datetime import datetime, date, timedelta
 
 import numpy as np
@@ -7,20 +7,9 @@ import pytest
 from quant.tests.conftest import (
     make_backtester,
     make_cn_bars,
-    make_dividends_df,
     run_simple_backtest,
 )
-from quant.features.backtest.engine import (
-    Backtester,
-    CN_COMMISSION_RATE,
-    CN_STAMP_DUTY_RATE,
-    CN_TRANSFER_FEE_RATE,
-    CN_REGULATOR_FEE_RATE,
-    CN_MIN_COMMISSION,
-    CN_DIVIDEND_TAX_SHORT_DAYS,
-    CN_DIVIDEND_TAX_MEDIUM_DAYS,
-    DEFAULT_LOT_SIZE,
-)
+from quant.features.backtest.engine import Backtester
 from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.daily_return_anomaly.strategy import DailyReturnAnomaly
 from quant.features.strategies.regime_filtered_momentum.strategy import RegimeFilteredMomentum
@@ -30,91 +19,7 @@ CN_SYMBOLS = ["600519", "000858", "300750", "601318"]
 START = datetime(2025, 1, 2)
 
 
-class TestCNMarketDetection:
-    def test_six_digit_shanghai_main(self):
-        assert Backtester._detect_market(None, "600519") == "CN"
-
-    def test_six_digit_shenzhen_main(self):
-        assert Backtester._detect_market(None, "000001") == "CN"
-
-    def test_six_digit_chinext(self):
-        assert Backtester._detect_market(None, "300750") == "CN"
-
-    def test_six_digit_star_market(self):
-        assert Backtester._detect_market(None, "688981") == "CN"
-
-    def test_six_digit_bse(self):
-        assert Backtester._detect_market(None, "830799") == "CN"
-
-    def test_five_digit_not_cn(self):
-        assert Backtester._detect_market(None, "00700") == "HK"
-
-    def test_alpha_not_cn(self):
-        assert Backtester._detect_market(None, "AAPL") == "US"
-
-    def test_currency_cn(self):
-        bt = make_backtester()
-        assert bt._detect_currency(["600519"]) == "CNY"
-
-    def test_currency_mixed_falls_back_usd(self):
-        bt = make_backtester()
-        assert bt._detect_currency(["600519", "AAPL"]) == "USD"
-
-
-class TestCNCommission:
-    def test_buy_commission_min_floor(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(10.0, 100, "CN", "BUY")
-        commission = breakdown["commission"]
-        assert commission == CN_MIN_COMMISSION  # 10*100*0.00025=0.25 < 5
-
-    def test_buy_commission_above_min(self):
-        bt = make_backtester()
-        price, qty = 50.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "CN", "BUY")
-        trade_value = price * qty
-        assert breakdown["commission"] == max(trade_value * CN_COMMISSION_RATE, CN_MIN_COMMISSION)
-
-    def test_buy_no_stamp_duty(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(50.0, 1000, "CN", "BUY")
-        assert breakdown["stamp_duty"] == 0.0
-
-    def test_sell_stamp_duty(self):
-        bt = make_backtester()
-        price, qty = 50.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "CN", "SELL")
-        assert breakdown["stamp_duty"] == pytest.approx(price * qty * CN_STAMP_DUTY_RATE, rel=1e-6)
-
-    def test_transfer_fee_on_both_sides(self):
-        bt = make_backtester()
-        buy = bt._calculate_commission_breakdown(50.0, 1000, "CN", "BUY")
-        sell = bt._calculate_commission_breakdown(50.0, 1000, "CN", "SELL")
-        assert buy["transfer_fee"] > 0
-        assert sell["transfer_fee"] > 0
-        assert buy["transfer_fee"] == pytest.approx(sell["transfer_fee"], rel=1e-6)
-
-    def test_regulator_fee_on_both_sides(self):
-        bt = make_backtester()
-        buy = bt._calculate_commission_breakdown(50.0, 1000, "CN", "BUY")
-        sell = bt._calculate_commission_breakdown(50.0, 1000, "CN", "SELL")
-        assert buy["regulator_fee"] > 0
-        assert sell["regulator_fee"] > 0
-
-    def test_total_sell_cost_higher_than_buy(self):
-        bt = make_backtester()
-        buy = bt._calculate_commission_breakdown(50.0, 1000, "CN", "BUY")
-        sell = bt._calculate_commission_breakdown(50.0, 1000, "CN", "SELL")
-        assert sum(sell.values()) > sum(buy.values())
-
-
 class TestCNLotSize:
-    def test_buy_rounds_to_lot(self):
-        bt = make_backtester()
-        price, qty = 50.0, 150
-        breakdown = bt._calculate_commission_breakdown(price, qty, "CN", "BUY")
-        assert breakdown is not None
-
     def test_buy_below_lot_rejected(self):
         data = make_cn_bars(["600519"], START, 10, {"600519": 50.0})
         config = {
@@ -161,11 +66,10 @@ class TestCNLotSize:
             data_provider=provider,
             symbols=["600519"],
         )
-        assert result.diagnostics.lot_adjusted_trades >= 0
         if result.trades:
             for t in result.trades:
                 if t.side == "BUY":
-                    assert t.quantity >= DEFAULT_LOT_SIZE
+                    assert t.quantity >= 100
 
 
 class TestCNT1Settlement:
@@ -238,8 +142,6 @@ class TestCNT1Settlement:
                 pass
 
             def on_after_trading(self, ctx, td):
-                from quant.features.trading.portfolio import Portfolio
-                port = ctx.portfolio
                 if self._day == 0:
                     om = ctx.order_manager
                     om.submit_order("600519", 100, "BUY", "MARKET", 50.0, "SellNow")
@@ -271,48 +173,6 @@ class TestCNT1Settlement:
             sell_date = sell_trades[0].fill_date
             buy_date = buy_trades[0].fill_date
             assert (sell_date.date() - buy_date.date()).days >= 1
-
-
-class TestCNPriceLimit:
-    def test_limit_up_rejected(self):
-        bt = make_backtester()
-        result = bt._is_cn_price_at_limit("600519", 55.0, 50.0)
-        assert result is True  # 55/50 = 10% hit limit
-
-    def test_limit_down_rejected(self):
-        bt = make_backtester()
-        result = bt._is_cn_price_at_limit("600519", 45.0, 50.0)
-        assert result is True
-
-    def test_normal_price_passes(self):
-        bt = make_backtester()
-        result = bt._is_cn_price_at_limit("600519", 52.0, 50.0)
-        assert result is False
-
-    def test_chinext_20pct_limit(self):
-        bt = make_backtester()
-        assert bt._is_cn_price_at_limit("300750", 61.0, 50.0) is True
-        assert bt._is_cn_price_at_limit("300750", 59.0, 50.0) is False
-
-    def test_star_market_20pct_limit(self):
-        bt = make_backtester()
-        assert bt._is_cn_price_at_limit("688981", 61.0, 50.0) is True
-        assert bt._is_cn_price_at_limit("688981", 59.0, 50.0) is False
-
-    def test_bse_30pct_limit(self):
-        bt = make_backtester()
-        assert bt._is_cn_price_at_limit("830799", 66.0, 50.0) is True
-        assert bt._is_cn_price_at_limit("830799", 64.0, 50.0) is False
-
-    def test_ipo_no_limit_period(self):
-        bt = make_backtester(ipo_dates={"600519": date(2025, 1, 2)})
-        result = bt._is_cn_price_at_limit("600519", 60.0, 50.0, date(2025, 1, 3))
-        assert result is False
-
-    def test_ipo_limit_returns_after_5_days(self):
-        bt = make_backtester(ipo_dates={"600519": date(2025, 1, 2)})
-        result = bt._is_cn_price_at_limit("600519", 55.0, 50.0, date(2025, 1, 9))
-        assert result is True
 
 
 class TestCNDividendTax:

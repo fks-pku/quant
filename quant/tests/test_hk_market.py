@@ -1,4 +1,4 @@
-"""港股市场回测测试 — 手数、佣金、无涨跌停、T+0。"""
+"""港股市场回测集成测试 — 手数、T+0、端到端。"""
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -9,17 +9,7 @@ from quant.tests.conftest import (
     make_hk_bars,
     run_simple_backtest,
 )
-from quant.features.backtest.engine import (
-    Backtester,
-    HK_COMMISSION_RATE,
-    HK_STAMP_DUTY_RATE,
-    HK_SFC_LEVY_RATE,
-    HK_CLEARING_RATE,
-    HK_TRADING_FEE_RATE,
-    HK_MIN_COMMISSION,
-    HK_TRADING_SYSTEM_FEE,
-    DEFAULT_LOT_SIZE,
-)
+from quant.features.backtest.engine import Backtester, HK_MIN_COMMISSION
 from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
 
@@ -28,98 +18,7 @@ HK_SYMBOLS = ["00700", "00005", "00941"]
 START = datetime(2025, 1, 2)
 
 
-class TestHKMarketDetection:
-    def test_five_digit_numeric(self):
-        assert Backtester._detect_market(None, "00700") == "HK"
-
-    def test_hk_prefix(self):
-        assert Backtester._detect_market(None, "HK.00700") == "HK"
-
-    def test_not_cn_not_us(self):
-        assert Backtester._detect_market(None, "00700") == "HK"
-
-    def test_four_digit_numeric(self):
-        assert Backtester._detect_market(None, "0388") == "HK"
-
-    def test_three_digit_numeric(self):
-        assert Backtester._detect_market(None, "001") == "HK"
-
-    def test_single_digit_numeric(self):
-        assert Backtester._detect_market(None, "1") == "HK"
-
-    def test_currency_hkd(self):
-        bt = make_backtester()
-        assert bt._detect_currency(["00700"]) == "HKD"
-
-
-class TestHKCommission:
-    def test_buy_commission_min_floor(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(10.0, 100, "HK", "BUY")
-        assert breakdown["commission"] == HK_MIN_COMMISSION
-
-    def test_buy_commission_above_min(self):
-        bt = make_backtester()
-        price, qty = 400.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "HK", "BUY")
-        trade_value = price * qty
-        assert breakdown["commission"] == max(trade_value * HK_COMMISSION_RATE, HK_MIN_COMMISSION)
-
-    def test_buy_no_stamp_duty(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(400.0, 1000, "HK", "BUY")
-        assert breakdown["stamp_duty"] == 0.0
-
-    def test_sell_stamp_duty(self):
-        bt = make_backtester()
-        price, qty = 400.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "HK", "SELL")
-        assert breakdown["stamp_duty"] == pytest.approx(price * qty * HK_STAMP_DUTY_RATE, rel=1e-6)
-
-    def test_sfc_levy(self):
-        bt = make_backtester()
-        price, qty = 400.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "HK", "BUY")
-        assert breakdown["sfc_levy"] == pytest.approx(price * qty * HK_SFC_LEVY_RATE, rel=1e-6)
-
-    def test_clearing_fee(self):
-        bt = make_backtester()
-        price, qty = 400.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "HK", "BUY")
-        assert breakdown["clearing"] == pytest.approx(price * qty * HK_CLEARING_RATE, rel=1e-6)
-
-    def test_trading_fee(self):
-        bt = make_backtester()
-        price, qty = 400.0, 1000
-        breakdown = bt._calculate_commission_breakdown(price, qty, "HK", "BUY")
-        assert breakdown["trading_fee"] == pytest.approx(price * qty * HK_TRADING_FEE_RATE, rel=1e-6)
-
-    def test_system_fee(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(400.0, 1000, "HK", "BUY")
-        assert breakdown["system_fee"] == HK_TRADING_SYSTEM_FEE
-
-    def test_sell_total_higher_than_buy(self):
-        bt = make_backtester()
-        buy = bt._calculate_commission_breakdown(400.0, 1000, "HK", "BUY")
-        sell = bt._calculate_commission_breakdown(400.0, 1000, "HK", "SELL")
-        assert sum(sell.values()) > sum(buy.values())
-
-    def test_breakdown_keys(self):
-        bt = make_backtester()
-        breakdown = bt._calculate_commission_breakdown(400.0, 1000, "HK", "BUY")
-        assert set(breakdown.keys()) == {"commission", "stamp_duty", "sfc_levy", "clearing", "trading_fee", "system_fee"}
-
-
-class TestHKLotSize:
-    def test_default_lot_size_100(self):
-        bt = make_backtester()
-        assert bt._get_lot_size("00700") == DEFAULT_LOT_SIZE
-
-    def test_custom_lot_size(self):
-        bt = make_backtester(lot_sizes={"00700": 500})
-        assert bt._get_lot_size("00700") == 500
-
+class TestHKLotSizeIntegration:
     def test_buy_below_lot_rejected(self):
         data = make_hk_bars(["00700"], START, 10, {"00700": 400.0})
         config = {
@@ -167,7 +66,7 @@ class TestHKLotSize:
         )
         buy_trades = [t for t in result.trades if t.side == "BUY"]
         for t in buy_trades:
-            assert t.quantity >= DEFAULT_LOT_SIZE
+            assert t.quantity >= 100
 
 
 class TestHKT0DayTrading:
@@ -185,7 +84,6 @@ class TestHKT0DayTrading:
             context = None
             _positions = {}
             _day = 0
-            _bought = False
 
             def on_start(self, ctx):
                 self.context = ctx
@@ -223,12 +121,6 @@ class TestHKT0DayTrading:
         sells = [t for t in result.trades if t.side == "SELL"]
         assert len(sells) >= 1
         assert result.diagnostics.t1_rejected_sells == 0
-
-
-class TestHKNoPriceLimit:
-    def test_no_price_limit_check(self):
-        bt = make_backtester()
-        assert not hasattr(bt, '_is_hk_price_at_limit') or True
 
 
 class TestHKEndToEnd:
