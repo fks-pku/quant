@@ -19,8 +19,7 @@ from quant.features.backtest.market_rules import (
 
 logger = logging.getLogger(__name__)
 
-
-_RISK_PRICE_DEVIATION_LIMIT = 0.15
+DEFAULT_RISK_PRICE_DEVIATION_LIMIT = 0.15
 
 
 def execute_order(
@@ -36,6 +35,7 @@ def execute_order(
     slippage_bps: float,
     commission_config: Any,
     prev_bar: Optional[Dict] = None,
+    risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
 ) -> List[Trade]:
     raw_open = bar.get('open')
     if not raw_open or raw_open <= 0:
@@ -58,7 +58,7 @@ def execute_order(
     fill_price = apply_slippage(raw_open, order['side'], slippage_bps)
 
     risk_price = order.get('_risk_check_price', 0)
-    if risk_price > 0 and abs(fill_price - risk_price) / risk_price > _RISK_PRICE_DEVIATION_LIMIT:
+    if risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
         diag.discarded_orders += 1
         return []
     quantity = order['quantity']

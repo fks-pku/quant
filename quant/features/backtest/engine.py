@@ -117,16 +117,22 @@ class Backtester:
             slippage_bps=self.slippage_bps,
             commission_config=self.commission,
             prev_bar=prev_bar,
+            risk_price_deviation_limit=self.risk_price_deviation_limit,
         )
 
     def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None,
                  lot_sizes: Optional[Dict[str, int]] = None,
-                 ipo_dates: Optional[Dict[str, datetime]] = None):
+                 ipo_dates: Optional[Dict[str, datetime]] = None,
+                 portfolio_class=None, risk_engine_class=None, sub_portfolio_class=None):
         self.config = config
         self.event_bus = event_bus
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
+        self.risk_price_deviation_limit = config.get("backtest", {}).get("risk_price_deviation_limit", 0.15)
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
+        self.portfolio_class = portfolio_class
+        self.risk_engine_class = risk_engine_class
+        self.sub_portfolio_class = sub_portfolio_class
 
         commission_config = config.get("execution", {}).get("commission", {})
         self.commission = CommissionConfig(
@@ -151,6 +157,7 @@ class Backtester:
 
         portfolio_map, risk_map, primary_portfolio, use_subs = create_portfolio_contexts(
             strategies, initial_cash, strategy_allocations, self.config, self.event_bus, currency,
+            self.portfolio_class, self.risk_engine_class, self.sub_portfolio_class,
         )
 
         equity_curve_dates: List[datetime] = []
@@ -229,6 +236,7 @@ class Backtester:
                     slippage_bps=self.slippage_bps,
                     commission_config=self.commission,
                     prev_bar=prev_close_bars.get(sym),
+                    risk_price_deviation_limit=self.risk_price_deviation_limit,
                 )
                 if not trades:
                     diag.discarded_orders += 1

@@ -135,6 +135,9 @@ class _BacktestContext:
         self.data_provider = data_provider
         self.order_manager = _BacktestOrderManager(risk_engine)
 
+    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+        return self.order_manager.submit_order(symbol, quantity, side, order_type, price, strategy_name)
+
     def prepare_for_trading_day(self, trading_date: date, last_prices: Dict[str, float]):
         self.order_manager._current_date = trading_date
         self.order_manager._last_prices = last_prices

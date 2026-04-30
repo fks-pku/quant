@@ -60,18 +60,14 @@ class Strategy(ABC):
 
     def buy(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
         """Submit a buy order."""
-        if self.context and self.context.portfolio:
-            order_manager = getattr(self.context, "order_manager", None)
-            if order_manager:
-                return order_manager.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
+        if self.context and hasattr(self.context, "submit_order"):
+            return self.context.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
         return None
 
     def sell(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
         """Submit a sell order."""
-        if self.context and self.context.portfolio:
-            order_manager = getattr(self.context, "order_manager", None)
-            if order_manager:
-                return order_manager.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
+        if self.context and hasattr(self.context, "submit_order"):
+            return self.context.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
         return None
 
     def get_position(self, symbol: str) -> float:

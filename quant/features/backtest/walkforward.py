@@ -53,6 +53,9 @@ class WalkForwardEngine:
         min_trades: int = 3,
         lot_sizes: Optional[Dict[str, int]] = None,
         ipo_dates: Optional[Dict[str, date]] = None,
+        portfolio_class=None,
+        risk_engine_class=None,
+        sub_portfolio_class=None,
     ):
         self.train_window_days = train_window_days
         self.test_window_days = test_window_days
@@ -61,6 +64,9 @@ class WalkForwardEngine:
         self.min_trades = min_trades
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
+        self.portfolio_class = portfolio_class
+        self.risk_engine_class = risk_engine_class
+        self.sub_portfolio_class = sub_portfolio_class
 
     def run(
         self,
@@ -262,11 +268,15 @@ class WalkForwardEngine:
 
         event_bus = EventBus()
         if isinstance(backtester_or_config, Backtester):
+            bt = backtester_or_config
             backtester = Backtester(
-                backtester_or_config.config,
+                bt.config,
                 event_bus=event_bus,
-                lot_sizes=backtester_or_config.lot_sizes or self.lot_sizes,
-                ipo_dates=backtester_or_config.ipo_dates or self.ipo_dates,
+                lot_sizes=bt.lot_sizes or self.lot_sizes,
+                ipo_dates=bt.ipo_dates or self.ipo_dates,
+                portfolio_class=getattr(bt, 'portfolio_class', None),
+                risk_engine_class=getattr(bt, 'risk_engine_class', None),
+                sub_portfolio_class=getattr(bt, 'sub_portfolio_class', None),
             )
         else:
             backtester = Backtester(
@@ -274,6 +284,9 @@ class WalkForwardEngine:
                 event_bus=event_bus,
                 lot_sizes=self.lot_sizes,
                 ipo_dates=self.ipo_dates,
+                portfolio_class=self.portfolio_class,
+                risk_engine_class=self.risk_engine_class,
+                sub_portfolio_class=self.sub_portfolio_class,
             )
 
         symbols = data['symbol'].unique().tolist()

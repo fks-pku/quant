@@ -55,10 +55,7 @@ class Trade:
         strategy_name: Optional[str] = None,
         **kwargs,
     ) -> "Trade":
-        if side.upper() == "BUY":
-            pnl = (exit_price - entry_price) * quantity - commission
-        else:
-            pnl = (entry_price - exit_price) * quantity - commission
+        pnl = (exit_price - entry_price) * quantity - commission
         return cls(
             symbol=symbol,
             quantity=quantity,

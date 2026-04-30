@@ -1,6 +1,6 @@
 """Portfolio and RiskEngine creation — single and sub-portfolio modes."""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Type
 
 from quant.features.backtest.entities import _BacktestContext
 
@@ -12,12 +12,18 @@ def create_portfolio_contexts(
     config: Dict[str, Any],
     event_bus: Any,
     currency: str,
+    portfolio_class: Optional[Type] = None,
+    risk_engine_class: Optional[Type] = None,
+    sub_portfolio_class: Optional[Type] = None,
 ) -> tuple:
-    from quant.features.trading.portfolio import Portfolio
-    from quant.features.trading.risk import RiskEngine
-    from quant.features.trading.sub_portfolio import SubPortfolio
+    if portfolio_class is None:
+        from quant.features.trading.portfolio import Portfolio as portfolio_class
+    if risk_engine_class is None:
+        from quant.features.trading.risk import RiskEngine as risk_engine_class
+    if sub_portfolio_class is None:
+        from quant.features.trading.sub_portfolio import SubPortfolio as sub_portfolio_class
 
-    master = Portfolio(initial_cash=initial_cash, currency=currency)
+    master = portfolio_class(initial_cash=initial_cash, currency=currency)
     use_subs = strategy_allocations is not None and len(strategies) > 1
 
     if use_subs:
@@ -27,14 +33,14 @@ def create_portfolio_contexts(
             sname = getattr(strategy, 'name', strategy.__class__.__name__)
             alloc_pct = strategy_allocations.get(sname, 0.0)
             alloc_cash = initial_cash * alloc_pct
-            sub = SubPortfolio(strategy_name=sname, allocated_capital=alloc_cash, master=master)
+            sub = sub_portfolio_class(strategy_name=sname, allocated_capital=alloc_cash, master=master)
             portfolio_map[sname] = sub
-            risk_map[sname] = RiskEngine(config, sub, event_bus)
+            risk_map[sname] = risk_engine_class(config, sub, event_bus)
         primary_portfolio = master
     else:
         portfolio_map = {}
         risk_map = {}
-        shared_risk = RiskEngine(config, master, event_bus)
+        shared_risk = risk_engine_class(config, master, event_bus)
         for strategy in strategies:
             sname = getattr(strategy, 'name', strategy.__class__.__name__)
             portfolio_map[sname] = master
