@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Callable, Optional
 import pandas as pd
 import numpy as np
@@ -44,8 +44,6 @@ class WFResult:
 class WalkForwardEngine:
     """Walk-forward analysis engine with configurable train/test windows."""
 
-    MIN_WF_TRADES = 3
-
     def __init__(
         self,
         train_window_days: int = 126,
@@ -53,12 +51,16 @@ class WalkForwardEngine:
         step_days: int = 21,
         rebalance_freq: str = "monthly",
         min_trades: int = 3,
+        lot_sizes: Optional[Dict[str, int]] = None,
+        ipo_dates: Optional[Dict[str, date]] = None,
     ):
         self.train_window_days = train_window_days
         self.test_window_days = test_window_days
         self.step_days = step_days
         self.rebalance_freq = rebalance_freq
         self.min_trades = min_trades
+        self.lot_sizes = lot_sizes or {}
+        self.ipo_dates = ipo_dates or {}
 
     def run(
         self,
@@ -83,6 +85,10 @@ class WalkForwardEngine:
         """
         config = config or {}
         window_results: List[WFWindowResult] = []
+        
+        if not pd.api.types.is_datetime64_any_dtype(data['timestamp']):
+            data = data.copy()
+            data['timestamp'] = pd.to_datetime(data['timestamp'])
         
         data = data.sort_values('timestamp')
         unique_dates = sorted(data['timestamp'].dt.normalize().unique())
@@ -260,11 +266,16 @@ class WalkForwardEngine:
             backtester = Backtester(
                 backtester_or_config.config,
                 event_bus=event_bus,
-                lot_sizes=backtester_or_config.lot_sizes,
-                ipo_dates=backtester_or_config.ipo_dates,
+                lot_sizes=backtester_or_config.lot_sizes or self.lot_sizes,
+                ipo_dates=backtester_or_config.ipo_dates or self.ipo_dates,
             )
         else:
-            backtester = Backtester(config or {}, event_bus=event_bus)
+            backtester = Backtester(
+                config or {},
+                event_bus=event_bus,
+                lot_sizes=self.lot_sizes,
+                ipo_dates=self.ipo_dates,
+            )
 
         symbols = data['symbol'].unique().tolist()
         

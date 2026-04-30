@@ -236,19 +236,19 @@ class TestBugFix5SuspendedCheck:
 
     def test_zero_close_and_zero_open_is_suspended(self):
         bar = {"volume": 1000, "open": 0, "close": 0, "high": 0, "low": 0}
-        assert Backtester._is_suspended(bar, None) is True
+        assert Backtester._is_suspended(bar) is True
 
     def test_zero_volume_is_suspended(self):
         bar = {"volume": 0, "open": 100, "close": 100}
-        assert Backtester._is_suspended(bar, None) is True
+        assert Backtester._is_suspended(bar) is True
 
     def test_normal_bar_not_suspended(self):
         bar = {"volume": 1000, "open": 100, "close": 100}
-        assert Backtester._is_suspended(bar, None) is False
+        assert Backtester._is_suspended(bar) is False
 
     def test_zero_close_with_nonzero_open_not_suspended(self):
         bar = {"volume": 1000, "open": 100, "close": 0}
-        assert Backtester._is_suspended(bar, None) is False
+        assert Backtester._is_suspended(bar) is False
 
 
 class TestBugFix6CostDragPct:
@@ -1052,7 +1052,7 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
         def test_is_suspended_returns_bool(self, volume, open_price, close_price):
             bar = {"volume": volume, "open": open_price, "close": close_price}
-            result = Backtester._is_suspended(bar, None)
+            result = Backtester._is_suspended(bar)
             assert isinstance(result, bool)
 
         @given(

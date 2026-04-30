@@ -62,11 +62,11 @@ class TestCommissionConfig:
 class TestBacktesterExecution:
     def test_suspended_bar_detected(self):
         bar = {"volume": 0, "open": 100, "close": 100}
-        assert Backtester._is_suspended(bar, None) is True
+        assert Backtester._is_suspended(bar) is True
 
     def test_normal_bar_not_suspended(self):
         bar = {"volume": 1000, "open": 100, "close": 100}
-        assert Backtester._is_suspended(bar, None) is False
+        assert Backtester._is_suspended(bar) is False
 
     def test_buy_creates_trade_with_negative_pnl(self):
         config = {
@@ -282,6 +282,31 @@ class TestPositionModel:
         assert pos.quantity == 100
         assert len(pos._lots) == 1
         assert sum(lot.qty for lot in pos._lots.values()) == 50
+
+    def test_avg_cost_recalculated_after_partial_sell(self):
+        pos = Position(symbol="AAPL")
+        pos.add_buy_lot(date(2025, 1, 2), 100, 10.0)
+        pos.add_buy_lot(date(2025, 1, 3), 100, 20.0)
+        pos.quantity = 200
+        pos.avg_cost = (100 * 10 + 100 * 20) / 200
+        pos.remove_sell_lots(100)
+        pos.recalc_avg_cost_from_lots()
+        assert pos.avg_cost == pytest.approx(20.0)
+        assert pos.quantity == 200
+        remaining_lot = list(pos._lots.values())[0]
+        assert remaining_lot.qty == 100
+        assert remaining_lot.price == 20.0
+
+    def test_avg_cost_correct_in_portfolio_after_partial_sell(self):
+        from quant.features.trading.portfolio import Portfolio
+        pf = Portfolio(initial_cash=100000)
+        d1, d2 = date(2025, 1, 2), date(2025, 1, 3)
+        pf.update_position("AAPL", 100, 10.0, 1000.0, trade_date=d1)
+        pf.update_position("AAPL", 100, 20.0, 2000.0, trade_date=d2)
+        pf.update_position("AAPL", -100, 25.0, 0, realized_pnl=(25.0 - 10.0) * 100)
+        pos = pf.get_position("AAPL")
+        assert pos.quantity == 100
+        assert pos.avg_cost == pytest.approx(20.0)
 
     def test_flat_position(self):
         pos = Position(symbol="AAPL", quantity=0)

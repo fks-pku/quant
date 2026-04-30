@@ -112,6 +112,8 @@ class Portfolio:
                     if abs(pos.quantity) < 1e-10:
                         pos.quantity = 0.0
                         pos.avg_cost = 0.0
+                    else:
+                        pos.recalc_avg_cost_from_lots()
 
             pos.market_value = pos.quantity * price
             pos.unrealized_pnl = pos.market_value - (pos.avg_cost * pos.quantity)

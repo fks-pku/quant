@@ -18,7 +18,7 @@ VOLUME_PARTICIPATION_LIMIT = 0.05
 DEFAULT_LOT_SIZE = 100
 
 HK_COMMISSION_RATE = 0.0003
-HK_STAMP_DUTY_RATE = 0.0013
+HK_STAMP_DUTY_RATE = 0.001
 HK_SFC_LEVY_RATE = 0.0000278
 HK_CLEARING_RATE = 0.00002
 HK_TRADING_FEE_RATE = 0.00005
@@ -27,11 +27,11 @@ HK_TRADING_SYSTEM_FEE = 0.50
 
 CN_COMMISSION_RATE = 0.00025
 CN_STAMP_DUTY_RATE = 0.0005
-CN_TRANSFER_FEE_RATE = 0.0000341
-CN_REGULATOR_FEE_RATE = 0.0000541
+CN_TRANSFER_FEE_RATE = 0.00001
+CN_REGULATOR_FEE_RATE = 0.00002
 CN_MIN_COMMISSION = 5.0
 
-US_SEC_FEE_RATE = 0.000000278
+US_SEC_FEE_RATE = 0.0000278
 US_FINRA_TAF_PER_SHARE = 0.000166
 
 MARKET_CURRENCY = {"CN": "CNY", "HK": "HKD", "US": "USD"}
@@ -107,7 +107,8 @@ class Backtester:
         )
 
     def _get_lot_size(self, symbol: str) -> int:
-        return self.lot_sizes.get(symbol, DEFAULT_LOT_SIZE) or DEFAULT_LOT_SIZE
+        ls = self.lot_sizes.get(symbol, DEFAULT_LOT_SIZE)
+        return ls if ls is not None and ls > 0 else DEFAULT_LOT_SIZE
 
     def _detect_currency(self, symbols: List[str]) -> str:
         if not symbols:
@@ -154,7 +155,7 @@ class Backtester:
         return slices
 
     @staticmethod
-    def _is_suspended(bar: Dict, prev_bar: Optional[Dict]) -> bool:
+    def _is_suspended(bar: Dict) -> bool:
         if bar.get("volume", 0) == 0:
             return True
         if bar.get("close", 0) == 0 and bar.get("open", 0) == 0:
@@ -216,10 +217,11 @@ class Backtester:
         else:
             portfolio_map = {}
             risk_map = {}
+            shared_risk = RiskEngine(self.config, master, self.event_bus)
             for strategy in strategies:
                 sname = getattr(strategy, 'name', strategy.__class__.__name__)
                 portfolio_map[sname] = master
-                risk_map[sname] = RiskEngine(self.config, master, self.event_bus)
+                risk_map[sname] = shared_risk
             primary_portfolio = master
 
         equity_curve_dates: List[datetime] = []
@@ -273,7 +275,7 @@ class Backtester:
                                 continue
                             bar_data = dict(bar_data)
                             bar_data['symbol'] = symbol
-                            bar_data['_suspended'] = self._is_suspended(bar_data, prev_bars.get(symbol))
+                            bar_data['_suspended'] = self._is_suspended(bar_data)
                             today_bars[symbol] = bar_data
 
                             if bar_data['_suspended']:
@@ -295,7 +297,7 @@ class Backtester:
                                     bar_data = bar.to_dict()
                                     bar_data['timestamp'] = bar_data.get('timestamp', bar.name if hasattr(bar, 'name') else current_date)
                                     bar_data['symbol'] = symbol
-                                    bar_data['_suspended'] = self._is_suspended(bar_data, prev_bars.get(symbol))
+                                    bar_data['_suspended'] = self._is_suspended(bar_data)
                                     today_bars[symbol] = bar_data
 
                                     if bar_data['_suspended']:
@@ -394,9 +396,12 @@ class Backtester:
                     re.reset_daily()
             else:
                 primary_portfolio.reset_daily()
-                diag.risk_skipped_orders += risk_map[strategies[0].name if hasattr(strategies[0], 'name') else strategies[0].__class__.__name__]._risk_rejected_count
+                seen_risk = set()
                 for re in risk_map.values():
-                    re.reset_daily()
+                    if id(re) not in seen_risk:
+                        seen_risk.add(id(re))
+                        diag.risk_skipped_orders += re._risk_rejected_count
+                        re.reset_daily()
 
             current_date += timedelta(days=1)
 
@@ -509,57 +514,7 @@ class Backtester:
                 pos.update_market_price(last_prices[symbol])
 
     def _create_context(self, portfolio: Any, risk_engine: Any, data_provider: Any) -> Any:
-        class BacktestContext:
-            def __init__(self, portfolio, risk_engine, event_bus, data_provider):
-                self.portfolio = portfolio
-                self.risk_engine = risk_engine
-                self.event_bus = event_bus
-                self.data_provider = data_provider
-                self.order_manager = BacktestOrderManager(risk_engine)
-                self.broker = BacktestBroker()
-
-        class BacktestOrderManager:
-            def __init__(self, risk_engine):
-                self._pending_orders: List[Dict] = []
-                self._risk_engine = risk_engine
-                self._current_date: Optional[date] = None
-                self._last_prices: Dict[str, float] = {}
-
-            def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
-                effective_price = price if price and price > 0 else 0
-                if effective_price == 0:
-                    effective_price = self._last_prices.get(symbol, 0)
-                if self._risk_engine:
-                    order_value = effective_price * quantity if effective_price > 0 else quantity
-                    approved, _ = self._risk_engine.check_order(
-                        symbol, quantity, effective_price, order_value, side=side,
-                        as_of_date=self._current_date,
-                    )
-                    if not approved:
-                        return None
-                    if effective_price > 0:
-                        self._risk_engine.record_order(
-                            symbol=symbol, order_value=order_value, as_of_date=self._current_date,
-                        )
-                order = {
-                    "symbol": symbol,
-                    "quantity": quantity,
-                    "side": side,
-                    "order_type": order_type,
-                    "price": price,
-                    "strategy": strategy_name
-                }
-                self._pending_orders.append(order)
-                return f"bt_{len(self._pending_orders)}"
-
-            def clear_pending(self):
-                self._pending_orders.clear()
-
-        class BacktestBroker:
-            def is_connected(self):
-                return True
-
-        return BacktestContext(
+        return _BacktestContext(
             portfolio=portfolio,
             risk_engine=risk_engine,
             event_bus=self.event_bus,
@@ -681,8 +636,12 @@ class Backtester:
                     diag.t1_rejected_sells += 1
                     return []
                 sell_qty = min(quantity, settled_qty)
+                if sell_qty < quantity:
+                    logger.warning("SELL %s truncated: requested %d, settled %d", symbol, quantity, sell_qty)
             else:
                 sell_qty = min(quantity, pos.quantity)
+                if sell_qty < quantity:
+                    logger.warning("SELL %s truncated: requested %d, available %d", symbol, quantity, sell_qty)
 
             cost_breakdown = self._calculate_commission_breakdown(fill_price, sell_qty, market, order['side'])
             commission = sum(cost_breakdown.values())
@@ -808,3 +767,50 @@ class BacktestResultExporter:
                 for t in result.trades
             ])
             trades_df.to_csv(f"{output_path}_trades.csv", index=False)
+
+
+class _BacktestOrderManager:
+    def __init__(self, risk_engine):
+        self._pending_orders: List[Dict] = []
+        self._risk_engine = risk_engine
+        self._current_date: Optional[date] = None
+        self._last_prices: Dict[str, float] = {}
+
+    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+        effective_price = price if price and price > 0 else 0
+        if effective_price == 0:
+            effective_price = self._last_prices.get(symbol, 0)
+        if self._risk_engine:
+            order_value = effective_price * quantity if effective_price > 0 else quantity
+            approved, _ = self._risk_engine.check_order(
+                symbol, quantity, effective_price, order_value, side=side,
+                as_of_date=self._current_date,
+            )
+            if not approved:
+                return None
+            if effective_price > 0:
+                self._risk_engine.record_order(
+                    symbol=symbol, order_value=order_value, as_of_date=self._current_date,
+                )
+        order = {
+            "symbol": symbol,
+            "quantity": quantity,
+            "side": side,
+            "order_type": order_type,
+            "price": price,
+            "strategy": strategy_name
+        }
+        self._pending_orders.append(order)
+        return f"bt_{len(self._pending_orders)}"
+
+    def clear_pending(self):
+        self._pending_orders.clear()
+
+
+class _BacktestContext:
+    def __init__(self, portfolio, risk_engine, event_bus, data_provider):
+        self.portfolio = portfolio
+        self.risk_engine = risk_engine
+        self.event_bus = event_bus
+        self.data_provider = data_provider
+        self.order_manager = _BacktestOrderManager(risk_engine)

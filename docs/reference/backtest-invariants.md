@@ -90,17 +90,15 @@
 
 | # | Invariant | 验证 | 测试 |
 |---|-----------|------|------|
-| D-1 | 超期订单有 `expired_orders` 计数 | `[AUTO]` | `test_bug_fixes::test_expired_order_counted_in_diagnostics` |
+| D-1 | 无法成交的延迟订单计入 `discarded_orders`（首次失败即丢弃，不重试） | `[AUTO]` | `test_bug_fixes::TestBugFix3DiscardedOrdersDiagnostic` |
 | D-2 | T+1 拒绝有 `t1_rejected_sells` 计数 | `[AUTO]` | `test_cn_market::TestCNT1Settlement` |
 | D-3 | 涨跌停拒绝有 `limit_rejected_orders` 计数 | `[AUTO]` | `test_bug_fixes::test_cn_limit_up_returns_none_for_retry` |
 | D-4 | 手数调整有 `lot_adjusted_trades` 计数 | `[AUTO]` | `test_bug_fixes::TestD4LotAdjustedTrades` |
 | D-5 | 成交量限制有 `volume_limited_trades` 计数 | `[AUTO]` | `test_bug_fixes::TestCN7VolumeParticipationLimit` |
 | D-6 | `cost_drag_pct` 在 \|gross_pnl\| < 1e-10 时返回 0 | `[AUTO]` | `test_bug_fixes::test_near_zero_gross_pnl_returns_zero` |
 | D-7 | `cost_drag_pct` 始终有限且非负 | `[AUTO]` | `test_bug_fixes::test_cost_drag_finite_and_non_negative` (hypothesis) |
-| D-8 | `avg_fill_delay_days` 在无成交时返回 0 | `[AUTO]` | `test_backtest_core::test_avg_fill_delay_zero_when_no_fills` |
 | D-9 | `total_gross_pnl = sum(trade.pnl) + diag.total_commission`（毛利润还原公式） | `[AUTO]` | `test_bug_fixes::TestD9TotalGrossPnl` |
-| D-10 | 涨跌停超期订单也计入 `expired_orders`（不限于停牌路径） | `[AUTO]` | `test_bug_fixes::test_limit_hit_expired_order_counted` |
-| D-11 | `fill_count` 和 `total_fill_delay_days` 仅在成交成功后递增（资金/仓位不足不计数） | `[AUTO]` | `test_bug_fixes::test_fill_count_only_increments_on_successful_fill` |
+| D-11 | `fill_count` 仅在成交成功后递增（资金/仓位不足不计数） | `[AUTO]` | `test_bug_fixes::test_fill_count_only_increments_on_successful_fill` |
 
 ## 模型不变量
 
@@ -149,7 +147,7 @@
 
 | # | Invariant | 验证 | 测试 |
 |---|-----------|------|------|
-| DEF-1 | `_deferred_days >= MAX_FILL_DEFER_DAYS`（5）时订单过期丢弃 | `[AUTO]` | `test_bug_fixes::test_expired_order_counted_in_diagnostics` |
+| DEF-1 | 延迟订单在 T+1 首次尝试执行，失败即永久丢弃（计入 `discarded_orders`），不重试 | `[AUTO]` | `test_bug_fixes::TestBugFix3DiscardedOrdersDiagnostic` |
 | DEF-2 | 首日 CN 标的无 prev_bar 时跳过涨跌停检查（prev_close 不可用） | `[AUTO]` | `test_bug_fixes::TestDEF2FirstDayNoPrevBar` |
 
 ## 佣金率精确性
@@ -157,8 +155,8 @@
 | # | Invariant | 验证 | 测试 |
 |---|-----------|------|------|
 | COM-1 | US per_share $0.005/股 最低 $1.0/单 | `[AUTO]` | `test_us_market::TestUSCommission` |
-| COM-2 | CN 佣金 0.025% 最低 ¥5 + 印花税（仅 SELL）0.05% + 过户费 0.00341% + 规管费 0.00541% | `[AUTO]` | `test_cn_market::TestCNCommission` |
-| COM-3 | HK 佣金 0.03% 最低 HK$3 + 印花税（仅 SELL）0.13% + SFC levy + 清算费 + 交易费 + 系统费 HK$0.50 | `[AUTO]` | `test_hk_market::TestHKCommission` |
+| COM-2 | CN 佣金 0.025% 最低 ¥5 + 印花税（仅 SELL）0.05% + 过户费 0.001% + 规管费 0.002% | `[AUTO]` | `test_cn_market::TestCNCommission` |
+| COM-3 | HK 佣金 0.03% 最低 HK$3 + 印花税（仅 SELL）0.1% + SFC levy + 清算费 + 交易费 + 系统费 HK$0.50 | `[AUTO]` | `test_hk_market::TestHKCommission` |
 
 ## 已知限制
 
@@ -181,7 +179,7 @@
 5. 新增功能 → 在对应分区新增 Invariant 行 + 测试
 6. 修复新 Bug → 在 `test_bug_fixes.py` 新增回归测试 + 在本清单增加 Invariant
 
-**统计**: 76/76 = **100%** `[AUTO]`。所有不变量已覆盖自动化测试。
+**统计**: 73/73 = **100%** `[AUTO]`。所有不变量已覆盖自动化测试。
 
 ---
 

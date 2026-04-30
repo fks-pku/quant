@@ -71,6 +71,14 @@ class Position:
             self._lots.clear()
         return consumed
 
+    def recalc_avg_cost_from_lots(self) -> None:
+        if not self._lots:
+            return
+        total_cost = sum(lot.qty * lot.price for lot in self._lots.values())
+        total_qty = sum(lot.qty for lot in self._lots.values())
+        if total_qty > 0:
+            self.avg_cost = total_cost / total_qty
+
     def update_from_fill(self, fill_quantity: float, fill_price: float, fill_date: Optional[date] = None) -> None:
         if self.quantity == 0:
             self.quantity = fill_quantity

@@ -9,7 +9,7 @@ import numpy as np
 from quant.domain.models.trade import Trade
 
 
-__all__ = ["Trade", "calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
+__all__ = ["calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
            "calculate_performance_metrics", "PerformanceMetrics",
            "calculate_rolling_sharpe", "calculate_rolling_sortino",
            "calculate_statistical_significance"]
@@ -89,12 +89,11 @@ def calculate_win_rate(trades: List[Trade]) -> float:
 
 
 def calculate_profit_factor(trades: List[Trade]) -> float:
-    """Gross profit / gross loss (round-trip trades only)."""
-    rt = _round_trip_trades(trades)
-    if not rt:
+    """Gross profit / gross loss (all trades, includes buy-side commissions)."""
+    if not trades:
         return 0.0
-    gross_profit = sum(t.pnl for t in rt if t.pnl > 0)
-    gross_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
+    gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
+    gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
     if gross_loss == 0:
         return 0.0
     return gross_profit / gross_loss
@@ -143,13 +142,16 @@ def calculate_max_favorable_excursion(trades: List[Trade]) -> float:
 
 def calculate_ulcer_index(equity_curve: pd.Series, periods: int = 14) -> float:
     """Ulcer Index - downside risk measure."""
-    if equity_curve.empty:
+    if equity_curve.empty or len(equity_curve) < periods:
         return 0.0
     
     running_max = equity_curve.expanding().max()
     drawdown_pct = ((equity_curve - running_max) / running_max) * 100
     drawdown_squared = (drawdown_pct ** 2).rolling(periods).mean()
-    return float(np.sqrt(drawdown_squared.iloc[-1])) if not drawdown_squared.empty else 0.0
+    val = drawdown_squared.iloc[-1]
+    if pd.isna(val):
+        return 0.0
+    return float(np.sqrt(val))
 
 
 def calculate_downside_deviation(returns: pd.Series) -> float:
@@ -161,12 +163,11 @@ def calculate_downside_deviation(returns: pd.Series) -> float:
 
 
 def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
-    """Sum of gains / absolute value of sum of losses (round-trip only)."""
-    rt = _round_trip_trades(trades)
-    if not rt:
+    """Sum of gains / absolute value of sum of losses (all trades, includes buy-side commissions)."""
+    if not trades:
         return 0.0
-    total_gain = sum(t.pnl for t in rt if t.pnl > 0)
-    total_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
+    total_gain = sum(t.pnl for t in trades if t.pnl > 0)
+    total_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
     if total_loss == 0:
         return 0.0
     return total_gain / total_loss
@@ -184,11 +185,10 @@ def calculate_tail_ratio(returns: pd.Series) -> float:
 
 
 def calculate_recovery_factor(trades: List[Trade], max_dd: float) -> float:
-    """Total profit / max drawdown (round-trip only)."""
-    rt = _round_trip_trades(trades)
-    if not rt:
+    """Total profit / max drawdown (all trades, includes buy-side commissions)."""
+    if not trades:
         return 0.0
-    total_profit = sum(t.pnl for t in rt)
+    total_profit = sum(t.pnl for t in trades)
     if max_dd == 0:
         return 0.0
     return total_profit / abs(max_dd)
