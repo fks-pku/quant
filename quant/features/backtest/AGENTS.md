@@ -102,3 +102,9 @@ while current_date ≤ end:
 - `order_executor` 中 SELL 路径的 settled_quantity 检查：CN T+1 用 `pos.settled_quantity()`，其他市场用 `pos.quantity`
 - 未成交订单不重试：策略应自行在 `on_after_trading` 中基于最新数据重新判断
 - `_BacktestContext` 和 `_BacktestOrderManager` 定义在 `entities.py`，不要暴露到外部
+- Engine 通过 `_BacktestContext.prepare_for_trading_day()` 和 `drain_orders()` 公开方法与 Context 交互，不要直接访问 `_pending_orders`、`_current_date`、`_last_prices` 等私有属性
+- Market order 无有效价格时（`effective_price <= 0`）直接 reject，不再用 share count 充当 dollar value 绕过风控
+- `is_suspended()` 优先检查 `bar["_suspended"]` 显式标记，其次才用 volume=0 / close=open=0 启发式
+- `DataFrameProvider._build_index()` 遇到重复 (symbol, date) 时保留 volume 更高的行，而非先到先得
+- `domain.ports.strategy.Strategy` 是架构端口定义，实际策略必须继承 `features.strategies.base.Strategy`
+- 非 SubPortfolio 模式下 `portfolio_map` 的多个 key 指向同一个 master Portfolio，`_reset_daily` 已做 id 去重

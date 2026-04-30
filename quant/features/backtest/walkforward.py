@@ -235,8 +235,7 @@ class WalkForwardEngine:
             
             try:
                 strategy = strategy_factory(params)
-                backtester = Backtester(config)
-                result = self._run_single_backtest(backtester, strategy, train_data, initial_cash, config)
+                result = self._run_single_backtest(config, strategy, train_data, initial_cash, config)
                 
                 if len(result.trades) < self.min_trades:
                     continue
@@ -313,25 +312,31 @@ class DataFrameProvider:
         for col in ('open', 'high', 'low', 'close', 'volume'):
             if col not in df.columns:
                 return
-        seen_keys: set = set()
         records = df.to_dict('records')
         symbols = df['symbol'].tolist()
         timestamps = df['timestamp'].tolist()
-        dup_count = 0
+        buf: Dict[tuple, Dict] = {}
         for rec, sym, ts in zip(records, symbols, timestamps):
             key = ts.date() if hasattr(ts, 'date') else ts
             dict_key = (sym, key)
-            if dict_key in seen_keys:
-                dup_count += 1
-                continue
-            seen_keys.add(dict_key)
-            self._bar_map[dict_key] = rec
+            existing = buf.get(dict_key)
+            if existing is None:
+                buf[dict_key] = rec
+            else:
+                existing_vol = existing.get('volume', 0) or 0
+                new_vol = rec.get('volume', 0) or 0
+                if new_vol > existing_vol:
+                    buf[dict_key] = rec
+        dup_count = len(records) - len(buf)
+        self._bar_map = buf
+        for ts in timestamps:
             dt = datetime(ts.year, ts.month, ts.day) if hasattr(ts, 'year') else ts
             self._trading_dates.add(dt)
         if dup_count > 0:
             import logging
             logging.getLogger(__name__).warning(
-                "DataFrameProvider._build_index: dropped %d duplicate (symbol, date) rows", dup_count,
+                "DataFrameProvider._build_index: resolved %d duplicate (symbol, date) rows (kept highest volume)",
+                dup_count,
             )
 
     def _build_dividend_index(self) -> None:

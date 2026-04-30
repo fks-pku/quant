@@ -83,12 +83,17 @@ def calculate_win_rate(trades: List[Trade]) -> float:
     return winning_trades / len(rt)
 
 
-def calculate_profit_factor(trades: List[Trade]) -> float:
-    """Gross profit / gross loss (all trades, includes buy-side commissions)."""
+def _gross_profit_loss(trades: List[Trade]) -> tuple:
     if not trades:
-        return 0.0
+        return 0.0, 0.0
     gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
     gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
+    return gross_profit, gross_loss
+
+
+def calculate_profit_factor(trades: List[Trade]) -> float:
+    """Gross profit / gross loss (all trades, includes buy-side commissions)."""
+    gross_profit, gross_loss = _gross_profit_loss(trades)
     if gross_loss == 0:
         return 0.0
     return gross_profit / gross_loss
@@ -102,13 +107,15 @@ def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
     durations = []
     for t in rt:
         d = t.exit_time - t.entry_time
-        if not isinstance(d, timedelta):
-            d = timedelta(seconds=int(d.total_seconds()) if hasattr(d, 'total_seconds') else int(d))
-        durations.append(d)
-    total_duration = timedelta(0)
-    for d in durations:
-        total_duration += d
-    return total_duration / len(rt)
+        if isinstance(d, timedelta):
+            durations.append(d)
+        else:
+            seconds = float(d.total_seconds()) if hasattr(d, 'total_seconds') else 0.0
+            durations.append(timedelta(seconds=seconds))
+    if not durations:
+        return timedelta(0)
+    total_seconds = sum(d.total_seconds() for d in durations)
+    return timedelta(seconds=total_seconds / len(durations))
 
 
 def calculate_max_adverse_excursion(trades: List[Trade]) -> float:

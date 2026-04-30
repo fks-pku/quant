@@ -65,6 +65,8 @@ def select_currency(symbols: List[str]) -> str:
 
 
 def is_suspended(bar: Dict) -> bool:
+    if bar.get("_suspended", False) is True:
+        return True
     if bar.get("volume", 0) == 0:
         return True
     if bar.get("close", 0) == 0 and bar.get("open", 0) == 0:

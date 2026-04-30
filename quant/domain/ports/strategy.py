@@ -40,6 +40,18 @@ class StrategyContext:
 
 
 class Strategy(ABC):
+    """Domain port for strategy interfaces.
+
+    This is the architectural contract defined in the domain layer.
+    Actual strategy implementations should inherit from
+    ``quant.features.strategies.base.Strategy`` which provides
+    concrete ``buy()``/``sell()`` methods compatible with the
+    backtest and trading engines.
+
+    Do NOT subclass this ABC directly for runnable strategies.
+    It exists solely to define the port interface so that the
+    domain layer remains dependency-free.
+    """
 
     def __init__(self, name: str):
         self._name = name

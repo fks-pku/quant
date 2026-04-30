@@ -257,21 +257,17 @@ class Backtester:
 
             # --- Step 7: Strategy signal generation ---
             for strategy in strategies:
-                if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
-                    strategy.context.order_manager._current_date = current_date.date()
-                    strategy.context.order_manager._last_prices = last_prices
+                if hasattr(strategy, "context") and hasattr(strategy.context, "prepare_for_trading_day"):
+                    strategy.context.prepare_for_trading_day(current_date.date(), last_prices)
                 if hasattr(strategy, "on_after_trading"):
                     strategy.on_after_trading(strategy.context, current_date.date())
 
             # --- Step 8: Collect pending orders ---
             for strategy in strategies:
-                if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
-                    om = strategy.context.order_manager
-                    if om and hasattr(om, "_pending_orders") and om._pending_orders:
-                        for order in om._pending_orders:
-                            order['_signal_date'] = current_date
-                            pending_orders.append(order)
-                        om.clear_pending()
+                if hasattr(strategy, "context") and hasattr(strategy.context, "drain_orders"):
+                    for order in strategy.context.drain_orders():
+                        order['_signal_date'] = current_date
+                        pending_orders.append(order)
 
             for order in pending_orders:
                 deferred_orders.append(order)
@@ -378,8 +374,11 @@ class Backtester:
                 diag.risk_skipped_orders += re._risk_rejected_count
                 re.reset_daily()
         else:
+            seen_pf = set()
             for pf in portfolio_map.values():
-                pf.reset_daily()
+                if id(pf) not in seen_pf:
+                    seen_pf.add(id(pf))
+                    pf.reset_daily()
             seen_risk = set()
             for re in risk_map.values():
                 if id(re) not in seen_risk:

@@ -57,6 +57,8 @@ class BacktestResultExporter:
 
     @staticmethod
     def to_csv(result: BacktestResult, output_path: str) -> None:
+        import logging
+        _log = logging.getLogger(__name__)
         result.metrics.equity_curve.to_csv(f"{output_path}_equity.csv")
 
         if result.trades:
@@ -79,6 +81,8 @@ class BacktestResultExporter:
                 for t in result.trades
             ])
             trades_df.to_csv(f"{output_path}_trades.csv", index=False)
+        else:
+            _log.info("No trades to export for %s", output_path)
 
 
 class _BacktestOrderManager:
@@ -92,18 +96,19 @@ class _BacktestOrderManager:
         effective_price = price if price and price > 0 else 0
         if effective_price == 0:
             effective_price = self._last_prices.get(symbol, 0)
+        if effective_price <= 0:
+            return None
         if self._risk_engine:
-            order_value = effective_price * quantity if effective_price > 0 else quantity
+            order_value = effective_price * quantity
             approved, _ = self._risk_engine.check_order(
                 symbol, quantity, effective_price, order_value, side=side,
                 as_of_date=self._current_date,
             )
             if not approved:
                 return None
-            if effective_price > 0:
-                self._risk_engine.record_order(
-                    symbol=symbol, order_value=order_value, as_of_date=self._current_date,
-                )
+            self._risk_engine.record_order(
+                symbol=symbol, order_value=order_value, as_of_date=self._current_date,
+            )
         order = {
             "symbol": symbol,
             "quantity": quantity,
@@ -116,8 +121,10 @@ class _BacktestOrderManager:
         self._pending_orders.append(order)
         return f"bt_{len(self._pending_orders)}"
 
-    def clear_pending(self):
+    def drain_pending(self):
+        orders = list(self._pending_orders)
         self._pending_orders.clear()
+        return orders
 
 
 class _BacktestContext:
@@ -127,3 +134,10 @@ class _BacktestContext:
         self.event_bus = event_bus
         self.data_provider = data_provider
         self.order_manager = _BacktestOrderManager(risk_engine)
+
+    def prepare_for_trading_day(self, trading_date: date, last_prices: Dict[str, float]):
+        self.order_manager._current_date = trading_date
+        self.order_manager._last_prices = last_prices
+
+    def drain_orders(self):
+        return self.order_manager.drain_pending()
