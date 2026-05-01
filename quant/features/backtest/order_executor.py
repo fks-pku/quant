@@ -1,10 +1,14 @@
 """Order execution pipeline — slippage, lot rounding, volume limit, commission, trade generation."""
 
+from __future__ import annotations
 import logging
 from datetime import date, datetime
-from typing import Dict, List, Any, Optional
+from typing import TYPE_CHECKING, Dict, List, Any, Optional
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from quant.features.backtest.schemas import BacktestBar, DeferredOrder
 
 from quant.domain.models.trade import Trade
 from quant.features.backtest.entities import BacktestDiagnostics
@@ -23,10 +27,10 @@ DEFAULT_RISK_PRICE_DEVIATION_LIMIT = 0.15
 
 
 def execute_order(
-    order: Dict,
+    order: "DeferredOrder",
     portfolio: Any,
     symbol: str,
-    bar: Dict,
+    bar: "BacktestBar",
     entry_times: Dict[str, datetime],
     entry_prices: Dict[str, float],
     diag: BacktestDiagnostics,
@@ -34,7 +38,7 @@ def execute_order(
     ipo_dates: Optional[Dict[str, date]],
     slippage_bps: float,
     commission_config: Any,
-    prev_bar: Optional[Dict] = None,
+    prev_bar: Optional["BacktestBar"] = None,
     risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
 ) -> List[Trade]:
     raw_open = bar.get('open')
@@ -229,7 +233,7 @@ def _execute_sell(
         ))
 
     portfolio.cash += fill_price * sell_qty - commission
-    portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0, realized_pnl=total_realized - commission)
+    portfolio.update_position(symbol, quantity=-sell_qty, price=fill_price, cost=0, realized_pnl=total_realized)
 
     updated_pos = portfolio.get_position(symbol)
     if updated_pos is None or updated_pos.quantity <= 0:

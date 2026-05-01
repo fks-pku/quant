@@ -18,6 +18,23 @@ class Position:
     realized_pnl: float = 0.0
     sector: Optional[str] = None
     _lots: Dict[date, LotEntry] = field(default_factory=dict, repr=False)
+    _win_count: int = field(default=0, repr=False)
+    _loss_count: int = field(default=0, repr=False)
+
+    @property
+    def win_count(self) -> int:
+        return self._win_count
+
+    @property
+    def loss_count(self) -> int:
+        return self._loss_count
+
+    @property
+    def win_rate(self) -> float:
+        total = self._win_count + self._loss_count
+        if total == 0:
+            return 0.0
+        return self._win_count / total
 
     @property
     def is_long(self) -> bool:
@@ -90,20 +107,31 @@ class Position:
                 self.avg_cost = total_cost / abs(self.quantity)
         else:
             closing_qty = min(abs(self.quantity), abs(fill_quantity))
-            pnl_per_share = (fill_price - self.avg_cost) if self.quantity > 0 else (self.avg_cost - fill_price)
-            self.realized_pnl += pnl_per_share * closing_qty
+            if self._lots:
+                lot_slices = self.remove_sell_lots(closing_qty)
+                pnl = 0.0
+                for _lot_date, sub_qty, lot_price in lot_slices:
+                    sub_pnl = (fill_price - lot_price) * sub_qty
+                    if self.quantity < 0:
+                        sub_pnl = (lot_price - fill_price) * sub_qty
+                    pnl += sub_pnl
+                    if sub_pnl > 1e-10:
+                        self._win_count += 1
+                    elif sub_pnl < -1e-10:
+                        self._loss_count += 1
+                self.realized_pnl += pnl
+            else:
+                pnl_per_share = (fill_price - self.avg_cost) if self.quantity > 0 else (self.avg_cost - fill_price)
+                self.realized_pnl += pnl_per_share * closing_qty
             self.quantity += fill_quantity
             if abs(self.quantity) < 1e-10:
                 self.quantity = 0.0
                 self.avg_cost = 0.0
-            elif self.quantity < 0 and fill_quantity < 0 and self.avg_cost != fill_price:
-                self.avg_cost = fill_price
-
-        if fill_date is not None:
-            if fill_quantity > 0:
-                self.add_buy_lot(fill_date, fill_quantity, fill_price)
             else:
-                self.remove_sell_lots(abs(fill_quantity))
+                self.recalc_avg_cost_from_lots()
+
+        if fill_date is not None and fill_quantity > 0:
+            self.add_buy_lot(fill_date, fill_quantity, fill_price)
 
     def adjust_lots_for_stock_dividend(self, ratio: float) -> None:
         if not self._lots or ratio <= 0:

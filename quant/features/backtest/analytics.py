@@ -84,15 +84,16 @@ def calculate_win_rate(trades: List[Trade]) -> float:
 
 
 def _gross_profit_loss(trades: List[Trade]) -> tuple:
-    if not trades:
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0, 0.0
-    gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
-    gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
+    gross_profit = sum(t.pnl for t in rt if t.pnl > 0)
+    gross_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     return gross_profit, gross_loss
 
 
 def calculate_profit_factor(trades: List[Trade]) -> float:
-    """Gross profit / gross loss (all trades, includes buy-side commissions)."""
+    """Gross profit / gross loss (round-trip SELL trades only)."""
     gross_profit, gross_loss = _gross_profit_loss(trades)
     if gross_loss == 0:
         return float('inf') if gross_profit > 0 else 0.0
@@ -165,11 +166,12 @@ def calculate_downside_deviation(returns: pd.Series) -> float:
 
 
 def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
-    """Sum of gains / absolute value of sum of losses (all trades, includes buy-side commissions)."""
-    if not trades:
+    """Sum of gains / absolute value of sum of losses (round-trip trades only)."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    total_gain = sum(t.pnl for t in trades if t.pnl > 0)
-    total_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
+    total_gain = sum(t.pnl for t in rt if t.pnl > 0)
+    total_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     if total_loss == 0:
         return 0.0
     return total_gain / total_loss
@@ -187,10 +189,11 @@ def calculate_tail_ratio(returns: pd.Series) -> float:
 
 
 def calculate_recovery_factor(trades: List[Trade], max_dd: float) -> float:
-    """Total profit / max drawdown (all trades, includes buy-side commissions)."""
-    if not trades:
+    """Total profit / max drawdown (round-trip trades only)."""
+    rt = _round_trip_trades(trades)
+    if not rt:
         return 0.0
-    total_profit = sum(t.pnl for t in trades)
+    total_profit = sum(t.pnl for t in rt)
     if max_dd == 0:
         return 0.0
     return total_profit / abs(max_dd)

@@ -141,10 +141,9 @@ class WalkForwardEngine:
                 continue
             
             strategy = strategy_factory(best_params)
-            
-            backtester = Backtester(config)
+
             test_result = self._run_single_backtest(
-                backtester, strategy, test_data, initial_cash, config
+                config or {}, strategy, test_data, initial_cash
             )
             
             test_max_dd = test_result.max_drawdown_pct if hasattr(test_result, 'max_drawdown_pct') else 0.0
@@ -257,40 +256,26 @@ class WalkForwardEngine:
 
     def _run_single_backtest(
         self,
-        backtester_or_config,
+        config: Dict[str, Any],
         strategy: Any,
         data: pd.DataFrame,
         initial_cash: float,
-        config: Optional[Dict[str, Any]] = None
     ) -> BacktestResult:
-        """Run a single backtest on given data."""
         from quant.infrastructure.events import EventBus
 
         event_bus = EventBus()
-        if isinstance(backtester_or_config, Backtester):
-            bt = backtester_or_config
-            backtester = Backtester(
-                bt.config,
-                event_bus=event_bus,
-                lot_sizes=bt.lot_sizes or self.lot_sizes,
-                ipo_dates=bt.ipo_dates or self.ipo_dates,
-                portfolio_class=getattr(bt, 'portfolio_class', None),
-                risk_engine_class=getattr(bt, 'risk_engine_class', None),
-                sub_portfolio_class=getattr(bt, 'sub_portfolio_class', None),
-            )
-        else:
-            backtester = Backtester(
-                config or {},
-                event_bus=event_bus,
-                lot_sizes=self.lot_sizes,
-                ipo_dates=self.ipo_dates,
-                portfolio_class=self.portfolio_class,
-                risk_engine_class=self.risk_engine_class,
-                sub_portfolio_class=self.sub_portfolio_class,
-            )
+        backtester = Backtester(
+            config or {},
+            event_bus=event_bus,
+            lot_sizes=self.lot_sizes,
+            ipo_dates=self.ipo_dates,
+            portfolio_class=self.portfolio_class,
+            risk_engine_class=self.risk_engine_class,
+            sub_portfolio_class=self.sub_portfolio_class,
+        )
 
         symbols = data['symbol'].unique().tolist()
-        
+
         result = backtester.run(
             start=data['timestamp'].min(),
             end=data['timestamp'].max(),
@@ -299,7 +284,7 @@ class WalkForwardEngine:
             data_provider=DataFrameProvider(data),
             symbols=symbols
         )
-        
+
         return result
 
 

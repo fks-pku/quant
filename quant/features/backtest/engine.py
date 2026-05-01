@@ -1,9 +1,13 @@
 """Backtest orchestrator — daily loop, T+1 execution, portfolio management."""
 
+from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from typing import TYPE_CHECKING, Dict, List, Any, Optional
 import pandas as pd
+
+if TYPE_CHECKING:
+    from quant.features.backtest.schemas import BacktestBar, DeferredOrder
 
 from quant.domain.ports.event_publisher import EventPublisher
 from quant.features.backtest.entities import (
@@ -95,14 +99,14 @@ class Backtester:
 
     def _execute_order(
         self,
-        order: Dict,
+        order: "DeferredOrder",
         portfolio: Any,
         symbol: str,
-        bar: Dict,
+        bar: "BacktestBar",
         entry_times: Dict[str, datetime],
         entry_prices: Dict[str, float],
         diag: BacktestDiagnostics,
-        prev_bar: Optional[Dict] = None,
+        prev_bar: Optional["BacktestBar"] = None,
     ) -> List:
         return execute_order(
             order=order,
@@ -167,18 +171,10 @@ class Backtester:
         entry_times: Dict[str, datetime] = {}
         entry_prices: Dict[str, float] = {}
         last_prices: Dict[str, float] = {}
-        prev_bars: Dict[str, Dict] = {}
+        prev_bars: "Dict[str, BacktestBar]" = {}
 
-        deferred_orders: List[Dict] = []
-        pending_orders: List[Dict] = []
-
-        for strategy in strategies:
-            sname = getattr(strategy, 'name', strategy.__class__.__name__)
-            pf = portfolio_map[sname]
-            re = risk_map[sname]
-            strategy.context = create_context(pf, re, self.event_bus, data_provider)
-            if hasattr(strategy, "on_start"):
-                strategy.on_start(strategy.context)
+        deferred_orders: "List[DeferredOrder]" = []
+        pending_orders: "List[DeferredOrder]" = []
 
         seen_names = set()
         for strategy in strategies:
@@ -189,6 +185,14 @@ class Backtester:
                     f"to prevent fill cross-talk."
                 )
             seen_names.add(sname)
+
+        for strategy in strategies:
+            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            pf = portfolio_map[sname]
+            re = risk_map[sname]
+            strategy.context = create_context(pf, re, self.event_bus, data_provider)
+            if hasattr(strategy, "on_start"):
+                strategy.on_start(strategy.context)
 
         trading_dates_set = None
         if data_provider and hasattr(data_provider, 'trading_dates'):
@@ -206,7 +210,7 @@ class Backtester:
                     strategy.on_before_trading(strategy.context, current_date.date())
 
             # --- Step 2: Load today's bar data ---
-            prev_close_bars: Dict[str, Dict] = dict(prev_bars)
+            prev_close_bars: "Dict[str, BacktestBar]" = dict(prev_bars)
             today_bars, any_suspended_today = self._load_daily_bars(
                 data_provider, symbols, current_date, last_prices, prev_bars,
             )

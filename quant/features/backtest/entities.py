@@ -87,31 +87,40 @@ class BacktestResultExporter:
 
 class _BacktestOrderManager:
     def __init__(self, risk_engine):
-        self._pending_orders: List[Dict] = []
         self._risk_engine = risk_engine
+        self._buffer: List[Dict] = []
+        self._dedup_set: set = set()
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
-        self._pending_buy_symbols: set = set()
+
+    def _resolve_price(self, price: Optional[float], symbol: str) -> Optional[float]:
+        effective = price if price and price > 0 else self._last_prices.get(symbol, 0)
+        return effective if effective > 0 else None
+
+    def _passes_dedup(self, symbol: str, side: str) -> bool:
+        if side == 'BUY' and symbol in self._dedup_set:
+            return False
+        return True
+
+    def _passes_risk(self, symbol: str, quantity: float, price: float, side: str) -> bool:
+        if self._risk_engine is None:
+            return True
+        value = price * quantity
+        approved, _ = self._risk_engine.check_order(
+            symbol, quantity, price, value, side=side, as_of_date=self._current_date,
+        )
+        if approved:
+            self._risk_engine.record_order(symbol=symbol, order_value=value, as_of_date=self._current_date)
+        return approved
 
     def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
-        if side == 'BUY' and symbol in self._pending_buy_symbols:
+        effective = self._resolve_price(price, symbol)
+        if effective is None:
             return None
-        effective_price = price if price and price > 0 else 0
-        if effective_price == 0:
-            effective_price = self._last_prices.get(symbol, 0)
-        if effective_price <= 0:
+        if not self._passes_dedup(symbol, side):
             return None
-        if self._risk_engine:
-            order_value = effective_price * quantity
-            approved, _ = self._risk_engine.check_order(
-                symbol, quantity, effective_price, order_value, side=side,
-                as_of_date=self._current_date,
-            )
-            if not approved:
-                return None
-            self._risk_engine.record_order(
-                symbol=symbol, order_value=order_value, as_of_date=self._current_date,
-            )
+        if not self._passes_risk(symbol, quantity, effective, side):
+            return None
         order = {
             "symbol": symbol,
             "quantity": quantity,
@@ -119,17 +128,17 @@ class _BacktestOrderManager:
             "order_type": order_type,
             "price": price,
             "strategy": strategy_name,
-            "_risk_check_price": effective_price,
+            "_risk_check_price": effective,
         }
-        self._pending_orders.append(order)
+        self._buffer.append(order)
         if side == 'BUY':
-            self._pending_buy_symbols.add(symbol)
-        return f"bt_{len(self._pending_orders)}"
+            self._dedup_set.add(symbol)
+        return f"bt_{len(self._buffer)}"
 
     def drain_pending(self):
-        orders = list(self._pending_orders)
-        self._pending_orders.clear()
-        self._pending_buy_symbols.clear()
+        orders = list(self._buffer)
+        self._buffer.clear()
+        self._dedup_set.clear()
         return orders
 
 

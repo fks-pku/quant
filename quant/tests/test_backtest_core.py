@@ -320,7 +320,7 @@ class TestPositionModel:
 
     def test_update_from_fill_sell_closes(self):
         pos = Position(symbol="AAPL", quantity=100, avg_cost=150.0)
-        pos.add_buy_lot(date(2025, 1, 2), 100)
+        pos.add_buy_lot(date(2025, 1, 2), 100, 150.0)
         pos.update_from_fill(-100, 160.0)
         assert pos.quantity == 0
         assert pos.realized_pnl == pytest.approx(1000.0, rel=1e-4)

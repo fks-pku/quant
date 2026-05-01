@@ -1,0 +1,654 @@
+# 回测引擎不变量 & 逐日状态测试用例
+
+所有自动化测试必须基于此文档的 CASE 构造。修改引擎后运行对应 CASE 验证。
+
+---
+
+## 通用约定
+
+| 参数 | 值 |
+|------|-----|
+| 信号执行 | **T+1**：当日 Step7 `on_after_trading` 信号，次日 Step4 以 **open** 价执行 |
+| NAV 记录 | Step 9（Step6 持仓市价更新之后，用当日 **close** 计市值） |
+| 日循环 | (1) on_before_trading (2) load bars (3) dividends (4) exec deferred (5) on_data (6) update prices (7) on_after_trading (8) pending->deferred (9) NAV + reset |
+
+### 核心不变式
+
+- I1 `NAV == cash + market_value` (每日恒等)
+- I2 `cash` 仅在成交日/分红日改变
+- I3 `final_nav == initial_cash + sum(trade.pnl) + sum(dividend_net)`
+- I4 `diag.total_gross_pnl == sum(trade.pnl) + diag.total_commission`
+- I5 `equity_curve[t] == NAV of day t`
+
+### 市场参数
+
+| 市场 | 手数 | T+1 | 佣金 | 印花税 | 其他费 |
+|------|------|-----|------|--------|--------|
+| US | 无 | 无 | per_share/percent | SEC+FINRA (SELL) | - |
+| CN | 100 | 有 | 0.025% min 5 | 0.05% (SELL) | transfer+regulator |
+| HK | config | 无 | 0.03% min 3 | 0.1% (SELL) | SFC+clear+trade+sys 0.50 |
+
+### 测试辅助函数
+
+    def _signal_strategy(name, symbol, buy_on, sell_on, qty=100):
+        class S(Strategy):
+            def __init__(self): super().__init__(name); self._day = 0
+            @property
+            def symbols(self): return [symbol]
+            def on_after_trading(self, ctx, td):
+                if self._day in buy_on: self.buy(symbol, qty)
+                if self._day in sell_on: self.sell(symbol, qty)
+                self._day += 1
+        return S()
+
+---
+
+## CASE-1: US 零摩擦
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 0},
+    "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+### 行情
+
+| Date       | Day | Open   | Close  | Volume    |
+| ---------- | --- | ------ | ------ | --------- |
+| 2024-06-03 | D0  | 180.00 | 182.50 | 5,000,000 |
+| 2024-06-04 | D1  | 182.50 | 184.00 | 6,000,000 |
+| 2024-06-05 | D2  | 184.50 | 185.50 | 4,500,000 |
+| 2024-06-06 | D3  | 185.00 | 186.00 | 5,500,000 |
+| 2024-06-07 | D4  | 186.50 | 187.00 | 7,000,000 |
+
+### 信号
+
+```
+D0 after close → BUY  100 AAPL → D1 Step4 执行
+D3 after close → SELL 100 AAPL → D4 Step4 执行
+```
+
+### 逐日状态
+
+```
+Date |    Cash($) | Qty | Close  | MktValue($)|    NAV($) | ΔNAV
+D0   |100,000.000 |   0 |     —  |      0.00  |100,000.00 |    —
+D1   | 81,750.000 | 100 | 184.00 | 18,400.00  |100,150.00 |+150.00
+D2   | 81,750.000 | 100 | 185.50 | 18,550.00  |100,300.00 |+150.00
+D3   | 81,750.000 | 100 | 186.00 | 18,600.00  |100,350.00 | +50.00
+D4   |100,400.000 |   0 |     —  |      0.00  |100,400.00 | +50.00
+```
+
+### 推导
+
+**D1 BUY:**
+
+```
+fill_price = 182.50 × (1+0/10000) = 182.50
+commission = 0
+total_cost = 182.50×100 + 0 = 18,250.00
+cash       = 100,000 - 18,250 = 81,750.00
+avg_cost   = 18,250/100 = 182.50
+lot        = (D1, qty=100, price=182.50)
+Step6: market_value = 100 × 184.00 = 18,400.00
+Step9: NAV = 81,750 + 18,400 = 100,150.00
+```
+
+**D2～D3 持有:**
+
+```
+D2: market_value=100×185.50=18,550 → NAV=81,750+18,550=100,300
+D3: market_value=100×186.00=18,600 → NAV=81,750+18,600=100,350
+cash 不变=81,750
+```
+
+**D4 SELL:**
+
+```
+fill_price   = 186.50 × (1-0) = 186.50
+commission   = 0
+proceeds     = 186.50×100 = 18,650.00
+cash         = 81,750+18,650 = 100,400.00
+realized_pnl = (186.50-182.50)×100 = 400.00
+position     = 0, avg_cost=0
+NAV          = 100,400.00
+```
+
+### 断言
+
+```
+C1-01  nav == cash + market_value  (每日)
+C1-02  cash_d1 == cash_d2 == cash_d3 == 81,750
+C1-03  equity_curve == [100000, 100150, 100300, 100350, 100400]
+C1-04  ΔNAV == Δmarket_value on non-trade days
+C1-05  final_nav == 100000 + t_buy.pnl + t_sell.pnl  → 100,400
+C1-06  total_return == 0.004
+C1-07  trades[0]. BUY: pnl=0, commission=0, entry_price=182.50, qty=100
+C1-08  trades[1]. SELL: pnl=400, realized_pnl=400, entry_price=182.50, exit_price=186.50
+C1-09  diag.fill_count==2, diag.total_commission==0, diag.total_gross_pnl==400
+C1-10  pos_d1.qty=100, avg_cost=182.50, len(lots)=1; pos_d4.qty=0, avg_cost=0, lots=[]
+```
+
+---
+
+## CASE-2: US 含佣金滑点
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 5},
+    "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+### 行情/信号（同 CASE-1）
+
+### 逐日状态
+
+```
+Date |   Cash($)    | Qty | Close  |   NAV($)     | ΔNAV
+D0   | 100,000.0000 |   0 |     —  |100,000.00000 |    —
+D1   |  81,739.87500| 100 | 184.00 |100,139.87500 |+139.875
+D2   |  81,739.87500| 100 | 185.50 |100,289.87500 |+150.000
+D3   |  81,739.87500| 100 | 186.00 |100,339.87500 | +50.000
+D4   | 100,379.01519|   0 |     —  |100,379.01519 | +39.140
+```
+
+### 推导
+
+**D1 BUY:**
+
+```
+fill_price = 182.50 × (1+5/10000)           = 182.59125
+commission = max(100×0.005, 1.00)            = 1.00
+total_cost = 182.59125×100 + 1.00            = 18,260.125
+cash       = 100,000-18,260.125              = 81,739.875
+avg_cost   = 18,260.125/100                  = 182.60125
+lot.price  = 182.59125  (不含佣金)
+```
+
+**D4 SELL:**
+
+```
+fill_price   = 186.50 × (1-5/10000)         = 186.40675
+per_share    = max(100×0.005, 1.00)         = 1.00
+sec_fee      = 186.40675×100×0.0000278      = 0.51821
+finra_taf    = 100×0.000166                  = 0.01660
+total_comm   = 1.0+0.51821+0.01660          = 1.53481
+proceeds     = 186.40675×100 - 1.53481      = 18,639.14019
+cash         = 81,739.875+18,639.14019      = 100,379.01519
+realized_pnl_raw = (186.40675-182.59125)×100 = 381.55
+sell_pnl     = 381.55-1.53481                = 380.01519
+```
+
+### 断言
+
+```
+C2-01  equity_curve ≈ [100000, 100139.875, 100289.875, 100339.875, 100379.01519] (±1e-6)
+C2-02  cash_d1 == cash_d2 == cash_d3
+C2-03  final_nav == initial_cash + trades[0].pnl + trades[1].pnl
+C2-04  trades[0] BUY: pnl=-commission, entry_price=182.59125, cost_breakdown={"commission":1.0}
+C2-05  trades[1] SELL: entry_price=182.59125, exit_price=186.40675
+C2-06  trades[1].pnl == trades[1].realized_pnl - trades[1].commission
+C2-07  trades[1].cost_breakdown has keys: {commission, sec_fee, finra_taf}
+C2-08  all(v >= 0 for v in trades[1].cost_breakdown.values())
+C2-09  diag.total_commission == trades[0].commission + trades[1].commission
+C2-10  diag.total_gross_pnl == sum(t.pnl for t in trades) + diag.total_commission
+```
+
+---
+
+## CASE-3: CN A 股
+
+验证 T+1 结算 + CN 佣金费率。
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 0},
+    "execution": {"commission": {"CN": {"type": "cn_realistic"}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+CN 费率: commission 0.025% min ¥5, stamp_duty 0.05% (SELL), transfer 0.001%, regulator 0.002%
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 50.00 | 51.00 | 10M    |
+| 2024-06-04 | D1  | 52.00 | 53.00 | 12M    |
+| 2024-06-05 | D2  | 53.00 | 52.00 | 8M     |
+| 2024-06-06 | D3  | 52.50 | 54.00 | 10M    |
+| 2024-06-07 | D4  | 55.00 | 56.00 | 15M    |
+
+### 信号
+
+```
+D0 after close → BUY  100 600519 → D1
+D3 after close → SELL 100 600519 → D4
+```
+
+T+1: D1 买入 → D4 卖出, `lot_date(06-04) < fill_date(06-07)` → settled=100 ✓
+
+### 逐日状态
+
+```
+Date |   Cash(¥)    | Qty | Close | MktValue(¥)|   NAV(¥)    | ΔNAV
+D0   |100,000.000000|   0 |    —  |      0.00  |100,000.0000 |    —
+D1   | 94,794.844000| 100 | 53.00 |  5,300.00  |100,094.8440 |+94.844
+D2   | 94,794.844000| 100 | 52.00 |  5,200.00  | 99,994.8440 |-100.00
+D3   | 94,794.844000| 100 | 54.00 |  5,400.00  |100,194.8440 |+200.00
+D4   |100,286.929000|   0 |    —  |      0.00  |100,286.9290 |+92.085
+```
+
+### 推导(关键)
+
+**D1 BUY:** trade_value=5,200, commission=max(1.30,5.00)=5.00, transfer=0.052, regulator=0.104, total_comm=5.156, cash=94,794.844
+
+**D4 SELL:** trade_value=5,500, commission=5.00, stamp=2.75(SELL), total_comm=7.915, cash=100,286.929
+
+### 断言
+
+```
+C3-01  equity_curve == [100000, 100094.844, 99994.844, 100194.844, 100286.929]
+C3-02  cash_d1==cash_d2==cash_d3
+C3-03  final_nav == initial_cash + Σtrade.pnl
+C3-04  trades[0] BUY: pnl==-commission, stamp_duty==0 (buy no stamp)
+C3-05  trades[1] stamp_duty==2.75, cost_breakdown={commission,stamp_duty,transfer_fee,regulator_fee}
+C3-06  trades[1].pnl == trades[1].realized_pnl - trades[1].commission
+C3-07  diag.t1_rejected_sells==0 (3天已结算)
+C3-08  diag.lot_adjusted_trades==0 (100=1手)
+```
+
+---
+
+## CASE-4: HK 港股
+
+验证手数取整 + 印花税仅卖出。
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 0},
+    "execution": {"commission": {"HK": {"type": "hk_realistic"}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+HK 费率: commission 0.03% min HK$3, stamp 0.1%(SELL), SFC levy 0.00278%, clearing 0.002%, trading 0.005%, system HK$0.50
+
+### 行情
+
+| Date       | Day | Open   | Close  | Volume |
+| ---------- | --- | ------ | ------ | ------ |
+| 2024-06-03 | D0  | 300.00 | 305.00 | 3M     |
+| 2024-06-04 | D1  | 310.00 | 315.00 | 4M     |
+| 2024-06-05 | D2  | 312.00 | 308.00 | 2.5M   |
+| 2024-06-06 | D3  | 315.00 | 320.00 | 3.5M   |
+| 2024-06-07 | D4  | 325.00 | 330.00 | 5M     |
+
+### 信号
+
+```
+D0 after close → BUY  100 00700 → D1
+D3 after close → SELL 100 00700 → D4
+```
+
+HK T+0，无 T+1 限制。100 股 = 1 手。
+
+### 断言
+
+```
+C4-01  len(equity_curve) == 5
+C4-02  cash_d1 == cash_d2 == cash_d3
+C4-03  final_nav == initial_cash + Σtrade.pnl
+C4-04  trades[0] BUY: pnl<0, stamp_duty==0
+C4-05  trades[1] SELL: stamp_duty>0, system_fee==0.50
+C4-06  trades[1] cost_breakdown keys: {commission,stamp_duty,sfc_levy,clearing,trading_fee,system_fee}
+C4-07  all(v>=0 for v in trades[1].cost_breakdown.values())
+C4-08  diag.t1_rejected_sells==0 (HK T+0)
+```
+
+---
+
+## CASE-5: SubPortfolio 多策略共享持仓
+
+两个独立策略各自持有/交易**同一标的 AAPL**，互不隔离。
+master 持有所有真实现金，标的持仓为两个子组合之和。
+
+### 架构
+
+    master(真实资金池, initial_cash=100,000)
+      subA(allocated=40,000): 持有AAPL, cash变动通过setter同步master
+      subB(allocated=60,000): 持有AAPL, cash变动通过setter同步master
+
+    NAV       = master.cash + sum(sub.positions.market_value)
+    总持仓(sym) = subA.qty[sym] + subB.qty[sym]
+    加权成本    = (subA.cost_basis + subB.cost_basis) / 总持仓
+    储备        = master.cash - sum(sub.cash)
+    总现金      = 储备 + sum(sub.cash) = master.cash
+
+### 配置(零摩擦US)
+
+    {"backtest":{"slippage_bps":0},
+     "execution":{"commission":{"US":{"type":"percent","percent":0.0,"min_per_order":0.0}}},
+     "risk":{"max_position_pct":1.0,"max_daily_loss_pct":1.0,"max_leverage":999,"max_orders_minute":999}}
+
+### 数据(同CASE-1)
+
+|D|Date|Open|Close|
+|0|06-03|180.00|182.50|
+|1|06-04|182.50|184.00|
+|2|06-05|184.50|185.50|
+|3|06-06|185.00|186.00|
+|4|06-07|186.50|187.00|
+
+### 策略
+
+    StratA(allocated=40,000): D0 BUY 50 AAPL, D3 SELL 30 AAPL
+    StratB(allocated=60,000): D0 BUY 50 AAPL, D3 SELL 20 AAPL
+
+### 逐日状态
+
+|D|master.cash|subA.cash|subA.q|subB.cash|subB.q|总AAPL|MktVal|NAV|
+|D0|100,000.0000|40,000.00|0|60,000.00|0|0|0.00|100,000.0000|
+|D1| 81,750.0000|32,700.00|50|49,050.00|50|100|18,400.00|100,150.0000|
+|D2| 81,750.0000|32,700.00|50|49,050.00|50|100|18,550.00|100,300.0000|
+|D3| 81,750.0000|32,700.00|50|49,050.00|50|100|18,600.00|100,350.0000|
+|D4| 91,075.0000|38,295.00|20|52,780.00|30|50|9,350.00|100,425.0000|
+
+### D1推导
+
+    subA BUY 50: fill=182.50, cost=9,125.00
+      subA.cash: 40,000->32,700 (setter: master += -7,300, master: 100,000->92,700)
+    subB BUY 50: fill=182.50, cost=9,125.00
+      subB.cash: 60,000->49,050 (setter: master += -10,950, master: 92,700->81,750)
+    总持仓=100, mv=100x184=18,400, NAV=81,750+18,400=100,150
+
+### D4推导
+
+    subA SELL 30: fill=186.50, proceeds=5,595.00
+      subA.cash: 32,700->38,295 (master += +5,595 -> 87,345)
+      余20, Step6 mv=20x187=3,740
+    subB SELL 20: fill=186.50, proceeds=3,730.00
+      subB.cash: 49,050->52,780 (master += +3,730 -> 91,075)
+      余30, Step6 mv=30x187=5,610
+    总持仓=50, mv=50x187=9,350
+    加权成本=(20*182.50+30*182.50)/50=182.50
+    NAV=91,075+9,350=100,425
+
+### 断言
+
+    C5-01  equity_curve == [100000, 100150, 100300, 100350, 100425]
+    C5-02  NAV_daily == master.cash + sum(sub.positions.market_value)
+    C5-03  total_qty_per_symbol == sum(sub_qty)
+    C5-04  allocated_sum <= initial_cash (40k+60k=100k)
+    C5-05  sub.cash 变动 = -master.cash 变动 (每笔交易)
+    C5-06  open_positions: 2 entries (stratA 20 + stratB 30 = total 50)
+    C5-07  final_nav == initial_cash + sum(trade.pnl)
+
+---
+
+
+## CASE-6: 多批次 FIFO 卖出
+
+分两次买入，一次全卖出。验证 per-lot Trade 记录。
+
+### 配置(零摩擦 US)
+
+### 行情
+
+| Date | Open   | Close  | Volume |
+| ---- | ------ | ------ | ------ |
+| D0   | 100.00 | 102.00 | 1M     |
+| D1   | 105.00 | 108.00 | 1.2M   |
+| D2   | 110.00 | 112.00 | 1.5M   |
+| D3   | 115.00 | 118.00 | 1.3M   |
+| D4   | 120.00 | 122.00 | 2M     |
+
+### 信号
+
+```
+D0: BUY 40 @ D1 open=105
+D1: BUY 60 @ D2 open=110
+D3: SELL 100 @ D4 open=120  → FIFO: 40×105 + 60×110
+```
+
+### 逐日状态
+
+```
+Date | Cash($) | Qty | Close  | MktValue($)| NAV($)   | Note
+D0   |100,000  |   0 |     —  |       0    |100,000   |
+D1   | 95,800  |  40 | 108.00 |   4,320    |100,120   | buy 40×105
+D2   | 89,200  | 100 | 112.00 |  11,200    |100,400   | buy 60×110
+D3   | 89,200  | 100 | 118.00 |  11,800    |101,000   | hold
+D4   |101,200  |   0 |     —  |       0    |101,200   | sell all
+```
+
+### 断言
+
+```
+C6-01  trades 中 SELL 产生 2 条记录（FIFO 两个 lot）
+C6-02  trades[-2]: qty=40, entry_price=105.00, exit_price=120.00, realized_pnl=600.00
+C6-03  trades[-1]: qty=60, entry_price=110.00, exit_price=120.00, realized_pnl=600.00
+C6-04  trades[-2].entry_time < trades[-1].entry_time  (FIFO 顺序)
+C6-05  sum(sell.realized_pnl) == 1,200.00
+C6-06  pos._lots 在 SELL 后为空
+C6-07  pos.avg_cost == 0 (全平)
+C6-08  final_nav == 101,200.00
+C6-09  diag.fill_count == 3 (2 buy + 1 sell)
+```
+
+## CASE-7: 除权除息
+
+### 7A: US 零摩擦分红(无税)
+
+#### 配置(同CASE-1)
+
+#### 数据
+
+|D|Date|Open|Close|Event|
+|D0|06-03|180.00|182.00|signal BUY|
+|D1|06-04|182.00|184.00|exec BUY|
+|D2|06-05|183.00|183.50|ex-div $1.00|
+|D3|06-06|183.00|185.00|signal SELL|
+|D4|06-07|186.00|187.00|exec SELL|
+
+#### 策略
+
+D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
+
+#### 逐日状态
+
+|D|Cash($)|Qty|Close|MktVal|NAV|dNAV|
+|D0|100,000.000|0|—|0.00|100,000.000|—|
+|D1| 81,800.000|100|184.00|18,400.00|100,200.000|+200|
+|D2| 81,900.000|100|183.50|18,350.00|100,250.000|+50|
+|D3| 81,900.000|100|185.00|18,500.00|100,400.000|+150|
+|D4|100,600.000|0|—|0.00|100,600.000|+200|
+
+#### D2除权推导(Step3在Step6之前)
+
+    payment = $1.00 * 100 = $100.00
+    portfolio.cash += 100.00  =>  81,800 -> 81,900
+    pos.adjust_lots_for_cash_dividend(1.00):
+      lot.price = max(0, 182-1) = 181.00
+      recalc_avg_cost: 181.00
+    Step6: market_value = 100 * 183.50 = 18,350
+    Step9: NAV = 81,900 + 18,350 = 100,250
+
+#### D4推导(cost basis已调整)
+
+    fill=186.00, lot_price=181.00
+    realized = (186-181)*100 = 500.00 (adjust)
+    proceeds = 18,600, cash = 81,900+18,600 = 100,600
+    总回报 = trading(500) + dividend(100) = 600
+
+#### 断言
+
+    C7-01  equity_curve == [100000,100200,100250,100400,100600]
+    C7-02  trades[1].realized_pnl == 500.0 (adjusted basis)
+    C7-03  final_nav == 100000 + div(100) + trading(500)
+
+### 7B: CN 含红利税
+
+#### 配置(同CASE-3)
+
+#### 数据
+
+|D|Date|Open|Close|Event|
+|D0|06-03|50.00|51.00|signal BUY|
+|D1|06-04|52.00|53.00|exec BUY|
+|D2|06-05|53.00|52.80|ex-div CNY 0.50|
+|D3|06-06|53.00|54.00|signal SELL|
+|D4|06-07|55.00|56.00|exec SELL|
+
+#### D2除权推导
+
+    payment = 0.50 * 100 = 50.00
+    holding_days = D2-D1 = 1 day <= 30 -> tax_rate = 20%
+    tax = 0.50 * 100 * 0.20 = 10.00
+    net = 50.00 - 10.00 = 40.00
+    cash = 94,794.844 + 40.00 = 94,834.844
+    lot.price = max(0, 52 - 0.50) = 51.50
+
+#### 断言
+
+    C7B-01  D2 cash增加净额40.00(非50.00)
+    C7B-02  D4 realized_pnl == (55-51.50)*100 = 350.0
+    C7B-03  total_reward = trading(350) + net_div(40) = 390
+
+---
+
+
+## CASE-8: 综合案例
+
+组合所有要素: **SubPortfolio双策略 + US/CN跨市场 + 除权除息 + CN红利税
++ 多批次FIFO + T+1结算 + 佣金**。
+
+### 配置
+
+    US: per_share 0.005 min 1.00, slippage=0
+    CN: cn_realistic, slippage=0
+    SubPortfolio: StratA allocated=50,000, StratB allocated=50,000
+
+### 数据
+
+|D|Date|AAPL O/C|600519 O/C|Event|
+|D0|06-03|180/182|50/51|BUY signals|
+|D1|06-04|182/184|52/53|exec both|
+|D2|06-05|183/183.5|53/52|AAPL ex-div $1.00|
+|D3|06-06|183/185|52.5/54|StratA SELL 40 AAPL signal|
+|D4|06-07|186/187|55/56|exec SELL; StratB BUY 50 AAPL signal|
+|D5|06-10|188/189|56/57|exec BUY; SELL all signals|
+|D6|06-11|190/191|57/58|exec all sells|
+
+### 策略
+
+    StratA (US only):
+      D0: BUY 100 AAPL -> D1 exec
+      D3: SELL 40 AAPL -> D4 exec (FIFO from D1 lot)
+      D5: SELL 60 AAPL -> D6 exec (remaining D1 lot)
+
+    StratB (CN+US):
+      D0: BUY 100 600519 -> D1 exec
+      D4: BUY  50 AAPL   -> D5 exec
+      D5: SELL 100 600519 -> D6 exec (T+1: D1->D6, settled)
+      D5: SELL  50 AAPL   -> D6 exec (FIFO from D5 lot)
+
+### 逐日NAV
+
+|D|master.cash|AAPL qty|600519 qty|NAV|
+|D0|100,000.000|0|0|100,000.000|
+|D1| 76,593.844|100|100|100,293.844|
+|D2| 76,693.844|100|100|100,243.844|
+|D3| 76,693.844|100|100|100,593.844|
+|D4| 84,013.844|60|100|100,833.844|
+|D5| 74,612.844|110|100|101,102.844|
+|D6|101,204.929|0|0|101,204.929|
+
+### 断言
+
+    C8-01  equity_curve 末尾值 101,204.929
+    C8-02  StratA AAPL 通过FIFO 40+60=100平仓
+    C8-03  StratB 600519 T+1通过(t1_rejected_sells==0)
+    C8-04  StratB AAPL 50从D5 lot卖出,无交叉污染
+    C8-05  AAPL分红$100计入cash, cost basis调整影响realized
+    C8-06  CN佣金: SELL stamp>0, BUY stamp=0
+    C8-07  final_nav~=initial_cash+pnl_sum+dividend_net (±1e-2)
+    C8-08  open_positions全为0
+    C8-09  diag.fill_count == 6
+
+---
+
+## CASE-9: Position realized_pnl 与 Trade realized_pnl 一致性（多批次不同成本部分卖出）
+
+### 目的
+
+验证 `position.realized_pnl` 与各 FIFO lot Trade 的 `realized_pnl` 总和一致。
+**两批次不同买入价格 + 部分卖出**：avg_cost 路径会产生偏差，必须用 per-lot FIFO 才能保持一致。
+
+### 前置条件
+
+- US 市场，有佣金（per_share $0.005, min $1）
+- D1 signal → D2 execute: BUY 40@100
+- D2 signal → D3 execute: BUY 60@110
+- D3 signal → D4 execute: SELL 50@130, position 剩 50 股
+- D5: 不操作，让 position 存活
+
+### 行情数据
+
+| 日期 | open | close | volume |
+|------|------|-------|--------|
+| D1 | 100 | 101 | 1M |
+| D2 | 100 | 101 | 1M |
+| D3 | 110 | 111 | 1M |
+| D4 | 130 | 131 | 1M |
+| D5 | 131 | 132 | 1M |
+
+### 推导
+
+SELL 50 股 (FIFO: 全部来自 D2 lot 的 40 股 + D3 lot 的 10 股):
+- Lot D2 (40@100): sub_realized = (130-100)*40 = 1200
+- Lot D3 (10@110): sub_realized = (130-110)*10 = 200
+- `total_realized = 1200 + 200 = 1400`
+- `sum(trade.realized_pnl) = 1400`
+- `position.realized_pnl` 应等于 1400
+- **avg_cost 错误路径**: avg_cost = (4000+6600)/100 = 106, (130-106)*50 = 1200 ≠ 1400
+
+### 断言
+
+```
+C9-01  open_positions 有 1 条（剩余 50 股 AAPL）
+C9-02  sum(sell_trade.realized_pnl) == 1400.0
+C9-03  position.realized_pnl == sum(sell_trade.realized_pnl)  ← 核心不变式 I6
+C9-04  sell_trades 有 2 条（FIFO 跨两个 lot）
+```
+
+### 对应测试: `test_c9_*` in `test_backtest_invariants.py`
+
+---
+
+## CASE索引
+
+|#|市场|核心验证|
+|1|US|NAV=C+M, cash不变, equity匹配|
+|2|US|佣金拆解, SEC+FINRA, realized一致性|
+|3|CN|T+1结算, stamp仅SELL, CN费率全套|
+|4|HK|stamp仅SELL, system_fee=0.50, T+0|
+|5|US|双策略同标的, master汇总, 持仓加权, 储备概念|
+|6|US|FIFO per-lot Trade精确性|
+|7A|US|现金分红, cost basis调整, 经济验证|
+|7B|CN|红利税阶梯, cost basis调整|
+|8|US+CN|跨市场+分红+FIFO+T+1+佣金+双策略综合|
+|9|US|position.realized_pnl == sum(trade.realized_pnl) 部分卖出一致性|
