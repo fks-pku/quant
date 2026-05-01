@@ -17,9 +17,12 @@ __all__ = ["calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
 
 def calculate_sharpe(returns: pd.Series, periods_per_year: int = 252) -> float:
     """Annualized Sharpe ratio."""
-    if returns.empty or returns.std() == 0:
+    if returns.empty:
         return 0.0
-    return np.sqrt(periods_per_year) * returns.mean() / returns.std()
+    std = returns.std()
+    if std == 0 or pd.isna(std):
+        return 0.0
+    return np.sqrt(periods_per_year) * returns.mean() / std
 
 
 def calculate_sortino(returns: pd.Series, periods_per_year: int = 252) -> float:
@@ -30,7 +33,7 @@ def calculate_sortino(returns: pd.Series, periods_per_year: int = 252) -> float:
     downside_sq = np.minimum(returns, 0) ** 2
     downside_dev = np.sqrt(downside_sq.mean())
     if downside_dev == 0:
-        return 0.0
+        return float('inf') if returns.mean() > 0 else 0.0
 
     return np.sqrt(periods_per_year) * returns.mean() / downside_dev
 
@@ -92,12 +95,15 @@ def _gross_profit_loss(trades: List[Trade]) -> tuple:
     return gross_profit, gross_loss
 
 
+MAX_PROFIT_FACTOR = 9999.0
+
+
 def calculate_profit_factor(trades: List[Trade]) -> float:
     """Gross profit / gross loss (round-trip SELL trades only)."""
     gross_profit, gross_loss = _gross_profit_loss(trades)
     if gross_loss == 0:
-        return float('inf') if gross_profit > 0 else 0.0
-    return gross_profit / gross_loss
+        return MAX_PROFIT_FACTOR if gross_profit > 0 else 0.0
+    return min(gross_profit / gross_loss, MAX_PROFIT_FACTOR)
 
 
 def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
@@ -173,7 +179,7 @@ def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
     total_gain = sum(t.pnl for t in rt if t.pnl > 0)
     total_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
     if total_loss == 0:
-        return 0.0
+        return MAX_PROFIT_FACTOR if total_gain > 0 else 0.0
     return total_gain / total_loss
 
 
@@ -356,7 +362,7 @@ def calculate_performance_metrics(
     avg_duration = calculate_avg_trade_duration(trades)
     
     winning_trades = len([t for t in trades if t.pnl > 0 and t.side == "SELL"])
-    losing_trades = len([t for t in trades if t.pnl < 0 and t.side == "SELL"])
+    losing_trades = len([t for t in trades if t.pnl <= 0 and t.side == "SELL"])
     
     rolling_sharpe = calculate_rolling_sharpe(returns)
     ulcer_idx = calculate_ulcer_index(equity_curve)

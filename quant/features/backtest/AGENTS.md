@@ -110,5 +110,12 @@ while current_date ≤ end:
 - 非 SubPortfolio 模式下 `portfolio_map` 的多个 key 指向同一个 master Portfolio，`_reset_daily` 已做 id 去重
 - 重复策略名称会在 `engine.py run()` 开头抛出 `ValueError`，防止 fills 交叉到错误策略
 - `_BacktestOrderManager` 用 `_pending_buy_symbols` 集合拒绝同一天同一策略对同一 symbol 的重复 BUY 订单（日线策略去重）
-- `profit_factor` 在 gross_loss==0（全胜）时返回 `float('inf')` 而非 0.0
+- `profit_factor` 在 gross_loss==0（全胜）时返回 `MAX_PROFIT_FACTOR=9999.0` 而非 `float('inf')`（避免 JSON 序列化失败）
+- `sortino` 在全正收益时返回 `float('inf')`（完美策略不应排在中庸之下）
+- HK 印花税双向收取（BUY+SELL 各 0.1%），使用 `math.ceil()` 向上取整到整数元
+- CN 涨跌停价格计算使用 `_round_half_up()`（四舍五入），不使用 Python `round()`（银行家舍入）
+- `DataFrameProvider.get_bars()` 基于 `_bar_map` 去重索引返回数据，与 `get_bar_for_date()` 一致
+- `process_dividends()` 返回送股记录列表，engine 在 Step ③ 后分发 synthetic fill 给策略以保持 `strategy._positions` 同步
+- `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询
+- Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）
 - `risk_price_deviation_limit` 从 config 读取（键名 `risk_price_deviation_limit`），而非硬编码 0.15

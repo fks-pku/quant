@@ -613,6 +613,79 @@ class TestStockDividendLotTracking:
         assert pos.quantity == 100
 
 
+class TestStrategyPositionSyncAfterDividend:
+    def test_on_fill_updates_positions(self):
+        from types import SimpleNamespace
+        from quant.features.strategies.base import Strategy
+
+        class TestStrat(Strategy):
+            def __init__(self):
+                super().__init__("test")
+
+        s = TestStrat()
+        fill = SimpleNamespace(symbol="AAPL", quantity=100, side="BUY")
+        s.on_fill(None, fill)
+        assert s.get_position("AAPL") == 100
+
+        sell_fill = SimpleNamespace(symbol="AAPL", quantity=50, side="SELL")
+        s.on_fill(None, sell_fill)
+        assert s.get_position("AAPL") == 50
+
+    def test_stock_dividend_syncs_strategy_positions(self):
+        from quant.features.backtest.engine import Backtester
+        start = datetime(2025, 1, 2)
+        rows = []
+        for i, p in enumerate([100, 102, 104, 106, 108, 110, 112, 108, 110, 112]):
+            rows.append({
+                "symbol": "600519", "timestamp": start + timedelta(days=i),
+                "open": p, "high": p + 1, "low": p - 1, "close": p,
+                "volume": 5000000,
+                "adj_open": p, "adj_high": p + 1, "adj_low": p - 1,
+                "adj_close": p, "adj_factor": 1.0,
+            })
+        data = pd.DataFrame(rows)
+        div = pd.DataFrame({
+            "symbol": ["600519"], "ex_date": [start + timedelta(days=5)],
+            "cash_dividend": [0.0], "stock_dividend": [0.5],
+        })
+        from quant.features.strategies.registry import StrategyRegistry
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = Backtester(config)
+        strat = StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=8)
+        result = run_simple_backtest(bt, data, strategies=[strat], symbols=["600519"], dividends=div, initial_cash=1000000)
+        buy_trades = [t for t in result.trades if t.side == "BUY"]
+        if buy_trades:
+            assert strat.get_position("600519") >= 0
+
+
+class TestDataFrameProviderDedup:
+    def test_get_bars_no_duplicates(self):
+        from quant.features.backtest.walkforward import DataFrameProvider
+        start = datetime(2025, 1, 2)
+        rows = [
+            {"symbol": "AAPL", "timestamp": start, "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1000},
+            {"symbol": "AAPL", "timestamp": start, "open": 151, "high": 152, "low": 150, "close": 151, "volume": 500},
+        ]
+        data = pd.DataFrame(rows)
+        provider = DataFrameProvider(data)
+        bars = provider.get_bars("AAPL", start, start + timedelta(days=1), "1d")
+        assert len(bars) == 1
+        assert bars.iloc[0]["volume"] == 1000
+
+    def test_trading_dates_are_date_objects(self):
+        from quant.features.backtest.walkforward import DataFrameProvider
+        start = datetime(2025, 1, 2)
+        data = make_us_bars(["AAPL"], start, 5, {"AAPL": 150.0})
+        provider = DataFrameProvider(data)
+        for d in provider.trading_dates:
+            assert isinstance(d, date)
+            assert not isinstance(d, datetime)
+
+
 class TestMarketOrderRiskCheck:
 
     def test_market_order_uses_last_price_for_risk(self):

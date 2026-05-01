@@ -327,11 +327,11 @@ class TestCase4HKMarket:
         pnl_sum = sum(t.pnl for t in case4_result.trades)
         assert case4_result.final_nav == pytest.approx(100_000 + pnl_sum, rel=1e-2)
 
-    def test_c4_04_buy_no_stamp(self, case4_result):
+    def test_c4_04_buy_has_stamp(self, case4_result):
         buy = [t for t in case4_result.trades if t.side == "BUY"][0]
         assert buy.pnl < 0
         if buy.cost_breakdown:
-            assert buy.cost_breakdown.get("stamp_duty", 0) == 0
+            assert buy.cost_breakdown.get("stamp_duty", 0) > 0
 
     def test_c4_05_sell_has_stamp_and_system_fee(self, case4_result):
         sell = [t for t in case4_result.trades if t.side == "SELL"][0]

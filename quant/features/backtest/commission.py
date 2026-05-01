@@ -1,5 +1,6 @@
 """Commission calculation per market — CN/HK/US fee breakdowns."""
 
+import math
 from typing import Dict, Any
 
 from quant.features.backtest.market_rules import get_market
@@ -77,7 +78,8 @@ def _calculate_hk_commission(trade_value: float, side: str) -> Dict[str, float]:
     sfc_levy = trade_value * HK_SFC_LEVY_RATE
     clearing = trade_value * HK_CLEARING_RATE
     trading_fee = trade_value * HK_TRADING_FEE_RATE
-    stamp_duty = trade_value * HK_STAMP_DUTY_RATE if side == 'SELL' else 0.0
+    raw_stamp = trade_value * HK_STAMP_DUTY_RATE
+    stamp_duty = math.ceil(raw_stamp) if raw_stamp > 0 else 0.0
 
     return {
         "commission": commission,

@@ -1,5 +1,6 @@
 """Market-specific rules registry — symbol classification, lot sizes, price limits, settlement."""
 
+import math
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +24,11 @@ def get_lot_size(symbol: str, lot_sizes: Dict[str, int]) -> int:
     return ls if ls is not None and ls > 0 else DEFAULT_LOT_SIZE
 
 
+def _round_half_up(value: float, decimals: int = 2) -> float:
+    multiplier = 10 ** decimals
+    return math.floor(value * multiplier + 0.5) / multiplier
+
+
 def is_price_at_limit(
     symbol: str,
     open_price: float,
@@ -41,9 +47,9 @@ def is_price_at_limit(
         if calendar_days_since_ipo <= IPO_NO_LIMIT_CALENDAR_DAYS:
             return False
     limit_pct = cn_price_limit_pct(symbol)
-    upper = round(prev_close * (1 + limit_pct), 2)
-    lower = round(prev_close * (1 - limit_pct), 2)
-    open_rounded = round(open_price, 2)
+    upper = _round_half_up(prev_close * (1 + limit_pct))
+    lower = _round_half_up(prev_close * (1 - limit_pct))
+    open_rounded = _round_half_up(open_price)
     return open_rounded >= upper or open_rounded <= lower
 
 

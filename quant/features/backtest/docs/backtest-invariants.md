@@ -26,7 +26,7 @@
 |------|------|-----|------|--------|--------|
 | US | 无 | 无 | per_share/percent | SEC+FINRA (SELL) | - |
 | CN | 100 | 有 | 0.025% min 5 | 0.05% (SELL) | transfer+regulator |
-| HK | config | 无 | 0.03% min 3 | 0.1% (SELL) | SFC+clear+trade+sys 0.50 |
+| HK | config | 无 | 0.03% min 3 | 0.1% (BUY+SELL, ceil) | SFC+clear+trade+sys 0.50 |
 
 ### 测试辅助函数
 
@@ -273,7 +273,7 @@ C3-08  diag.lot_adjusted_trades==0 (100=1手)
 
 ## CASE-4: HK 港股
 
-验证手数取整 + 印花税仅卖出。
+验证手数取整 + 印花税双向收取。
 
 ### 配置
 
@@ -285,7 +285,7 @@ C3-08  diag.lot_adjusted_trades==0 (100=1手)
 }
 ```
 
-HK 费率: commission 0.03% min HK$3, stamp 0.1%(SELL), SFC levy 0.00278%, clearing 0.002%, trading 0.005%, system HK$0.50
+HK 费率: commission 0.03% min HK$3, stamp 0.1%(BUY+SELL, ceil to integer), SFC levy 0.00278%, clearing 0.002%, trading 0.005%, system HK$0.50
 
 ### 行情
 
@@ -312,7 +312,7 @@ HK T+0，无 T+1 限制。100 股 = 1 手。
 C4-01  len(equity_curve) == 5
 C4-02  cash_d1 == cash_d2 == cash_d3
 C4-03  final_nav == initial_cash + Σtrade.pnl
-C4-04  trades[0] BUY: pnl<0, stamp_duty==0
+C4-04  trades[0] BUY: pnl<0, stamp_duty>0 (bidirectional)
 C4-05  trades[1] SELL: stamp_duty>0, system_fee==0.50
 C4-06  trades[1] cost_breakdown keys: {commission,stamp_duty,sfc_levy,clearing,trading_fee,system_fee}
 C4-07  all(v>=0 for v in trades[1].cost_breakdown.values())

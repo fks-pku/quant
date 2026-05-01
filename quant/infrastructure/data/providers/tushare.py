@@ -31,7 +31,7 @@ except ImportError:
     TUSHARE_AVAILABLE = False
 
 _CN_INDEX_CODES = {
-    "000001", "000016", "000300", "000905",
+    "000016", "000300", "000905",
     "399001", "399006", "399673",
 }
 

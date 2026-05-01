@@ -19,9 +19,10 @@ def process_dividends(
     current_date: datetime,
     last_prices: Dict[str, float],
     entry_times: Dict[str, datetime],
-) -> None:
+) -> List[Dict[str, Any]]:
+    stock_dividends: List[Dict[str, Any]] = []
     if not data_provider or not hasattr(data_provider, 'get_dividend_for_date'):
-        return
+        return stock_dividends
     for symbol in symbols:
         pos = portfolio.get_position(symbol)
         if not pos or pos.quantity <= 0:
@@ -41,8 +42,11 @@ def process_dividends(
             pos.adjust_lots_for_cash_dividend(cash_div)
             logger.info("%s ex-div: cash %.4f/share x %d = %.2f, tax=%.2f", symbol, cash_div, pos.quantity, payment, tax)
         if stock_div > 0:
+            additional_shares = pos.quantity * stock_div
             pos.adjust_lots_for_stock_dividend(stock_div)
+            stock_dividends.append({'symbol': symbol, 'ratio': stock_div, 'additional_shares': additional_shares})
             logger.info("%s ex-div: stock %.4f/share adjusted lots, new qty=%.0f, avg_cost=%.4f", symbol, stock_div, pos.quantity, pos.avg_cost)
+    return stock_dividends
 
 
 def calculate_cn_dividend_tax(pos: Any, cash_div: float, current_date: Any) -> float:

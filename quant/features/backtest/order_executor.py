@@ -78,7 +78,7 @@ def execute_order(
     bar_volume = bar.get('volume', 0)
     if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
         max_qty = int(bar_volume * VOLUME_PARTICIPATION_LIMIT)
-        if order['side'] == 'BUY' and market in ("HK", "CN"):
+        if market in ("HK", "CN"):
             max_qty = (max_qty // lot_size) * lot_size
         if max_qty <= 0:
             return []
@@ -146,8 +146,13 @@ def _execute_buy(
     diag.total_commission += commission
 
     strategy_key = order.get('strategy')
-    entry_times.setdefault((strategy_key, symbol), fill_ts)
-    entry_prices.setdefault((strategy_key, symbol), fill_price)
+    pos_before = portfolio.get_position(symbol)
+    if pos_before is None or pos_before.quantity == 0:
+        entry_times[(strategy_key, symbol)] = fill_ts
+        entry_prices[(strategy_key, symbol)] = fill_price
+    else:
+        entry_times.setdefault((strategy_key, symbol), fill_ts)
+        entry_prices.setdefault((strategy_key, symbol), fill_price)
 
     fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
     portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)

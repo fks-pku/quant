@@ -1,5 +1,7 @@
 """Unit tests for commission module."""
 
+import math
+
 import pytest
 
 from quant.features.backtest.commission import (
@@ -67,9 +69,10 @@ class TestHKCommission:
         breakdown = _calculate_hk_commission(100, "BUY")
         assert breakdown["commission"] == HK_MIN_COMMISSION
 
-    def test_buy_no_stamp_duty(self):
+    def test_buy_has_stamp_duty(self):
         breakdown = _calculate_hk_commission(100000, "BUY")
-        assert breakdown["stamp_duty"] == 0.0
+        expected = math.ceil(100000 * HK_STAMP_DUTY_RATE)
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
 
     def test_sell_stamp_duty(self):
         breakdown = _calculate_hk_commission(100000, "SELL")

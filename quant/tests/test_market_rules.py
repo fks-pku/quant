@@ -201,3 +201,14 @@ class TestEarliestLotTime:
     def test_no_lots(self):
         pos = Position(symbol="AAPL")
         assert get_earliest_lot_time(pos) is None
+
+
+class TestRoundHalfUp:
+    def test_cn_half_up_not_bankers(self):
+        prev_close = 10.05
+        assert is_price_at_limit("600519", round(prev_close * 1.10, 2), prev_close) is True
+
+    def test_cn_exact_limit_rounded_up(self):
+        prev_close = 33.33
+        upper = prev_close * 1.10
+        assert is_price_at_limit("600519", upper, prev_close) is True

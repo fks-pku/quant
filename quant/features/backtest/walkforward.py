@@ -186,7 +186,7 @@ class WalkForwardEngine:
         
         avg_train = float(np.mean(train_sharpes)) if train_sharpes else 0.0
         avg_test = float(np.mean(test_sharpes)) if test_sharpes else 0.0
-        test_std = float(np.std(test_sharpes)) if test_sharpes else 0.0
+        test_std = float(np.std(test_sharpes, ddof=1)) if len(test_sharpes) > 1 else 0.0
         
         if avg_train > 0:
             sharpe_degradation = max(0.0, 1.0 - (avg_test / avg_train))
@@ -328,7 +328,7 @@ class DataFrameProvider:
         dup_count = len(records) - len(buf)
         self._bar_map = buf
         for ts in timestamps:
-            dt = datetime(ts.year, ts.month, ts.day) if hasattr(ts, 'year') else ts
+            dt = ts.date() if hasattr(ts, 'date') else ts
             self._trading_dates.add(dt)
         if dup_count > 0:
             import logging
@@ -356,11 +356,17 @@ class DataFrameProvider:
         return self._trading_dates
 
     def get_bars(self, symbol: str, start: datetime, end: datetime, timeframe: str) -> pd.DataFrame:
-        return self.data[
-            (self.data['symbol'] == symbol) &
-            (self.data['timestamp'] >= start) &
-            (self.data['timestamp'] < end)
-        ]
+        start_key = start.date() if hasattr(start, 'date') else start
+        end_key = end.date() if hasattr(end, 'date') else end
+        rows = []
+        for d in sorted(set(k[1] for k in self._bar_map if k[0] == symbol)):
+            if start_key <= d < end_key:
+                rec = self._bar_map.get((symbol, d))
+                if rec is not None:
+                    rows.append(rec)
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows)
 
     def get_bar_for_date(self, symbol: str, date) -> Optional[Dict]:
         """O(1) lookup for a single bar by symbol + date."""

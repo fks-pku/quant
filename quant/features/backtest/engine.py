@@ -3,6 +3,7 @@
 from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Dict, List, Any, Optional
 import pandas as pd
 
@@ -200,9 +201,11 @@ class Backtester:
 
         current_date = start
         while current_date <= end:
-            if trading_dates_set and datetime(current_date.year, current_date.month, current_date.day) not in trading_dates_set:
-                current_date += timedelta(days=1)
-                continue
+            if trading_dates_set is not None:
+                lookup_key = current_date.date() if hasattr(current_date, 'date') else current_date
+                if lookup_key not in trading_dates_set:
+                    current_date += timedelta(days=1)
+                    continue
 
             # --- Step 1: on_before_trading ---
             for strategy in strategies:
@@ -218,11 +221,25 @@ class Backtester:
                 diag.suspended_days += 1
 
             # --- Step 3: Process dividends ---
+            all_stock_divs: List[Dict[str, Any]] = []
             if use_subs:
                 for pf in portfolio_map.values():
-                    process_dividends(data_provider, pf, symbols, current_date, last_prices, entry_times)
+                    divs = process_dividends(data_provider, pf, symbols, current_date, last_prices, entry_times)
+                    all_stock_divs.extend(divs)
             else:
-                process_dividends(data_provider, primary_portfolio, symbols, current_date, last_prices, entry_times)
+                divs = process_dividends(data_provider, primary_portfolio, symbols, current_date, last_prices, entry_times)
+                all_stock_divs.extend(divs)
+
+            for div_info in all_stock_divs:
+                sym = div_info['symbol']
+                for strategy in strategies:
+                    if hasattr(strategy, 'on_fill'):
+                        current_pos = strategy.get_position(sym)
+                        if current_pos > 0:
+                            additional = current_pos * div_info['ratio']
+                            strategy.on_fill(strategy.context, SimpleNamespace(
+                                symbol=sym, quantity=additional, side="BUY"
+                            ))
 
             # --- Step 4: Execute deferred orders from T-1 ---
             for order in deferred_orders:
