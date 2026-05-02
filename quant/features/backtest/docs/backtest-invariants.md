@@ -639,6 +639,74 @@ C9-04  sell_trades 有 2 条（FIFO 跨两个 lot）
 
 ---
 
+## CASE-10: 复权价格隔离 — 信号用后复权，下单量用真实价
+
+### 目的
+
+验证 **策略技术指标计算用后复权价 (`_adj`)**，**下单量计算用真实收盘价 (`_price`)**。
+CN 市场 `adj_close ≈ close × adj_factor`（adj_factor 可达 100+），若误用后复权价算下单量会导致手数
+静默丢弃。
+
+**真实 Bug 回归**: dual_ma_crossover 用 `closes[-1]`（= `_adj(bar, "close")` = 后复权 ~1700）算下单量 →
+`qty=55 < 100 lot` → 39 次金叉全部静默丢弃，`fill_count=0, discarded_orders=40`。
+
+### 前置条件
+
+- CN 市场，初始资金 ¥100,000
+- `adj_factor = 118.0` 模拟 CN 累积复权因子
+- `close ≈ 12`，`adj_close ≈ 1416`（close × adj_factor）
+
+### 行情数据
+
+| 日期 | open | close | adj_close | adj_factor | volume |
+|------|------|-------|-----------|------------|--------|
+| D0-D20 | ~11.88 | ~11.88 | ~1402 | 118.0 | 10M | (21 天积累到信号检查窗口)
+| D21 | 11.85 | 11.88 | 1401.84 | 118.0 | 10M | signal: BUY |
+
+### 策略
+
+```
+D21 on_after_trading:
+  # 信号计算 — 用 _adj() (后复权)
+  closes = [_adj(b, "close") for b in bars]  # ≈ [1402, 1401, ...]
+
+  # 下单量 — 用 _price() (真实价)
+  price = _price(bars[-1])                     # ≈ 11.88
+  qty   = int(nav * 0.95 / price)            # = 100000 * 0.95 / 11.88 ≈ 7996
+
+  self.buy("000001", qty)
+
+D22 Step4: execute_order()
+  lot_qty = (7996 // 100) * 100 = 7900 ≥ 100 → ✅ 执行
+```
+
+### 反例（bug 版本）
+
+```
+# 错误：用 _adj() 算下单量
+price = _adj(bars[-1], "close")               # = 1401.84 (后复权!)
+qty   = int(nav * 0.95 / 1401.84)            # = 100000 * 0.95 / 1401.84 ≈ 67
+
+D22 execute_order():
+  lot_qty = (67 // 100) * 100 = 0 < 100 → return None → 静默丢弃 ❌
+```
+
+### 断言
+
+```
+C10-01  diag.discarded_orders == 0   (不应有任何丢弃)
+C10-02  diag.fill_count >= 1         (至少一次成交)
+C10-03  len([t for t in trades if t.side == "BUY"]) >= 1
+C10-04  _price(bar) == close 而非 adj_close
+```
+
+### 对应测试
+
+- `test_s2b_*` in `test_strategies_invariants.py` — `_price()` 单元测试
+- `test_backward_adjusted_price_quantity_uses_real_close` in `test_cn_market.py` — CN 后复权集成回归测试
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -652,3 +720,4 @@ C9-04  sell_trades 有 2 条（FIFO 跨两个 lot）
 |7B|CN|红利税阶梯, cost basis调整|
 |8|US+CN|跨市场+分红+FIFO+T+1+佣金+双策略综合|
 |9|US|position.realized_pnl == sum(trade.realized_pnl) 部分卖出一致性|
+|10|CN|策略 _adj(复权) vs _price(真实价) 隔离, 防止下单量静默丢弃|

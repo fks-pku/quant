@@ -56,6 +56,7 @@ class WalkForwardEngine:
         portfolio_class=None,
         risk_engine_class=None,
         sub_portfolio_class=None,
+        event_bus=None,
     ):
         self.train_window_days = train_window_days
         self.test_window_days = test_window_days
@@ -67,6 +68,17 @@ class WalkForwardEngine:
         self.portfolio_class = portfolio_class
         self.risk_engine_class = risk_engine_class
         self.sub_portfolio_class = sub_portfolio_class
+        self._event_bus = event_bus
+
+        if self.portfolio_class is None:
+            from quant.features.trading.portfolio import Portfolio
+            self.portfolio_class = Portfolio
+        if self.risk_engine_class is None:
+            from quant.features.trading.risk import RiskEngine
+            self.risk_engine_class = RiskEngine
+        if self.sub_portfolio_class is None:
+            from quant.features.trading.sub_portfolio import SubPortfolio
+            self.sub_portfolio_class = SubPortfolio
 
     def run(
         self,
@@ -261,9 +273,10 @@ class WalkForwardEngine:
         data: pd.DataFrame,
         initial_cash: float,
     ) -> BacktestResult:
-        from quant.infrastructure.events import EventBus
-
-        event_bus = EventBus()
+        event_bus = self._event_bus
+        if event_bus is None:
+            from quant.infrastructure.events import EventBus
+            event_bus = EventBus()
         backtester = Backtester(
             config or {},
             event_bus=event_bus,

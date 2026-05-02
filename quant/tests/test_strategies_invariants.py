@@ -43,6 +43,8 @@ class TestCase1RegistryCRUD:
 # ---------------------------------------------------------------------------
 
 class TestCase2AdjHelper:
+    """_adj() is for signals/indicators — returns backward-adjusted price as-is."""
+
     def test_s2_01_prefers_adj_close(self):
         bar = {"close": 100.0, "adj_close": 105.0}
         assert Strategy._adj(bar, "close") == pytest.approx(105.0)
@@ -58,6 +60,40 @@ class TestCase2AdjHelper:
     def test_s2_04_none_fallback(self):
         bar = {"close": 100.0, "adj_close": None}
         assert Strategy._adj(bar, "close") == pytest.approx(100.0)
+
+    def test_s2_05_cn_backward_adjusted_preserved_for_signals(self):
+        """CN adj_close = close * adj_factor. _adj keeps it for MA continuity."""
+        bar = {"close": 10.0, "adj_close": 1160.0, "adj_factor": 116.0}
+        assert Strategy._adj(bar, "close") == pytest.approx(1160.0)
+
+
+# ---------------------------------------------------------------------------
+# CASE-2b: _price helper — real market price for quantity/order sizing
+# ---------------------------------------------------------------------------
+
+class TestCase2bPriceHelper:
+    """_price() is for order sizing — returns actual market close."""
+
+    def test_s2b_01_returns_close(self):
+        bar = {"close": 100.0, "adj_close": 105.0}
+        assert Strategy._price(bar) == pytest.approx(100.0)
+
+    def test_s2b_02_cn_real_price(self):
+        """Even with high adj_close, _price returns actual market price."""
+        bar = {"close": 10.0, "adj_close": 1160.0, "adj_factor": 116.0}
+        assert Strategy._price(bar) == pytest.approx(10.0)
+
+    def test_s2b_03_zero_close(self):
+        bar = {"close": 0.0}
+        assert Strategy._price(bar) == pytest.approx(0.0)
+
+    def test_s2b_04_missing_close(self):
+        bar = {}
+        assert Strategy._price(bar) == pytest.approx(0.0)
+
+    def test_s2b_05_object_bar(self):
+        bar = type("Bar", (), {"close": 55.5, "adj_close": 999.0})()
+        assert Strategy._price(bar) == pytest.approx(55.5)
 
 
 # ---------------------------------------------------------------------------

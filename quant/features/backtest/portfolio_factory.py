@@ -16,12 +16,11 @@ def create_portfolio_contexts(
     risk_engine_class: Optional[Type] = None,
     sub_portfolio_class: Optional[Type] = None,
 ) -> tuple:
-    if portfolio_class is None:
-        from quant.features.trading.portfolio import Portfolio as portfolio_class
-    if risk_engine_class is None:
-        from quant.features.trading.risk import RiskEngine as risk_engine_class
-    if sub_portfolio_class is None:
-        from quant.features.trading.sub_portfolio import SubPortfolio as sub_portfolio_class
+    if portfolio_class is None or risk_engine_class is None or sub_portfolio_class is None:
+        raise ValueError(
+            "portfolio_class, risk_engine_class, and sub_portfolio_class are required. "
+            "Backtester and WalkForwardEngine provide defaults from quant.features.trading."
+        )
 
     master = portfolio_class(initial_cash=initial_cash, currency=currency)
     use_subs = strategy_allocations is not None and len(strategies) > 1

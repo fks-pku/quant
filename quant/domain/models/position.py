@@ -68,7 +68,7 @@ class Position:
         else:
             self._lots[buy_date] = LotEntry(qty, price)
 
-    def remove_sell_lots(self, sell_qty: float) -> List[Tuple[date, float, float]]:
+    def remove_sell_lots(self, sell_qty: float, fill_price: float = None) -> List[Tuple[date, float, float]]:
         consumed: List[Tuple[date, float, float]] = []
         remaining = sell_qty
         sorted_dates = sorted(self._lots.keys())
@@ -78,6 +78,12 @@ class Position:
             lot = self._lots[d]
             take = min(lot.qty, remaining)
             consumed.append((d, take, lot.price))
+            if fill_price is not None:
+                sub_pnl = (fill_price - lot.price) * take
+                if sub_pnl > 1e-10:
+                    self._win_count += 1
+                elif sub_pnl < -1e-10:
+                    self._loss_count += 1
             new_qty = lot.qty - take
             if new_qty < 1e-10:
                 del self._lots[d]

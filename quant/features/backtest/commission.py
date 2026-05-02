@@ -26,6 +26,16 @@ US_FINRA_TAF_PER_SHARE = 0.000166
 VOLUME_PARTICIPATION_LIMIT = 0.05
 
 
+def _get_market_config(commission_config: Any, market: str) -> Any:
+    if commission_config is None:
+        return None
+    if hasattr(commission_config, market):
+        return getattr(commission_config, market)
+    if isinstance(commission_config, dict):
+        return commission_config.get(market)
+    return None
+
+
 def calculate_commission(
     symbol: str,
     price: float,
@@ -39,9 +49,9 @@ def calculate_commission(
     if market == "US":
         return _calculate_us_commission(quantity, trade_value, side, commission_config)
     elif market == "CN":
-        return _calculate_cn_commission(trade_value, side)
+        return _calculate_cn_commission(trade_value, side, commission_config)
     else:
-        return _calculate_hk_commission(trade_value, side)
+        return _calculate_hk_commission(trade_value, side, commission_config)
 
 
 def _calculate_us_commission(quantity: float, trade_value: float, side: str, commission_config: Any) -> Dict[str, float]:
@@ -60,8 +70,12 @@ def _calculate_us_commission(quantity: float, trade_value: float, side: str, com
     return result
 
 
-def _calculate_cn_commission(trade_value: float, side: str) -> Dict[str, float]:
-    commission = max(trade_value * CN_COMMISSION_RATE, CN_MIN_COMMISSION)
+def _calculate_cn_commission(trade_value: float, side: str, commission_config: Any = None) -> Dict[str, float]:
+    cfg = _get_market_config(commission_config, "CN")
+    if cfg and cfg.get("type") == "percent":
+        commission = max(trade_value * cfg.get("percent", CN_COMMISSION_RATE), cfg.get("min_per_order", CN_MIN_COMMISSION))
+    else:
+        commission = max(trade_value * CN_COMMISSION_RATE, CN_MIN_COMMISSION)
     stamp_duty = trade_value * CN_STAMP_DUTY_RATE if side == 'SELL' else 0.0
     transfer_fee = trade_value * CN_TRANSFER_FEE_RATE
     regulator_fee = trade_value * CN_REGULATOR_FEE_RATE
@@ -73,8 +87,12 @@ def _calculate_cn_commission(trade_value: float, side: str) -> Dict[str, float]:
     }
 
 
-def _calculate_hk_commission(trade_value: float, side: str) -> Dict[str, float]:
-    commission = max(trade_value * HK_COMMISSION_RATE, HK_MIN_COMMISSION)
+def _calculate_hk_commission(trade_value: float, side: str, commission_config: Any = None) -> Dict[str, float]:
+    cfg = _get_market_config(commission_config, "HK")
+    if cfg and cfg.get("type") == "percent":
+        commission = max(trade_value * cfg.get("percent", HK_COMMISSION_RATE), cfg.get("min_per_order", HK_MIN_COMMISSION))
+    else:
+        commission = max(trade_value * HK_COMMISSION_RATE, HK_MIN_COMMISSION)
     sfc_levy = trade_value * HK_SFC_LEVY_RATE
     clearing = trade_value * HK_CLEARING_RATE
     trading_fee = trade_value * HK_TRADING_FEE_RATE

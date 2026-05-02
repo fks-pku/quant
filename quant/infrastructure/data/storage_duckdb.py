@@ -246,7 +246,8 @@ class DuckDBStorage(Storage):
             params.append(end)
         with self._lock:
             result = self.conn.execute(query, params)
-            return result.fetchone()[0] if result.fetchone() else 0
+            row = result.fetchone()
+            return row[0] if row else 0
 
     def add_column(self, table_name: str, column_name: str, column_type: str = "DOUBLE", default: str = "NULL") -> None:
         self._ensure_table(table_name)

@@ -106,7 +106,7 @@ class Portfolio:
                         pos.add_buy_lot(trade_date, quantity, effective_lot_price)
                 else:
                     pos.quantity += quantity
-                    pos.remove_sell_lots(abs(quantity))
+                    pos.remove_sell_lots(abs(quantity), fill_price=price)
                     if realized_pnl is not None:
                         pos.realized_pnl += realized_pnl
                     if abs(pos.quantity) < 1e-10:

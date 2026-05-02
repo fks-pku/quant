@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from quant.domain.models.bar import Bar
@@ -77,19 +78,19 @@ class Strategy(ABC):
             return self._context.symbols
         return []
 
-    def on_start(self) -> None:
+    def on_start(self, context: "StrategyContext" = None) -> None:
         pass
 
-    def on_stop(self) -> None:
+    def on_stop(self, context: "StrategyContext" = None) -> None:
         pass
 
-    def on_before_trading(self) -> None:
+    def on_before_trading(self, context: "StrategyContext" = None, trading_date: date = None) -> None:
         pass
 
-    def on_after_trading(self) -> None:
+    def on_after_trading(self, context: "StrategyContext" = None, trading_date: date = None) -> None:
         pass
 
-    def on_fill(self, order: Order) -> None:
+    def on_fill(self, context: "StrategyContext" = None, fill: Any = None) -> None:
         pass
 
     def on_order_rejected(self, order: Order) -> None:

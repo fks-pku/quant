@@ -2,6 +2,7 @@
 from datetime import datetime, date, timedelta
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from quant.tests.conftest import (
@@ -11,6 +12,7 @@ from quant.tests.conftest import (
 )
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.strategies.base import Strategy
 from quant.features.strategies.daily_return_anomaly.strategy import DailyReturnAnomaly
 from quant.features.strategies.regime_filtered_momentum.strategy import RegimeFilteredMomentum
 
@@ -272,3 +274,98 @@ class TestCNEndToEnd:
             symbols=["600519"],
         )
         assert len([t for t in result.trades if t.side == "BUY"]) >= 1
+
+    def test_backward_adjusted_price_quantity_uses_real_close(self):
+        """CN adj_close ≈ close * adj_factor (post-复权). Strategy MUST use real
+        close for quantity calc, not adj_close, or lot rounding kills the order.
+
+        Regression test for: dual_ma_crossover 000001 zero-trade bug where
+        adj_close ≈ 1700, qty = int(nav*0.95/1700) = 55 < 100 lot → silently dropped.
+        """
+        np.random.seed(777)
+        symbols = ["000001"]
+        n_days = 60
+
+        # Real prices in normal market range
+        base_price = 12.0
+        adj_factor = 118.0  # Simulate CN cumulative adjustment factor
+
+        rows = []
+        current = datetime(2024, 1, 2)
+        price = base_price
+        for i in range(n_days):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            chg = np.random.randn() * 0.005
+            price = max(1.0, price * (1 + chg))
+            adj_price = round(price * adj_factor, 4)
+            rows.append({
+                "timestamp": current,
+                "symbol": "000001",
+                "open": round(price * 0.999, 4),
+                "high": round(price * 1.02, 4),
+                "low": round(price * 0.98, 4),
+                "close": round(price, 4),
+                "volume": 10000000,
+                "adj_open": round(price * 0.999 * adj_factor, 4),
+                "adj_high": round(price * 1.02 * adj_factor, 4),
+                "adj_low": round(price * 0.98 * adj_factor, 4),
+                "adj_close": adj_price,
+                "adj_factor": adj_factor,
+            })
+            current += timedelta(days=1)
+
+        data = pd.DataFrame(rows)
+        provider = DataFrameProvider(data)
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"CN": {"type": "cn_realistic"}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 10.0},
+        }
+        bt = make_backtester(config)
+
+        # Strategy that uses _adj (backward-adjusted) for signals
+        # but _price (real close) for quantity — the invariant
+        class AdjAwareTestStrategy:
+            name = "AdjAwareTest"
+            context = None
+            _positions = {}
+            _bars = []
+            _signalled = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_data(self, ctx, data):
+                self._bars.append(data)
+
+            def on_after_trading(self, ctx, td):
+                if self._signalled or len(self._bars) < 21:
+                    return
+                self._signalled = True
+                price = Strategy._price(self._bars[-1])
+                nav = ctx.portfolio.nav
+                qty = int(nav * 0.95 / price)
+                Strategy.buy(self, "000001", qty)
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[AdjAwareTestStrategy()],
+            initial_cash=100000,
+            data_provider=provider,
+            symbols=["000001"],
+        )
+
+        buys = [t for t in result.trades if t.side == "BUY"]
+        assert result.diagnostics.discarded_orders == 0, \
+            f"Expected 0 discarded, got {result.diagnostics.discarded_orders} — adj_close ≠ real_price bug?"
+        assert len(buys) >= 1, \
+            f"Expected ≥1 BUY fill, got {len(buys)} — lot rounding may have killed order (adj_close vs close)"

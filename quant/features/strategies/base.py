@@ -80,6 +80,7 @@ class Strategy(ABC):
 
     @staticmethod
     def _adj(bar, field: str = "close", default: float = 0.0) -> float:
+        """返回后复权价格，用于信号/技术指标计算。不要用于计算下单量。"""
         if isinstance(bar, dict):
             v = bar.get(f"adj_{field}")
             if v is not None and v == v:
@@ -89,6 +90,15 @@ class Strategy(ABC):
         if v is not None and v == v:
             return float(v)
         return float(getattr(bar, field, default))
+
+    @staticmethod
+    def _price(bar, default: float = 0.0) -> float:
+        """返回真实收盘价，用于计算下单量/资金分配。"""
+        if isinstance(bar, dict):
+            v = bar.get("close")
+            return float(v) if v is not None and v == v else default
+        v = getattr(bar, "close", None)
+        return float(v) if v is not None and v == v else default
 
     def _load_data(self) -> None:
         """Load historical data for strategy initialization."""

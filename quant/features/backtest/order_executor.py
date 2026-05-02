@@ -63,7 +63,7 @@ def execute_order(
 
     risk_price = order.get('_risk_check_price', 0)
     if risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
-        diag.discarded_orders += 1
+        # discarded_orders incremented by caller (engine.py) uniformly
         return []
     quantity = order['quantity']
     lot_size = get_lot_size(symbol, lot_sizes)
@@ -77,7 +77,7 @@ def execute_order(
 
     bar_volume = bar.get('volume', 0)
     if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
-        max_qty = int(bar_volume * VOLUME_PARTICIPATION_LIMIT)
+        max_qty = max(1, int(bar_volume * VOLUME_PARTICIPATION_LIMIT))
         if market in ("HK", "CN"):
             max_qty = (max_qty // lot_size) * lot_size
         if max_qty <= 0:
@@ -155,7 +155,7 @@ def _execute_buy(
         entry_prices.setdefault((strategy_key, symbol), fill_price)
 
     fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-    portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=fill_price * quantity, trade_date=fill_date_val)
+    portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=total_cost, trade_date=fill_date_val)
     portfolio.cash -= total_cost
 
     diag.fill_count += 1

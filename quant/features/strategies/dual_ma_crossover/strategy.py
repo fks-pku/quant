@@ -98,7 +98,7 @@ class DualMACrossover(Strategy):
 
         if golden_cross and current_pos == 0:
             nav = context.portfolio.nav
-            price = closes[-1]
+            price = self._price(bars[-1])
             if price <= 0 or nav <= 0:
                 return
             qty = int(nav * self.max_position_pct / price)
@@ -127,6 +127,7 @@ class DualMACrossover(Strategy):
                 self.sell(symbol, int(quantity))
         self._day_data.clear()
         self._prev_signal.clear()
+        super().on_stop(context)
 
     def get_state(self) -> Dict[str, Any]:
         return {
