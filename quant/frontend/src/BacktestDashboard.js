@@ -147,6 +147,11 @@ export default function BacktestDashboard() {
   const [symbols, setSymbols] = useState('HK.00700');
   const [initialCash, setInitialCash] = useState(100000);
   const [slippageBps, setSlippageBps] = useState(5);
+  const [riskConfig, setRiskConfig] = useState({
+    max_position_pct: 1.0,
+    max_daily_loss_pct: 1.0,
+    max_leverage: 10.0,
+  });
   const [status, setStatus] = useState('idle');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -260,6 +265,11 @@ export default function BacktestDashboard() {
         initial_cash: Number(initialCash),
         slippage_bps: Number(slippageBps),
         strategy_params: paramValues,
+        risk_config: {
+          max_position_pct: Number(riskConfig.max_position_pct),
+          max_daily_loss_pct: Number(riskConfig.max_daily_loss_pct),
+          max_leverage: Number(riskConfig.max_leverage),
+        },
       });
       pollResult(res.data.backtest_id);
     } catch (err) {
@@ -322,6 +332,24 @@ export default function BacktestDashboard() {
           <label>Slippage (bps)</label>
           <input type="number" className="bt-input" value={slippageBps} onChange={e => setSlippageBps(e.target.value)} />
         </div>
+        <CollapsibleSection title="Risk Parameters">
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            {[
+              { key: 'max_position_pct', label: 'Max Position %', step: '0.1', tip: 'Single position limit as fraction of NAV (1.0 = 100%)' },
+              { key: 'max_daily_loss_pct', label: 'Max Daily Loss %', step: '0.01', tip: 'Daily loss Stop as fraction of NAV (1.0 = no limit)' },
+              { key: 'max_leverage', label: 'Max Leverage', step: '0.5', tip: 'Maximum leverage ratio (10.0 = typical)' },
+            ].map(p => (
+              <div key={p.key} className="bt-control-group" style={{ minWidth: 160 }}>
+                <label>{p.label}</label>
+                <input type="number" className="bt-input" step={p.step} min="0"
+                  value={riskConfig[p.key]}
+                  onChange={e => setRiskConfig(prev => ({ ...prev, [p.key]: parseFloat(e.target.value) || 0 }))}
+                />
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{p.tip}</span>
+              </div>
+            ))}
+          </div>
+        </CollapsibleSection>
         <button className="bt-run-btn" onClick={runBacktest} disabled={status === 'running'}>
           {status === 'running' ? 'RUNNING...' : 'RUN BACKTEST'}
         </button>

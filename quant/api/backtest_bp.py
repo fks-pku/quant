@@ -20,6 +20,7 @@ def run_backtest():
     initial_cash = data.get('initial_cash', 100000)
     slippage_bps = data.get('slippage_bps', 5)
     strategy_params = data.get('strategy_params', {})
+    risk_config = data.get('risk_config', {})
 
     backtest_id = str(uuid.uuid4())[:8]
     with _backtest_lock:
@@ -111,7 +112,13 @@ def run_backtest():
                         "CN": {"type": "cn_realistic"},
                     }},
                     "data": {"default_timeframe": "1d"},
-                    "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0, "max_orders_minute": 100},
+                    "risk": {
+                        "max_position_pct": risk_config.get("max_position_pct", 1.0),
+                        "max_sector_pct": 1.0,
+                        "max_daily_loss_pct": risk_config.get("max_daily_loss_pct", 1.0),
+                        "max_leverage": risk_config.get("max_leverage", 10.0),
+                        "max_orders_minute": 100,
+                    },
                 }
 
                 lot_sizes = {s: db.get_lot_size(s) for s in symbols}

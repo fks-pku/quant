@@ -4,7 +4,7 @@ strategy:
   priority: 2
 
 parameters:
-  symbols: ["000001.XSHE"]
+  symbols: ["000001"]
   fast_period: 5
   slow_period: 20
   buy_buffer: 0.0

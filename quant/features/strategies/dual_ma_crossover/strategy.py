@@ -37,7 +37,7 @@ class DualMACrossover(Strategy):
         max_position_pct: float = 0.95,
     ):
         super().__init__("DualMACrossover")
-        self._symbols = symbols or ["000001.XSHE"]
+        self._symbols = symbols or ["000001"]
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.buy_buffer = buy_buffer
