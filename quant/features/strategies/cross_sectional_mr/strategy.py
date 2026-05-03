@@ -2,10 +2,6 @@
 
 Stocks that have underperformed the market over the past N days revert to mean.
 Long the most underperforming, short the most overperforming, equal weight per leg.
-
-Hypothesis: Short-term reversal effect - excess returns mean-revert over 5-day windows.
-Author: Quantitative Research
-Validated: Walk-forward with 6m train / 1m test
 """
 
 from datetime import date
@@ -13,16 +9,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("CrossSectionalMeanReversion")
-class CrossSectionalMeanReversion(Strategy):
+class CrossSectionalMeanReversion(DailyBarStrategy):
 
     def __init__(
         self,
@@ -34,27 +30,21 @@ class CrossSectionalMeanReversion(Strategy):
         bottom_pct: float = 0.1,
         max_position_pct: float = 0.05,
     ):
-        super().__init__("CrossSectionalMeanReversion")
-        self._symbols = symbols or [
-            "SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "JPM"
-        ]
+        super().__init__("CrossSectionalMeanReversion",
+                         symbols or _DEFAULT_SYMBOLS, holding_days)
         self.market_symbol = market_symbol
         self.lookback_days = lookback_days
-        self.holding_days = holding_days
         self.top_pct = top_pct
         self.bottom_pct = bottom_pct
         self.max_position_pct = max_position_pct
 
-        self._day_data: Dict[str, List] = {}
-        self._last_rebalance_date: Optional[date] = None
-        self._days_since_rebalance: int = 0
         self._long_positions: List[str] = []
         self._short_positions: List[str] = []
         self._excess_returns: Dict[str, float] = {}
 
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return 0  # no trim — need full history for lookback
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -64,23 +54,12 @@ class CrossSectionalMeanReversion(Strategy):
             f"holding_days={self.holding_days}"
         )
 
-    def _get_closes(self, symbol: str) -> List[float]:
-        bars = self._day_data.get(symbol, [])
-        return [self._adj(bar, "close") for bar in bars]
-
-    def _get_last_price(self, symbol: str) -> float:
-        closes = self._get_closes(symbol)
-        return float(closes[-1]) if closes else 0.0
-
     def _calculate_excess_returns(self) -> None:
         self._excess_returns.clear()
-
         market_closes = self._get_closes(self.market_symbol)
         if len(market_closes) < self.lookback_days + 1:
             return
-
         market_ret = (market_closes[-1] / market_closes[-self.lookback_days - 1]) - 1
-
         for symbol in self._symbols:
             closes = self._get_closes(symbol)
             if len(closes) >= self.lookback_days + 1:
@@ -91,15 +70,10 @@ class CrossSectionalMeanReversion(Strategy):
 
     def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
         self._calculate_excess_returns()
-
         if not self._excess_returns:
-            self._last_rebalance_date = trading_date
             return
 
-        sorted_by_excess = sorted(
-            self._excess_returns.items(), key=lambda x: x[1]
-        )
-
+        sorted_by_excess = sorted(self._excess_returns.items(), key=lambda x: x[1])
         n_stocks = len(sorted_by_excess)
         n_long = max(1, int(n_stocks * self.bottom_pct))
         n_short = max(1, int(n_stocks * self.top_pct))
@@ -139,65 +113,33 @@ class CrossSectionalMeanReversion(Strategy):
                 if quantity > 0:
                     self.sell(symbol, quantity)
 
-        self._last_rebalance_date = trading_date
-        self._days_since_rebalance = 0
-
         self.logger.info(
             f"CrossSectionalMeanReversion rebalanced: long={self._long_positions}, "
             f"short={self._short_positions}"
         )
 
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-    def on_before_trading(self, context: "Context", trading_date: date) -> None:
-        pass
-
-    def on_after_trading(self, context: "Context", trading_date: date) -> None:
-        if self._last_rebalance_date is not None:
-            self._days_since_rebalance += 1
-            if self._days_since_rebalance < self.holding_days:
-                return
-        self._execute_rebalance(context, trading_date)
-
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._long_positions.clear()
         self._short_positions.clear()
         self._excess_returns.clear()
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "market_symbol": self.market_symbol,
+            "lookback_days": self.lookback_days,
+            "holding_days": self.holding_days,
+            "top_pct": self.top_pct,
+            "bottom_pct": self.bottom_pct,
+            "max_position_pct": self.max_position_pct,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "long_positions": self._long_positions,
             "short_positions": self._short_positions,
             "excess_returns": self._excess_returns,
             "last_rebalance_date": str(self._last_rebalance_date) if self._last_rebalance_date else None,
-            "parameters": {
-                "market_symbol": self.market_symbol,
-                "lookback_days": self.lookback_days,
-                "holding_days": self.holding_days,
-                "top_pct": self.top_pct,
-                "bottom_pct": self.bottom_pct,
-                "max_position_pct": self.max_position_pct,
-            },
         }
+
+
+_DEFAULT_SYMBOLS = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "JPM"]

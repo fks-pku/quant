@@ -6,7 +6,7 @@
 DataFeed port (fetch from external)     Storage port (persist & query)
 ┌─────────────────────┐                ┌─────────────────────┐
 │ TushareProvider     │──write──────→  │                     │
-│ AkshareProvider     │──write──────→  │   DuckDBStorage     │
+│ TushareProvider     │──write──────→  │   DuckDBStorage     │
 │ YfinanceProvider    │──write──────→  │   (implements       │
 └─────────────────────┘                │    Storage port)     │
                                        │                     │
@@ -25,7 +25,6 @@ DataFeed port (fetch from external)     Storage port (persist & query)
 | Provider | File | Markets | Storage |
 |----------|------|---------|---------|
 | TushareProvider | `infrastructure/data/providers/tushare.py` | CN | DuckDB (via Storage port) |
-| AkshareProvider | `infrastructure/data/providers/akshare.py` | CN | — |
 | YfinanceProvider | `infrastructure/data/providers/yfinance_provider.py` | US | Parquet |
 
 ## Storage

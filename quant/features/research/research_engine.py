@@ -1,6 +1,6 @@
 import logging
-from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Callable, List, Optional
 
 from quant.features.research.models import ResearchConfig, ResearchResult, ResearchLogEntry, RawStrategy
 from quant.features.research.scout import StrategyScout
@@ -19,12 +19,16 @@ class ResearchEngine:
         evaluator: Optional[StrategyEvaluator] = None,
         integrator: Optional[StrategyIntegrator] = None,
         pool: Optional[CandidatePool] = None,
+        backtest_fn: Optional[Callable] = None,
+        strategies_dir: Optional[str] = None,
     ):
         self.config = config or ResearchConfig()
         self.scout = scout or StrategyScout()
         self.evaluator = evaluator or StrategyEvaluator()
-        self.integrator = integrator or StrategyIntegrator()
+        _default_dir = Path(__file__).resolve().parent.parent / "strategies"
+        self.integrator = integrator or StrategyIntegrator(Path(strategies_dir) if strategies_dir else _default_dir)
         self.pool = pool or CandidatePool()
+        self._backtest_fn = backtest_fn
 
     def run_full_pipeline(self, sources: Optional[List[str]] = None, result: Optional[ResearchResult] = None) -> ResearchResult:
         if result is None:
@@ -107,88 +111,12 @@ class ResearchEngine:
         return result
 
     def _run_backtests(self, strategy_ids: List[str], result: ResearchResult) -> None:
-        from quant.features.backtest.engine import Backtester
-        from quant.features.strategies.registry import StrategyRegistry
-        from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
-        from quant.features.backtest.walkforward import DataFrameProvider
-        import pandas as pd
-
+        if self._backtest_fn is None:
+            logger.warning("No backtest function injected — skipping backtests")
+            return
         for sid in strategy_ids:
             try:
-                registry = StrategyRegistry()
-                strategy_class = registry.get(sid)
-                if strategy_class is None:
-                    result.errors.append(f"Strategy {sid} not in registry for backtest")
-                    continue
-
-                symbols = self.config.default_symbols
-                start = datetime.strptime(self.config.default_backtest_start, "%Y-%m-%d")
-                end = datetime.strptime(self.config.default_backtest_end, "%Y-%m-%d")
-
-                db_provider = DuckDBProvider()
-                db_provider.connect()
-                all_data = []
-                for sym in symbols:
-                    bars = db_provider.get_bars(sym, start, end, "1d")
-                    if not bars.empty:
-                        all_data.append(bars)
-                db_provider.disconnect()
-
-                if not all_data:
-                    result.errors.append(f"No data for {sid}")
-                    continue
-
-                data_df = pd.concat(all_data, ignore_index=True)
-                data_provider = DataFrameProvider(data_df)
-                strategy = strategy_class(symbols=symbols)
-
-                config = {
-                    "backtest": {"slippage_bps": 5},
-                    "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
-                    "data": {"default_timeframe": "1d"},
-                    "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
-                }
-
-                backtester = Backtester(config)
-                bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=100000, data_provider=data_provider, symbols=symbols)
-
-                for name, info in self.integrator._registry.items():
-                    if info["id"] == sid:
-                        info["backtest"] = {
-                            "sharpe": round(bt_result.sharpe_ratio, 2),
-                            "max_dd": round(bt_result.max_drawdown_pct, 2),
-                            "cagr": round(bt_result.total_return * 100 / max(1, (end - start).days / 365.25), 2),
-                            "win_rate": round(bt_result.win_rate * 100, 2),
-                            "period": f"{self.config.default_backtest_start}-{self.config.default_backtest_end}",
-                        }
-                        meta = info.setdefault("research_meta", {})
-                        meta["backtest_result"] = info["backtest"]
-                        if bt_result.sharpe_ratio < self.config.backtest_sharpe_threshold:
-                            self.pool.reject(sid, reason=f"Backtest Sharpe {bt_result.sharpe_ratio:.2f} below threshold")
-                            result.rejected += 1
-                            result.log.append(ResearchLogEntry(
-                                phase="backtest", title=info.get("name", sid),
-                                source="", source_url="", verdict="fail",
-                                reason=f"Sharpe {bt_result.sharpe_ratio:.2f} < {self.config.backtest_sharpe_threshold}",
-                                scores={
-                                    "sharpe": round(bt_result.sharpe_ratio, 2),
-                                    "max_dd": round(bt_result.max_drawdown_pct, 2),
-                                    "win_rate": round(bt_result.win_rate * 100, 2),
-                                },
-                            ))
-                        else:
-                            result.backtested += 1
-                            result.log.append(ResearchLogEntry(
-                                phase="backtest", title=info.get("name", sid),
-                                source="", source_url="", verdict="pass",
-                                reason=f"Sharpe {bt_result.sharpe_ratio:.2f}",
-                                scores={
-                                    "sharpe": round(bt_result.sharpe_ratio, 2),
-                                    "max_dd": round(bt_result.max_drawdown_pct, 2),
-                                    "win_rate": round(bt_result.win_rate * 100, 2),
-                                },
-                            ))
-                        break
+                self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
             except Exception as e:
                 logger.error(f"Backtest failed for {sid}: {e}")
                 result.errors.append(f"Backtest error for {sid}: {e}")

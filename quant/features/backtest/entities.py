@@ -6,6 +6,8 @@ from typing import Dict, List, Any, Optional
 import pandas as pd
 
 from quant.domain.models.trade import Trade
+from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
+from quant.features.backtest.schemas import DeferredOrder
 
 
 @dataclass
@@ -20,6 +22,11 @@ class BacktestDiagnostics:
     limit_rejected_orders: int = 0
     discarded_orders: int = 0
     risk_skipped_orders: int = 0
+    rejection_counts: Dict[str, int] = field(default_factory=dict)
+
+    def record_rejection(self, reason: OrderRejectionReason) -> None:
+        key = reason.name.lower()
+        self.rejection_counts[key] = self.rejection_counts.get(key, 0) + 1
 
     @property
     def cost_drag_pct(self) -> float:
@@ -97,36 +104,36 @@ class _BacktestOrderManager:
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
 
-    def _resolve_price(self, price: Optional[float], symbol: str) -> Optional[float]:
+    def _resolve_price(self, price: Optional[float], symbol: str) -> float:
         if isinstance(price, (int, float)) and price > 0:
-            effective = float(price)
-        else:
-            effective = float(self._last_prices.get(symbol, 0) or 0)
-        return effective if effective > 0 else None
+            return float(price)
+        effective = float(self._last_prices.get(symbol, 0) or 0)
+        if effective <= 0:
+            raise OrderRejectedError(OrderRejectionReason.PRICE_UNRESOLVABLE, symbol,
+                                     f"no valid price for {symbol}")
+        return effective
 
-    def _passes_dedup(self, symbol: str, side: str) -> bool:
+    def _passes_dedup(self, symbol: str, side: str) -> None:
         if side == 'BUY' and symbol in self._buy_dedup_set:
-            return False
-        return True
+            raise OrderRejectedError(OrderRejectionReason.DUPLICATE_BUY, symbol)
 
-    def _passes_risk(self, symbol: str, quantity: float, price: float, side: str) -> bool:
+    def _passes_risk(self, symbol: str, quantity: float, price: float, side: str) -> None:
         if self._risk_engine is None:
-            return True
+            return
         value = price * quantity
         approved, _ = self._risk_engine.check_order(
             symbol, quantity, price, value, side=side, as_of_date=self._current_date,
         )
-        if approved:
-            self._risk_engine.record_order(symbol=symbol, order_value=value, as_of_date=self._current_date)
-        return approved
+        if not approved:
+            raise OrderRejectedError(OrderRejectionReason.RISK_REJECTED, symbol)
+        self._risk_engine.record_order(symbol=symbol, order_value=value, as_of_date=self._current_date)
 
     def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
-        effective = self._resolve_price(price, symbol)
-        if effective is None:
-            return None
-        if not self._passes_dedup(symbol, side):
-            return None
-        if not self._passes_risk(symbol, quantity, effective, side):
+        try:
+            effective = self._resolve_price(price, symbol)
+            self._passes_dedup(symbol, side)
+            self._passes_risk(symbol, quantity, effective, side)
+        except OrderRejectedError:
             return None
         order = {
             "symbol": symbol,
@@ -142,8 +149,20 @@ class _BacktestOrderManager:
             self._buy_dedup_set.add(symbol)
         return f"bt_{len(self._buffer)}"
 
-    def drain_pending(self):
-        orders = list(self._buffer)
+    def drain_pending(self, signal_date: date) -> list:
+        orders = [
+            DeferredOrder(
+                symbol=item["symbol"],
+                quantity=item["quantity"],
+                side=item["side"],
+                order_type=item["order_type"],
+                price=item["price"],
+                strategy=item["strategy"],
+                signal_date=signal_date,
+                risk_check_price=item.get("_risk_check_price", 0.0),
+            )
+            for item in self._buffer
+        ]
         self._buffer.clear()
         self._buy_dedup_set.clear()
         return orders
@@ -164,5 +183,5 @@ class _BacktestContext:
         self.order_manager._current_date = trading_date
         self.order_manager._last_prices = last_prices
 
-    def drain_orders(self):
-        return self.order_manager.drain_pending()
+    def drain_orders(self, signal_date: date = None):
+        return self.order_manager.drain_pending(signal_date)

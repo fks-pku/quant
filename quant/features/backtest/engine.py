@@ -16,6 +16,8 @@ from quant.features.backtest.entities import (
     BacktestResult,
     CommissionConfig,
 )
+from quant.features.backtest.schemas import DeferredOrder
+from quant.features.backtest.exceptions import OrderRejectedError
 from quant.features.backtest.analytics import calculate_performance_metrics
 from quant.features.backtest.market_rules import (
     select_currency,
@@ -32,16 +34,6 @@ logger = logging.getLogger(__name__)
 class Backtester:
     """Backtester with realistic execution."""
 
-    IPO_NO_LIMIT_DAYS = 9
-
-    @staticmethod
-    def _is_suspended(bar: Dict) -> bool:
-        return is_suspended(bar)
-
-    def _calculate_cn_dividend_tax(self, pos: Any, cash_div: float, current_date: Any) -> float:
-        from quant.features.backtest.dividend_processor import calculate_cn_dividend_tax
-        return calculate_cn_dividend_tax(pos, cash_div, current_date)
-
     def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None,
                  lot_sizes: Optional[Dict[str, int]] = None,
                  ipo_dates: Optional[Dict[str, datetime]] = None,
@@ -52,19 +44,14 @@ class Backtester:
         self.risk_price_deviation_limit = config.get("backtest", {}).get("risk_price_deviation_limit", 0.15)
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
+        if portfolio_class is None or risk_engine_class is None or sub_portfolio_class is None:
+            raise ValueError(
+                "portfolio_class, risk_engine_class, and sub_portfolio_class are required. "
+                "Use quant.features.trading.Portfolio, RiskEngine, and SubPortfolio."
+            )
         self.portfolio_class = portfolio_class
         self.risk_engine_class = risk_engine_class
         self.sub_portfolio_class = sub_portfolio_class
-
-        if self.portfolio_class is None:
-            from quant.features.trading.portfolio import Portfolio
-            self.portfolio_class = Portfolio
-        if self.risk_engine_class is None:
-            from quant.features.trading.risk import RiskEngine
-            self.risk_engine_class = RiskEngine
-        if self.sub_portfolio_class is None:
-            from quant.features.trading.sub_portfolio import SubPortfolio
-            self.sub_portfolio_class = SubPortfolio
 
         commission_config = config.get("execution", {}).get("commission", {})
         self.commission = CommissionConfig(
@@ -136,7 +123,7 @@ class Backtester:
         current_date = start
         while current_date <= end:
             if trading_dates_set is not None:
-                lookup_key = current_date.date() if hasattr(current_date, 'date') else current_date
+                lookup_key = current_date.date()
                 if lookup_key not in trading_dates_set:
                     current_date += timedelta(days=1)
                     continue
@@ -188,44 +175,48 @@ class Backtester:
                         ))
 
             # --- Step 4: Execute deferred orders from T-1 ---
-            for order in deferred_orders:
-                sym = order['symbol']
-                bar = today_bars.get(sym, {})
-                if not bar or bar.get('_suspended'):
-                    diag.discarded_orders += 1
-                    continue
-                order_strategy = order.get('strategy')
-                if order_strategy and order_strategy not in portfolio_map:
-                    logger.warning("Order strategy '%s' not in portfolio_map, discarding order for %s", order_strategy, sym)
-                    diag.discarded_orders += 1
-                    continue
-                order_pf = portfolio_map.get(order_strategy, primary_portfolio)
-                trades = execute_order(
-                    order=order,
-                    portfolio=order_pf,
-                    symbol=sym,
-                    bar=bar,
-                    entry_times=entry_times,
-                    entry_prices=entry_prices,
-                    diag=diag,
-                    lot_sizes=self.lot_sizes,
-                    ipo_dates=self.ipo_dates,
-                    slippage_bps=self.slippage_bps,
-                    commission_config=self.commission,
-                    prev_bar=prev_close_bars.get(sym),
-                    risk_price_deviation_limit=self.risk_price_deviation_limit,
-                )
-                if not trades:
-                    diag.discarded_orders += 1
-                    continue
-                all_trades.extend(trades)
-                target_sname = order.get('strategy')
-                for s in strategies:
-                    sname = getattr(s, 'name', s.__class__.__name__)
-                    if target_sname is None or sname == target_sname:
-                        for t in trades:
-                            s.on_fill(s.context, t)
-            deferred_orders = []
+            try:
+                for order in deferred_orders:
+                    sym = order.symbol
+                    bar = today_bars.get(sym, {})
+                    if not bar or bar.get('_suspended'):
+                        diag.discarded_orders += 1
+                        continue
+                    order_strategy = order.strategy
+                    if order_strategy and order_strategy not in portfolio_map:
+                        logger.warning("Order strategy '%s' not in portfolio_map, discarding order for %s", order_strategy, sym)
+                        diag.discarded_orders += 1
+                        continue
+                    order_pf = portfolio_map.get(order_strategy, primary_portfolio)
+                    try:
+                        trades = execute_order(
+                            order=order,
+                            portfolio=order_pf,
+                            symbol=sym,
+                            bar=bar,
+                            entry_times=entry_times,
+                            entry_prices=entry_prices,
+                            diag=diag,
+                            lot_sizes=self.lot_sizes,
+                            ipo_dates=self.ipo_dates,
+                            slippage_bps=self.slippage_bps,
+                            commission_config=self.commission,
+                            prev_bar=prev_close_bars.get(sym),
+                            risk_price_deviation_limit=self.risk_price_deviation_limit,
+                        )
+                    except OrderRejectedError as e:
+                        diag.record_rejection(e.reason)
+                        diag.discarded_orders += 1
+                        continue
+                    all_trades.extend(trades)
+                    target_sname = order.strategy
+                    for s in strategies:
+                        sname = getattr(s, 'name', s.__class__.__name__)
+                        if target_sname is None or sname == target_sname:
+                            for t in trades:
+                                s.on_fill(s.context, t)
+            finally:
+                deferred_orders = []
 
             # --- Step 5 prep: Initialize order manager with today's state ---
             for strategy in strategies:
@@ -251,8 +242,7 @@ class Backtester:
             # --- Step 8: Collect pending orders ---
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "drain_orders"):
-                    for order in strategy.context.drain_orders():
-                        order['_signal_date'] = current_date
+                    for order in strategy.context.drain_orders(signal_date=current_date):
                         pending_orders.append(order)
 
             for order in pending_orders:
@@ -278,8 +268,8 @@ class Backtester:
                 ctx = strategy.context
                 if not hasattr(ctx, 'drain_orders'):
                     continue
-                for order in ctx.drain_orders():
-                    sym = order['symbol']
+                for order in ctx.drain_orders(signal_date=current_date):
+                    sym = order.symbol
                     close_price = last_prices.get(sym)
                     if not close_price or close_price <= 0:
                         continue
@@ -288,22 +278,25 @@ class Backtester:
                         'low': close_price, 'close': close_price, 'volume': 10_000_000,
                         'timestamp': current_date,
                     }
-                    order_pf = portfolio_map.get(order.get('strategy', sname), primary_portfolio)
-                    trades = execute_order(
-                        order=order, portfolio=order_pf, symbol=sym, bar=bar,
-                        entry_times=entry_times, entry_prices=entry_prices,
-                        diag=diag, lot_sizes=self.lot_sizes, ipo_dates=self.ipo_dates,
-                        slippage_bps=self.slippage_bps, commission_config=self.commission,
-                        prev_bar=None,
-                        risk_price_deviation_limit=self.risk_price_deviation_limit,
-                    )
-                    if trades:
-                        all_trades.extend(trades)
-                        for s in strategies:
-                            sn = getattr(s, 'name', s.__class__.__name__)
-                            if sn == sname:
-                                for t in trades:
-                                    s.on_fill(s.context, t)
+                    order_pf = portfolio_map.get(order.strategy or sname, primary_portfolio)
+                    try:
+                        trades = execute_order(
+                            order=order, portfolio=order_pf, symbol=sym, bar=bar,
+                            entry_times=entry_times, entry_prices=entry_prices,
+                            diag=diag, lot_sizes=self.lot_sizes, ipo_dates=self.ipo_dates,
+                            slippage_bps=self.slippage_bps, commission_config=self.commission,
+                            prev_bar=None,
+                            risk_price_deviation_limit=self.risk_price_deviation_limit,
+                        )
+                    except OrderRejectedError as e:
+                        diag.record_rejection(e.reason)
+                        continue
+                    all_trades.extend(trades)
+                    for s in strategies:
+                        sn = getattr(s, 'name', s.__class__.__name__)
+                        if sn == sname:
+                            for t in trades:
+                                s.on_fill(s.context, t)
 
         equity_curve = pd.Series(equity_curve_values, index=equity_curve_dates)
         metrics = calculate_performance_metrics(equity_curve, all_trades, initial_cash)

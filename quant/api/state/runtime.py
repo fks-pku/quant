@@ -193,15 +193,7 @@ def _init_default_symbols():
     global _STRATEGY_DEFAULT_SYMBOLS
     if _STRATEGY_DEFAULT_SYMBOLS:
         return
-    try:
-        from quant.domain.ports.storage import Storage
-        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        _db_tmp: Storage = DuckDBStorage(read_only=True)
-        _all_syms = _db_tmp.get_symbols('daily', 'hk') + _db_tmp.get_symbols('daily', 'us') + _db_tmp.get_symbols('daily', 'cn')
-        _db_tmp.close()
-        _default_sym_str = ','.join(_all_syms) if _all_syms else 'HK.00700'
-    except Exception:
-        _default_sym_str = 'HK.00700'
+    _default_sym_str = 'HK.00700'
     for _sid in list(STRATEGY_ID_TO_REGISTRY.keys()):
         _STRATEGY_DEFAULT_SYMBOLS[_sid] = _default_sym_str
 
@@ -304,7 +296,7 @@ def run_quant_system():
 def _get_cio_engine():
     global _cio_engine
     if _cio_engine is None:
-        from quant.features.cio.cioengine import CIOEngine
+        from quant.features.cio.cio_engine import CIOEngine
         from quant.features.cio.market_assessor import MarketAssessor
         from quant.features.cio.news_analyzer import NewsAnalyzer
         from quant.features.cio.weight_allocator import WeightAllocator

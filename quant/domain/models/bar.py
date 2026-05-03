@@ -27,7 +27,8 @@ class Bar:
             )
 
     @property
-    def range(self) -> float:
+    def price_range(self) -> float:
+        """High-Low range — use 'price_range' to avoid shadowing built-in range()."""
         return self.high - self.low
 
     @property

@@ -6,6 +6,7 @@ import pytest
 
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.walkforward import DataFrameProvider
+from quant.tests.conftest import make_backtester
 
 
 START = datetime(2024, 6, 3)
@@ -95,7 +96,7 @@ CASE1_BARS = [
 @pytest.fixture
 def case1_result():
     data = _make_bars("AAPL", CASE1_BARS)
-    bt = Backtester(CASE1_CONFIG)
+    bt = make_backtester(CASE1_CONFIG)
     provider = DataFrameProvider(data)
     strat = _signal_strategy("Case1", "AAPL", buy_on={0}, sell_on={3}, qty=100)
     return bt.run(
@@ -169,7 +170,7 @@ CASE2_CONFIG = {
 @pytest.fixture
 def case2_result():
     data = _make_bars("AAPL", CASE1_BARS)
-    bt = Backtester(CASE2_CONFIG)
+    bt = make_backtester(CASE2_CONFIG)
     provider = DataFrameProvider(data)
     strat = _signal_strategy("Case2", "AAPL", buy_on={0}, sell_on={3}, qty=100)
     return bt.run(
@@ -248,7 +249,7 @@ CASE3_BARS = [
 @pytest.fixture
 def case3_result():
     data = _make_bars("600519", CASE3_BARS)
-    bt = Backtester(CASE3_CONFIG)
+    bt = make_backtester(CASE3_CONFIG)
     provider = DataFrameProvider(data)
     strat = _signal_strategy("Case3", "600519", buy_on={0}, sell_on={3}, qty=100)
     return bt.run(
@@ -309,7 +310,7 @@ CASE4_BARS = [
 @pytest.fixture
 def case4_result():
     data = _make_bars("00700", CASE4_BARS)
-    bt = Backtester(CASE4_CONFIG)
+    bt = make_backtester(CASE4_CONFIG)
     provider = DataFrameProvider(data)
     strat = _signal_strategy("Case4", "00700", buy_on={0}, sell_on={3}, qty=100)
     return bt.run(
@@ -369,7 +370,7 @@ CASE5_CONFIG = {
 @pytest.fixture
 def case5_result():
     data = _make_bars("AAPL", CASE1_BARS)
-    bt = Backtester(CASE5_CONFIG)
+    bt = make_backtester(CASE5_CONFIG)
     provider = DataFrameProvider(data)
 
     class StratA:
@@ -488,7 +489,7 @@ def case6_result():
         "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
         "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
     }
-    bt = Backtester(config)
+    bt = make_backtester(config)
     provider = DataFrameProvider(data)
 
     class FIFOStrat:
@@ -589,7 +590,7 @@ def case7a_result():
         "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
         "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
     }
-    bt = Backtester(config)
+    bt = make_backtester(config)
     provider = DataFrameProvider(data, dividends=divs)
     strat = _signal_strategy("Case7A", "AAPL", buy_on={0}, sell_on={3}, qty=100)
     return bt.run(
@@ -635,7 +636,7 @@ def case7b_result():
         "execution": {"commission": {"CN": {"type": "cn_realistic"}}},
         "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
     }
-    bt = Backtester(config)
+    bt = make_backtester(config)
     provider = DataFrameProvider(data, dividends=divs)
     strat = _signal_strategy("Case7B", "600519", buy_on={0}, sell_on={3}, qty=100)
     return bt.run(
@@ -702,7 +703,7 @@ def case8_result():
         }},
         "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
     }
-    bt = Backtester(config)
+    bt = make_backtester(config)
     provider = DataFrameProvider(data, dividends=divs)
 
     class StratA:
@@ -812,6 +813,7 @@ class TestCase9PositionRealizedPnlConsistency:
         from quant.features.trading.portfolio import Portfolio
         from quant.features.backtest.entities import BacktestDiagnostics, CommissionConfig
         from quant.features.backtest.order_executor import execute_order
+        from quant.features.backtest.schemas import DeferredOrder
 
         pf = Portfolio(initial_cash=100_000)
         diag = BacktestDiagnostics()
@@ -819,11 +821,11 @@ class TestCase9PositionRealizedPnlConsistency:
             US={"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}
         )
 
-        buy1 = {
-            "symbol": "AAPL", "quantity": 40, "side": "BUY",
-            "order_type": "MARKET", "price": 100.0, "strategy": "test",
-            "_signal_date": datetime(2024, 6, 3),
-        }
+        buy1 = DeferredOrder(
+            symbol="AAPL", quantity=40, side="BUY",
+            order_type="MARKET", price=100.0, strategy="test",
+            signal_date=datetime(2024, 6, 3),
+        )
         bar1 = {
             "symbol": "AAPL", "timestamp": datetime(2024, 6, 4),
             "open": 100.0, "high": 101.0, "low": 99.0,
@@ -838,11 +840,11 @@ class TestCase9PositionRealizedPnlConsistency:
             lot_sizes={}, ipo_dates={}, slippage_bps=0, commission_config=config,
         )
 
-        buy2 = {
-            "symbol": "AAPL", "quantity": 60, "side": "BUY",
-            "order_type": "MARKET", "price": 110.0, "strategy": "test",
-            "_signal_date": datetime(2024, 6, 4),
-        }
+        buy2 = DeferredOrder(
+            symbol="AAPL", quantity=60, side="BUY",
+            order_type="MARKET", price=110.0, strategy="test",
+            signal_date=datetime(2024, 6, 4),
+        )
         bar2 = {
             "symbol": "AAPL", "timestamp": datetime(2024, 6, 5),
             "open": 110.0, "high": 111.0, "low": 109.0,
@@ -855,11 +857,11 @@ class TestCase9PositionRealizedPnlConsistency:
             lot_sizes={}, ipo_dates={}, slippage_bps=0, commission_config=config,
         )
 
-        sell_order = {
-            "symbol": "AAPL", "quantity": 50, "side": "SELL",
-            "order_type": "MARKET", "price": 130.0, "strategy": "test",
-            "_signal_date": datetime(2024, 6, 5),
-        }
+        sell_order = DeferredOrder(
+            symbol="AAPL", quantity=50, side="SELL",
+            order_type="MARKET", price=130.0, strategy="test",
+            signal_date=datetime(2024, 6, 5),
+        )
         sell_bar = {
             "symbol": "AAPL", "timestamp": datetime(2024, 6, 6),
             "open": 130.0, "high": 131.0, "low": 129.0,
@@ -884,6 +886,7 @@ class TestCase9PositionRealizedPnlConsistency:
         from quant.features.trading.portfolio import Portfolio
         from quant.features.backtest.entities import BacktestDiagnostics, CommissionConfig
         from quant.features.backtest.order_executor import execute_order
+        from quant.features.backtest.schemas import DeferredOrder
 
         pf = Portfolio(initial_cash=100_000)
         diag = BacktestDiagnostics()
@@ -891,11 +894,11 @@ class TestCase9PositionRealizedPnlConsistency:
             US={"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}
         )
 
-        buy1 = {
-            "symbol": "AAPL", "quantity": 40, "side": "BUY",
-            "order_type": "MARKET", "price": 100.0, "strategy": "test",
-            "_signal_date": datetime(2024, 6, 3),
-        }
+        buy1 = DeferredOrder(
+            symbol="AAPL", quantity=40, side="BUY",
+            order_type="MARKET", price=100.0, strategy="test",
+            signal_date=datetime(2024, 6, 3),
+        )
         bar1 = {
             "symbol": "AAPL", "timestamp": datetime(2024, 6, 4),
             "open": 100.0, "high": 101.0, "low": 99.0,
@@ -910,11 +913,11 @@ class TestCase9PositionRealizedPnlConsistency:
             lot_sizes={}, ipo_dates={}, slippage_bps=0, commission_config=config,
         )
 
-        buy2 = {
-            "symbol": "AAPL", "quantity": 60, "side": "BUY",
-            "order_type": "MARKET", "price": 110.0, "strategy": "test",
-            "_signal_date": datetime(2024, 6, 4),
-        }
+        buy2 = DeferredOrder(
+            symbol="AAPL", quantity=60, side="BUY",
+            order_type="MARKET", price=110.0, strategy="test",
+            signal_date=datetime(2024, 6, 4),
+        )
         bar2 = {
             "symbol": "AAPL", "timestamp": datetime(2024, 6, 5),
             "open": 110.0, "high": 111.0, "low": 109.0,
@@ -927,11 +930,11 @@ class TestCase9PositionRealizedPnlConsistency:
             lot_sizes={}, ipo_dates={}, slippage_bps=0, commission_config=config,
         )
 
-        sell_order = {
-            "symbol": "AAPL", "quantity": 100, "side": "SELL",
-            "order_type": "MARKET", "price": 130.0, "strategy": "test",
-            "_signal_date": datetime(2024, 6, 5),
-        }
+        sell_order = DeferredOrder(
+            symbol="AAPL", quantity=100, side="SELL",
+            order_type="MARKET", price=130.0, strategy="test",
+            signal_date=datetime(2024, 6, 5),
+        )
         sell_bar = {
             "symbol": "AAPL", "timestamp": datetime(2024, 6, 6),
             "open": 130.0, "high": 131.0, "low": 129.0,

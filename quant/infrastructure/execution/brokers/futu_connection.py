@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from quant.infrastructure.execution.brokers.base import OrderStatus
+from quant.domain.models.order import OrderStatus
 from quant.shared.utils.logger import setup_logger
 
 

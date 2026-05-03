@@ -109,7 +109,7 @@ def main(argv=None):
             print(f"  - {e}")
         sys.exit(1)
 
-    backtester = Backtester(config, lot_sizes=lot_sizes)
+    backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes)
     result = backtester.run(
         start=start,
         end=end,

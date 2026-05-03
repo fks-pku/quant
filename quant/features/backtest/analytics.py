@@ -141,11 +141,7 @@ def calculate_ulcer_index(equity_curve: pd.Series, periods: int = 14) -> float:
 
 def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
     """Sum of gains / absolute value of sum of losses (round-trip trades only)."""
-    rt = _round_trip_trades(trades)
-    if not rt:
-        return 0.0
-    total_gain = sum(t.pnl for t in rt if t.pnl > 0)
-    total_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
+    total_gain, total_loss = _gross_profit_loss(trades)
     if total_loss == 0:
         return MAX_PROFIT_FACTOR if total_gain > 0 else 0.0
     return total_gain / total_loss

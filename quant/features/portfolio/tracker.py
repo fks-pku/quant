@@ -186,7 +186,7 @@ class StrategyPositionTracker:
                 total_unrealized = 0.0
                 for sym, pos in positions.items():
                     market_value = pos.market_value or 0.0
-                    unrealized_pnl = pos.unrealized_pnl or (market_value - pos.avg_cost * pos.qty)
+                    unrealized_pnl = pos.unrealized_pnl if pos.unrealized_pnl is not None else (market_value - pos.avg_cost * pos.qty)
                     holdings.append({
                         "symbol": sym,
                         "strategy": strat,

@@ -27,7 +27,7 @@ class TestUSNoLotSize:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyOneShare:
             name = "BuyOneShare"
@@ -80,7 +80,7 @@ class TestUST0DayTrading:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class DayTradeUS:
             name = "DayTradeUS"
@@ -133,7 +133,7 @@ class TestUSSlippage:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuySlippage:
             name = "BuySlippage"
@@ -188,7 +188,7 @@ class TestUSSlippage:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class SellSlippage:
             name = "SellSlippage"
@@ -282,7 +282,7 @@ class TestUSEndToEnd:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyOnly:
             name = "BuyOnly"

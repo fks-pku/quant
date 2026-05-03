@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 import pandas as pd
 
+from quant.domain.models.order import Order
 from quant.domain.ports.storage import Storage
 from quant.shared.utils.logger import setup_logger
 from quant.shared.utils.symbol_utils import detect_market as _detect_market
@@ -142,7 +143,9 @@ class DuckDBStorage(Storage):
     @property
     def conn(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
-            self._conn = duckdb.connect(str(self.db_path))
+            with self._lock:
+                if self._conn is None:
+                    self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
         return self._conn
 
     def _resolve_table(self, symbol: str, timeframe: str) -> str:
@@ -255,7 +258,7 @@ class DuckDBStorage(Storage):
             self.conn.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_type} DEFAULT {default}")
         self.logger.info(f"Added column {column_name} ({column_type}) to {table_name}")
 
-    def save_order(self, order: Dict[str, Any]) -> None:
+    def save_order(self, order: "Order") -> None:  # type: ignore[override]
         self._ensure_table("orders")
         with self._lock:
             self.conn.execute("""
@@ -263,17 +266,17 @@ class DuckDBStorage(Storage):
                 (order_id, timestamp, symbol, quantity, side, order_type, price, status, filled_quantity, avg_fill_price, broker)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
-                order.get("order_id"),
-                order.get("timestamp", datetime.now()),
-                order.get("symbol"),
-                order.get("quantity"),
-                order.get("side"),
-                order.get("order_type"),
-                order.get("price"),
-                order.get("status"),
-                order.get("filled_quantity", 0),
-                order.get("avg_fill_price"),
-                order.get("broker"),
+                order.order_id,
+                order.timestamp,
+                order.symbol,
+                order.quantity,
+                order.side.value if hasattr(order.side, 'value') else order.side,
+                order.order_type.value if hasattr(order.order_type, 'value') else order.order_type,
+                order.price,
+                order.status.value if hasattr(order.status, 'value') else order.status,
+                getattr(order, 'filled_quantity', 0) or 0,
+                getattr(order, 'avg_fill_price', None),
+                getattr(order, 'broker', None),
             ])
 
     def update_order_status(self, order_id: str, status: str, filled_quantity: Optional[float] = None, avg_fill_price: Optional[float] = None) -> None:

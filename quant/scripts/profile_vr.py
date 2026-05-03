@@ -12,6 +12,10 @@ from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.backtest.engine import Backtester
 from quant.features.strategies.volatility_regime.strategy import VolatilityRegime
 
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
+
 all_syms = ['HK.01024','HK.06618','HK.02013','HK.02057','HK.00700','HK.09988',
             'HK.03690','HK.09618','HK.02015','HK.09888','HK.09961','HK.02382',
             'HK.00981','HK.09626','HK.09901','HK.02018','HK.01810','HK.00285',
@@ -66,7 +70,7 @@ config = {
 }
 
 strategy = VolatilityRegime(symbols=all_syms)
-backtester = Backtester(config)
+backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
 
 print(f"\nRunning backtest (VolatilityRegime, 21 symbols, 2020-2024)...")
 t4 = time.perf_counter()

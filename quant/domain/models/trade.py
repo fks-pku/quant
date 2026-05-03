@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime
 from typing import Dict, Optional
 
 
@@ -19,7 +19,7 @@ class Trade:
     fill_date: Optional[datetime] = None
     fill_price: float = 0.0
     intended_qty: float = 0.0
-    cost_breakdown: Optional[Dict] = None
+    cost_breakdown: Optional[Dict[str, float]] = None
     strategy_name: Optional[str] = None
 
     @property
@@ -32,9 +32,10 @@ class Trade:
 
     @property
     def return_pct(self) -> float:
-        if self.entry_price == 0:
+        cost_basis = self.entry_price * abs(self.quantity) + self.commission
+        if cost_basis == 0:
             return 0.0
-        return self.pnl / (self.entry_price * abs(self.quantity)) * 100
+        return self.pnl / cost_basis * 100
 
     @property
     def duration_days(self) -> float:

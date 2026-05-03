@@ -32,6 +32,10 @@ from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.base import Strategy
 from quant.features.strategies.registry import strategy
 
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
+
 if TYPE_CHECKING:
     from quant.features.trading.engine import Context
 
@@ -237,7 +241,7 @@ def run_and_analyze(bars, dividends):
         "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
     }
 
-    bt = Backtester(config, lot_sizes={"600519": 100})
+    bt = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes={"600519": 100})
     strategy = WalkthroughBuyHold(symbols=["600519"], buy_day=6, max_pct=0.90)
     provider = DataFrameProvider(bars, dividends=dividends)
 

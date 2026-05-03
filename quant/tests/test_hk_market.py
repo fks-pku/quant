@@ -27,7 +27,7 @@ class TestHKLotSizeIntegration:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class TinyBuyHK:
             name = "TinyBuyHK"
@@ -78,7 +78,7 @@ class TestHKT0DayTrading:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class DayTradeHK:
             name = "DayTradeHK"
@@ -153,7 +153,7 @@ class TestHKEndToEnd:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyOne:
             name = "BuyOne"

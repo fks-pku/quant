@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Any
 import threading
 import time
 
+from quant.domain.context import StrategyContext
 from quant.domain.ports.event_publisher import EventPublisher
 from quant.domain.events.base import EventType
 from quant.features.trading.scheduler import Scheduler
@@ -22,28 +23,30 @@ class SystemMode(Enum):
     BACKTEST = "backtest"
 
 
-@dataclass
-class Context:
-    """Strategy context providing access to system components."""
-    portfolio: Portfolio
-    risk_engine: RiskEngine
-    event_bus: EventPublisher
-    order_manager: Any
-    data_provider: Any
-    broker: Any
+class Context(StrategyContext):
+    """Trading-engine strategy context — extends domain StrategyContext.
+
+    Maintained as a subclass for backward compatibility with code that imports
+    Context from this module. New code should import StrategyContext from domain.
+    """
+
+    def submit_order(self, symbol: str, quantity: float, side: str,
+                     order_type: str = "MARKET", price: Optional[float] = None,
+                     strategy_name: Optional[str] = None) -> Optional[str]:
+        if self.order_manager is None:
+            return None
+        return self.order_manager.submit_order(
+            symbol, quantity, side, order_type, price, strategy_name,
+        )
 
 
 class Engine:
     """Main event loop and orchestration engine."""
 
-    def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None):
+    def __init__(self, config: Dict[str, Any], event_bus: EventPublisher):
         self.config = config
         self.mode = SystemMode(config.get("system", {}).get("mode", "paper"))
         self.logger = setup_logger("Engine", config.get("system", {}).get("log_level", "INFO"))
-
-        if event_bus is None:
-            from quant.infrastructure.events import EventBus
-            event_bus = EventBus()
         self.event_bus = event_bus
         self.portfolio = Portfolio(
             initial_cash=config.get("system", {}).get("initial_cash", 100000),

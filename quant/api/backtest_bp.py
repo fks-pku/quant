@@ -33,6 +33,9 @@ def run_backtest():
             from quant.features.strategies.registry import StrategyRegistry
             from quant.domain.ports.storage import Storage
             from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+            from quant.features.trading.portfolio import Portfolio
+            from quant.features.trading.risk import RiskEngine
+            from quant.features.trading.sub_portfolio import SubPortfolio
 
             db: Storage = DuckDBStorage(read_only=True)
             try:
@@ -125,7 +128,7 @@ def run_backtest():
             finally:
                 db.close()
 
-            backtester = Backtester(config, lot_sizes=lot_sizes)
+            backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes)
             result = backtester.run(
                 start=datetime.strptime(start_date, '%Y-%m-%d'),
                 end=datetime.strptime(end_date, '%Y-%m-%d'),

@@ -22,16 +22,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("TurtleTrading")
-class TurtleTrading(Strategy):
+class TurtleTrading(DailyBarStrategy):
 
     def __init__(
         self,
@@ -41,19 +41,19 @@ class TurtleTrading(Strategy):
         max_position_pct: float = 0.05,
         atr_period: int = 20,
     ):
-        super().__init__("TurtleTrading")
         self._symbols = symbols or ["600519", "000858", "601318"]
         self.entry_period = entry_period
         self.exit_period = exit_period
         self.max_position_pct = max_position_pct
         self.atr_period = atr_period
 
-        self._day_data: Dict[str, List] = {}
         self._entry_prices: Dict[str, float] = {}
 
+        super().__init__("TurtleTrading", self._symbols, holding_days=1)
+
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return (max(self.entry_period, self.atr_period) + 1) * 3
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -65,15 +65,6 @@ class TurtleTrading(Strategy):
 
     def _get_bars(self, symbol: str) -> List:
         return self._day_data.get(symbol, [])
-
-    def _get_last_price(self, symbol: str) -> float:
-        bars = self._get_bars(symbol)
-        if not bars:
-            return 0.0
-        last = bars[-1]
-        if isinstance(last, dict):
-            return float(last.get("close", 0))
-        return float(getattr(last, "close", 0))
 
     def _donchian_high(self, symbol: str, period: int) -> float:
         bars = self._get_bars(symbol)
@@ -101,25 +92,6 @@ class TurtleTrading(Strategy):
             tr = max(h - l, abs(h - pc), abs(l - pc))
             trs.append(tr)
         return float(np.mean(trs)) if trs else 0.0
-
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-        max_keep = (max(self.entry_period, self.atr_period) + 1) * 3
-        if len(self._day_data[symbol]) > max_keep:
-            self._day_data[symbol] = self._day_data[symbol][-max_keep:]
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         nav = context.portfolio.nav
@@ -160,26 +132,17 @@ class TurtleTrading(Strategy):
                             f"above entry high={entry_high:.2f}, ATR={atr:.2f}"
                         )
 
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._entry_prices.clear()
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
-            "entry_prices": self._entry_prices,
-            "parameters": {
-                "entry_period": self.entry_period,
-                "exit_period": self.exit_period,
-                "max_position_pct": self.max_position_pct,
-                "atr_period": self.atr_period,
-                "symbols": self._symbols,
-            },
+            "entry_period": self.entry_period,
+            "exit_period": self.exit_period,
+            "max_position_pct": self.max_position_pct,
+            "atr_period": self.atr_period,
+            "symbols": self._symbols,
         }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {"entry_prices": self._entry_prices}

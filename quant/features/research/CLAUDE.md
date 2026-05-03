@@ -6,7 +6,7 @@
 
 ## 对外契约
 
-- `ResearchEngine(config, scout, evaluator, integrator, pool)` - 研究引擎主类，编排完整流水线
+- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir)` - 研究引擎主类，backtest_fn 由调用方注入（API 层）避免 feature 间交叉导入
 - `StrategyScout` - 策略搜索器 (arXiv/SSRN 适配器)
 - `StrategyEvaluator` - 策略评估器 (LLM 驱动)
 - `StrategyIntegrator` - 策略集成器 (代码生成 + 注册)
@@ -16,11 +16,9 @@
 
 ## 依赖
 
-- `features/cio/llm_adapters` - LLMAdapter (OpenAI/Claude/Ollama)
-- `features/backtest` - Backtester, DataFrameProvider
-- `features/strategies` - Strategy 基类, StrategyRegistry, @strategy 装饰器
+- `domain/ports/llm` - LLMAdapterLike（实现由 cio/llm_adapters 提供，通过 DI 注入）
 - `shared/utils` - logger, config_loader
-- `api/state/runtime` - AVAILABLE_STRATEGIES, STRATEGY_PARAMETERS
+- 回测和策略依赖通过 `backtest_fn` 和 `strategies_dir` 由调用方注入（API 层）—— research feature 不直接导入其他 features 或 infrastructure
 
 ## 不变量
 

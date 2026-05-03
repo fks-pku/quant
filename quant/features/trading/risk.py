@@ -8,11 +8,12 @@ import time
 
 from quant.domain.models.risk_check import RiskCheckResult
 from quant.domain.ports.event_publisher import EventPublisher
+from quant.domain.ports.portfolio import RiskEngineLike
 from quant.features.trading.portfolio import Portfolio
 from quant.shared.utils.logger import setup_logger
 
 
-class RiskEngine:
+class RiskEngine(RiskEngineLike):
     """Risk checks run before every order submission."""
 
     def __init__(self, config: Dict, portfolio: Portfolio, event_bus):
@@ -66,17 +67,17 @@ class RiskEngine:
                 if not results[-1].passed:
                     approved = False
 
-        results.append(self._check_daily_loss())
-        if not results[-1].passed:
-            approved = False
+            results.append(self._check_daily_loss())
+            if not results[-1].passed:
+                approved = False
 
-        results.append(self._check_leverage())
-        if not results[-1].passed:
-            approved = False
+            results.append(self._check_leverage())
+            if not results[-1].passed:
+                approved = False
 
-        results.append(self._check_order_rate(as_of_date))
-        if not results[-1].passed:
-            approved = False
+            results.append(self._check_order_rate(as_of_date))
+            if not results[-1].passed:
+                approved = False
 
         if not approved:
             self._risk_rejected_count += 1

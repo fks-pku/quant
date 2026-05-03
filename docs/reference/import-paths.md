@@ -25,7 +25,6 @@ from quant.infrastructure.events import EventBus
 from quant.infrastructure.execution.brokers.paper import PaperBroker
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.infrastructure.data.providers.tushare import TushareProvider
-from quant.infrastructure.data.providers.akshare import AkshareProvider
 ```
 
 ## Features (orchestrators)

@@ -66,20 +66,15 @@ class WalkForwardEngine:
         self.min_trades = min_trades
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
+        if portfolio_class is None or risk_engine_class is None or sub_portfolio_class is None:
+            raise ValueError(
+                "portfolio_class, risk_engine_class, and sub_portfolio_class are required. "
+                "Use quant.features.trading.Portfolio, RiskEngine, and SubPortfolio."
+            )
         self.portfolio_class = portfolio_class
         self.risk_engine_class = risk_engine_class
         self.sub_portfolio_class = sub_portfolio_class
         self._event_bus = event_bus
-
-        if self.portfolio_class is None:
-            from quant.features.trading.portfolio import Portfolio
-            self.portfolio_class = Portfolio
-        if self.risk_engine_class is None:
-            from quant.features.trading.risk import RiskEngine
-            self.risk_engine_class = RiskEngine
-        if self.sub_portfolio_class is None:
-            from quant.features.trading.sub_portfolio import SubPortfolio
-            self.sub_portfolio_class = SubPortfolio
 
     def run(
         self,
@@ -295,13 +290,9 @@ class WalkForwardEngine:
         data: pd.DataFrame,
         initial_cash: float,
     ) -> BacktestResult:
-        event_bus = self._event_bus
-        if event_bus is None:
-            from quant.infrastructure.events import EventBus
-            event_bus = EventBus()
         backtester = Backtester(
             config or {},
-            event_bus=event_bus,
+            event_bus=self._event_bus,
             lot_sizes=self.lot_sizes,
             ipo_dates=self.ipo_dates,
             portfolio_class=self.portfolio_class,

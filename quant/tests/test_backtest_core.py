@@ -16,9 +16,12 @@ from quant.tests.conftest import (
 from quant.features.strategies.registry import StrategyRegistry
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestDiagnostics, BacktestResult, CommissionConfig
-from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE
+from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE, is_suspended
 from quant.features.backtest.commission import VOLUME_PARTICIPATION_LIMIT
 from quant.features.backtest.walkforward import DataFrameProvider, WalkForwardEngine
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
 from quant.domain.models.trade import Trade
 from quant.domain.models.position import Position
 
@@ -58,11 +61,11 @@ class TestCommissionConfig:
 class TestBacktesterExecution:
     def test_suspended_bar_detected(self):
         bar = {"volume": 0, "open": 100, "close": 100}
-        assert Backtester._is_suspended(bar) is True
+        assert is_suspended(bar) is True
 
     def test_normal_bar_not_suspended(self):
         bar = {"volume": 1000, "open": 100, "close": 100}
-        assert Backtester._is_suspended(bar) is False
+        assert is_suspended(bar) is False
 
     def test_buy_creates_trade_with_negative_pnl(self):
         config = {
@@ -70,7 +73,7 @@ class TestBacktesterExecution:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyStrategy:
             name = "BuyTest"
@@ -122,7 +125,7 @@ class TestBacktesterExecution:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class SellNoPosition:
             name = "SellNone"
@@ -169,7 +172,7 @@ class TestBacktesterExecution:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyExpensive:
             name = "BuyExpensive"
@@ -367,7 +370,7 @@ class TestTradeModel:
 
 class TestWalkForwardEngine:
     def test_empty_data_returns_not_viable(self):
-        engine = WalkForwardEngine(train_window_days=5, test_window_days=2, step_days=2)
+        engine = WalkForwardEngine(train_window_days=5, test_window_days=2, step_days=2, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
         df = pd.DataFrame({
             "timestamp": pd.to_datetime(["2025-01-02"]),
             "symbol": ["AAPL"],
@@ -386,7 +389,7 @@ class TestWalkForwardEngine:
         assert len(result.windows) == 0
 
     def test_wf_result_structure(self):
-        engine = WalkForwardEngine(train_window_days=5, test_window_days=2, step_days=30, min_trades=0)
+        engine = WalkForwardEngine(train_window_days=5, test_window_days=2, step_days=30, min_trades=0, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
         result = engine.run(
             strategy_factory=lambda params: SimpleMomentum(
                 symbols=["AAPL", "MSFT"],
@@ -462,7 +465,7 @@ class TestAdjustedPriceSeparation:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
             strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["AAPL"], momentum_lookback=2, holding_period=1)],
@@ -487,7 +490,7 @@ class TestAdjustedPriceSeparation:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
             strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["AAPL"], momentum_lookback=2, holding_period=1)],
@@ -527,7 +530,7 @@ class TestStockDividendLotTracking:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
             strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=1)],
@@ -562,7 +565,7 @@ class TestStockDividendLotTracking:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 10.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
             strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=1)],
@@ -650,7 +653,7 @@ class TestStrategyPositionSyncAfterDividend:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
         strat = StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=8)
         result = run_simple_backtest(bt, data, strategies=[strat], symbols=["600519"], dividends=div, initial_cash=1000000)
         buy_trades = [t for t in result.trades if t.side == "BUY"]
@@ -690,7 +693,7 @@ class TestMarketOrderRiskCheck:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 0.10, "max_daily_loss_pct": 1.0, "max_leverage": 10.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyBig:
             name = "BuyBig"
@@ -754,7 +757,7 @@ class TestDailyLossRiskCheck:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 10.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyAndHoldThenBuyMore:
             name = "BuyHold"
@@ -814,7 +817,7 @@ class TestCriticalRegression:
             "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         # Only provide data for Mon 2024-06-03 and Wed 2024-06-05 (Tue is missing)
         bars = {}
@@ -903,7 +906,7 @@ class TestCriticalRegression:
             "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class CloseOutStrat:
             name = "CloseOut"
@@ -970,7 +973,7 @@ class TestCriticalRegression:
         id2 = om.submit_order("AAPL", 100, "BUY", "MARKET", None, "test")
         assert id2 is None, "Duplicate BUY should be rejected"
 
-        orders = om.drain_pending()
+        orders = om.drain_pending(signal_date=datetime(2024, 6, 3))
         assert len(orders) == 1
 
         id3 = om.submit_order("AAPL", 100, "BUY", "MARKET", None, "test")

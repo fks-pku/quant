@@ -3,12 +3,14 @@ from datetime import datetime
 from typing import Optional
 import uuid
 
+from quant.domain.models.order import OrderSide
+
 
 @dataclass(frozen=True)
 class Fill:
     order_id: str
     symbol: str
-    side: str
+    side: OrderSide
     quantity: float
     price: float
     commission: float

@@ -24,6 +24,10 @@ from quant.features.strategies.base import Strategy
 from quant.features.strategies.registry import strategy as reg_strategy
 from quant.features.backtest.walkforward import DataFrameProvider
 
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
+
 SYMBOL = "HK.00700"
 DB_PATH = str(Path(os.path.join(os.path.dirname(__file__), "..", "data", "duckdb", "quant.duckdb")))
 OUTPUT_DIR = Path(os.path.join(os.path.dirname(__file__), "..", "data"))
@@ -166,7 +170,7 @@ def run_backtest(df):
     }
 
     provider = DataFrameProvider(df)
-    backtester = Backtester(config)
+    backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
 
     start = df["timestamp"].min()
     end = df["timestamp"].max()

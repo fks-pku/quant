@@ -21,16 +21,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("ATRVolatilityBreakout")
-class ATRVolatilityBreakout(Strategy):
+class ATRVolatilityBreakout(DailyBarStrategy):
 
     def __init__(
         self,
@@ -39,27 +39,23 @@ class ATRVolatilityBreakout(Strategy):
         breakout_mult: float = 1.5,
         stop_atr_mult: float = 2.0,
         max_holding_days: int = 10,
-        check_interval_days: int = 5,
+        holding_days: int = 5,
         max_position_pct: float = 0.08,
     ):
-        super().__init__("ATRVolatilityBreakout")
-        self._symbols = symbols or ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "SPY", "QQQ"]
+        _syms = symbols or ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "SPY", "QQQ"]
+        super().__init__("ATRVolatilityBreakout", _syms, holding_days)
         self.atr_period = atr_period
         self.breakout_mult = breakout_mult
         self.stop_atr_mult = stop_atr_mult
         self.max_holding_days = max_holding_days
-        self.check_interval_days = check_interval_days
         self.max_position_pct = max_position_pct
 
-        self._day_data: Dict[str, List] = {}
         self._entry_dates: Dict[str, date] = {}
         self._stop_prices: Dict[str, float] = {}
-        self._last_check_date: Optional[date] = None
-        self._days_since_check: int = 0
 
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return (self.atr_period + 1) * 3
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -71,20 +67,6 @@ class ATRVolatilityBreakout(Strategy):
 
     def _get_bars(self, symbol: str) -> List[dict]:
         return self._day_data.get(symbol, [])
-
-    def _get_last_price(self, symbol: str) -> float:
-        bars = self._get_bars(symbol)
-        if not bars:
-            return 0.0
-        last = bars[-1]
-        if isinstance(last, dict):
-            return float(last.get("close", 0))
-        return float(getattr(last, "close", 0))
-
-    def _get_bar_fields(self, bar: Any, field: str) -> float:
-        if isinstance(bar, dict):
-            return float(bar.get(field, 0))
-        return float(getattr(bar, field, 0))
 
     def _calculate_atr(self, symbol: str) -> float:
         bars = self._get_bars(symbol)
@@ -128,28 +110,6 @@ class ATRVolatilityBreakout(Strategy):
         current_stop = self._stop_prices.get(symbol, 0)
         self._stop_prices[symbol] = max(current_stop, new_stop)
 
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-        max_keep = (self.atr_period + 1) * 3
-        if len(self._day_data[symbol]) > max_keep:
-            self._day_data[symbol] = self._day_data[symbol][-max_keep:]
-
-    def on_before_trading(self, context: "Context", trading_date: date) -> None:
-        pass
-
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         nav = context.portfolio.nav
 
@@ -181,10 +141,10 @@ class ATRVolatilityBreakout(Strategy):
                 self._stop_prices.pop(symbol, None)
                 self.logger.info(f"ATRVolatilityBreakout exit {symbol}: {exit_reason}")
 
-        self._days_since_check += 1
-        if self._days_since_check < self.check_interval_days:
-            return
-        self._days_since_check = 0
+        super().on_after_trading(context, trading_date)
+
+    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        nav = context.portfolio.nav
 
         for symbol in self._symbols:
             if self._positions.get(symbol, 0) > 0:
@@ -208,28 +168,21 @@ class ATRVolatilityBreakout(Strategy):
                     f"ATRVolatilityBreakout entry {symbol} at ~{price:.2f}, stop={stop:.2f}"
                 )
 
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._entry_dates.clear()
         self._stop_prices.clear()
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "atr_period": self.atr_period,
+            "breakout_mult": self.breakout_mult,
+            "stop_atr_mult": self.stop_atr_mult,
+            "max_holding_days": self.max_holding_days,
+            "holding_days": self.holding_days,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "entry_dates": {k: str(v) for k, v in self._entry_dates.items()},
             "stop_prices": self._stop_prices,
-            "parameters": {
-                "atr_period": self.atr_period,
-                "breakout_mult": self.breakout_mult,
-                "stop_atr_mult": self.stop_atr_mult,
-                "max_holding_days": self.max_holding_days,
-                "check_interval_days": self.check_interval_days,
-            },
         }

@@ -5,9 +5,10 @@ from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 from quant.shared.utils.logger import get_logger
+from quant.domain.exceptions import OrderRejectedError
 
 
 class Strategy(ABC):
@@ -59,15 +60,21 @@ class Strategy(ABC):
         self._positions.clear()
 
     def buy(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
-        """Submit a buy order."""
+        """Submit a buy order. Returns None if rejected."""
         if self.context and hasattr(self.context, "submit_order"):
-            return self.context.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
+            try:
+                return self.context.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
+            except OrderRejectedError:
+                return None
         return None
 
     def sell(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
-        """Submit a sell order."""
+        """Submit a sell order. Returns None if rejected."""
         if self.context and hasattr(self.context, "submit_order"):
-            return self.context.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
+            try:
+                return self.context.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
+            except OrderRejectedError:
+                return None
         return None
 
     def get_position(self, symbol: str) -> float:

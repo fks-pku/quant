@@ -19,19 +19,18 @@ Validated: Walk-forward with 6m train / 1m test
 
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-import pandas as pd
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("VolatilityRegime")
-class VolatilityRegime(Strategy):
+class VolatilityRegime(DailyBarStrategy):
     """
     Volatility regime-based strategy switching.
 
@@ -60,7 +59,6 @@ class VolatilityRegime(Strategy):
         max_position_pct: float = 0.05,
         reduce_exposure_bear: float = 0.3,
     ):
-        super().__init__("VolatilityRegime")
         self._symbols = symbols or ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META"]
         self.vix_symbol = vix_symbol
         self.vix_lookback = vix_lookback
@@ -79,12 +77,13 @@ class VolatilityRegime(Strategy):
         self._regime_history: List[str] = []
         self._momentum_scores: Dict[str, float] = {}
         self._rsi_values: Dict[str, float] = {}
-        self._day_data: Dict[str, List] = {}
         self._positions_opened = False
 
+        super().__init__("VolatilityRegime", self._symbols, holding_days=1)
+
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return max(self.momentum_lookback, self.rsi_period + 1) * 2
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -176,12 +175,7 @@ class VolatilityRegime(Strategy):
         if symbol not in self._symbols:
             return
 
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-        max_keep = max(self.momentum_lookback, self.rsi_period + 1) * 2
-        if len(self._day_data[symbol]) > max_keep:
-            self._day_data[symbol] = self._day_data[symbol][-max_keep//2:]
+        super().on_data(context, data)
 
     def execute(self, context: "Context") -> None:
         if self._positions_opened:
@@ -198,11 +192,14 @@ class VolatilityRegime(Strategy):
             positions = self._execute_defensive(nav)
 
         for symbol, (direction, quantity) in positions.items():
-            if quantity > 0:
-                if direction == "BUY":
-                    self.buy(symbol, quantity)
-                else:
-                    self.sell(symbol, quantity)
+            if quantity <= 0:
+                continue
+            if self._positions.get(symbol, 0) > 0:
+                continue
+            if direction == "BUY":
+                self.buy(symbol, quantity)
+            else:
+                self.sell(symbol, quantity)
 
         self._positions_opened = True
 
@@ -263,15 +260,6 @@ class VolatilityRegime(Strategy):
 
         return positions
 
-    def _get_last_price(self, symbol: str) -> float:
-        if symbol in self._day_data and len(self._day_data[symbol]) > 0:
-            last_bar = self._day_data[symbol][-1]
-            if isinstance(last_bar, dict):
-                return float(last_bar.get("close", 0))
-            if hasattr(last_bar, "close"):
-                return float(last_bar.close)
-        return 0.0
-
     def on_fill(self, context: "Context", fill: Any) -> None:
         super().on_fill(context, fill)
         self.logger.info(
@@ -282,12 +270,11 @@ class VolatilityRegime(Strategy):
         self.execute(context)
         self._positions_opened = False
 
-    def on_stop(self, context: "Context") -> None:
+    def _on_stop_cleanup(self) -> None:
         self._vix_history.clear()
         self._regime_history.clear()
         self._momentum_scores.clear()
         self._rsi_values.clear()
-        self._day_data.clear()
         self._positions_opened = False
 
     def get_current_regime(self) -> str:
@@ -303,21 +290,22 @@ class VolatilityRegime(Strategy):
             "bear": self._regime_history.count(self.REGIME_BEAR) / total,
         }
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "vix_lookback": self.vix_lookback,
+            "vix_bull_threshold": self.vix_bull_threshold,
+            "vix_bear_threshold": self.vix_bear_threshold,
+            "momentum_lookback": self.momentum_lookback,
+            "momentum_top_n": self.momentum_top_n,
+            "rsi_period": self.rsi_period,
+            "rsi_oversold": self.rsi_oversold,
+            "rsi_overbought": self.rsi_overbought,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "current_regime": self._current_regime,
             "regime_distribution": self.get_regime_distribution(),
             "momentum_scores": self._momentum_scores,
             "rsi_values": self._rsi_values,
-            "parameters": {
-                "vix_lookback": self.vix_lookback,
-                "vix_bull_threshold": self.vix_bull_threshold,
-                "vix_bear_threshold": self.vix_bear_threshold,
-                "momentum_lookback": self.momentum_lookback,
-                "momentum_top_n": self.momentum_top_n,
-                "rsi_period": self.rsi_period,
-                "rsi_oversold": self.rsi_oversold,
-                "rsi_overbought": self.rsi_overbought,
-            },
         }

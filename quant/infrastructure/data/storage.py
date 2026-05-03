@@ -10,13 +10,13 @@ import threading
 from quant.shared.utils.logger import setup_logger
 
 
-class Storage:
+class SQLiteStorage:
     """SQLite and Parquet persistence layer."""
 
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.logger = setup_logger("Storage")
+        self.logger = setup_logger("SQLiteStorage")
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.RLock()
         self._init_database()

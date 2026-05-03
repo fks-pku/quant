@@ -1,6 +1,9 @@
-# Quant Trading System - Architecture Documentation
+# Quant Trading System - Architecture Documentation (HISTORICAL)
 
-> Last updated: 2025-04-19
+> **DEPRECATED:** This document reflects the architecture as of 2025-04-19 and is NO LONGER CURRENT.
+> The code has been refactored to a hexagonal architecture. See `ARCHITECTURE.md` for the current architecture.
+>
+> Last updated: 2025-04-19 (historical)
 
 ---
 

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
-from datetime import date
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from datetime import date, datetime
+from typing import Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 
 class LotEntry(NamedTuple):
@@ -136,7 +136,7 @@ class Position:
             else:
                 self.recalc_avg_cost_from_lots()
 
-        if fill_date is not None and fill_quantity > 0:
+        if fill_date is not None and fill_quantity > 0 and self.quantity > 0:
             self.add_buy_lot(fill_date, fill_quantity, fill_price)
 
     def adjust_lots_for_stock_dividend(self, ratio: float) -> None:
@@ -178,3 +178,23 @@ class Position:
             self.unrealized_pnl = self.market_value - self.cost_basis
         else:
             self.unrealized_pnl = 0.0
+
+    @property
+    def lot_count(self) -> int:
+        return len(self._lots)
+
+    @property
+    def has_lots(self) -> bool:
+        return bool(self._lots)
+
+    @property
+    def earliest_lot_date(self) -> Optional[date]:
+        if not self._lots:
+            return None
+        return min(self._lots.keys())
+
+    def iter_lots(self) -> Iterator[Tuple[date, "LotEntry"]]:
+        return iter(self._lots.items())
+
+    def iter_lots_fifo(self) -> Iterator[Tuple[date, "LotEntry"]]:
+        return iter(sorted(self._lots.items()))

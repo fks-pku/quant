@@ -15,10 +15,11 @@ from typing import Dict, List, Optional, Any
 import threading
 
 from quant.domain.models.position import Position
-from quant.shared.utils.symbol_utils import is_cn_symbol as _is_cn_symbol
+from quant.domain.models.market import is_cn_symbol as _is_cn_symbol
+from quant.domain.ports.portfolio import PortfolioLike
 
 
-class SubPortfolio:
+class SubPortfolio(PortfolioLike):
     """Virtual sub-account for a strategy within a shared capital pool."""
 
     def __init__(self, strategy_name: str, allocated_capital: float, master: Any):

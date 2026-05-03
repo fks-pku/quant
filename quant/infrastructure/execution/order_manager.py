@@ -241,8 +241,16 @@ class OrderManager:
             )
 
     def _get_last_price(self, symbol: str) -> float:
-        """Get last known price for a symbol (placeholder)."""
-        return 100.0
+        """Get last known price for a symbol.
+
+        Raises ValueError if no price tracking is configured. Live/paper trading
+        must register a price feed via register_price_feed() or pass explicit
+        prices in order submission.
+        """
+        raise ValueError(
+            f"No last price available for {symbol}. "
+            "Market orders require a price; pass price= explicitly or configure a price feed."
+        )
 
     def _record_strategy(self, order_id: str, strategy_name: Optional[str]) -> None:
         if self._strategy_tracker is None:

@@ -17,16 +17,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("DualMACrossover")
-class DualMACrossover(Strategy):
+class DualMACrossover(DailyBarStrategy):
 
     def __init__(
         self,
@@ -36,19 +36,19 @@ class DualMACrossover(Strategy):
         buy_buffer: float = 0.0,
         max_position_pct: float = 0.95,
     ):
-        super().__init__("DualMACrossover")
         self._symbols = symbols or ["000001"]
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.buy_buffer = buy_buffer
         self.max_position_pct = max_position_pct
 
-        self._day_data: Dict[str, List] = {}
         self._prev_signal: Dict[str, str] = {}
 
+        super().__init__("DualMACrossover", self._symbols, holding_days=1)
+
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return self.slow_period * 2
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -57,16 +57,6 @@ class DualMACrossover(Strategy):
             "DualMACrossover starting: fast=%d slow=%d buffer=%.2f%% symbols=%s",
             self.fast_period, self.slow_period, self.buy_buffer * 100, self._symbols,
         )
-
-    def on_data(self, context: "Context", data: Any) -> None:
-        symbol = data.get("symbol", "") if isinstance(data, dict) else getattr(data, "symbol", "")
-        if not symbol or symbol not in self._symbols:
-            return
-        buf = self._day_data.setdefault(symbol, [])
-        buf.append(data)
-        max_len = self.slow_period * 2
-        if len(buf) > max_len:
-            self._day_data[symbol] = buf[-max_len:]
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         for symbol in self._symbols:
@@ -118,25 +108,16 @@ class DualMACrossover(Strategy):
                 symbol, fast_ma, slow_ma, int(current_pos),
             )
 
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                self.sell(symbol, int(quantity))
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._prev_signal.clear()
-        super().on_stop(context)
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
-            "parameters": {
-                "fast_period": self.fast_period,
-                "slow_period": self.slow_period,
-                "buy_buffer": self.buy_buffer,
-                "max_position_pct": self.max_position_pct,
-            },
-            "prev_signal": dict(self._prev_signal),
+            "fast_period": self.fast_period,
+            "slow_period": self.slow_period,
+            "buy_buffer": self.buy_buffer,
+            "max_position_pct": self.max_position_pct,
         }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {"prev_signal": dict(self._prev_signal)}

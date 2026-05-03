@@ -8,7 +8,8 @@ import threading
 import pandas as pd
 
 from quant.domain.models.position import Position
-from quant.shared.utils.symbol_utils import is_cn_symbol as _is_cn_symbol
+from quant.domain.ports.portfolio import PortfolioLike
+from quant.domain.models.market import is_cn_symbol as _is_cn_symbol
 
 
 __all__ = ["Position", "PortfolioSnapshot", "Portfolio"]
@@ -26,7 +27,7 @@ class PortfolioSnapshot:
     margin_used: float
 
 
-class Portfolio:
+class Portfolio(PortfolioLike):
     """Tracks positions, NAV, and P&L in-memory per session."""
 
     def __init__(self, initial_cash: float = 100000.0, currency: str = "USD"):

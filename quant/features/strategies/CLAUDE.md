@@ -2,14 +2,13 @@
 
 ## 职责
 
-策略定义、注册、发现、框架组件。包含策略基类、注册表、因子库。
+策略定义、注册、发现、框架组件。包含策略基类、注册表。
 
 ## 对外契约
 
 - `Strategy(ABC)` - 策略抽象基类
 - `StrategyRegistry` - 策略注册表
 - `@strategy` - 策略装饰器
-- `Factors` - 因子库
 
 ## 依赖
 
@@ -25,9 +24,8 @@
 ## 修改守则
 
 - 改策略框架：只动 `base.py`, `registry.py`
-- 改因子库：只动 `factors.py`
 - 新增策略：在 `strategies/` 下新建目录
-- 每个策略需要配一个AGENTS.md，展示其基本概述
+- 每个策略需要配一个CLAUDE.md，展示其基本概述
 
 ## Known Pitfalls
 

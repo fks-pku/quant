@@ -1878,21 +1878,21 @@ git commit -m "feat: Phase 5 - update entry points to use new module paths"
 
 ---
 
-## Phase 6: AGENTS.md 和测试
+## Phase 6: CLAUDE.md 和测试
 
-**目标:** 创建所有 AGENTS.md 文件，确保测试通过
+**目标:** 创建所有 CLAUDE.md 文件，确保测试通过
 
 ---
 
-### Task 6.1: 创建根目录 AGENTS.md
+### Task 6.1: 创建根目录 CLAUDE.md
 
 **Files:**
-- Create: `/Users/bytedance/Desktop/vk/quant/.vibe-kanban-workspaces/a9c9-/quant/AGENTS.md`
+- Create: `/Users/bytedance/Desktop/vk/quant/.vibe-kanban-workspaces/a9c9-/quant/CLAUDE.md`
 
-- [ ] **Step 1: Create global AGENTS.md**
+- [ ] **Step 1: Create global CLAUDE.md**
 
 ```markdown
-# AGENTS.md — Quant Trading System
+# CLAUDE.md — Quant Trading System
 
 ## Architecture
 
@@ -1930,11 +1930,11 @@ quant/
 
 | Feature | Path | Description |
 |---------|------|-------------|
-| backtest | features/backtest/ | 回测完整闭环，见 features/backtest/AGENTS.md |
-| trading | features/trading/ | 实盘/模拟交易，见 features/trading/AGENTS.md |
-| portfolio | features/portfolio/ | 仓位管理，见 features/portfolio/AGENTS.md |
-| cio | features/cio/ | CIO 市场评估，见 features/cio/AGENTS.md |
-| strategies | features/strategies/ | 策略框架 + 实现，见 features/strategies/AGENTS.md |
+| backtest | features/backtest/ | 回测完整闭环，见 features/backtest/CLAUDE.md |
+| trading | features/trading/ | 实盘/模拟交易，见 features/trading/CLAUDE.md |
+| portfolio | features/portfolio/ | 仓位管理，见 features/portfolio/CLAUDE.md |
+| cio | features/cio/ | CIO 市场评估，见 features/cio/CLAUDE.md |
+| strategies | features/strategies/ | 策略框架 + 实现，见 features/strategies/CLAUDE.md |
 
 ## Python Package
 
@@ -1975,16 +1975,16 @@ from quant.shared.models import Order
 
 ---
 
-### Task 6.2: 创建各 Feature 的 AGENTS.md
+### Task 6.2: 创建各 Feature 的 CLAUDE.md
 
 **Files:**
-- Create: `quant/features/backtest/AGENTS.md`
-- Create: `quant/features/trading/AGENTS.md`
-- Create: `quant/features/portfolio/AGENTS.md`
-- Create: `quant/features/cio/AGENTS.md`
-- Create: `quant/features/strategies/AGENTS.md`
+- Create: `quant/features/backtest/CLAUDE.md`
+- Create: `quant/features/trading/CLAUDE.md`
+- Create: `quant/features/portfolio/CLAUDE.md`
+- Create: `quant/features/cio/CLAUDE.md`
+- Create: `quant/features/strategies/CLAUDE.md`
 
-- [ ] **Step 1: Create backtest/AGENTS.md**
+- [ ] **Step 1: Create backtest/CLAUDE.md**
 
 ```markdown
 # Backtest Feature
@@ -2026,7 +2026,7 @@ from quant.shared.models import Order
 - `lot_sizes` 字典的 key 格式要与 symbol 一致（包含 HK./US. 前缀）
 ```
 
-- [ ] **Step 2: Create trading/AGENTS.md**
+- [ ] **Step 2: Create trading/CLAUDE.md**
 
 ```markdown
 # Trading Feature
@@ -2071,7 +2071,7 @@ from quant.shared.models import Order
 - 策略通过 Context 访问所有系统组件，不要直接引用 Engine
 ```
 
-- [ ] **Step 3: Create portfolio/AGENTS.md**
+- [ ] **Step 3: Create portfolio/CLAUDE.md**
 
 ```markdown
 # Portfolio Feature
@@ -2109,7 +2109,7 @@ from quant.shared.models import Order
 - 策略名称作为 key 的一部分，改名会导致历史数据丢失
 ```
 
-- [ ] **Step 4: Create cio/AGENTS.md**
+- [ ] **Step 4: Create cio/CLAUDE.md**
 
 ```markdown
 # CIO Feature
@@ -2149,7 +2149,7 @@ CIO 市场评估和策略权重分配。包含市场评估器、新闻分析器�
 - 新闻文本过长需要截断
 ```
 
-- [ ] **Step 5: Create strategies/AGENTS.md**
+- [ ] **Step 5: Create strategies/CLAUDE.md**
 
 ```markdown
 # Strategies Feature
@@ -2217,8 +2217,8 @@ Expected: All tests pass
 - [ ] **Step 3: Commit**
 
 ```bash
-git add quant/tests/ AGENTS.md quant/features/*/AGENTS.md
-git commit -m "feat: Phase 6 - add AGENTS.md docs and update test imports"
+git add quant/tests/ CLAUDE.md quant/features/*/CLAUDE.md
+git commit -m "feat: Phase 6 - add CLAUDE.md docs and update test imports"
 ```
 
 ---
@@ -2274,6 +2274,6 @@ This plan implements a complete Feature-Slice refactoring:
 3. **Phase 3**: Migrate features (portfolio, trading, backtest, strategies, cio)
 4. **Phase 4**: Refactor API layer, remove api/state.py god module
 5. **Phase 5**: Update entry points (api_server.py, quant_system.py, backtest_runner.py)
-6. **Phase 6**: Add AGENTS.md documentation, update tests
+6. **Phase 6**: Add CLAUDE.md documentation, update tests
 
 Each phase is self-contained and testable. API paths remain unchanged for frontend compatibility.

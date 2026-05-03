@@ -72,11 +72,14 @@ quant/
 
 | Port | Description | Implementations |
 |------|-------------|------------------|
-| DataFeed | Data source interface (get_bars, subscribe) | TushareProvider, AkshareProvider, YfinanceProvider |
+| DataFeed | Data source interface (get_bars, subscribe) | TushareProvider, YfinanceProvider |
 | BrokerAdapter | Broker interface (submit_order, get_positions) | PaperBroker, FutuProvider |
-| Strategy | Strategy interface (on_bar, buy, sell) | VolatilityRegime, SimpleMomentum, CrossSectionalMeanReversion |
+| Strategy | Strategy interface (on_data, buy, sell) | DailyBarStrategy + 12 concrete strategies |
 | Storage | Persistence interface (save_bars, get_bars, get_symbols, get_lot_size) | DuckDBStorage |
 | EventPublisher | Event publish interface (subscribe, publish, publish_nowait) | EventBus |
+| PortfolioLike | Portfolio contract (cash, positions, nav, update_position, reset_daily) | Portfolio, SubPortfolio |
+| RiskEngineLike | Risk engine contract (check_order, record_order, reset_daily) | RiskEngine |
+| LLMAdapterLike | LLM adapter contract (analyze) | OpenAIAdapter, ClaudeAdapter, OllamaAdapter, MiniMaxAdapter |
 
 ## Architecture Invariants
 
@@ -89,13 +92,25 @@ quant/
 7. **Inter-layer communication**: direct call + Event Bus (pub/sub) + Dependency Injection (DI)
 8. **domain ports return `Any` type**, not `pd.DataFrame` — keeps domain zero-dependency. pandas conversion happens in infrastructure layer
 
-## Strategies (implemented)
+## Strategies (13 implemented)
 
-| Strategy | Directory | CN Compatible | Notes |
-|----------|-----------|---------------|-------|
-| SimpleMomentum | `features/strategies/simple_momentum/` | Yes | Cross-sectional momentum; single-stock mode auto-detects |
-| CrossSectionalMeanReversion | `features/strategies/cross_sectional_mr/` | Partially | Needs market_symbol=000300 |
-| VolatilityRegime | `features/strategies/volatility_regime/` | No | Requires VIX data |
+All strategies extend `DailyBarStrategy` (in `features/strategies/daily_bar.py`) which provides
+bar buffering, price helpers, rebalance gating, position liquidation, and serialization.
+
+| Strategy | Directory | CN Compatible | Type |
+|----------|-----------|---------------|------|
+| SimpleMomentum | `features/strategies/simple_momentum/` | Yes | Cross-sectional momentum |
+| CrossSectionalMeanReversion | `features/strategies/cross_sectional_mr/` | Partially | Mean reversion vs market |
+| VolatilityRegime | `features/strategies/volatility_regime/` | No | Regime-switching (VIX) |
+| DualMomentum | `features/strategies/dual_momentum/` | Partially | Absolute + relative momentum |
+| DualMACrossover | `features/strategies/dual_ma_crossover/` | Yes | MA crossover signal |
+| BollingerMeanReversion | `features/strategies/bollinger_mean_reversion/` | Yes | BB + RSI oversold bounce |
+| ATRVolatilityBreakout | `features/strategies/atr_volatility_breakout/` | Yes | ATR-based breakout |
+| TurtleTrading | `features/strategies/turtle_trading/` | Yes | Donchian channel breakout |
+| MultiFactorScore | `features/strategies/multi_factor_score/` | Yes | Momentum + RSI + Volume composite |
+| RegimeFilteredMomentum | `features/strategies/regime_filtered_momentum/` | Yes | Momentum with vol-regime sizing |
+| VolatilityScaledTrend | `features/strategies/volatility_scaled_trend/` | Yes | Trend with inverse-vol weighting |
+| DailyReturnAnomaly | `features/strategies/daily_return_anomaly/` | Yes | Consecutive return streak |
 
 ## Key Conventions
 

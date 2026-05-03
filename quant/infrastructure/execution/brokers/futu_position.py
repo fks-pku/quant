@@ -2,7 +2,8 @@
 
 from typing import Any, Dict, List
 
-from quant.infrastructure.execution.brokers.base import AccountInfo, Position
+from quant.domain.models.account import AccountInfo
+from quant.domain.models.position import Position
 
 
 class FutuPositionMixin:

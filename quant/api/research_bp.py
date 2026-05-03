@@ -1,11 +1,106 @@
 import uuid
 import threading
+from datetime import datetime
 from flask import Blueprint, jsonify, request
 
 from quant.features.research.models import ResearchConfig, ResearchResult
 from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
+
+
+def _make_backtest_fn():
+    """Create a backtest function for the research pipeline.
+
+    Defined at the API layer (not in features/) so cross-feature imports are
+    architectural composition-root wiring, not feature-to-feature coupling.
+    """
+    from quant.features.backtest.engine import Backtester
+    from quant.features.strategies.registry import StrategyRegistry
+    from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+    from quant.features.backtest.walkforward import DataFrameProvider
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.risk import RiskEngine
+    from quant.features.trading.sub_portfolio import SubPortfolio
+    from quant.features.research.models import ResearchLogEntry
+    import pandas as pd
+
+    def _run_backtest(sid, result, config, integrator, pool):
+        registry = StrategyRegistry()
+        strategy_class = registry.get(sid)
+        if strategy_class is None:
+            result.errors.append(f"Strategy {sid} not in registry for backtest")
+            return
+
+        symbols = config.default_symbols
+        start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
+        end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
+
+        db_provider = DuckDBProvider()
+        db_provider.connect()
+        all_data = []
+        for sym in symbols:
+            bars = db_provider.get_bars(sym, start, end, "1d")
+            if not bars.empty:
+                all_data.append(bars)
+        db_provider.disconnect()
+
+        if not all_data:
+            result.errors.append(f"No data for {sid}")
+            return
+
+        data_df = pd.concat(all_data, ignore_index=True)
+        data_provider = DataFrameProvider(data_df)
+        strategy = strategy_class(symbols=symbols)
+
+        bt_config = {
+            "backtest": {"slippage_bps": 5},
+            "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+            "data": {"default_timeframe": "1d"},
+            "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
+        }
+
+        backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
+        bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=100000, data_provider=data_provider, symbols=symbols)
+
+        info = integrator.get_registry_entry(sid)
+        if info is not None:
+            info["backtest"] = {
+                "sharpe": round(bt_result.sharpe_ratio, 2),
+                "max_dd": round(bt_result.max_drawdown_pct, 2),
+                "cagr": round(bt_result.total_return * 100 / max(1, (end - start).days / 365.25), 2),
+                "win_rate": round(bt_result.win_rate * 100, 2),
+                "period": f"{config.default_backtest_start}-{config.default_backtest_end}",
+            }
+            meta = info.setdefault("research_meta", {})
+            meta["backtest_result"] = info["backtest"]
+            if bt_result.sharpe_ratio < config.backtest_sharpe_threshold:
+                pool.reject(sid, reason=f"Backtest Sharpe {bt_result.sharpe_ratio:.2f} below threshold")
+                result.rejected += 1
+                result.log.append(ResearchLogEntry(
+                    phase="backtest", title=info.get("name", sid),
+                    source="", source_url="", verdict="fail",
+                    reason=f"Sharpe {bt_result.sharpe_ratio:.2f} < {config.backtest_sharpe_threshold}",
+                    scores={
+                        "sharpe": round(bt_result.sharpe_ratio, 2),
+                        "max_dd": round(bt_result.max_drawdown_pct, 2),
+                        "win_rate": round(bt_result.win_rate * 100, 2),
+                    },
+                ))
+            else:
+                result.backtested += 1
+                result.log.append(ResearchLogEntry(
+                    phase="backtest", title=info.get("name", sid),
+                    source="", source_url="", verdict="pass",
+                    reason=f"Sharpe {bt_result.sharpe_ratio:.2f}",
+                    scores={
+                        "sharpe": round(bt_result.sharpe_ratio, 2),
+                        "max_dd": round(bt_result.max_drawdown_pct, 2),
+                        "win_rate": round(bt_result.win_rate * 100, 2),
+                    },
+                ))
+
+    return _run_backtest
 
 research_bp = Blueprint("research", __name__)
 
@@ -43,7 +138,7 @@ def _get_scheduler() -> ResearchScheduler:
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-        engine = ResearchEngine(config=cfg, evaluator=evaluator)
+        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn())
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:
             _research_scheduler.start()
@@ -82,7 +177,7 @@ def run_research():
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator
     evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-    engine = ResearchEngine(config=cfg, evaluator=evaluator)
+    engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn())
 
     def _run():
         try:

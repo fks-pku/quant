@@ -25,7 +25,7 @@ from quant.features.trading.scheduler import Scheduler
 from quant.infrastructure.data.providers.yahoo import YahooProvider
 from quant.infrastructure.data.providers.alpha_vantage import AlphaVantageProvider
 from quant.infrastructure.data.providers.futu import FutuProvider
-from quant.infrastructure.data.storage import Storage
+from quant.infrastructure.data.storage import SQLiteStorage
 from quant.infrastructure.execution.brokers.paper import PaperBroker
 from quant.infrastructure.execution.brokers.futu import FutuBroker
 from quant.infrastructure.execution.order_manager import OrderManager
@@ -46,7 +46,7 @@ class QuantSystem:
             self.config.get("system", {}).get("log_level", "INFO"),
         )
         self.engine: Optional[Engine] = None
-        self.storage: Optional[Storage] = None
+        self.storage: Optional[SQLiteStorage] = None
         self._setup_signal_handlers()
 
     def _setup_signal_handlers(self) -> None:
@@ -66,9 +66,10 @@ class QuantSystem:
         self.logger.info("Initializing Quant Trading System...")
 
         data_dir = self.config.get("system", {}).get("data_dir", "./data")
-        self.storage = Storage(data_dir)
+        self.storage = SQLiteStorage(data_dir)
 
-        self.engine = Engine(self.config)
+        self._event_bus = EventBus()
+        self.engine = Engine(self.config, event_bus=self._event_bus)
 
         providers = self.config.get("data", {}).get("providers", [])
         for provider_name in providers:

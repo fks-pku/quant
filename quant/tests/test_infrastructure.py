@@ -46,6 +46,27 @@ class TestEventBus:
         bus.publish_nowait(EventType.BAR, data={"symbol": "AAPL"})
         assert len(received) == 1
 
+    def test_publish_multiple_event_types(self):
+        bus = EventBus()
+        r1, r2, r3 = [], [], []
+        bus.subscribe(EventType.BAR, lambda e: r1.append(e))
+        bus.subscribe(EventType.MARKET_OPEN, lambda e: r2.append(e))
+        bus.subscribe(EventType.ORDER_SUBMITTED, lambda e: r3.append(e))
+        bus.publish(Event(EventType.BAR, data={}))
+        bus.publish(Event(EventType.MARKET_OPEN, data={}))
+        bus.publish(Event(EventType.BAR, data={}))
+        assert len(r1) == 2
+        assert len(r2) == 1
+        assert len(r3) == 0
+
+    def test_unrelated_events_not_dispatched(self):
+        bus = EventBus()
+        received = []
+        bus.subscribe(EventType.BAR, lambda e: received.append(e))
+        bus.publish(Event(EventType.MARKET_CLOSE, data={}))
+        bus.publish(Event(EventType.SYSTEM_START, data={}))
+        assert len(received) == 0
+
 
 class TestPortfolio:
     def test_initial_nav(self):
@@ -157,7 +178,7 @@ class TestBarModel:
             volume=1000000,
         )
         assert bar.is_bullish is True
-        assert bar.range == 7.0
+        assert bar.price_range == 7.0
 
     def test_invalid_bar_raises(self):
         with pytest.raises(ValueError):

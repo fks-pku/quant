@@ -23,16 +23,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("DailyReturnAnomaly")
-class DailyReturnAnomaly(Strategy):
+class DailyReturnAnomaly(DailyBarStrategy):
 
     def __init__(
         self,
@@ -44,39 +44,27 @@ class DailyReturnAnomaly(Strategy):
         top_pct: float = 0.2,
         max_position_pct: float = 0.10,
     ):
-        super().__init__("DailyReturnAnomaly")
-        self._symbols = symbols or [
+        _syms = symbols or [
             "600519", "000858", "601318", "600036", "000333",
             "002415", "300750", "601012", "600900", "000651",
             "002304", "600276", "601888", "000568", "603259",
         ]
+        super().__init__("DailyReturnAnomaly", _syms, holding_days)
         self.streak_short = streak_short
         self.streak_long = streak_long
         self.short_weight = short_weight
-        self.holding_days = holding_days
         self.top_pct = top_pct
         self.max_position_pct = max_position_pct
 
-        self._day_data: Dict[str, List] = {}
-        self._last_rebalance_date: Optional[date] = None
-        self._days_since_rebalance: int = 0
         self._long_positions: List[str] = []
 
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return 60
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
         self.logger = get_logger("DailyReturnAnomaly")
-
-    def _get_closes(self, symbol: str) -> List[float]:
-        bars = self._day_data.get(symbol, [])
-        return [self._adj(b, "close") for b in bars]
-
-    def _get_last_price(self, symbol: str) -> float:
-        closes = self._get_closes(symbol)
-        return float(closes[-1]) if closes else 0.0
 
     def _count_streak(self, symbol: str) -> int:
         closes = self._get_closes(symbol)
@@ -130,7 +118,6 @@ class DailyReturnAnomaly(Strategy):
     def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
         scores = self._calculate_composite_scores()
         if not scores:
-            self._last_rebalance_date = trading_date
             return
 
         sorted_syms = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -156,58 +143,19 @@ class DailyReturnAnomaly(Strategy):
                 if qty > 0:
                     self.buy(symbol, qty)
 
-        self._last_rebalance_date = trading_date
-        self._days_since_rebalance = 0
-
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-        max_keep = 60
-        if len(self._day_data[symbol]) > max_keep:
-            self._day_data[symbol] = self._day_data[symbol][-max_keep:]
-
-    def on_before_trading(self, context: "Context", trading_date: date) -> None:
-        pass
-
-    def on_after_trading(self, context: "Context", trading_date: date) -> None:
-        if self._last_rebalance_date is not None:
-            self._days_since_rebalance += 1
-            if self._days_since_rebalance < self.holding_days:
-                return
-        self._execute_rebalance(context, trading_date)
-
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._long_positions.clear()
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "streak_short": self.streak_short,
+            "streak_long": self.streak_long,
+            "short_weight": self.short_weight,
+            "holding_days": self.holding_days,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "long_positions": self._long_positions,
             "last_rebalance_date": str(self._last_rebalance_date) if self._last_rebalance_date else None,
-            "parameters": {
-                "streak_short": self.streak_short,
-                "streak_long": self.streak_long,
-                "short_weight": self.short_weight,
-                "holding_days": self.holding_days,
-            },
         }

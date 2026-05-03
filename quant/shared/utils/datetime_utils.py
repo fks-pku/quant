@@ -26,7 +26,11 @@ def is_market_open(
 
 
 def is_trading_day(current_time: datetime, market: str = "US") -> bool:
-    """Check if current day is a trading day (Mon-Fri, excluding holidays)."""
+    """Check if current day is a trading day (Mon-Fri).
+
+    TODO: Integrate market holiday calendars (CN/HK/US) to exclude holidays.
+    Currently only excludes weekends. The live scheduler depends on this function.
+    """
     if current_time.weekday() >= 5:
         return False
     return True

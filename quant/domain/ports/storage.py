@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from quant.domain.models.order import Order
+
 
 class Storage(ABC):
 
@@ -32,7 +34,7 @@ class Storage(ABC):
         pass
 
     @abstractmethod
-    def save_order(self, order: dict) -> None:
+    def save_order(self, order: Order) -> None:
         pass
 
     @abstractmethod

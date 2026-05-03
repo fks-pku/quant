@@ -43,8 +43,6 @@ class NewsAnalyzer:
             )
         else:
             raise ValueError(f"Unknown provider: {provider}")
-        self._adapter = self.adapter
-
     def analyze(self, news_text: str, market_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not news_text:
             return {"sentiment": "neutral", "confidence": 0.5, "summary": ""}

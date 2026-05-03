@@ -29,7 +29,7 @@ def process_dividends(
             continue
         try:
             div = data_provider.get_dividend_for_date(symbol, current_date)
-        except Exception:
+        except (TypeError, ValueError, KeyError, AttributeError):
             logger.warning("Error getting dividend for %s on %s", symbol, current_date)
             continue
         if not div:
@@ -64,7 +64,7 @@ def process_dividends(
 def calculate_cn_dividend_tax(pos: Any, cash_div: float, current_date: Any) -> float:
     total_tax = 0.0
     today = current_date.date() if hasattr(current_date, 'date') else current_date
-    for lot_date, lot in pos._lots.items():
+    for lot_date, lot in pos.iter_lots():
         holding_days = (today - lot_date).days
         if holding_days <= CN_DIVIDEND_TAX_SHORT_DAYS:
             rate = 0.20

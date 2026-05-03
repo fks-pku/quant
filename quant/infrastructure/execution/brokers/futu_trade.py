@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from quant.infrastructure.execution.brokers.base import Order, OrderStatus
+from quant.domain.models.order import Order, OrderStatus
 from quant.infrastructure.execution.brokers.futu_connection import FutuOrderState
 
 

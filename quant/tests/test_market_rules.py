@@ -212,3 +212,27 @@ class TestRoundHalfUp:
         prev_close = 33.33
         upper = prev_close * 1.10
         assert is_price_at_limit("600519", upper, prev_close) is True
+
+
+class TestTradingDay:
+    def test_weekend_is_not_trading_day(self):
+        from quant.shared.utils.datetime_utils import is_trading_day
+        from datetime import datetime
+        saturday = datetime(2025, 1, 4)
+        assert is_trading_day(saturday) is False
+        sunday = datetime(2025, 1, 5)
+        assert is_trading_day(sunday) is False
+
+    def test_weekday_is_trading_day(self):
+        from quant.shared.utils.datetime_utils import is_trading_day
+        from datetime import datetime
+        monday = datetime(2025, 1, 6)
+        assert is_trading_day(monday) is True
+        wednesday = datetime(2025, 1, 8)
+        assert is_trading_day(wednesday) is True
+
+    def test_friday_is_trading_day(self):
+        from quant.shared.utils.datetime_utils import is_trading_day
+        from datetime import datetime
+        friday = datetime(2025, 1, 10)
+        assert is_trading_day(friday) is True

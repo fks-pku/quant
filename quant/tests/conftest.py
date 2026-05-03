@@ -1,14 +1,20 @@
 """Shared fixtures for all tests."""
 from datetime import datetime, timedelta, date
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from quant.features.backtest.engine import Backtester
-from quant.features.backtest.entities import CommissionConfig
 from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.strategies.base import Strategy
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
+
+
+_RNG = np.random.RandomState(42)
 
 
 @pytest.fixture
@@ -55,12 +61,12 @@ def make_bars_df(
     price = start_price
     for i in range(n_days):
         ts = start + timedelta(days=i)
-        ret = daily_return + np.random.normal(0, noise)
+        ret = daily_return + _RNG.normal(0, noise)
         price = price * (1 + ret)
         price = max(price, 1.0)
-        high = price * (1 + abs(np.random.normal(0, 0.005)))
-        low = price * (1 - abs(np.random.normal(0, 0.005)))
-        open_price = round(price * (1 + np.random.normal(0, 0.003)), 4)
+        high = price * (1 + abs(_RNG.normal(0, 0.005)))
+        low = price * (1 - abs(_RNG.normal(0, 0.005)))
+        open_price = round(price * (1 + _RNG.normal(0, 0.003)), 4)
         rows.append({
             "symbol": symbol,
             "timestamp": ts,
@@ -135,7 +141,41 @@ def make_backtester(config=None, lot_sizes=None, ipo_dates=None):
         "execution": {"commission": {}},
         "risk": {},
     }
-    return Backtester(config, lot_sizes=lot_sizes, ipo_dates=ipo_dates)
+    return Backtester(
+        config, lot_sizes=lot_sizes, ipo_dates=ipo_dates,
+        portfolio_class=Portfolio,
+        risk_engine_class=RiskEngine,
+        sub_portfolio_class=SubPortfolio,
+    )
+
+
+class _TestStrategy(Strategy):
+    """Reusable test strategy base — eliminates ~30 inline class duplications.
+
+    Usage:
+        strat = make_test_strategy("BuyAAPL", symbols=["AAPL"],
+                                   on_after=lambda ctx, td: ctx.submit_order("AAPL", 10, "BUY"))
+    """
+
+    def __init__(self, name: str, symbols: List[str],
+                 on_after: Optional[Callable] = None):
+        super().__init__(name)
+        self._symbols = symbols
+        self._on_after = on_after
+
+    @property
+    def symbols(self) -> List[str]:
+        return self._symbols
+
+    def on_after_trading(self, context, trading_date):
+        if self._on_after:
+            self._on_after(context, trading_date)
+
+
+def make_test_strategy(name: str, symbols: List[str],
+                       on_after: Optional[Callable] = None) -> _TestStrategy:
+    """Factory for test strategies with minimal boilerplate."""
+    return _TestStrategy(name, symbols, on_after)
 
 
 class MockDataProvider:

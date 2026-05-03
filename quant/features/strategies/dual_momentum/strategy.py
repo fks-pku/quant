@@ -20,16 +20,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("DualMomentum")
-class DualMomentum(Strategy):
+class DualMomentum(DailyBarStrategy):
 
     def __init__(
         self,
@@ -39,21 +39,20 @@ class DualMomentum(Strategy):
         holding_days: int = 21,
         max_position_pct: float = 0.90,
     ):
-        super().__init__("DualMomentum")
-        self._symbols = symbols or ["SPY", "QQQ", "IWM", "VGK", "EEM"]
+        _trading_syms = symbols or ["SPY", "QQQ", "IWM", "VGK", "EEM"]
+        self._trading_symbols = _trading_syms
         self.safe_symbol = safe_symbol
         self.lookback_months = lookback_months
-        self.holding_days = holding_days
         self.max_position_pct = max_position_pct
 
-        self._day_data: Dict[str, List] = {}
-        self._last_rebalance_date: Optional[date] = None
+        _all_syms = list(set(_trading_syms + [safe_symbol]))
+        super().__init__("DualMomentum", _all_syms, holding_days)
+
         self._current_allocation: Optional[str] = None
-        self._days_since_rebalance: int = 0
 
     @property
-    def symbols(self) -> List[str]:
-        return list(set(self._symbols + [self.safe_symbol]))
+    def _max_keep_hint(self) -> int:
+        return self.lookback_months * 21 + 10
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -62,14 +61,6 @@ class DualMomentum(Strategy):
             f"DualMomentum starting with lookback={self.lookback_months}m, "
             f"safe_asset={self.safe_symbol}"
         )
-
-    def _get_closes(self, symbol: str) -> List[float]:
-        bars = self._day_data.get(symbol, [])
-        return [self._adj(bar, "close") for bar in bars]
-
-    def _get_last_price(self, symbol: str) -> float:
-        closes = self._get_closes(symbol)
-        return float(closes[-1]) if closes else 0.0
 
     def _calculate_returns(self, symbol: str, lookback_days: int) -> float:
         closes = self._get_closes(symbol)
@@ -86,7 +77,7 @@ class DualMomentum(Strategy):
         best_symbol = None
         best_return = -np.inf
 
-        for symbol in self._symbols:
+        for symbol in self._trading_symbols:
             ret = self._calculate_returns(symbol, lookback_days)
             if ret > best_return:
                 best_return = ret
@@ -125,62 +116,24 @@ class DualMomentum(Strategy):
                     self.buy(target_symbol, qty)
 
         self._current_allocation = target_symbol
-        self._last_rebalance_date = trading_date
-        self._days_since_rebalance = 0
 
         self.logger.info(
             f"DualMomentum rebalanced to {target_symbol}"
         )
 
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self.symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-        lookback_days = self.lookback_months * 21 + 10
-        if len(self._day_data[symbol]) > lookback_days:
-            self._day_data[symbol] = self._day_data[symbol][-lookback_days:]
-
-    def on_before_trading(self, context: "Context", trading_date: date) -> None:
-        pass
-
-    def on_after_trading(self, context: "Context", trading_date: date) -> None:
-        if self._last_rebalance_date is not None:
-            self._days_since_rebalance += 1
-            if self._days_since_rebalance < self.holding_days:
-                return
-        self._execute_rebalance(context, trading_date)
-
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._current_allocation = None
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "safe_symbol": self.safe_symbol,
+            "lookback_months": self.lookback_months,
+            "holding_days": self.holding_days,
+            "max_position_pct": self.max_position_pct,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "current_allocation": self._current_allocation,
             "last_rebalance_date": str(self._last_rebalance_date) if self._last_rebalance_date else None,
-            "parameters": {
-                "safe_symbol": self.safe_symbol,
-                "lookback_months": self.lookback_months,
-                "holding_days": self.holding_days,
-                "max_position_pct": self.max_position_pct,
-            },
         }

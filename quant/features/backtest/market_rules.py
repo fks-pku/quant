@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from quant.shared.utils.symbol_utils import detect_market, is_cn_symbol, cn_price_limit_pct
+from quant.domain.models.market import detect_market, is_cn_symbol, cn_price_limit_pct
 
 
 MARKET_CURRENCY = {"CN": "CNY", "HK": "HKD", "US": "USD"}
@@ -87,19 +87,18 @@ def is_suspended(bar: Dict) -> bool:
 
 
 def get_earliest_lot_time(pos) -> Optional[datetime]:
-    if pos is None or not hasattr(pos, '_lots') or not pos._lots:
+    if pos is None or not pos.has_lots:
         return None
-    earliest = min(pos._lots.keys())
-    return datetime(earliest.year, earliest.month, earliest.day)
+    d = pos.earliest_lot_date
+    return datetime(d.year, d.month, d.day) if d else None
 
 
 def fifo_lot_slices(pos, sell_qty: float) -> List[tuple]:
     slices = []
     remaining = sell_qty
-    for lot_date in sorted(pos._lots.keys()):
+    for lot_date, lot in pos.iter_lots_fifo():
         if remaining <= 0:
             break
-        lot = pos._lots[lot_date]
         take = min(lot.qty, remaining)
         slices.append((lot_date, take, lot.price))
         remaining -= take

@@ -11,14 +11,11 @@ logger = logging.getLogger(__name__)
 class StrategyIntegrator:
     def __init__(
         self,
-        strategies_dir: Optional[Path] = None,
+        strategies_dir: Path,
         strategy_registry: Optional[Dict[str, Any]] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
         on_register: Optional[Callable] = None,
     ):
-        if strategies_dir is None:
-            from quant.features.strategies import __file__ as _strat_file
-            strategies_dir = Path(_strat_file).parent
         self.strategies_dir = strategies_dir
         self._registry = strategy_registry if strategy_registry is not None else {}
         self._params = strategy_params if strategy_params is not None else {}
@@ -46,6 +43,13 @@ class StrategyIntegrator:
 
         self._register_in_runtime(name, class_name, raw, report)
         return name
+
+    def get_registry_entry(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        """Return the registry entry for strategy_id, or None."""
+        for info in self._registry.values():
+            if info.get("id") == strategy_id:
+                return info
+        return None
 
     @staticmethod
     def _normalize_name(title: str) -> str:

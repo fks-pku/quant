@@ -163,3 +163,7 @@ class TestCalculateCommissionBySymbol:
         cfg = CommissionConfig()
         breakdown = calculate_commission("AAPL", 150.0, 100, "BUY", cfg)
         assert isinstance(breakdown["commission"], float)
+
+    def test_volume_participation_limit_constant(self):
+        from quant.features.backtest.commission import VOLUME_PARTICIPATION_LIMIT
+        assert VOLUME_PARTICIPATION_LIMIT == 0.05

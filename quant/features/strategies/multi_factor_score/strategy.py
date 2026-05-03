@@ -21,16 +21,16 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("MultiFactorScore")
-class MultiFactorScore(Strategy):
+class MultiFactorScore(DailyBarStrategy):
 
     def __init__(
         self,
@@ -45,11 +45,11 @@ class MultiFactorScore(Strategy):
         holding_days: int = 5,
         max_position_pct: float = 0.10,
     ):
-        super().__init__("MultiFactorScore")
-        self._symbols = symbols or [
+        _syms = symbols or [
             "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
             "JPM", "SPY", "QQQ", "IWM", "XLF", "XLE", "XLK",
         ]
+        super().__init__("MultiFactorScore", _syms, holding_days)
         self.momentum_lookback = momentum_lookback
         self.rsi_period = rsi_period
         self.volume_lookback = volume_lookback
@@ -57,18 +57,14 @@ class MultiFactorScore(Strategy):
         self.rsi_weight = rsi_weight
         self.volume_weight = volume_weight
         self.top_pct = top_pct
-        self.holding_days = holding_days
         self.max_position_pct = max_position_pct
 
-        self._day_data: Dict[str, List] = {}
-        self._last_rebalance_date: Optional[date] = None
-        self._days_since_rebalance: int = 0
         self._long_positions: List[str] = []
         self._scores: Dict[str, float] = {}
 
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return max(self.momentum_lookback, self.rsi_period, self.volume_lookback) * 2 + 10
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -82,20 +78,12 @@ class MultiFactorScore(Strategy):
             f"top_pct={self.top_pct}"
         )
 
-    def _get_closes(self, symbol: str) -> List[float]:
-        bars = self._day_data.get(symbol, [])
-        return [self._adj(b, "close") for b in bars]
-
     def _get_volumes(self, symbol: str) -> List[float]:
         bars = self._day_data.get(symbol, [])
         return [
             b.get("volume", 0) if isinstance(b, dict) else getattr(b, "volume", 0)
             for b in bars
         ]
-
-    def _get_last_price(self, symbol: str) -> float:
-        closes = self._get_closes(symbol)
-        return float(closes[-1]) if closes else 0.0
 
     def _calculate_momentum(self, symbol: str) -> Optional[float]:
         closes = self._get_closes(symbol)
@@ -180,7 +168,6 @@ class MultiFactorScore(Strategy):
         self._scores = scores
 
         if not scores:
-            self._last_rebalance_date = trading_date
             return
 
         sorted_symbols = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -206,69 +193,30 @@ class MultiFactorScore(Strategy):
                 if qty > 0:
                     self.buy(symbol, qty)
 
-        self._last_rebalance_date = trading_date
-        self._days_since_rebalance = 0
-
         self.logger.info(
             f"MultiFactorScore rebalanced: long={self._long_positions}, "
             f"scores={{{', '.join(f'{s}:{scores[s]:.2f}' for s in new_long)}}}"
         )
 
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-        max_keep = max(self.momentum_lookback, self.rsi_period, self.volume_lookback) * 2 + 10
-        if len(self._day_data[symbol]) > max_keep:
-            self._day_data[symbol] = self._day_data[symbol][-max_keep // 2:]
-
-    def on_before_trading(self, context: "Context", trading_date: date) -> None:
-        pass
-
-    def on_after_trading(self, context: "Context", trading_date: date) -> None:
-        if self._last_rebalance_date is not None:
-            self._days_since_rebalance += 1
-            if self._days_since_rebalance < self.holding_days:
-                return
-        self._execute_rebalance(context, trading_date)
-
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
+    def _on_stop_cleanup(self) -> None:
         self._long_positions.clear()
         self._scores.clear()
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "momentum_lookback": self.momentum_lookback,
+            "rsi_period": self.rsi_period,
+            "volume_lookback": self.volume_lookback,
+            "momentum_weight": self.momentum_weight,
+            "rsi_weight": self.rsi_weight,
+            "volume_weight": self.volume_weight,
+            "top_pct": self.top_pct,
+            "holding_days": self.holding_days,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "long_positions": self._long_positions,
             "scores": self._scores,
             "last_rebalance_date": str(self._last_rebalance_date) if self._last_rebalance_date else None,
-            "parameters": {
-                "momentum_lookback": self.momentum_lookback,
-                "rsi_period": self.rsi_period,
-                "volume_lookback": self.volume_lookback,
-                "momentum_weight": self.momentum_weight,
-                "rsi_weight": self.rsi_weight,
-                "volume_weight": self.volume_weight,
-                "top_pct": self.top_pct,
-                "holding_days": self.holding_days,
-            },
         }

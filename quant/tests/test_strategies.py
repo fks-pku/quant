@@ -41,6 +41,8 @@ class TestStrategyRegistry:
 
     def test_case_insensitive(self):
         assert StrategyRegistry.is_registered("SimpleMomentum")
+        assert StrategyRegistry.is_registered("simplemomentum")
+        assert StrategyRegistry.is_registered("SIMPLEMOMENTUM")
         assert not StrategyRegistry.is_registered("nonexistent_strategy")
 
 

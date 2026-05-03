@@ -11,6 +11,7 @@ from quant.tests.conftest import (
     run_simple_backtest,
 )
 from quant.features.backtest.engine import Backtester
+from quant.features.backtest.dividend_processor import calculate_cn_dividend_tax
 from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.base import Strategy
 from quant.features.strategies.daily_return_anomaly.strategy import DailyReturnAnomaly
@@ -29,7 +30,7 @@ class TestCNLotSize:
             "execution": {"commission": {"CN": {"type": "cn_realistic"}}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class TinyBuyStrategy:
             name = "TinyBuy"
@@ -82,7 +83,7 @@ class TestCNT1Settlement:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class QuickFlipStrategy:
             name = "QuickFlip"
@@ -126,7 +127,7 @@ class TestCNT1Settlement:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class SellImmediatelyStrategy:
             name = "SellNow"
@@ -183,7 +184,7 @@ class TestCNDividendTax:
         bt = make_backtester()
         pos = Position(symbol="600519", quantity=1000, avg_cost=50.0)
         pos.add_buy_lot(date(2025, 1, 2), 1000)
-        tax = bt._calculate_cn_dividend_tax(pos, 1.0, datetime(2025, 1, 20))
+        tax = calculate_cn_dividend_tax(pos, 1.0, datetime(2025, 1, 20))
         expected = 1.0 * 1000 * 0.20
         assert tax == pytest.approx(expected, rel=1e-4)
 
@@ -192,7 +193,7 @@ class TestCNDividendTax:
         bt = make_backtester()
         pos = Position(symbol="600519", quantity=1000, avg_cost=50.0)
         pos.add_buy_lot(date(2025, 1, 2), 1000)
-        tax = bt._calculate_cn_dividend_tax(pos, 1.0, datetime(2025, 3, 15))
+        tax = calculate_cn_dividend_tax(pos, 1.0, datetime(2025, 3, 15))
         expected = 1.0 * 1000 * 0.10
         assert tax == pytest.approx(expected, rel=1e-4)
 
@@ -201,7 +202,7 @@ class TestCNDividendTax:
         bt = make_backtester()
         pos = Position(symbol="600519", quantity=1000, avg_cost=50.0)
         pos.add_buy_lot(date(2024, 1, 2), 1000)
-        tax = bt._calculate_cn_dividend_tax(pos, 1.0, datetime(2025, 6, 1))
+        tax = calculate_cn_dividend_tax(pos, 1.0, datetime(2025, 6, 1))
         assert tax == pytest.approx(0.0, abs=0.01)
 
 
@@ -232,7 +233,7 @@ class TestCNEndToEnd:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuySellStrategy:
             name = "BuySell"

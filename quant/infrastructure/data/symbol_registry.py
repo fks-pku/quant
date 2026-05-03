@@ -45,7 +45,7 @@ class SymbolRegistry:
         self._us_tradable = {
             "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "JPM", "V", "WMT",
             "SPY", "QQQ", "IWM", "DIA", "XLF", "XLK", "XLE", "XLV", "TLT", "AGG",
-            "GLD", "SLV", "USO", "UNG", "Corn", " Wheat",
+            "GLD", "SLV", "USO", "UNG", "CORN", "WEAT",
         }
         self._hk_tradable = {
             "00700", "00005", "00006", "00011", "00012", "00016", "00017", "00019",

@@ -21,16 +21,16 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("VolatilityScaledTrend")
-class VolatilityScaledTrend(Strategy):
+class VolatilityScaledTrend(DailyBarStrategy):
 
     def __init__(
         self,
@@ -41,24 +41,19 @@ class VolatilityScaledTrend(Strategy):
         max_weight: float = 0.25,
         holding_days: int = 21,
     ):
-        super().__init__("VolatilityScaledTrend")
-        self._symbols = symbols or [
+        _syms = symbols or [
             "510300", "510500", "159915", "512880", "512010",
             "510050", "512100", "518880",
         ]
+        super().__init__("VolatilityScaledTrend", _syms, holding_days)
         self.sma_lookback = sma_lookback
         self.vol_lookback = vol_lookback
         self.target_vol = target_vol
         self.max_weight = max_weight
-        self.holding_days = holding_days
-
-        self._day_data: Dict[str, List] = {}
-        self._last_rebalance_date: Optional[date] = None
-        self._days_since_rebalance: int = 0
 
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return max(self.sma_lookback, self.vol_lookback) * 2 + 10
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -67,17 +62,6 @@ class VolatilityScaledTrend(Strategy):
             f"VolatilityScaledTrend starting with SMA({self.sma_lookback}), "
             f"vol_lookback={self.vol_lookback}, target_vol={self.target_vol}"
         )
-
-    def _get_closes(self, symbol: str) -> List[float]:
-        bars = self._day_data.get(symbol, [])
-        return [
-            self._adj(b, "close")
-            for b in bars
-        ]
-
-    def _get_last_price(self, symbol: str) -> float:
-        closes = self._get_closes(symbol)
-        return float(closes[-1]) if closes else 0.0
 
     def _calculate_sma(self, symbol: str) -> Optional[float]:
         closes = self._get_closes(symbol)
@@ -143,61 +127,21 @@ class VolatilityScaledTrend(Strategy):
             elif target_qty < current_qty:
                 self.sell(symbol, current_qty - target_qty)
 
-        self._last_rebalance_date = trading_date
-        self._days_since_rebalance = 0
         self.logger.info(
             f"VolatilityScaledTrend rebalanced: "
             + ", ".join(f"{s}={w:.1%}" for s, w in target_weights.items())
         )
 
-    def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-        else:
-            return
-
-        if not symbol or symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-        self._day_data[symbol].append(data)
-
-        max_keep = max(self.sma_lookback, self.vol_lookback) * 2 + 10
-        if len(self._day_data[symbol]) > max_keep:
-            self._day_data[symbol] = self._day_data[symbol][-max_keep:]
-
-    def on_before_trading(self, context: "Context", trading_date: date) -> None:
-        pass
-
-    def on_after_trading(self, context: "Context", trading_date: date) -> None:
-        if self._last_rebalance_date is not None:
-            self._days_since_rebalance += 1
-            if self._days_since_rebalance < self.holding_days:
-                return
-        self._execute_rebalance(context, trading_date)
-
-    def on_fill(self, context: "Context", fill: Any) -> None:
-        super().on_fill(context, fill)
-
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
-        self._day_data.clear()
-
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "sma_lookback": self.sma_lookback,
+            "vol_lookback": self.vol_lookback,
+            "target_vol": self.target_vol,
+            "max_weight": self.max_weight,
+            "holding_days": self.holding_days,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "last_rebalance_date": str(self._last_rebalance_date) if self._last_rebalance_date else None,
-            "parameters": {
-                "sma_lookback": self.sma_lookback,
-                "vol_lookback": self.vol_lookback,
-                "target_vol": self.target_vol,
-                "max_weight": self.max_weight,
-                "holding_days": self.holding_days,
-            },
         }

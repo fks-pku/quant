@@ -13,19 +13,18 @@ Validated: Walk-forward with 6m train / 1m test
 
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-import pandas as pd
 import numpy as np
 
-from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from quant.features.trading.engine import Context
+    from quant.domain.context import StrategyContext as Context
 
 
 @strategy("SimpleMomentum")
-class SimpleMomentum(Strategy):
+class SimpleMomentum(DailyBarStrategy):
     """
     Cross-sectional momentum strategy.
 
@@ -42,7 +41,6 @@ class SimpleMomentum(Strategy):
         bottom_pct: float = 0.1,
         max_position_pct: float = 0.05,
     ):
-        super().__init__("SimpleMomentum")
         self._symbols = symbols or ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "JPM"]
         self.momentum_lookback = momentum_lookback
         self.holding_period = holding_period
@@ -51,14 +49,14 @@ class SimpleMomentum(Strategy):
         self.max_position_pct = max_position_pct
 
         self._momentum_scores: Dict[str, float] = {}
-        self._day_data: Dict[str, List] = {}
-        self._last_rebalance_date: Optional[date] = None
         self._long_positions: List[str] = []
         self._short_positions: List[str] = []
 
+        super().__init__("SimpleMomentum", self._symbols, holding_days=1)
+
     @property
-    def symbols(self) -> List[str]:
-        return self._symbols
+    def _max_keep_hint(self) -> int:
+        return self.momentum_lookback * 2
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
@@ -90,27 +88,10 @@ class SimpleMomentum(Strategy):
                 self._momentum_scores[symbol] = 0.0
 
     def on_data(self, context: "Context", data: Any) -> None:
-        if isinstance(data, dict):
-            symbol = data.get("symbol", "")
-            close = data.get("close")
-        elif hasattr(data, "symbol"):
-            symbol = data.symbol
-            close = getattr(data, "close", None)
-        else:
+        close = data.get("close") if isinstance(data, dict) else getattr(data, "close", None)
+        if not close:
             return
-
-        if not symbol or not close:
-            return
-
-        if symbol not in self._symbols:
-            return
-
-        if symbol not in self._day_data:
-            self._day_data[symbol] = []
-
-        self._day_data[symbol].append(data)
-        if len(self._day_data[symbol]) > self.momentum_lookback * 2:
-            self._day_data[symbol] = self._day_data[symbol][-self.momentum_lookback:]
+        super().on_data(context, data)
 
     def on_before_trading(self, context: "Context", trading_date: date) -> None:
         self._calculate_momentum_scores()
@@ -195,15 +176,6 @@ class SimpleMomentum(Strategy):
             f"SimpleMomentum rebalanced: long={self._long_positions}, short={self._short_positions}"
         )
 
-    def _get_last_price(self, symbol: str) -> float:
-        if symbol in self._day_data and len(self._day_data[symbol]) > 0:
-            last_bar = self._day_data[symbol][-1]
-            if isinstance(last_bar, dict):
-                return float(last_bar.get("close", 0))
-            if hasattr(last_bar, "close"):
-                return float(last_bar.close)
-        return 0.0
-
     def _close_position(self, context: "Context", symbol: str, quantity: int) -> None:
         pos_qty = self._positions.get(symbol, 0)
         if pos_qty > 0:
@@ -219,28 +191,24 @@ class SimpleMomentum(Strategy):
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         self.execute(context, trading_date)
 
-    def on_stop(self, context: "Context") -> None:
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0:
-                price = self._get_last_price(symbol)
-                self.sell(symbol, quantity, "MARKET", price if price > 0 else None)
+    def _on_stop_cleanup(self) -> None:
         self._momentum_scores.clear()
-        self._day_data.clear()
         self._long_positions.clear()
         self._short_positions.clear()
 
-    def get_state(self) -> Dict[str, Any]:
+    def _get_parameters(self) -> Dict[str, Any]:
         return {
-            "name": self.name,
+            "momentum_lookback": self.momentum_lookback,
+            "holding_period": self.holding_period,
+            "top_pct": self.top_pct,
+            "bottom_pct": self.bottom_pct,
+            "max_position_pct": self.max_position_pct,
+        }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
             "long_positions": self._long_positions,
             "short_positions": self._short_positions,
             "momentum_scores": self._momentum_scores,
             "last_rebalance_date": str(self._last_rebalance_date) if self._last_rebalance_date else None,
-            "parameters": {
-                "momentum_lookback": self.momentum_lookback,
-                "holding_period": self.holding_period,
-                "top_pct": self.top_pct,
-                "bottom_pct": self.bottom_pct,
-                "max_position_pct": self.max_position_pct,
-            },
         }

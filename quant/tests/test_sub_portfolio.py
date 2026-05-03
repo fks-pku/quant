@@ -8,6 +8,7 @@ from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.sub_portfolio import SubPortfolio
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.walkforward import DataFrameProvider
+from quant.tests.conftest import make_backtester
 
 
 START = datetime(2025, 1, 2)
@@ -115,7 +116,7 @@ class TestSubPortfolioBacktest:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class StratA:
             name = "StratA"
@@ -200,7 +201,7 @@ class TestSubPortfolioBacktest:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class GreedyStrat:
             name = "Greedy"
@@ -248,7 +249,7 @@ class TestSubPortfolioBacktest:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class BuyerA:
             name = "BuyerA"
@@ -331,7 +332,7 @@ class TestSubPortfolioBacktest:
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
-        bt = Backtester(config)
+        bt = make_backtester(config)
 
         class SingleStrat:
             name = "Single"

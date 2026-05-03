@@ -13,6 +13,10 @@ from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
 from quant.features.backtest.walkforward import DataFrameProvider
 
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
+
 symbols = ["HK.00700", "HK.09988", "HK.01810", "HK.09618", "HK.03690"]
 start = datetime(2024, 1, 1)
 end = datetime(2024, 12, 31)
@@ -70,7 +74,7 @@ config = {
 }
 
 strategy = SimpleMomentum(symbols=symbols)
-backtester = Backtester(config, lot_sizes=lot_sizes)
+backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes)
 
 print("\nRunning backtest...")
 t2 = time.perf_counter()

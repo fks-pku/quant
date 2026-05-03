@@ -16,6 +16,10 @@ t_total = time.perf_counter()
 # === Step 1: Load symbols (same as API _init_default_symbols) ===
 t0 = time.perf_counter()
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
 db = DuckDBStorage("D:/vk/quant/data/duckdb/quant.duckdb")
 all_syms = db.get_symbols('daily', 'hk') + db.get_symbols('daily', 'us')
 db.close()
@@ -66,7 +70,7 @@ config = {
 }
 
 t6 = time.perf_counter()
-backtester = Backtester(config)
+backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
 result = backtester.run(
     start=start,
     end=end,

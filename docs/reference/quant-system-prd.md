@@ -1,4 +1,8 @@
-# Quant Trading System — Product Requirements Document
+# Quant Trading System — Product Requirements Document (HISTORICAL)
+
+> **HISTORICAL:** This PRD describes the original design intent. The system evolved through several architecture revisions.
+> See `ARCHITECTURE.md` for the current hexagonal architecture.
+> See `docs/reference/deprecated-paths.md` for old→new path mappings.
 
 ## 1. Concept & Vision
 

@@ -3,6 +3,7 @@ from datetime import date
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from quant.domain.models.bar import Bar
+from quant.domain.models.fill import Fill
 from quant.domain.models.order import Order, OrderSide, OrderType
 from quant.domain.models.position import Position
 from quant.domain.events.base import Event, EventType
@@ -90,7 +91,7 @@ class Strategy(ABC):
     def on_after_trading(self, context: "StrategyContext" = None, trading_date: date = None) -> None:
         pass
 
-    def on_fill(self, context: "StrategyContext" = None, fill: Any = None) -> None:
+    def on_fill(self, context: "StrategyContext" = None, fill: Optional[Fill] = None) -> None:
         pass
 
     def on_data(self, context: "StrategyContext" = None, data: Any = None) -> None:

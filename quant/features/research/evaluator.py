@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 
 from quant.features.research.models import RawStrategy, EvaluationReport
-from quant.features.cio.llm_adapters.base import LLMAdapter
+from quant.domain.ports.llm import LLMAdapterLike as LLMAdapter
 
 logger = logging.getLogger(__name__)
 
