@@ -27,12 +27,24 @@ def process_dividends(
         pos = portfolio.get_position(symbol)
         if not pos or pos.quantity <= 0:
             continue
-        div = data_provider.get_dividend_for_date(symbol, current_date)
+        try:
+            div = data_provider.get_dividend_for_date(symbol, current_date)
+        except Exception:
+            logger.warning("Error getting dividend for %s on %s", symbol, current_date)
+            continue
         if not div:
             continue
         market = get_market(symbol)
-        cash_div = float(div.get('cash_dividend', 0) or 0)
-        stock_div = float(div.get('stock_dividend', 0) or 0)
+        try:
+            cash_div = float(div.get('cash_dividend', 0) or 0)
+        except (ValueError, TypeError):
+            logger.warning("Invalid cash dividend for %s on %s: %s", symbol, current_date, div.get('cash_dividend'))
+            cash_div = 0.0
+        try:
+            stock_div = float(div.get('stock_dividend', 0) or 0)
+        except (ValueError, TypeError):
+            logger.warning("Invalid stock dividend for %s on %s: %s", symbol, current_date, div.get('stock_dividend'))
+            stock_div = 0.0
         if cash_div > 0:
             payment = cash_div * pos.quantity
             tax = 0.0

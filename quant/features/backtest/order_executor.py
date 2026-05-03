@@ -41,6 +41,8 @@ def execute_order(
     prev_bar: Optional["BacktestBar"] = None,
     risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
 ) -> List[Trade]:
+    if bar is None:
+        return []
     raw_open = bar.get('open')
     if not raw_open or raw_open <= 0:
         return []
@@ -65,7 +67,10 @@ def execute_order(
     if risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
         # discarded_orders incremented by caller (engine.py) uniformly
         return []
-    quantity = order['quantity']
+    quantity = order.get('quantity', 0)
+    if not isinstance(quantity, (int, float)) or quantity <= 0:
+        return []
+    lot_sizes = lot_sizes or {}
     lot_size = get_lot_size(symbol, lot_sizes)
 
     qty, lot_adjusted = apply_lot_rounding(quantity, lot_size, order['side'], market)
@@ -96,10 +101,13 @@ def execute_order(
             signal_date, market, entry_times, entry_prices, diag, commission_config,
         )
 
+    logger.warning("Unknown order side '%s' for %s — discarding", order.get('side'), symbol)
     return []
 
 
 def apply_slippage(price: float, side: str, bps: float) -> float:
+    if price <= 0:
+        return price
     slippage = price * (bps / 10000)
     if side == 'BUY':
         return price + slippage

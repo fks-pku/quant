@@ -1,5 +1,5 @@
-from quant.features.backtest.engine import (
-    Backtester,
+from quant.features.backtest.engine import Backtester
+from quant.features.backtest.entities import (
     BacktestResult,
     BacktestDiagnostics,
     BacktestResultExporter,

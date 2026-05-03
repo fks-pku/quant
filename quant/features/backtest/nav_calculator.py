@@ -27,14 +27,17 @@ def extract_open_positions(
         for pf in portfolio_map.values():
             for sym, pos in pf.positions.items():
                 if pos.quantity > 0:
-                    last_price = last_prices.get(sym, pos.avg_cost)
+                    avg_cost = pos.avg_cost or 0.0
+                    last_price = last_prices.get(sym, avg_cost)
+                    if last_price is None or last_price <= 0:
+                        last_price = avg_cost
                     open_positions.append({
                         "symbol": sym,
                         "quantity": pos.quantity,
-                        "entry_price": pos.avg_cost,
+                        "entry_price": avg_cost,
                         "entry_time": get_earliest_lot_time(pos) or entry_times.get((pf.strategy_name, sym)),
                         "current_price": last_price,
-                        "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
+                        "unrealized_pnl": (last_price - avg_cost) * pos.quantity,
                         "market_value": pos.quantity * last_price,
                         "strategy": pf.strategy_name,
                     })
@@ -42,7 +45,10 @@ def extract_open_positions(
         strategy_names = list(portfolio_map.keys())
         for sym, pos in primary_portfolio.positions.items():
             if pos.quantity > 0:
-                last_price = last_prices.get(sym, pos.avg_cost)
+                avg_cost = pos.avg_cost or 0.0
+                last_price = last_prices.get(sym, avg_cost)
+                if last_price is None or last_price <= 0:
+                    last_price = avg_cost
                 et = get_earliest_lot_time(pos)
                 if et is None:
                     for sn in strategy_names:
@@ -53,10 +59,10 @@ def extract_open_positions(
                 open_positions.append({
                     "symbol": sym,
                     "quantity": pos.quantity,
-                    "entry_price": pos.avg_cost,
+                    "entry_price": avg_cost,
                     "entry_time": et,
                     "current_price": last_price,
-                    "unrealized_pnl": (last_price - pos.avg_cost) * pos.quantity,
+                    "unrealized_pnl": (last_price - avg_cost) * pos.quantity,
                     "market_value": pos.quantity * last_price,
                 })
     return open_positions

@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quant.features.backtest.engine import Backtester, CommissionConfig
+from quant.features.backtest.engine import Backtester
+from quant.features.backtest.entities import CommissionConfig
 from quant.features.backtest.walkforward import DataFrameProvider
 
 
@@ -135,6 +136,30 @@ def make_backtester(config=None, lot_sizes=None, ipo_dates=None):
         "risk": {},
     }
     return Backtester(config, lot_sizes=lot_sizes, ipo_dates=ipo_dates)
+
+
+class MockDataProvider:
+    """Configurable data provider for testing fallback paths."""
+
+    def __init__(self, bars=None, trading_dates=None, dividends=None):
+        self._bars = bars or {}
+        self._trading_dates = trading_dates
+        self._dividends = dividends or {}
+
+    @property
+    def trading_dates(self):
+        return self._trading_dates
+
+    def get_bar_for_date(self, symbol, dt):
+        key = dt.date() if hasattr(dt, 'date') else dt
+        return self._bars.get((symbol, key))
+
+    def get_dividend_for_date(self, symbol, dt):
+        key = dt.date() if hasattr(dt, 'date') else dt
+        return self._dividends.get((symbol, key))
+
+    def get_bars(self, symbol, start, end, timeframe="1d"):
+        return pd.DataFrame()
 
 
 def run_simple_backtest(

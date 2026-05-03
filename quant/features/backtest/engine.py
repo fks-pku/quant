@@ -15,37 +15,16 @@ from quant.features.backtest.entities import (
     BacktestDiagnostics,
     BacktestResult,
     CommissionConfig,
-    BacktestResultExporter,
-    _BacktestContext,
-    _BacktestOrderManager,
 )
 from quant.features.backtest.analytics import calculate_performance_metrics
 from quant.features.backtest.market_rules import (
     select_currency,
     is_suspended,
-    get_market,
-    get_lot_size,
-    get_earliest_lot_time,
-    fifo_lot_slices,
-    is_price_at_limit,
-    DEFAULT_LOT_SIZE,
 )
 from quant.features.backtest.order_executor import execute_order
 from quant.features.backtest.dividend_processor import process_dividends
 from quant.features.backtest.portfolio_factory import create_portfolio_contexts, create_context
 from quant.features.backtest.nav_calculator import calculate_daily_nav, extract_open_positions
-
-from quant.features.backtest.commission import (
-    HK_COMMISSION_RATE, HK_STAMP_DUTY_RATE, HK_SFC_LEVY_RATE,
-    HK_CLEARING_RATE, HK_TRADING_FEE_RATE, HK_MIN_COMMISSION, HK_TRADING_SYSTEM_FEE,
-    CN_COMMISSION_RATE, CN_STAMP_DUTY_RATE, CN_TRANSFER_FEE_RATE,
-    CN_REGULATOR_FEE_RATE, CN_MIN_COMMISSION,
-    US_SEC_FEE_RATE, US_FINRA_TAF_PER_SHARE,
-    VOLUME_PARTICIPATION_LIMIT,
-)
-from quant.features.backtest.dividend_processor import (
-    CN_DIVIDEND_TAX_SHORT_DAYS, CN_DIVIDEND_TAX_MEDIUM_DAYS,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -59,71 +38,9 @@ class Backtester:
     def _is_suspended(bar: Dict) -> bool:
         return is_suspended(bar)
 
-    @staticmethod
-    def _detect_market(self_or_none, symbol: str = None) -> str:
-        return get_market(symbol if symbol is not None else self_or_none)
-
-    @staticmethod
-    def _fifo_lot_slices(pos, sell_qty: float) -> List[tuple]:
-        return fifo_lot_slices(pos, sell_qty)
-
-    @staticmethod
-    def _earliest_lot_time(pos) -> Optional[datetime]:
-        return get_earliest_lot_time(pos)
-
-    def _is_cn_price_at_limit(self, symbol: str, open_price: float, prev_close: float,
-                               current_date=None) -> bool:
-        return is_price_at_limit(symbol, open_price, prev_close, current_date, self.ipo_dates)
-
     def _calculate_cn_dividend_tax(self, pos: Any, cash_div: float, current_date: Any) -> float:
         from quant.features.backtest.dividend_processor import calculate_cn_dividend_tax
         return calculate_cn_dividend_tax(pos, cash_div, current_date)
-
-    def _get_lot_size(self, symbol: str) -> int:
-        return get_lot_size(symbol, self.lot_sizes)
-
-    def _detect_currency(self, symbols: List[str]) -> str:
-        return select_currency(symbols)
-
-    def _calculate_commission_breakdown(self, price: float, quantity: float, market: str, side: str) -> Dict[str, float]:
-        from quant.features.backtest.commission import (
-            _calculate_us_commission,
-            _calculate_cn_commission,
-            _calculate_hk_commission,
-        )
-        trade_value = price * quantity
-        if market == "US":
-            return _calculate_us_commission(quantity, trade_value, side, self.commission)
-        elif market == "CN":
-            return _calculate_cn_commission(trade_value, side)
-        return _calculate_hk_commission(trade_value, side)
-
-    def _execute_order(
-        self,
-        order: "DeferredOrder",
-        portfolio: Any,
-        symbol: str,
-        bar: "BacktestBar",
-        entry_times: Dict[str, datetime],
-        entry_prices: Dict[str, float],
-        diag: BacktestDiagnostics,
-        prev_bar: Optional["BacktestBar"] = None,
-    ) -> List:
-        return execute_order(
-            order=order,
-            portfolio=portfolio,
-            symbol=symbol,
-            bar=bar,
-            entry_times=entry_times,
-            entry_prices=entry_prices,
-            diag=diag,
-            lot_sizes=self.lot_sizes,
-            ipo_dates=self.ipo_dates,
-            slippage_bps=self.slippage_bps,
-            commission_config=self.commission,
-            prev_bar=prev_bar,
-            risk_price_deviation_limit=self.risk_price_deviation_limit,
-        )
 
     def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None,
                  lot_sizes: Optional[Dict[str, int]] = None,
@@ -166,7 +83,15 @@ class Backtester:
         symbols: Optional[List[str]] = None,
         strategy_allocations: Optional[Dict[str, float]] = None,
     ) -> BacktestResult:
+        if end < start:
+            raise ValueError(f"end ({end}) must be >= start ({start})")
+        if initial_cash <= 0:
+            raise ValueError(f"initial_cash must be > 0, got {initial_cash}")
+        if not strategies:
+            raise ValueError("At least one strategy is required")
         symbols = symbols or []
+        if not symbols:
+            raise ValueError("At least one symbol is required")
         currency = select_currency(symbols)
         diag = BacktestDiagnostics()
 
@@ -202,8 +127,7 @@ class Backtester:
             pf = portfolio_map[sname]
             re = risk_map[sname]
             strategy.context = create_context(pf, re, self.event_bus, data_provider)
-            if hasattr(strategy, "on_start"):
-                strategy.on_start(strategy.context)
+            strategy.on_start(strategy.context)
 
         trading_dates_set = None
         if data_provider and hasattr(data_provider, 'trading_dates'):
@@ -216,11 +140,18 @@ class Backtester:
                 if lookup_key not in trading_dates_set:
                     current_date += timedelta(days=1)
                     continue
+            elif data_provider and hasattr(data_provider, 'get_bar_for_date'):
+                # No trading calendar — fall back to checking data availability
+                if not any(
+                    data_provider.get_bar_for_date(s, current_date) is not None
+                    for s in symbols
+                ):
+                    current_date += timedelta(days=1)
+                    continue
 
             # --- Step 1: on_before_trading ---
             for strategy in strategies:
-                if hasattr(strategy, "on_before_trading"):
-                    strategy.on_before_trading(strategy.context, current_date.date())
+                strategy.on_before_trading(strategy.context, current_date.date())
 
             # --- Step 2: Load today's bar data ---
             prev_close_bars: "Dict[str, BacktestBar]" = dict(prev_bars)
@@ -243,13 +174,18 @@ class Backtester:
             for div_info in all_stock_divs:
                 sym = div_info['symbol']
                 for strategy in strategies:
-                    if hasattr(strategy, 'on_fill'):
-                        current_pos = strategy.get_position(sym)
-                        if current_pos > 0:
-                            additional = current_pos * div_info['ratio']
-                            strategy.on_fill(strategy.context, SimpleNamespace(
-                                symbol=sym, quantity=additional, side="BUY"
-                            ))
+                    current_pos = strategy.get_position(sym)
+                    if current_pos > 0:
+                        additional = current_pos * div_info['ratio']
+                        strategy.on_fill(strategy.context, SimpleNamespace(
+                            symbol=sym, quantity=additional, side="BUY",
+                            price=0.0, fill_price=0.0, pnl=0.0, commission=0.0,
+                            realized_pnl=0.0, entry_price=0.0, exit_price=0.0,
+                            intended_qty=additional, cost_breakdown={},
+                            entry_time=current_date, exit_time=current_date,
+                            signal_date=current_date, fill_date=current_date,
+                            strategy_name=getattr(strategy, 'name', strategy.__class__.__name__),
+                        ))
 
             # --- Step 4: Execute deferred orders from T-1 ---
             for order in deferred_orders:
@@ -286,7 +222,7 @@ class Backtester:
                 target_sname = order.get('strategy')
                 for s in strategies:
                     sname = getattr(s, 'name', s.__class__.__name__)
-                    if hasattr(s, "on_fill") and (target_sname is None or sname == target_sname):
+                    if target_sname is None or sname == target_sname:
                         for t in trades:
                             s.on_fill(s.context, t)
             deferred_orders = []
@@ -299,8 +235,7 @@ class Backtester:
             # --- Step 5: Feed bar data to strategies ---
             for sym, bar_data in today_bars.items():
                 for strategy in strategies:
-                    if hasattr(strategy, "on_data"):
-                        strategy.on_data(strategy.context, bar_data)
+                    strategy.on_data(strategy.context, bar_data)
 
             # --- Step 6: Update portfolio prices ---
             if use_subs:
@@ -311,8 +246,7 @@ class Backtester:
 
             # --- Step 7: Strategy signal generation ---
             for strategy in strategies:
-                if hasattr(strategy, "on_after_trading"):
-                    strategy.on_after_trading(strategy.context, current_date.date())
+                strategy.on_after_trading(strategy.context, current_date.date())
 
             # --- Step 8: Collect pending orders ---
             for strategy in strategies:
@@ -335,8 +269,7 @@ class Backtester:
             current_date += timedelta(days=1)
 
         for strategy in strategies:
-            if hasattr(strategy, "on_stop"):
-                strategy.on_stop(strategy.context)
+            strategy.on_stop(strategy.context)
 
         # Execute final close-out orders generated by on_stop
         if last_prices:
@@ -368,7 +301,7 @@ class Backtester:
                         all_trades.extend(trades)
                         for s in strategies:
                             sn = getattr(s, 'name', s.__class__.__name__)
-                            if hasattr(s, "on_fill") and sn == sname:
+                            if sn == sname:
                                 for t in trades:
                                     s.on_fill(s.context, t)
 
@@ -440,7 +373,7 @@ class Backtester:
                             if bar_close > 0:
                                 last_prices[symbol] = bar_close
                             prev_bars[symbol] = bar_data
-            except Exception as e:
+            except (KeyError, TypeError, ValueError) as e:
                 logger.warning("Error loading bar data for %s on %s: %s", symbol, current_date, e)
 
         return today_bars, any_suspended

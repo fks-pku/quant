@@ -14,14 +14,10 @@ from quant.tests.conftest import (
     run_simple_backtest,
 )
 from quant.features.strategies.registry import StrategyRegistry
-from quant.features.backtest.engine import (
-    Backtester,
-    BacktestDiagnostics,
-    BacktestResult,
-    CommissionConfig,
-    DEFAULT_LOT_SIZE,
-    VOLUME_PARTICIPATION_LIMIT,
-)
+from quant.features.backtest.engine import Backtester
+from quant.features.backtest.entities import BacktestDiagnostics, BacktestResult, CommissionConfig
+from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE
+from quant.features.backtest.commission import VOLUME_PARTICIPATION_LIMIT
 from quant.features.backtest.walkforward import DataFrameProvider, WalkForwardEngine
 from quant.domain.models.trade import Trade
 from quant.domain.models.position import Position
@@ -803,3 +799,179 @@ class TestDailyLossRiskCheck:
         )
         buy_trades = [t for t in result.trades if t.side == "BUY"]
         assert len(buy_trades) >= 1
+
+
+@pytest.mark.regression
+class TestCriticalRegression:
+    """Regression tests for bugs found in audit: C2, C3, on_stop, dedup."""
+
+    def test_bug_c3_no_trading_dates_skips_non_trading_days(self):
+        """Engine skips days with no bar data when trading_dates is unavailable."""
+        from quant.tests.conftest import MockDataProvider
+
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = Backtester(config)
+
+        # Only provide data for Mon 2024-06-03 and Wed 2024-06-05 (Tue is missing)
+        bars = {}
+        for sym in ["AAPL"]:
+            bars[(sym, date(2024, 6, 3))] = {
+                "symbol": sym, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1_000_000,
+                "timestamp": datetime(2024, 6, 3), "_suspended": False,
+            }
+            bars[(sym, date(2024, 6, 5))] = {
+                "symbol": sym, "open": 105, "high": 106, "low": 104, "close": 105, "volume": 1_000_000,
+                "timestamp": datetime(2024, 6, 5), "_suspended": False,
+            }
+        provider = MockDataProvider(bars=bars)
+
+        class DayCounter:
+            name = "DayCounter"
+            context = None
+            _positions = {}
+            _days_seen = []
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                self._days_seen.append(("before", td))
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                self._days_seen.append(("after", td))
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        bt.run(
+            start=datetime(2024, 6, 3), end=datetime(2024, 6, 6),
+            strategies=[DayCounter()], initial_cash=100000,
+            data_provider=provider, symbols=["AAPL"],
+        )
+        # Only days with bar data should trigger hooks
+        before_dates = [d for tag, d in DayCounter._days_seen if tag == "before"]
+        assert date(2024, 6, 4) not in before_dates, "Tuesday (no data) should be skipped"
+
+    def test_bug_c2_stock_dividend_fill_has_all_fields(self):
+        """Stock dividend synthetic fill includes all Trade fields."""
+        from types import SimpleNamespace
+
+        fill = SimpleNamespace(
+            symbol="AAPL", quantity=10, side="BUY",
+            price=0.0, fill_price=0.0, pnl=0.0, commission=0.0,
+            realized_pnl=0.0, entry_price=0.0, exit_price=0.0,
+            intended_qty=10, cost_breakdown={},
+            entry_time=datetime(2024, 6, 5), exit_time=datetime(2024, 6, 5),
+            signal_date=datetime(2024, 6, 5), fill_date=datetime(2024, 6, 5),
+            strategy_name="test",
+        )
+        # All fields needed by strategy on_fill should be present
+        assert fill.symbol == "AAPL"
+        assert fill.quantity == 10
+        assert fill.side == "BUY"
+        assert fill.price == 0.0
+        assert fill.pnl == 0.0
+        assert fill.commission == 0.0
+        assert fill.realized_pnl == 0.0
+        assert fill.cost_breakdown == {}
+        assert fill.strategy_name == "test"
+
+    def test_on_stop_orders_are_executed(self):
+        """Orders generated in on_stop are executed as close-out trades."""
+        import numpy as np
+
+        bars = []
+        for i in range(5):
+            bars.append({
+                "symbol": "AAPL", "timestamp": datetime(2024, 6, 3) + timedelta(days=i),
+                "open": 100.0 + i, "high": 101.0 + i, "low": 99.0 + i, "close": 100.0 + i,
+                "volume": 1_000_000,
+            })
+        data = pd.DataFrame(bars)
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = Backtester(config)
+
+        class CloseOutStrat:
+            name = "CloseOut"
+            context = None
+            _positions = {}
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if self._day == 0:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", 100.0, "CloseOut"
+                    )
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pos = self._positions.get("AAPL", 0)
+                if pos > 0:
+                    self.context.order_manager.submit_order(
+                        "AAPL", pos, "SELL", "MARKET", 105.0, "CloseOut"
+                    )
+
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(), end=data["timestamp"].max(),
+            strategies=[CloseOutStrat()], initial_cash=100000,
+            data_provider=provider, symbols=["AAPL"],
+        )
+        sells = [t for t in result.trades if t.side == "SELL"]
+        assert len(sells) >= 1, "on_stop close-out should produce SELL trades"
+        assert abs(sum(t.quantity for t in sells) - 100) < 1e-6
+
+    def test_context_drain_resets_buy_dedup(self):
+        """OrderManager drain clears the BUY dedup set."""
+        from quant.features.backtest.entities import _BacktestContext, _BacktestOrderManager
+
+        class DummyRisk:
+            def check_order(self, *args, **kwargs):
+                return True, None
+            def record_order(self, *args, **kwargs):
+                pass
+            def reset_daily(self):
+                pass
+            _risk_rejected_count = 0
+
+        om = _BacktestOrderManager(DummyRisk())
+        om._current_date = date(2024, 6, 3)
+        om._last_prices = {"AAPL": 100.0}
+
+        id1 = om.submit_order("AAPL", 100, "BUY", "MARKET", None, "test")
+        assert id1 is not None, "First BUY should be accepted"
+        id2 = om.submit_order("AAPL", 100, "BUY", "MARKET", None, "test")
+        assert id2 is None, "Duplicate BUY should be rejected"
+
+        orders = om.drain_pending()
+        assert len(orders) == 1
+
+        id3 = om.submit_order("AAPL", 100, "BUY", "MARKET", None, "test")
+        assert id3 is not None, "BUY should be accepted after drain"

@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+markers = [
+    "unit: Unit tests (single function/module, no full Backtester pipeline)",
+    "integration: Integration tests (full Backtester or WalkForward pipeline)",
+    "slow: Slow tests (>1s runtime)",
+    "regression: Regression tests for previously fixed bugs",
+]

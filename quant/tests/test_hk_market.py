@@ -9,7 +9,8 @@ from quant.tests.conftest import (
     make_hk_bars,
     run_simple_backtest,
 )
-from quant.features.backtest.engine import Backtester, HK_MIN_COMMISSION
+from quant.features.backtest.engine import Backtester
+from quant.features.backtest.commission import HK_MIN_COMMISSION
 from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
 

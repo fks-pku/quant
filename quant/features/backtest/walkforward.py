@@ -7,7 +7,8 @@ from typing import Dict, List, Any, Callable, Optional
 import pandas as pd
 import numpy as np
 
-from quant.features.backtest.engine import Backtester, BacktestResult
+from quant.features.backtest.engine import Backtester
+from quant.features.backtest.entities import BacktestResult
 from quant.features.backtest.analytics import calculate_sharpe, calculate_max_drawdown
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,23 @@ class WalkForwardEngine:
         """
         config = config or {}
         window_results: List[WFWindowResult] = []
-        
+
+        if data is None or data.empty:
+            return WFResult(
+                windows=[], aggregate_sharpe=0.0, aggregate_max_dd=0.0,
+                consistency=0.0, best_params={}, sharpe_degradation=0.0,
+                avg_train_sharpe=0.0, avg_test_sharpe=0.0, test_sharpe_std=0.0,
+                pct_profitable=0.0, is_viable=False
+            )
+        if 'timestamp' not in data.columns:
+            logger.warning("Data missing 'timestamp' column — cannot run walk-forward")
+            return WFResult(
+                windows=[], aggregate_sharpe=0.0, aggregate_max_dd=0.0,
+                consistency=0.0, best_params={}, sharpe_degradation=0.0,
+                avg_train_sharpe=0.0, avg_test_sharpe=0.0, test_sharpe_std=0.0,
+                pct_profitable=0.0, is_viable=False
+            )
+
         if not pd.api.types.is_datetime64_any_dtype(data['timestamp']):
             data = data.copy()
             data['timestamp'] = pd.to_datetime(data['timestamp'])
@@ -154,11 +171,16 @@ class WalkForwardEngine:
             
             strategy = strategy_factory(best_params)
 
-            test_result = self._run_single_backtest(
-                config or {}, strategy, test_data, initial_cash
-            )
-            
-            test_max_dd = test_result.max_drawdown_pct if hasattr(test_result, 'max_drawdown_pct') else 0.0
+            try:
+                test_result = self._run_single_backtest(
+                    config or {}, strategy, test_data, initial_cash
+                )
+            except Exception as e:
+                logger.warning("WalkForward test backtest failed for params %s: %s", best_params, e)
+                step_idx += self.step_days
+                continue
+
+            test_max_dd = test_result.max_drawdown_pct
             
             window_results.append(WFWindowResult(
                 train_start=train_start,
@@ -201,7 +223,7 @@ class WalkForwardEngine:
         test_std = float(np.std(test_sharpes, ddof=1)) if len(test_sharpes) > 1 else 0.0
         
         if avg_train > 0:
-            sharpe_degradation = max(0.0, 1.0 - (avg_test / avg_train))
+            sharpe_degradation = min(1.0, max(0.0, 1.0 - (avg_test / avg_train)))
         elif avg_test > 0:
             sharpe_degradation = 0.0
         else:
@@ -260,7 +282,7 @@ class WalkForwardEngine:
                 if result.sharpe_ratio > best_sharpe:
                     best_sharpe = result.sharpe_ratio
                     best_params = params
-            except Exception as e:
+            except (ValueError, TypeError, RuntimeError) as e:
                 logger.warning("WalkForward grid search failed for params %s: %s", params, e)
                 continue
         
@@ -322,6 +344,7 @@ class DataFrameProvider:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         for col in ('open', 'high', 'low', 'close', 'volume'):
             if col not in df.columns:
+                logger.warning("DataFrameProvider: missing '%s' column — index not built", col)
                 return
         records = df.to_dict('records')
         symbols = df['symbol'].tolist()

@@ -55,7 +55,7 @@ def calculate_commission(
 
 
 def _calculate_us_commission(quantity: float, trade_value: float, side: str, commission_config: Any) -> Dict[str, float]:
-    cfg = commission_config.US if hasattr(commission_config, 'US') else commission_config.get("US", {})
+    cfg = _get_market_config(commission_config, "US") or {}
     if cfg.get("type") == "per_share":
         commission = quantity * cfg.get("per_share", 0.005)
         commission = max(commission, cfg.get("min_per_order", 1.0))

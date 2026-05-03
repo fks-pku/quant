@@ -11,7 +11,7 @@ from quant.domain.models.trade import Trade
 
 __all__ = ["calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
            "calculate_performance_metrics", "PerformanceMetrics",
-           "calculate_rolling_sharpe", "calculate_rolling_sortino",
+           "calculate_rolling_sharpe",
            "calculate_statistical_significance"]
 
 
@@ -125,30 +125,6 @@ def calculate_avg_trade_duration(trades: List[Trade]) -> timedelta:
     return timedelta(seconds=total_seconds / len(durations))
 
 
-def calculate_max_adverse_excursion(trades: List[Trade]) -> float:
-    """Maximum adverse excursion - largest peak-to-trough loss during trade.
-
-    .. note::
-        This is a stub implementation returning 0.0. The Trade model only tracks
-        entry_price and exit_price, so intraday high/low data is unavailable.
-        To compute true MAE, the trade model would need bar-level or tick-level
-        price data for each position's lifetime.
-    """
-    return 0.0
-
-
-def calculate_max_favorable_excursion(trades: List[Trade]) -> float:
-    """Maximum favorable excursion - largest peak-to-trough gain during trade.
-
-    .. note::
-        This is a stub implementation returning 0.0. The Trade model only tracks
-        entry_price and exit_price, so intraday high/low data is unavailable.
-        To compute true MFE, the trade model would need bar-level or tick-level
-        price data for each position's lifetime.
-    """
-    return 0.0
-
-
 def calculate_ulcer_index(equity_curve: pd.Series, periods: int = 14) -> float:
     """Ulcer Index - downside risk measure."""
     if equity_curve.empty or len(equity_curve) < periods:
@@ -161,14 +137,6 @@ def calculate_ulcer_index(equity_curve: pd.Series, periods: int = 14) -> float:
     if pd.isna(val):
         return 0.0
     return float(np.sqrt(val))
-
-
-def calculate_downside_deviation(returns: pd.Series) -> float:
-    """Downside deviation (Sortino denominator)."""
-    downside_returns = returns[returns < 0]
-    if downside_returns.empty:
-        return 0.0
-    return float(downside_returns.std())
 
 
 def calculate_gain_to_pain_ratio(trades: List[Trade]) -> float:
@@ -246,15 +214,6 @@ def calculate_rolling_sharpe(returns: pd.Series, window: int = 63, periods_per_y
     rolling_mean = returns.rolling(window).mean()
     rolling_std = returns.rolling(window).std()
     result = (rolling_mean / rolling_std.replace(0, np.nan)) * np.sqrt(periods_per_year)
-    return result.fillna(0.0)
-
-
-def calculate_rolling_sortino(returns: pd.Series, window: int = 63, periods_per_year: int = 252) -> pd.Series:
-    if returns.empty or len(returns) < window:
-        return pd.Series(dtype=float)
-    rolling_mean = returns.rolling(window).mean()
-    rolling_downside = returns.rolling(window).apply(lambda x: x[x < 0].std() if len(x[x < 0]) > 0 else 0, raw=False)
-    result = (rolling_mean / rolling_downside.replace(0, np.nan)) * np.sqrt(periods_per_year)
     return result.fillna(0.0)
 
 

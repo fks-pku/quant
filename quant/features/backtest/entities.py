@@ -23,9 +23,10 @@ class BacktestDiagnostics:
 
     @property
     def cost_drag_pct(self) -> float:
-        if abs(self.total_gross_pnl) < 1e-10:
+        gpnl = self.total_gross_pnl or 0.0
+        if abs(gpnl) < 1e-10 or gpnl != gpnl:
             return 0.0
-        return self.total_commission / abs(self.total_gross_pnl) * 100
+        return self.total_commission / abs(gpnl) * 100
 
 
 @dataclass
@@ -59,6 +60,9 @@ class BacktestResultExporter:
     def to_csv(result: BacktestResult, output_path: str) -> None:
         import logging
         _log = logging.getLogger(__name__)
+        if result.metrics is None or result.metrics.equity_curve.empty:
+            _log.warning("No equity curve to export for %s", output_path)
+            return
         result.metrics.equity_curve.to_csv(f"{output_path}_equity.csv")
 
         if result.trades:
@@ -89,16 +93,19 @@ class _BacktestOrderManager:
     def __init__(self, risk_engine):
         self._risk_engine = risk_engine
         self._buffer: List[Dict] = []
-        self._dedup_set: set = set()
+        self._buy_dedup_set: set = set()
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
 
     def _resolve_price(self, price: Optional[float], symbol: str) -> Optional[float]:
-        effective = price if price and price > 0 else self._last_prices.get(symbol, 0)
+        if isinstance(price, (int, float)) and price > 0:
+            effective = float(price)
+        else:
+            effective = float(self._last_prices.get(symbol, 0) or 0)
         return effective if effective > 0 else None
 
     def _passes_dedup(self, symbol: str, side: str) -> bool:
-        if side == 'BUY' and symbol in self._dedup_set:
+        if side == 'BUY' and symbol in self._buy_dedup_set:
             return False
         return True
 
@@ -132,13 +139,13 @@ class _BacktestOrderManager:
         }
         self._buffer.append(order)
         if side == 'BUY':
-            self._dedup_set.add(symbol)
+            self._buy_dedup_set.add(symbol)
         return f"bt_{len(self._buffer)}"
 
     def drain_pending(self):
         orders = list(self._buffer)
         self._buffer.clear()
-        self._dedup_set.clear()
+        self._buy_dedup_set.clear()
         return orders
 
 

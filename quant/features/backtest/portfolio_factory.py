@@ -28,9 +28,18 @@ def create_portfolio_contexts(
     if use_subs:
         portfolio_map: Dict[str, Any] = {}
         risk_map: Dict[str, Any] = {}
+        import logging
         for strategy in strategies:
             sname = getattr(strategy, 'name', strategy.__class__.__name__)
             alloc_pct = strategy_allocations.get(sname, 0.0)
+            if alloc_pct <= 0:
+                logging.getLogger(__name__).warning(
+                    "Strategy '%s' has allocation %.4f — orders may be rejected", sname, alloc_pct
+                )
+            if alloc_pct < 0 or alloc_pct > 1.0:
+                raise ValueError(
+                    f"Strategy '{sname}' allocation must be in [0, 1], got {alloc_pct}"
+                )
             alloc_cash = initial_cash * alloc_pct
             sub = sub_portfolio_class(strategy_name=sname, allocated_capital=alloc_cash, master=master)
             portfolio_map[sname] = sub

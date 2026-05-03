@@ -336,6 +336,9 @@ class TestCNEndToEnd:
             def on_start(self, ctx):
                 self.context = ctx
 
+            def on_before_trading(self, ctx, td):
+                pass
+
             def on_data(self, ctx, data):
                 self._bars.append(data)
 

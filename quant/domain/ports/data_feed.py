@@ -43,3 +43,23 @@ class DataFeed(ABC):
     @abstractmethod
     def unsubscribe(self, symbols: List[str]) -> None:
         pass
+
+    def get_bar_for_date(self, symbol: str, date: Any) -> Any:
+        """Optional O(1) single-bar lookup. Returns None by default."""
+        return None
+
+    @property
+    def trading_dates(self) -> set:
+        """Optional set of trading dates for skipping non-trading days.
+
+        Returns an empty set by default; providers with a trading calendar
+        should override this property.
+        """
+        return set()
+
+    def get_dividend_for_date(self, symbol: str, date: Any) -> Any:
+        """Optional O(1) dividend lookup by symbol + ex_date.
+
+        Returns None by default; providers with dividend data override this.
+        """
+        return None

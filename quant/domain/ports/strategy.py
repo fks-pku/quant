@@ -93,12 +93,23 @@ class Strategy(ABC):
     def on_fill(self, context: "StrategyContext" = None, fill: Any = None) -> None:
         pass
 
+    def on_data(self, context: "StrategyContext" = None, data: Any = None) -> None:
+        """Called on each bar of data — the primary dispatch used by engines.
+
+        Default implementation delegates to :meth:`on_bar`.
+        """
+        if context is not None and data is not None:
+            self.on_bar(context, data)
+
     def on_order_rejected(self, order: Order) -> None:
         pass
 
     @abstractmethod
     def on_bar(self, context: StrategyContext, bar: Bar) -> None:
-        pass
+        """Process a single bar. Called by :meth:`on_data` by default.
+
+        Implementations may override ``on_data`` directly for finer control.
+        """
 
     def buy(
         self,

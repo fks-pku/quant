@@ -17,6 +17,8 @@ def get_market(symbol: str) -> str:
 
 
 def get_lot_size(symbol: str, lot_sizes: Dict[str, int]) -> int:
+    if lot_sizes is None:
+        lot_sizes = {}
     market = get_market(symbol)
     if market == "US":
         return 1
@@ -67,6 +69,10 @@ def select_currency(symbols: List[str]) -> str:
     markets = {get_market(s) for s in symbols}
     if len(markets) == 1:
         return MARKET_CURRENCY.get(markets.pop(), "USD")
+    import logging
+    logging.getLogger(__name__).warning(
+        "Mixed markets %s — defaulting to USD; PnL may be mispriced", markets
+    )
     return "USD"
 
 
@@ -81,7 +87,7 @@ def is_suspended(bar: Dict) -> bool:
 
 
 def get_earliest_lot_time(pos) -> Optional[datetime]:
-    if not pos._lots:
+    if pos is None or not hasattr(pos, '_lots') or not pos._lots:
         return None
     earliest = min(pos._lots.keys())
     return datetime(earliest.year, earliest.month, earliest.day)

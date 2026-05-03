@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 
-from quant.features.backtest.engine import Backtester, BacktestResultExporter
+from quant.features.backtest.engine import Backtester
+from quant.features.backtest.entities import BacktestResultExporter
 from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.features.strategies.registry import StrategyRegistry
