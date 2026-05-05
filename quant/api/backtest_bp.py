@@ -27,6 +27,15 @@ def run_backtest():
         _backtest_results[backtest_id] = {"status": "running", "backtest_id": backtest_id}
 
     def _run():
+        def detect_benchmark_symbol(symbols):
+            from quant.domain.models.market import is_cn_symbol
+            if any(is_cn_symbol(s) for s in symbols):
+                return "510300"
+            return None
+
+        bench_provider = None
+        benchmark_symbol = detect_benchmark_symbol(symbols)
+
         try:
             import pandas as pd
             from quant.features.backtest.engine import Backtester
@@ -107,6 +116,17 @@ def run_backtest():
                             strategy_kwargs[k] = v
                 strategy = strategy_class(**strategy_kwargs)
 
+                if benchmark_symbol:
+                    bench_df = db.get_bars(
+                        benchmark_symbol,
+                        datetime.strptime(start_date, '%Y-%m-%d'),
+                        datetime.strptime(end_date, '%Y-%m-%d'),
+                        "1d",
+                    )
+                    if not bench_df.empty:
+                        from quant.features.backtest.benchmark import BenchmarkProvider
+                        bench_provider = BenchmarkProvider(bench_df)
+
                 config = {
                     "backtest": {"slippage_bps": slippage_bps},
                     "execution": {"commission": {
@@ -128,7 +148,7 @@ def run_backtest():
             finally:
                 db.close()
 
-            backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes)
+            backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes, benchmark_provider=bench_provider)
             result = backtester.run(
                 start=datetime.strptime(start_date, '%Y-%m-%d'),
                 end=datetime.strptime(end_date, '%Y-%m-%d'),
@@ -140,6 +160,14 @@ def run_backtest():
 
             equity_list = result.equity_curve.reset_index().values.tolist()
             equity_serializable = [[str(r[0]), float(r[1])] for r in equity_list]
+
+            benchmark_curve = []
+            if bench_provider is not None:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                bench_eq = bench_provider.get_benchmark_equity(start_dt, end_dt, initial_cash)
+                if not bench_eq.empty:
+                    benchmark_curve = [[str(idx), float(v)] for idx, v in bench_eq.items()]
 
             trades_list = []
             for t in result.trades:
@@ -211,6 +239,12 @@ def run_backtest():
                 "expectancy": float(result.metrics.expectancy),
                 "avg_win": float(sum(t.pnl for t in winning) / max(1, len(winning))),
                 "avg_loss": float(sum(t.pnl for t in losing) / max(1, len(losing))),
+                "benchmark_return": float(result.metrics.benchmark_return) if result.metrics.benchmark_return is not None else None,
+                "benchmark_return_pct": float(result.metrics.benchmark_return * 100) if result.metrics.benchmark_return is not None else None,
+                "alpha": float(result.metrics.alpha) if result.metrics.alpha is not None else None,
+                "alpha_pct": float(result.metrics.alpha * 100) if result.metrics.alpha is not None else None,
+                "beta": float(result.metrics.beta) if result.metrics.beta is not None else None,
+                "information_ratio": float(result.metrics.information_ratio) if result.metrics.information_ratio is not None else None,
             }
 
             with _backtest_lock:
@@ -220,6 +254,7 @@ def run_backtest():
                     "strategy_id": strategy_id,
                     "metrics": metrics,
                     "equity_curve": equity_serializable,
+                    "benchmark_equity_curve": benchmark_curve,
                     "trades": trades_list,
                     "trade_timeline": timeline_list,
                     "description": f"{strategy_id} backtest from {start_date} to {end_date} on {', '.join(symbols)}",
