@@ -5,6 +5,7 @@ from quant.domain.ports.storage import Storage
 from quant.domain.ports.event_publisher import EventPublisher, EventSubscriber
 from quant.domain.ports.portfolio import PortfolioLike, RiskEngineLike
 from quant.domain.ports.llm import LLMAdapterLike
+from quant.domain.ports.research_store import ResearchStore
 
 __all__ = [
     "DataFeed",
@@ -18,4 +19,5 @@ __all__ = [
     "PortfolioLike",
     "RiskEngineLike",
     "LLMAdapterLike",
+    "ResearchStore",
 ]

@@ -1031,6 +1031,118 @@ class TestCriticalRegression:
         sells = [t for t in result.trades if t.side == "SELL"]
         assert len(sells) >= 1, "on_stop close-out should produce SELL trades"
         assert abs(sum(t.quantity for t in sells) - 100) < 1e-6
+        assert result.diagnostics.forced_closeout_orders == 1
+        assert result.diagnostics.forced_closeout_trades == 1
+
+    def test_on_stop_closeout_can_be_disabled(self):
+        """on_stop orders can be discarded instead of synthetic close-out fills."""
+        data = make_us_bars(["AAPL"], START, 4, {"AAPL": 100.0})
+        config = {
+            "backtest": {"slippage_bps": 0, "force_close_on_stop": False},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config)
+
+        class CloseOutDisabled:
+            name = "CloseOutDisabled"
+            context = None
+            _positions = {}
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if self._day == 0:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", None, "CloseOutDisabled"
+                    )
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pos = self._positions.get("AAPL", 0)
+                if pos > 0:
+                    self.context.order_manager.submit_order(
+                        "AAPL", pos, "SELL", "MARKET", None, "CloseOutDisabled"
+                    )
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[CloseOutDisabled()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["AAPL"],
+        )
+
+        assert [t.side for t in result.trades] == ["BUY"]
+        assert result.open_positions[0]["quantity"] == pytest.approx(100)
+        assert result.diagnostics.forced_closeout_orders == 1
+        assert result.diagnostics.forced_closeout_trades == 0
+        assert result.diagnostics.discarded_orders == 1
+        assert result.diagnostics.expired_orders == 1
+
+    def test_cash_dividend_is_recorded_in_diagnostics(self):
+        """Cash dividend cash flow is exposed for NAV reconstruction."""
+        data = make_us_bars(["AAPL"], START, 5, {"AAPL": 100.0})
+        dividends = make_dividends_df("AAPL", [START + timedelta(days=2)], [1.25])
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config)
+
+        class DividendBuyer:
+            name = "DividendBuyer"
+            context = None
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if self._day == 0:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", None, "DividendBuyer"
+                    )
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[DividendBuyer()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data, dividends=dividends),
+            symbols=["AAPL"],
+        )
+
+        assert result.diagnostics.total_cash_dividends == pytest.approx(125.0)
+        assert result.diagnostics.total_dividend_tax == pytest.approx(0.0)
+        assert result.diagnostics.total_net_dividends == pytest.approx(125.0)
 
     def test_final_trading_day_deferred_order_expires_without_synthetic_fill(self):
         """Orders generated on the final trading day cannot fill without a real next bar."""

@@ -12,9 +12,12 @@ def test_editorconfig_enforces_utf8():
     assert "charset = utf-8" in content
 
 
-def test_check_text_encoding_flags_invalid_utf8(tmp_path):
-    bad_file = tmp_path / "bad.md"
+def test_check_text_encoding_flags_invalid_utf8():
+    bad_file = ROOT / "tmp" / "bad_encoding_fixture.md"
     bad_file.write_bytes(b"\xff")
-    errors = check_files([bad_file])
-    assert errors
-    assert "invalid UTF-8" in errors[0]
+    try:
+        errors = check_files([bad_file])
+        assert errors
+        assert "invalid UTF-8" in errors[0]
+    finally:
+        bad_file.unlink(missing_ok=True)

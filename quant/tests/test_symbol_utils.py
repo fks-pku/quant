@@ -15,6 +15,10 @@ class TestIsCnSymbol:
     def test_cn_symbols(self, sym):
         assert is_cn_symbol(sym) is True
 
+    @pytest.mark.parametrize("sym", ["510300", "159915", "512880"])
+    def test_cn_etf_and_fund_symbols(self, sym):
+        assert is_cn_symbol(sym) is True
+
     @pytest.mark.parametrize("sym", ["00700", "AAPL", "0388", "1", "6005190", "60051"])
     def test_non_cn_symbols(self, sym):
         assert is_cn_symbol(sym) is False
@@ -33,6 +37,10 @@ class TestIsHkSymbol:
 class TestDetectMarket:
     @pytest.mark.parametrize("sym", ["600519", "000001", "300750", "688981", "830799"])
     def test_cn(self, sym):
+        assert detect_market(sym) == "CN"
+
+    @pytest.mark.parametrize("sym", ["510300", "159915", "512880"])
+    def test_cn_etf_and_fund_market(self, sym):
         assert detect_market(sym) == "CN"
 
     @pytest.mark.parametrize("sym", ["00700", "0388", "1", "HK.00700", "HK.0388"])

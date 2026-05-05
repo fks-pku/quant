@@ -25,6 +25,11 @@ class BacktestDiagnostics:
     risk_skipped_orders: int = 0
     truncated_sells: int = 0
     submission_rejected: int = 0
+    total_cash_dividends: float = 0.0
+    total_dividend_tax: float = 0.0
+    total_net_dividends: float = 0.0
+    forced_closeout_orders: int = 0
+    forced_closeout_trades: int = 0
     rejection_counts: Dict[str, int] = field(default_factory=dict)
 
     def record_rejection(self, reason: OrderRejectionReason) -> None:
@@ -134,6 +139,11 @@ class _BacktestOrderManager:
 
     def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
         try:
+            if (order_type or "MARKET").upper() == "LIMIT" and (
+                not isinstance(price, (int, float)) or price <= 0
+            ):
+                raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
+                                         f"limit price={price!r}")
             effective = self._resolve_price(price, symbol)
             self._passes_dedup(symbol, side)
             self._passes_risk(symbol, quantity, effective, side)

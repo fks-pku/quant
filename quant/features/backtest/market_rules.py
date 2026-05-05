@@ -38,21 +38,37 @@ def is_price_at_limit(
     current_date: Optional[date] = None,
     ipo_dates: Optional[Dict[str, date]] = None,
 ) -> bool:
+    return get_price_limit_direction(
+        symbol, open_price, prev_close, current_date, ipo_dates
+    ) is not None
+
+
+def get_price_limit_direction(
+    symbol: str,
+    open_price: float,
+    prev_close: float,
+    current_date: Optional[date] = None,
+    ipo_dates: Optional[Dict[str, date]] = None,
+) -> Optional[str]:
     market = get_market(symbol)
     if market != "CN":
-        return False
+        return None
     if prev_close <= 0:
-        return False
+        return None
     if current_date and ipo_dates and symbol in ipo_dates:
         ipo_d = ipo_dates[symbol]
         calendar_days_since_ipo = (current_date - ipo_d).days
         if calendar_days_since_ipo <= IPO_NO_LIMIT_CALENDAR_DAYS:
-            return False
+            return None
     limit_pct = cn_price_limit_pct(symbol)
     upper = _round_half_up(prev_close * (1 + limit_pct))
     lower = _round_half_up(prev_close * (1 - limit_pct))
     open_rounded = _round_half_up(open_price)
-    return open_rounded >= upper or open_rounded <= lower
+    if open_rounded >= upper:
+        return "UP"
+    if open_rounded <= lower:
+        return "DOWN"
+    return None
 
 
 def get_settled_quantity(symbol: str, pos: Any, trade_date: date, market: Optional[str] = None) -> float:
@@ -66,14 +82,12 @@ def get_settled_quantity(symbol: str, pos: Any, trade_date: date, market: Option
 def select_currency(symbols: List[str]) -> str:
     if not symbols:
         return "USD"
-    markets = {get_market(s) for s in symbols}
-    if len(markets) == 1:
-        return MARKET_CURRENCY.get(markets.pop(), "USD")
-    import logging
-    logging.getLogger(__name__).warning(
-        "Mixed markets %s — defaulting to USD; PnL may be mispriced", markets
+    currencies = {MARKET_CURRENCY.get(get_market(s), "USD") for s in symbols}
+    if len(currencies) == 1:
+        return currencies.pop()
+    raise ValueError(
+        f"Mixed currencies are not supported in one backtest: {sorted(currencies)}"
     )
-    return "USD"
 
 
 def is_suspended(bar: Dict) -> bool:

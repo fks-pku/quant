@@ -23,22 +23,51 @@ def create_portfolio_contexts(
         )
 
     master = portfolio_class(initial_cash=initial_cash, currency=currency)
-    use_subs = strategy_allocations is not None and len(strategies) > 1
+    use_subs = strategy_allocations is not None or len(strategies) > 1
 
     if use_subs:
         portfolio_map: Dict[str, Any] = {}
         risk_map: Dict[str, Any] = {}
         import logging
+        strategy_names = [
+            getattr(strategy, 'name', strategy.__class__.__name__)
+            for strategy in strategies
+        ]
+        if len(strategy_names) != len(set(strategy_names)):
+            duplicates = sorted({
+                name for name in strategy_names
+                if strategy_names.count(name) > 1
+            })
+            raise ValueError(f"Duplicate strategy names are not allowed: {duplicates}")
+        if strategy_allocations is None:
+            equal_weight = 1.0 / len(strategies)
+            strategy_allocations = {
+                sname: equal_weight for sname in strategy_names
+            }
+        unknown_allocations = set(strategy_allocations) - set(strategy_names)
+        if unknown_allocations:
+            raise ValueError(
+                f"strategy allocations contain unknown strategies: {sorted(unknown_allocations)}"
+            )
+        missing_allocations = set(strategy_names) - set(strategy_allocations)
+        if missing_allocations:
+            raise ValueError(
+                f"strategy allocations missing strategies: {sorted(missing_allocations)}"
+            )
+        for sname, alloc_pct in strategy_allocations.items():
+            if alloc_pct < 0 or alloc_pct > 1.0:
+                raise ValueError(
+                    f"Strategy '{sname}' allocation must be in [0, 1], got {alloc_pct}"
+                )
+        allocation_sum = sum(strategy_allocations[sname] for sname in strategy_names)
+        if allocation_sum > 1.0 + 1e-12:
+            raise ValueError(f"strategy allocations sum to {allocation_sum:.4f}, must be <= 1.0")
         for strategy in strategies:
             sname = getattr(strategy, 'name', strategy.__class__.__name__)
             alloc_pct = strategy_allocations.get(sname, 0.0)
             if alloc_pct <= 0:
                 logging.getLogger(__name__).warning(
                     "Strategy '%s' has allocation %.4f — orders may be rejected", sname, alloc_pct
-                )
-            if alloc_pct < 0 or alloc_pct > 1.0:
-                raise ValueError(
-                    f"Strategy '{sname}' allocation must be in [0, 1], got {alloc_pct}"
                 )
             alloc_cash = initial_cash * alloc_pct
             sub = sub_portfolio_class(strategy_name=sname, allocated_capital=alloc_cash, master=master)

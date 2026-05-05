@@ -1,6 +1,7 @@
 import uuid
 import threading
 from datetime import datetime
+from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from quant.features.research.models import ResearchConfig, ResearchResult
@@ -109,6 +110,13 @@ _research_lock = threading.Lock()
 _research_scheduler: ResearchScheduler = None
 
 
+def _make_research_store(cfg: ResearchConfig):
+    from quant.infrastructure.research.repository import FileResearchStore
+
+    root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
+    return FileResearchStore(root)
+
+
 def _create_llm_adapter(cfg: ResearchConfig):
     if cfg.llm_provider == "openai":
         from quant.features.cio.llm_adapters.openai_adapter import OpenAIAdapter
@@ -135,10 +143,11 @@ def _get_scheduler() -> ResearchScheduler:
     global _research_scheduler
     if _research_scheduler is None:
         cfg = _load_research_config()
+        research_store = _make_research_store(cfg)
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn())
+        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn(), research_store=research_store)
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:
             _research_scheduler.start()
@@ -177,7 +186,12 @@ def run_research():
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator
     evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-    engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn())
+    engine = ResearchEngine(
+        config=cfg,
+        evaluator=evaluator,
+        backtest_fn=_make_backtest_fn(),
+        research_store=_make_research_store(cfg),
+    )
 
     def _run():
         try:
@@ -214,13 +228,13 @@ def get_research_status(research_id):
 
 @research_bp.route("/api/research/candidates")
 def list_candidates():
-    pool = CandidatePool()
+    pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
     return jsonify({"candidates": pool.list_candidates()})
 
 
 @research_bp.route("/api/research/promote/<strategy_id>", methods=["POST"])
 def promote_candidate(strategy_id):
-    pool = CandidatePool()
+    pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
     success = pool.promote(strategy_id)
     if success:
         return jsonify({"success": True, "strategy_id": strategy_id, "status": "paused"})
@@ -231,7 +245,7 @@ def promote_candidate(strategy_id):
 def reject_candidate(strategy_id):
     data = request.get_json() or {}
     reason = data.get("reason", "")
-    pool = CandidatePool()
+    pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
     success = pool.reject(strategy_id, reason=reason)
     if success:
         return jsonify({"success": True, "strategy_id": strategy_id, "status": "rejected"})

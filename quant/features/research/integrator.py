@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from quant.domain.ports.research_store import ResearchStore
 from quant.features.research.models import RawStrategy, EvaluationReport
 
 logger = logging.getLogger(__name__)
@@ -15,12 +16,18 @@ class StrategyIntegrator:
         strategy_registry: Optional[Dict[str, Any]] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
         on_register: Optional[Callable] = None,
+        research_store: Optional[ResearchStore] = None,
     ):
         self.strategies_dir = strategies_dir
         self._registry = strategy_registry if strategy_registry is not None else {}
         self._params = strategy_params if strategy_params is not None else {}
         self._dir_map: Dict[str, str] = {}
         self._on_register = on_register
+        self.research_store = research_store
+
+    @property
+    def registry(self) -> Dict[str, Any]:
+        return self._registry
 
     def integrate(self, raw: RawStrategy, report: EvaluationReport) -> Optional[str]:
         name = self._normalize_name(raw.title)
@@ -37,11 +44,15 @@ class StrategyIntegrator:
             (strategy_dir / "strategy.py").write_text(code, encoding="utf-8")
             readme = self._generate_readme(raw, report)
             (strategy_dir / "README.md").write_text(readme, encoding="utf-8")
+            config = self._generate_config(raw, report)
+            (strategy_dir / "config.yaml").write_text(config, encoding="utf-8")
         except Exception as e:
             logger.error(f"Failed to write strategy files: {e}")
             return None
 
-        self._register_in_runtime(name, class_name, raw, report)
+        entry = self._register_in_runtime(name, class_name, raw, report)
+        if self.research_store is not None:
+            self.research_store.upsert_candidate(entry)
         return name
 
     def get_registry_entry(self, strategy_id: str) -> Optional[Dict[str, Any]]:
@@ -121,9 +132,23 @@ class {class_name}(Strategy):
 {report.summary}
 """
 
-    def _register_in_runtime(self, name: str, class_name: str, raw: RawStrategy, report: EvaluationReport) -> None:
+    def _generate_config(self, raw: RawStrategy, report: EvaluationReport) -> str:
+        class_name = self._to_class_name(raw.title)
+        symbols = report.recommended_symbols or ["AAPL"]
+        symbols_text = ", ".join(symbols)
+        return f"""strategy:
+  name: {class_name}
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  symbols: [{symbols_text}]
+"""
+
+    def _register_in_runtime(self, name: str, class_name: str, raw: RawStrategy, report: EvaluationReport) -> Dict[str, Any]:
         strategy_id = name
-        self._registry[class_name] = {
+        entry = {
             "id": strategy_id,
             "name": raw.title,
             "description": raw.description[:200],
@@ -139,14 +164,26 @@ class {class_name}(Strategy):
                 "data_requirement": report.data_requirement,
                 "daily_adaptable": report.daily_adaptable,
                 "estimated_edge": report.estimated_edge,
+                "strategy_type": report.strategy_type,
+                "economic_rationale_score": report.economic_rationale_score,
+                "factor_uniqueness_score": report.factor_uniqueness_score,
+                "data_availability_score": report.data_availability_score,
+                "implementation_score": report.implementation_score,
+                "overfit_risk_score": report.overfit_risk_score,
+                "cost_capacity_score": report.cost_capacity_score,
+                "regime_robustness_score": report.regime_robustness_score,
+                "risk_flags": report.risk_flags,
+                "rejection_reason": report.rejection_reason,
                 "discovered_at": "",
                 "evaluated_at": "",
             },
         }
+        self._registry[class_name] = entry
         self._dir_map[strategy_id] = name
         self._params[strategy_id] = {
             "lookback": {"type": "int", "default": 20, "description": "Default lookback period"},
         }
         if self._on_register:
-            self._on_register(class_name, self._registry[class_name])
+            self._on_register(class_name, entry)
         logger.info(f"Registered candidate strategy {strategy_id}")
+        return entry

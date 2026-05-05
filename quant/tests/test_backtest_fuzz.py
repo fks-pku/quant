@@ -384,7 +384,8 @@ def _verify_final_nav_invariant(result, initial_cash):
         cash -= t.commission
 
     market_value = sum(p.get("market_value", 0.0) for p in result.open_positions)
-    expected = cash + market_value
+    net_dividends = result.diagnostics.total_net_dividends
+    expected = cash + net_dividends + market_value
     # Abs tolerance: post-loop executions may have NAV timing differences
     # between portfolio.nav and extract_open_positions market_value computation.
     # Typical discrepancy < $0.02; allow up to 0.1% of initial_cash for edge cases.
@@ -392,7 +393,7 @@ def _verify_final_nav_invariant(result, initial_cash):
     assert abs(result.final_nav - expected) < tolerance, (
         f"I3 violated: final_nav={result.final_nav}, expected={expected}, "
         f"diff={result.final_nav - expected}, "
-        f"cash={cash}, market_value={market_value}, "
+        f"cash={cash}, net_dividends={net_dividends}, market_value={market_value}, "
         f"n_trades={len(result.trades)}, n_open={len(result.open_positions)}"
     )
 
@@ -1208,12 +1209,7 @@ def cross_market_input(draw):
 
 
 class TestFuzzCrossMarket:
-    """Verify I3/I4 hold with US + CN + HK symbols in a single backtest.
-
-    Uses US_ZERO_FRICTION config. CN and HK commissions default to realistic
-    from CommissionConfig. Verifies commission is correctly calculated
-    per-market.
-    """
+    """Mixed USD/CNY/HKD symbols must be rejected until an explicit FX layer exists."""
 
     @given(cross_market_input())
     @settings(max_examples=10, deadline=None,
@@ -1223,22 +1219,9 @@ class TestFuzzCrossMarket:
         bt = make_backtester(US_ZERO_FRICTION)
         provider = DataFrameProvider(data)
         strat = make_scripted_strategy("fuzz_cross", signals)
-        result = bt.run(
-            start=data["timestamp"].min(), end=data["timestamp"].max(),
-            strategies=[strat], initial_cash=INITIAL_CASH,
-            data_provider=provider, symbols=symbols,
-        )
-
-        _verify_all_invariants(result)
-
-        # Verify that commission per trade matches the trade's symbol market
-        for t in result.trades:
-            sym = t.symbol
-            if sym.startswith("HK.") or any(sym.startswith(p) for p in ["600", "000", "300"]):
-                # Non-US symbols should have commission >= 0 (realistic defaults)
-                assert t.commission >= 0, f"Commission should be non-negative for {sym}"
-            else:
-                # US symbols with zero-friction should have commission == 0
-                assert t.commission == pytest.approx(0.0, abs=0.01), (
-                    f"US zero-friction: commission should be 0, got {t.commission}"
-                )
+        with pytest.raises(ValueError, match="Mixed currencies"):
+            bt.run(
+                start=data["timestamp"].min(), end=data["timestamp"].max(),
+                strategies=[strat], initial_cash=INITIAL_CASH,
+                data_provider=provider, symbols=symbols,
+            )

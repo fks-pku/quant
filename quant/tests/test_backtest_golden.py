@@ -79,6 +79,11 @@ def _build_synthetic_data():
             row_dict["open"] = round(row_dict["close"] * (1.0 - noise), 4)
             row_dict["high"] = round(row_dict["close"] * 1.005, 4)
             row_dict["low"] = round(row_dict["close"] * 0.995, 4)
+            row_dict["adj_open"] = row_dict["open"]
+            row_dict["adj_high"] = row_dict["high"]
+            row_dict["adj_low"] = row_dict["low"]
+            row_dict["adj_close"] = row_dict["close"]
+            row_dict["adj_factor"] = 1.0
             new_rows.append(row_dict)
 
     return pd.DataFrame(new_rows)

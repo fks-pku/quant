@@ -35,3 +35,8 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `DuckDBStorage` read_only=True must be used in API endpoints and backtest — prevents write-lock conflicts
 - Provider subclasses should not import from features/ — only from domain ports
 - Tushare provider requires token configuration in config.yaml
+
+## Research Adapters
+
+- `research/FileResearchStore` implements the `ResearchStore` domain port.
+- Research feature code must receive it through dependency injection; infrastructure must not import from `features/`.

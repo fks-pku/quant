@@ -53,3 +53,7 @@ None. Domain has zero external dependencies — the most important invariant.
 
 - Adding `pd.DataFrame` return types to ports would break the zero-dependency invariant — keep ports returning `Any`
 - Events must be hashable if used in sets — use frozen dataclass for all Event subclasses
+
+## Recent Additions
+
+- `ResearchStore` is the domain port for research persistence. Feature code depends on this port only; file-backed implementations live in infrastructure.

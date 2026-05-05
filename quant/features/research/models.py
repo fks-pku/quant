@@ -22,6 +22,15 @@ class EvaluationReport:
     recommended_symbols: List[str]
     strategy_type: str
     summary: str
+    economic_rationale_score: float = 0.0
+    factor_uniqueness_score: float = 0.0
+    data_availability_score: float = 0.0
+    implementation_score: float = 0.0
+    overfit_risk_score: float = 0.0
+    cost_capacity_score: float = 0.0
+    regime_robustness_score: float = 0.0
+    risk_flags: List[str] = field(default_factory=list)
+    rejection_reason: str = ""
 
 
 @dataclass
@@ -64,6 +73,7 @@ class ResearchConfig:
     llm_temperature: float = 0.3
     llm_base_url: Optional[str] = None
     llm_group_id: Optional[str] = None
+    research_dir: Optional[str] = None
 
 
 @dataclass

@@ -1,7 +1,8 @@
 """Market identification and symbol rules — single source of truth.
 
 Rules:
-  CN (A-share): 6-digit numeric, first digit in {0, 3, 6, 8, 9}.
+  CN:           6-digit numeric mainland securities, including stocks,
+                ETFs, funds, bonds, and B-shares.
   HK:           HK. prefix OR 1-5 digit numeric (not 6-digit CN).
   US:           Everything else (alphabetic tickers, ETFs, etc.).
 
@@ -16,17 +17,12 @@ from typing import Literal
 
 Market = Literal["CN", "HK", "US"]
 
-_CN_FIRST_DIGITS = frozenset(("0", "3", "6", "8", "9"))
 _CN_STAR_PREFIX = "688"
 _CN_CHINEXT_PREFIX = "300"
 
 
 def is_cn_symbol(symbol: str) -> bool:
-    return (
-        symbol.isdigit()
-        and len(symbol) == 6
-        and symbol[0] in _CN_FIRST_DIGITS
-    )
+    return symbol.isdigit() and len(symbol) == 6
 
 
 def is_hk_symbol(symbol: str) -> bool:

@@ -42,3 +42,9 @@
 - LLM 返回非 JSON 时 evaluator 会 fallback 到 neutral report，不会 crash
 - arXiv API 有 rate limit，scout 已内置 3-5s jitter delay
 - 自动回测需要 DuckDB 中有数据，否则策略会被 reject
+
+## Hexagonal Boundary
+
+- `ResearchEngine`, `StrategyIntegrator`, and `CandidatePool` depend on `quant.domain.ports.ResearchStore`.
+- File persistence is an infrastructure adapter (`quant.infrastructure.research.FileResearchStore`) injected by the API/composition root.
+- Do not write filesystem, DuckDB, HTTP client, or other external adapter logic directly in this feature unless it is hidden behind an injected port.

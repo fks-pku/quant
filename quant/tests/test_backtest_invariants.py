@@ -771,37 +771,21 @@ def case8_result():
         def on_stop(self, ctx):
             pass
 
-    return bt.run(
-        start=data["timestamp"].min(), end=data["timestamp"].max(),
-        strategies=[StratA(), StratB()],
-        initial_cash=100_000,
-        data_provider=provider,
-        symbols=["AAPL", "600519"],
-        strategy_allocations={"StratA": 0.5, "StratB": 0.5},
-    )
+    with pytest.raises(ValueError, match="Mixed currencies") as exc:
+        bt.run(
+            start=data["timestamp"].min(), end=data["timestamp"].max(),
+            strategies=[StratA(), StratB()],
+            initial_cash=100_000,
+            data_provider=provider,
+            symbols=["AAPL", "600519"],
+            strategy_allocations={"StratA": 0.5, "StratB": 0.5},
+        )
+    return exc.value
 
 
 class TestCase8Comprehensive:
-    def test_c8_01_equity_curve_final(self, case8_result):
-        assert case8_result.equity_curve.iloc[-1] == pytest.approx(101204.929, rel=1e-2)
-
-    def test_c8_02_strata_aapl_fifo(self, case8_result):
-        a_trades = [t for t in case8_result.trades if t.strategy_name == "StratA" and t.side == "SELL"]
-        total_sold = sum(t.quantity for t in a_trades)
-        assert total_sold == pytest.approx(100, rel=1e-4)
-
-    def test_c8_03_stratb_cn_t1_passes(self, case8_result):
-        assert case8_result.diagnostics.t1_rejected_sells == 0
-
-    def test_c8_07_final_nav_invariant(self, case8_result):
-        pnl_sum = sum(t.pnl for t in case8_result.trades)
-        assert case8_result.final_nav == pytest.approx(100_000 + pnl_sum, abs=50)
-
-    def test_c8_08_all_positions_closed(self, case8_result):
-        assert len(case8_result.open_positions) == 0
-
-    def test_c8_09_fill_count(self, case8_result):
-        assert case8_result.diagnostics.fill_count == 7
+    def test_c8_01_mixed_currency_comprehensive_case_rejected(self, case8_result):
+        assert "Mixed currencies" in str(case8_result)
 
 
 # ---------------------------------------------------------------------------
@@ -1311,6 +1295,7 @@ def case15_result():
         name = "StockDiv"
         context = None
         _positions = {}
+        _position_history = []
         _day = -1
 
         def on_start(self, ctx):
@@ -1332,6 +1317,7 @@ def case15_result():
         def on_fill(self, ctx, fill):
             q = fill.quantity if fill.side == "BUY" else -fill.quantity
             self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + q
+            self._position_history.append(self._positions.get(fill.symbol, 0))
 
         def get_position(self, symbol):
             return self._positions.get(symbol, 0)
@@ -1339,11 +1325,15 @@ def case15_result():
         def on_stop(self, ctx):
             pass
 
-    return bt.run(
+    strat = StockDivStrat()
+    result = bt.run(
         start=data["timestamp"].min(), end=data["timestamp"].max(),
-        strategies=[StockDivStrat()], initial_cash=100_000,
+        strategies=[strat], initial_cash=100_000,
         data_provider=provider, symbols=["AAPL"],
     )
+    result._strategy_positions = strat._positions.copy()
+    result._strategy_position_history = list(strat._position_history)
+    return result
 
 
 class TestCase15StockDividend:
@@ -1360,7 +1350,7 @@ class TestCase15StockDividend:
         assert sells[0].entry_price == pytest.approx(70.00, rel=5e-2)
 
     def test_c15_04_strategy_positions_synced(self, case15_result):
-        pass
+        assert 150 in case15_result._strategy_position_history
 
     def test_c15_05_final_nav_profitable(self, case15_result):
         assert case15_result.final_nav > 100_000
@@ -1833,7 +1823,293 @@ class TestCase28InsufficientCash:
 
 
 # ============================================================================
-# Regression: B1 — last trading day deferred orders must execute
+# CASE-29: Limit order marketability
+# ============================================================================
+
+
+def _execute_direct_order(order, symbol, bar, portfolio, prev_bar=None):
+    from quant.features.backtest.entities import BacktestDiagnostics, CommissionConfig
+    from quant.features.backtest.order_executor import execute_order
+
+    diag = BacktestDiagnostics()
+    trades = execute_order(
+        order=order,
+        portfolio=portfolio,
+        symbol=symbol,
+        bar=bar,
+        entry_times={},
+        entry_prices={},
+        diag=diag,
+        lot_sizes={},
+        ipo_dates={},
+        slippage_bps=0,
+        commission_config=CommissionConfig(
+            US={"type": "percent", "percent": 0.0, "min_per_order": 0.0},
+            CN={"type": "cn_realistic"},
+            HK={"type": "hk_realistic"},
+        ),
+        prev_bar=prev_bar,
+        risk_price_deviation_limit=1.0,
+    )
+    return trades, diag
+
+
+class TestCase29LimitOrders:
+    def test_c29_01_buy_limit_above_open_fills_at_open(self):
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        pf = Portfolio(initial_cash=100_000)
+        order = DeferredOrder(
+            symbol="AAPL", quantity=100, side="BUY", order_type="LIMIT",
+            price=120.0, strategy="LimitBuy", signal_date=datetime(2024, 6, 3),
+            risk_check_price=120.0,
+        )
+        trades, _ = _execute_direct_order(
+            order, "AAPL",
+            {"symbol": "AAPL", "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
+            pf,
+        )
+        assert trades[0].fill_price == pytest.approx(110.0)
+
+    def test_c29_02_buy_limit_below_open_rejected(self):
+        from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        pf = Portfolio(initial_cash=100_000)
+        order = DeferredOrder(
+            symbol="AAPL", quantity=100, side="BUY", order_type="LIMIT",
+            price=100.0, strategy="LimitBuy", signal_date=datetime(2024, 6, 3),
+            risk_check_price=100.0,
+        )
+        with pytest.raises(OrderRejectedError) as exc:
+            _execute_direct_order(
+                order, "AAPL",
+                {"symbol": "AAPL", "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
+                pf,
+            )
+        assert exc.value.reason == OrderRejectionReason.LIMIT_NOT_MARKETABLE
+
+    def test_c29_03_sell_limit_below_open_fills_at_open(self):
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        pf = Portfolio(initial_cash=100_000)
+        pf.update_position("AAPL", quantity=100, price=100.0, cost=10_000.0, trade_date=date(2024, 6, 3))
+        pf.cash -= 10_000.0
+        order = DeferredOrder(
+            symbol="AAPL", quantity=100, side="SELL", order_type="LIMIT",
+            price=105.0, strategy="LimitSell", signal_date=datetime(2024, 6, 4),
+            risk_check_price=105.0,
+        )
+        trades, _ = _execute_direct_order(
+            order, "AAPL",
+            {"symbol": "AAPL", "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 5)},
+            pf,
+        )
+        assert trades[0].fill_price == pytest.approx(110.0)
+
+    def test_c29_04_sell_limit_above_open_rejected(self):
+        from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        pf = Portfolio(initial_cash=100_000)
+        pf.update_position("AAPL", quantity=100, price=100.0, cost=10_000.0, trade_date=date(2024, 6, 3))
+        pf.cash -= 10_000.0
+        order = DeferredOrder(
+            symbol="AAPL", quantity=100, side="SELL", order_type="LIMIT",
+            price=120.0, strategy="LimitSell", signal_date=datetime(2024, 6, 4),
+            risk_check_price=120.0,
+        )
+        with pytest.raises(OrderRejectedError) as exc:
+            _execute_direct_order(
+                order, "AAPL",
+                {"symbol": "AAPL", "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 5)},
+                pf,
+            )
+        assert exc.value.reason == OrderRejectionReason.LIMIT_NOT_MARKETABLE
+
+
+# ============================================================================
+# CASE-30: CN price limit side specificity
+# ============================================================================
+
+
+class TestCase30CNPriceLimitSide:
+    def test_c30_01_limit_up_rejects_buy(self):
+        from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        order = DeferredOrder(
+            symbol="600519", quantity=100, side="BUY", order_type="MARKET",
+            price=100.0, strategy="LimitUpBuy", signal_date=datetime(2024, 6, 3),
+            risk_check_price=100.0,
+        )
+        with pytest.raises(OrderRejectedError) as exc:
+            _execute_direct_order(
+                order, "600519",
+                {"symbol": "600519", "open": 110.0, "high": 110.0, "low": 110.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
+                Portfolio(initial_cash=100_000),
+                prev_bar={"close": 100.0},
+            )
+        assert exc.value.reason == OrderRejectionReason.PRICE_AT_LIMIT
+
+    def test_c30_02_limit_up_allows_sell(self):
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        pf = Portfolio(initial_cash=100_000, currency="CNY")
+        pf.update_position("600519", quantity=100, price=100.0, cost=10_000.0, trade_date=date(2024, 6, 1))
+        pf.cash -= 10_000.0
+        order = DeferredOrder(
+            symbol="600519", quantity=100, side="SELL", order_type="MARKET",
+            price=100.0, strategy="LimitUpSell", signal_date=datetime(2024, 6, 3),
+            risk_check_price=100.0,
+        )
+        trades, _ = _execute_direct_order(
+            order, "600519",
+            {"symbol": "600519", "open": 110.0, "high": 110.0, "low": 110.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
+            pf,
+            prev_bar={"close": 100.0},
+        )
+        assert trades[0].side == "SELL"
+
+    def test_c30_03_limit_down_allows_buy(self):
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        order = DeferredOrder(
+            symbol="600519", quantity=100, side="BUY", order_type="MARKET",
+            price=100.0, strategy="LimitDownBuy", signal_date=datetime(2024, 6, 3),
+            risk_check_price=100.0,
+        )
+        trades, _ = _execute_direct_order(
+            order, "600519",
+            {"symbol": "600519", "open": 90.0, "high": 90.0, "low": 90.0, "close": 90.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
+            Portfolio(initial_cash=100_000, currency="CNY"),
+            prev_bar={"close": 100.0},
+        )
+        assert trades[0].side == "BUY"
+
+    def test_c30_04_limit_down_rejects_sell(self):
+        from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        pf = Portfolio(initial_cash=100_000, currency="CNY")
+        pf.update_position("600519", quantity=100, price=100.0, cost=10_000.0, trade_date=date(2024, 6, 1))
+        pf.cash -= 10_000.0
+        order = DeferredOrder(
+            symbol="600519", quantity=100, side="SELL", order_type="MARKET",
+            price=100.0, strategy="LimitDownSell", signal_date=datetime(2024, 6, 3),
+            risk_check_price=100.0,
+        )
+        with pytest.raises(OrderRejectedError) as exc:
+            _execute_direct_order(
+                order, "600519",
+                {"symbol": "600519", "open": 90.0, "high": 90.0, "low": 90.0, "close": 90.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
+                pf,
+                prev_bar={"close": 100.0},
+            )
+        assert exc.value.reason == OrderRejectionReason.PRICE_AT_LIMIT
+
+
+# ============================================================================
+# CASE-31: Reject mixed currencies
+# ============================================================================
+
+
+class TestCase31RejectMixedCurrencies:
+    def test_c31_01_mixed_us_cn_symbols_rejected(self):
+        data = pd.concat([
+            _make_bars("AAPL", CASE1_BARS),
+            _make_bars("600519", CASE3_BARS),
+        ], ignore_index=True)
+        bt = make_backtester(CASE1_CONFIG)
+        provider = DataFrameProvider(data)
+        strat = _signal_strategy("Mixed", "AAPL", buy_on=set(), sell_on=set(), qty=100)
+        with pytest.raises(ValueError, match="Mixed currencies"):
+            bt.run(
+                start=data["timestamp"].min(), end=data["timestamp"].max(),
+                strategies=[strat], initial_cash=100_000,
+                data_provider=provider, symbols=["AAPL", "600519"],
+            )
+
+
+# ============================================================================
+# CASE-32: Suspended bars keep last valid price
+# ============================================================================
+
+
+CASE32_BARS = [
+    (datetime(2024, 6, 3), 100.00, 100.00, 1_000_000),
+    (datetime(2024, 6, 4), 100.00, 100.00, 1_000_000),
+    (datetime(2024, 6, 5), 130.00, 130.00, 0),
+    (datetime(2024, 6, 6), 100.00, 100.00, 1_000_000),
+]
+
+
+@pytest.fixture
+def case32_result():
+    data = _make_bars("AAPL", CASE32_BARS)
+    bt = make_backtester(CASE1_CONFIG)
+    provider = DataFrameProvider(data)
+    strat = _signal_strategy("Case32", "AAPL", buy_on={0}, sell_on=set(), qty=100)
+    return bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat], initial_cash=100_000,
+        data_provider=provider, symbols=["AAPL"],
+    )
+
+
+class TestCase32SuspendedBarsKeepLastPrice:
+    def test_c32_01_suspended_day_does_not_revalue_position(self, case32_result):
+        assert case32_result.diagnostics.suspended_days == 1
+        assert case32_result.equity_curve.iloc[1] == pytest.approx(100_000)
+        assert case32_result.equity_curve.iloc[2] == pytest.approx(100_000)
+
+
+# ============================================================================
+# CASE-33: Multi-strategy default isolation
+# ============================================================================
+
+
+@pytest.fixture
+def case33_result():
+    data = _make_bars("AAPL", CASE1_BARS)
+    bt = make_backtester(CASE1_CONFIG)
+    provider = DataFrameProvider(data)
+    strat_a = _signal_strategy("IsoA", "AAPL", buy_on={0}, sell_on=set(), qty=100)
+    strat_b = _signal_strategy("IsoB", "AAPL", buy_on=set(), sell_on={1}, qty=100)
+    result = bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat_a, strat_b], initial_cash=100_000,
+        data_provider=provider, symbols=["AAPL"],
+    )
+    result._strategy_positions = {
+        "IsoA": strat_a._positions.copy(),
+        "IsoB": strat_b._positions.copy(),
+    }
+    return result
+
+
+class TestCase33MultiStrategyDefaultIsolation:
+    def test_c33_01_second_strategy_cannot_sell_first_strategy_position(self, case33_result):
+        assert case33_result.diagnostics.rejection_counts.get("no_position", 0) >= 1
+        assert case33_result._strategy_positions["IsoA"].get("AAPL", 0) == pytest.approx(100)
+        assert case33_result._strategy_positions["IsoB"].get("AAPL", 0) == pytest.approx(0)
+
+    def test_c33_02_open_position_has_strategy_owner(self, case33_result):
+        positions = [p for p in case33_result.open_positions if p["symbol"] == "AAPL"]
+        assert len(positions) == 1
+        assert positions[0]["strategy"] == "IsoA"
+
+
+# ============================================================================
+# Regression: B1 — last trading day deferred orders must expire
 # ============================================================================
 
 REGRESSION_B1_BARS = [
@@ -1863,14 +2139,13 @@ def regression_b1_result():
 
 
 class TestRegressionB1FinalDayOrder:
-    def test_b1_fill_count_one(self, regression_b1_result):
-        assert regression_b1_result.diagnostics.fill_count == 1
+    def test_b1_fill_count_zero(self, regression_b1_result):
+        assert regression_b1_result.diagnostics.fill_count == 0
+        assert regression_b1_result.diagnostics.expired_orders == 1
 
-    def test_b1_position_exists(self, regression_b1_result):
+    def test_b1_position_does_not_exist(self, regression_b1_result):
         aapl_pos = [p for p in regression_b1_result.open_positions if p["symbol"] == "AAPL"]
-        assert len(aapl_pos) == 1
-        assert aapl_pos[0]["quantity"] == pytest.approx(100, rel=1e-4)
+        assert len(aapl_pos) == 0
 
-    def test_b1_trade_recorded(self, regression_b1_result):
-        assert len(regression_b1_result.trades) == 1
-        assert regression_b1_result.trades[0].side == "BUY"
+    def test_b1_trade_not_recorded(self, regression_b1_result):
+        assert len(regression_b1_result.trades) == 0

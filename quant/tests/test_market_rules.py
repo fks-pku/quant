@@ -7,6 +7,7 @@ from quant.features.backtest.market_rules import (
     get_market,
     get_lot_size,
     is_price_at_limit,
+    get_price_limit_direction,
     get_settled_quantity,
     select_currency,
     is_suspended,
@@ -70,11 +71,13 @@ class TestPriceLimit:
         prev_close = 100.0
         limit_price = prev_close * 1.10 + 0.01
         assert is_price_at_limit("600519", round(limit_price, 2), prev_close) is True
+        assert get_price_limit_direction("600519", round(limit_price, 2), prev_close) == "UP"
 
     def test_cn_limit_down_10pct(self):
         prev_close = 100.0
         limit_price = prev_close * 0.90 - 0.01
         assert is_price_at_limit("600519", round(limit_price, 2), prev_close) is True
+        assert get_price_limit_direction("600519", round(limit_price, 2), prev_close) == "DOWN"
 
     def test_cn_normal_price_passes(self):
         assert is_price_at_limit("600519", 100.0, 100.0) is False
@@ -135,14 +138,22 @@ class TestCurrency:
     def test_single_cn(self):
         assert select_currency(["600519"]) == "CNY"
 
+    def test_cn_equity_and_etf_share_currency(self):
+        assert select_currency(["600519", "510300", "159915", "512880"]) == "CNY"
+
     def test_single_hk(self):
         assert select_currency(["HK.00700"]) == "HKD"
 
     def test_single_us(self):
         assert select_currency(["AAPL"]) == "USD"
 
-    def test_mixed_falls_back_usd(self):
-        assert select_currency(["600519", "AAPL"]) == "USD"
+    def test_mixed_currency_rejected(self):
+        with pytest.raises(ValueError, match="Mixed currencies"):
+            select_currency(["600519", "AAPL"])
+
+    def test_mixed_us_hk_currency_rejected(self):
+        with pytest.raises(ValueError, match="Mixed currencies"):
+            select_currency(["AAPL", "HK.00700"])
 
     def test_empty(self):
         assert select_currency([]) == "USD"

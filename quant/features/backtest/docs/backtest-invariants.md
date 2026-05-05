@@ -22,6 +22,13 @@
 - I6 `position.realized_pnl == sum(trade.realized_pnl)` (每个仓位平仓后)
 - I7 `NAV[t] == NAV[t-1]` 在停牌日 (无成交、无除权)
 - I8 被拒绝订单不影响 `cash` 和 `NAV` (拒绝当天 NAV 不变)
+- I9 最后一个真实交易日 after-close 产生的 deferred order 没有下一交易日时必须过期，不能用 synthetic bar 成交
+- I10 一个回测实例内不得混合币种；USD/CNY/HKD 混合标的必须拒绝，除非未来引入显式 FX 层
+- I11 多策略回测必须按策略隔离现金、持仓、风控与成交回调；master 不承载策略持仓
+- I12 LIMIT 订单只在 next open 可成交时成交：BUY 要求 `open <= limit`，SELL 要求 `open >= limit`
+- I13 CN 涨跌停按买卖方向约束：涨停拒绝 BUY、跌停拒绝 SELL；反方向不因涨跌停规则拒绝
+- I14 停牌 bar 不更新 `last_prices`/`prev_bars`；无成交、无除权时持仓估值沿用最后有效价
+- I15 `on_stop` 清仓是显式 forced close-out 语义：默认按最后有效 close 清算并记录 diagnostics；禁用时订单必须过期丢弃
 
 ### 市场参数
 
@@ -324,22 +331,21 @@ C4-08  diag.t1_rejected_sells==0 (HK T+0)
 
 ---
 
-## CASE-5: SubPortfolio 多策略共享持仓
+## CASE-5: SubPortfolio 多策略隔离
 
-两个独立策略各自持有/交易**同一标的 AAPL**，互不隔离。
-master 持有所有真实现金，标的持仓为两个子组合之和。
+两个独立策略各自持有/交易**同一标的 AAPL**，现金、持仓、风控和成交回调必须完全隔离。
+master 不共享持仓池；它只负责初始资金分配、保留未分配现金，以及子组合关闭后的资金回收。
 
 ### 架构
 
-    master(真实资金池, initial_cash=100,000)
-      subA(allocated=40,000): 持有AAPL, cash变动通过setter同步master
-      subB(allocated=60,000): 持有AAPL, cash变动通过setter同步master
+    master(initial_cash=100,000, unallocated cash=0)
+      subA(allocated=40,000): 独立 cash + 独立 AAPL lots
+      subB(allocated=60,000): 独立 cash + 独立 AAPL lots
     
-    NAV       = master.cash + sum(sub.positions.market_value)
+    NAV       = master.cash + sum(sub.nav)
     总持仓(sym) = subA.qty[sym] + subB.qty[sym]
-    加权成本    = (subA.cost_basis + subB.cost_basis) / 总持仓
-    储备        = master.cash - sum(sub.cash)
-    总现金      = 储备 + sum(sub.cash) = master.cash
+    策略持仓    = 按 sub 独立记录，不允许其他策略卖出
+    master.cash = initial_cash - sum(allocated_capital) + closed_sub_returned_cash
 
 ### 配置(零摩擦US)
 
@@ -364,39 +370,38 @@ master 持有所有真实现金，标的持仓为两个子组合之和。
 ### 逐日状态
 
 |D|master.cash|subA.cash|subA.q|subB.cash|subB.q|总AAPL|MktVal|NAV|
-|D0|100,000.0000|40,000.00|0|60,000.00|0|0|0.00|100,000.0000|
-|D1| 81,750.0000|32,700.00|50|49,050.00|50|100|18,400.00|100,150.0000|
-|D2| 81,750.0000|32,700.00|50|49,050.00|50|100|18,550.00|100,300.0000|
-|D3| 81,750.0000|32,700.00|50|49,050.00|50|100|18,600.00|100,350.0000|
-|D4| 91,075.0000|38,295.00|20|52,780.00|30|50|9,350.00|100,425.0000|
+|D0|0.0000|40,000.00|0|60,000.00|0|0|0.00|100,000.0000|
+|D1|0.0000|30,875.00|50|50,875.00|50|100|18,400.00|100,150.0000|
+|D2|0.0000|30,875.00|50|50,875.00|50|100|18,550.00|100,300.0000|
+|D3|0.0000|30,875.00|50|50,875.00|50|100|18,600.00|100,350.0000|
+|D4|0.0000|36,470.00|20|54,605.00|30|50|9,350.00|100,425.0000|
 
 ### D1推导
 
     subA BUY 50: fill=182.50, cost=9,125.00
-      subA.cash: 40,000->32,700 (setter: master += -7,300, master: 100,000->92,700)
+      subA.cash: 40,000->30,875
     subB BUY 50: fill=182.50, cost=9,125.00
-      subB.cash: 60,000->49,050 (setter: master += -10,950, master: 92,700->81,750)
-    总持仓=100, mv=100x184=18,400, NAV=81,750+18,400=100,150
+      subB.cash: 60,000->50,875
+    总持仓=100, mv=100x184=18,400, NAV=master.cash(0)+subA.nav(40,075)+subB.nav(60,075)=100,150
 
 ### D4推导
 
     subA SELL 30: fill=186.50, proceeds=5,595.00
-      subA.cash: 32,700->38,295 (master += +5,595 -> 87,345)
+      subA.cash: 30,875->36,470
       余20, Step6 mv=20x187=3,740
     subB SELL 20: fill=186.50, proceeds=3,730.00
-      subB.cash: 49,050->52,780 (master += +3,730 -> 91,075)
+      subB.cash: 50,875->54,605
       余30, Step6 mv=30x187=5,610
     总持仓=50, mv=50x187=9,350
-    加权成本=(20*182.50+30*182.50)/50=182.50
-    NAV=91,075+9,350=100,425
+    NAV=master.cash(0)+subA.nav(40,210)+subB.nav(60,215)=100,425
 
 ### 断言
 
     C5-01  equity_curve == [100000, 100150, 100300, 100350, 100425]
-    C5-02  NAV_daily == master.cash + sum(sub.positions.market_value)
+    C5-02  NAV_daily == master.cash + sum(sub.nav)
     C5-03  total_qty_per_symbol == sum(sub_qty)
     C5-04  allocated_sum <= initial_cash (40k+60k=100k)
-    C5-05  sub.cash 变动 = -master.cash 变动 (每笔交易)
+    C5-05  subA/subB 独立持仓；任一策略不能卖出另一策略的仓位
     C5-06  open_positions: 2 entries (stratA 20 + stratB 30 = total 50)
     C5-07  final_nav == initial_cash + sum(trade.pnl)
 
@@ -532,64 +537,21 @@ D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
 
 ---
 
-## CASE-8: 综合案例
+## CASE-8: 混合币种拒绝
 
-组合所有要素: **SubPortfolio双策略 + US/CN跨市场 + 除权除息 + CN红利税
-
-+ 多批次FIFO + T+1结算 + 佣金**。
-
-### 配置
-
-    US: per_share 0.005 min 1.00, slippage=0
-    CN: cn_realistic, slippage=0
-    SubPortfolio: StratA allocated=50,000, StratB allocated=50,000
+验证同一个回测实例不能同时包含 USD 与 CNY/HKD 标的。跨币种组合必须先拆成不同回测，或未来显式引入 FX 汇率、换汇成本和基准币种重估层。
 
 ### 数据
 
 |D|Date|AAPL O/C|600519 O/C|Event|
 |D0|06-03|180/182|50/51|BUY signals|
-|D1|06-04|182/184|52/53|exec both|
-|D2|06-05|183/183.5|53/52|AAPL ex-div $1.00|
-|D3|06-06|183/185|52.5/54|StratA SELL 40 AAPL signal|
-|D4|06-07|186/187|55/56|exec SELL; StratB BUY 50 AAPL signal|
-|D5|06-10|188/189|56/57|exec BUY; SELL all signals|
-|D6|06-11|190/191|57/58|exec all sells|
-
-### 策略
-
-    StratA (US only):
-      D0: BUY 100 AAPL -> D1 exec
-      D3: SELL 40 AAPL -> D4 exec (FIFO from D1 lot)
-      D5: SELL 60 AAPL -> D6 exec (remaining D1 lot)
-    
-    StratB (CN+US):
-      D0: BUY 100 600519 -> D1 exec
-      D4: BUY  50 AAPL   -> D5 exec
-      D5: SELL 100 600519 -> D6 exec (T+1: D1->D6, settled)
-      D5: SELL  50 AAPL   -> D6 exec (FIFO from D5 lot)
-
-### 逐日NAV
-
-|D|master.cash|AAPL qty|600519 qty|NAV|
-|D0|100,000.000|0|0|100,000.000|
-|D1| 76,593.844|100|100|100,293.844|
-|D2| 76,693.844|100|100|100,243.844|
-|D3| 76,693.844|100|100|100,593.844|
-|D4| 84,013.844|60|100|100,833.844|
-|D5| 74,612.844|110|100|101,102.844|
-|D6|101,204.929|0|0|101,204.929|
+|D1|06-04|182/184|52/53|would execute both|
 
 ### 断言
 
-    C8-01  equity_curve 末尾值 101,204.929
-    C8-02  StratA AAPL 通过FIFO 40+60=100平仓
-    C8-03  StratB 600519 T+1通过(t1_rejected_sells==0)
-    C8-04  StratB AAPL 50从D5 lot卖出,无交叉污染
-    C8-05  AAPL分红$100计入cash, cost basis调整影响realized
-    C8-06  CN佣金: SELL stamp>0, BUY stamp=0
-    C8-07  final_nav~=initial_cash+pnl_sum+dividend_net (±1e-2)
-    C8-08  open_positions全为0
-    C8-09  diag.fill_count == 6
+    C8-01  symbols=["AAPL", "600519"] -> ValueError("Mixed currencies ...")
+    C8-02  不创建 portfolio，不产生 equity_curve/trades
+    C8-03  旧的 US+CN 综合盈利预期废弃；需要拆成单币种 CASE 再验证
 
 ---
 
@@ -714,9 +676,9 @@ C10-04  _price(bar) == close 而非 adj_close
 
 ---
 
-## CASE-11: CN 涨跌停拒绝
+## CASE-11: CN 涨跌停方向性拒绝
 
-验证涨停板买入和跌停板卖出被正确拒绝。
+验证涨停板买入和跌停板卖出被正确拒绝；涨停卖出、跌停买入不因涨跌停规则拒绝。
 
 ### 配置 (同CASE-3 CN零滑点)
 
@@ -736,10 +698,11 @@ D0 after close → BUY 100 600519 → D1 执行
 
 ```
 prev_close_bars["600519"].close = 10.00 (D0 bar)
-is_price_at_limit("600519", 11.00, 10.00, ...)
+get_price_limit_direction("600519", 11.00, 10.00, ...)
   upper = _round_half_up(10.00 * 1.10) = 11.00
   open_rounded = _round_half_up(11.00) = 11.00
-  open_rounded >= upper → True → PRICE_AT_LIMIT
+  open_rounded >= upper → "UP"
+  order.side == BUY → PRICE_AT_LIMIT
 diag.limit_rejected_orders += 1
 NAV 不变 = 100,000
 ```
@@ -747,17 +710,17 @@ NAV 不变 = 100,000
 ### 断言
 
 ```
-C11-01  diag.limit_rejected_orders == 1
-C11-02  diag.fill_count == 0
-C11-03  equity_curve == [100000, 100000, 100000] (NAV 不变)
-C11-04  diag.discarded_orders >= 1
+C11-01  limit-up BUY -> PRICE_AT_LIMIT
+C11-02  limit-up SELL -> allowed if position/settlement checks pass
+C11-03  limit-down BUY -> allowed if cash/risk checks pass
+C11-04  limit-down SELL -> PRICE_AT_LIMIT
 ```
 
 ---
 
 ## CASE-12: 停牌日处理
 
-验证停牌日延迟订单丢弃 + NAV 不变 + diag 计数。
+验证停牌日延迟订单丢弃 + NAV 不变 + diag 计数；停牌 bar 不能刷新 `last_prices` 或 `prev_bars`。
 
 ### 配置 (零摩擦 US)
 
@@ -780,6 +743,7 @@ C11-04  diag.discarded_orders >= 1
 ```
 D1 Step2: D1 bar volume=0 → is_suspended → _suspended=True
   diag.suspended_days += 1
+  last_prices/prev_bars 沿用 D0 最后有效 bar
 D1 Step4: deferred BUY → bar._suspended → diag.discarded_orders += 1
 D1 Step9: NAV = D0 NAV = 100,000 (无持仓、无成交)
 D3 Step4: BUY 执行 @ open=107.00
@@ -793,6 +757,7 @@ C12-02  diag.discarded_orders >= 1
 C12-03  equity_curve[0] == equity_curve[1] (D1 NAV 不变)
 C12-04  diag.fill_count == 1 (仅 D3 成交)
 C12-05  equity_curve[-1] > equity_curve[0] (D3 BUY 执行后)
+C12-06  若已有持仓，停牌日错误 close/填充值不得改变 NAV
 ```
 
 ---
@@ -837,7 +802,7 @@ C13-04  diag.rejection_counts["risk_rejected"] >= 1
 
 ## CASE-14: on_stop 清仓
 
-验证 `on_stop()` 生成的清仓订单正确执行，循环后最终仓位清零。
+验证 `on_stop()` 生成的清仓订单在 `backtest.force_close_on_stop=True` 时按最后有效 close 执行，循环后最终仓位清零；设为 `False` 时不生成 synthetic fill，订单计入过期/丢弃。
 
 ### 配置 (零摩擦 US)
 
@@ -852,7 +817,7 @@ C13-04  diag.rejection_counts["risk_rejected"] >= 1
 ### 信号
 
 D0: BUY 100 AAPL → D1 执行
-on_stop: SELL 100 AAPL → 循环后以 last_prices 执行
+on_stop: SELL 100 AAPL → 循环后以 last_prices 强制清算
 
 ### 推导
 
@@ -872,6 +837,9 @@ C14-01  diag.fill_count == 2
 C14-02  len(open_positions) == 0 (全部平仓)
 C14-03  final_nav == initial_cash + sum(trade.pnl) (I3)
 C14-04  final_nav > initial_cash
+C14-05  diag.forced_closeout_orders == 1
+C14-06  diag.forced_closeout_trades == 1
+C14-07  force_close_on_stop=False 时 trades 仅含 BUY, expired_orders/discarded_orders 各 +1
 ```
 
 ---
@@ -1224,6 +1192,81 @@ C28-03  final_nav == initial_cash
 
 ---
 
+## CASE-29: LIMIT 订单可成交性
+
+验证 LIMIT 不再被当作 MARKET 单成交。
+
+### 断言
+
+    C29-01  BUY LIMIT 120, next open 110 -> 成交价 110
+    C29-02  BUY LIMIT 100, next open 110 -> LIMIT_NOT_MARKETABLE
+    C29-03  SELL LIMIT 105, next open 110 -> 成交价 110
+    C29-04  SELL LIMIT 120, next open 110 -> LIMIT_NOT_MARKETABLE
+    C29-05  市场冲击后的成交价不得穿越 limit
+
+---
+
+## CASE-30: CN 涨跌停方向性
+
+验证涨跌停规则只约束无法成交的方向。
+
+### 断言
+
+    C30-01  涨停 BUY -> PRICE_AT_LIMIT
+    C30-02  涨停 SELL -> allowed
+    C30-03  跌停 BUY -> allowed
+    C30-04  跌停 SELL -> PRICE_AT_LIMIT
+
+---
+
+## CASE-31: 混合币种拒绝
+
+验证 `select_currency()` 和 `Backtester.run()` 对 USD/CNY/HKD 混合标的直接拒绝。
+
+### 断言
+
+    C31-01  ["AAPL", "600519"] -> ValueError("Mixed currencies ...")
+    C31-02  ["AAPL", "HK.00700"] -> ValueError("Mixed currencies ...")
+
+---
+
+## CASE-32: 停牌 bar 不刷新有效价格
+
+验证已有持仓在停牌日不会被错误 close 或复权填充值重估。
+
+### 断言
+
+    C32-01  suspended_days == 1
+    C32-02  停牌日 NAV == 前一交易日 NAV
+    C32-03  后续非停牌交易日的涨跌停 prev_bar 仍来自最后有效 bar
+
+---
+
+## CASE-33: 多策略默认隔离
+
+验证未传 `strategy_allocations` 时，多策略自动等权创建独立 `SubPortfolio`，不共享 master 持仓池。
+
+### 断言
+
+    C33-01  Strategy B 不能卖出 Strategy A 的持仓，记录 no_position 拒绝
+    C33-02  open_positions 包含 strategy owner
+    C33-03  master 不持有策略仓位，仅保留未分配/回收现金
+
+---
+
+## Regression B1: 结束日 deferred order 过期
+
+验证最后一个真实交易日 after-close 产生的订单没有下一交易日时不会用 synthetic bar 成交。
+
+### 断言
+
+    B1-01  fill_count == 0
+    B1-02  expired_orders == 1
+    B1-03  open_positions 为空
+    B1-04  trades 为空
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -1231,15 +1274,15 @@ C28-03  final_nav == initial_cash
 |2|US|佣金拆解, SEC+FINRA, realized一致性|
 |3|CN|T+1结算, stamp仅SELL, CN费率全套|
 |4|HK|stamp仅SELL, system_fee=0.50, T+0|
-|5|US|双策略同标的, master汇总, 持仓加权, 储备概念|
+|5|US|双策略同标的, SubPortfolio 隔离, master 仅分配/回收资金|
 |6|US|FIFO per-lot Trade精确性|
 |7A|US|现金分红, cost basis调整, 经济验证|
 |7B|CN|红利税阶梯, cost basis调整|
-|8|US+CN|跨市场+分红+FIFO+T+1+佣金+双策略综合|
+|8|US+CN|混合币种拒绝|
 |9|US|position.realized_pnl == sum(trade.realized_pnl) 部分卖出一致性|
 |10|CN|策略 _adj(复权) vs _price(真实价) 隔离, 防止下单量静默丢弃|
-|11|CN|涨停拒绝 (limit_rejected_orders)|
-|12|US|停牌日 (suspended_days + discarded + NAV 不变)|
+|11|CN|涨跌停方向性拒绝 (limit_rejected_orders)|
+|12|US|停牌日 (suspended_days + discarded + NAV 不变 + 不刷新 last_prices)|
 |13|US|风控拒绝管线 (risk_skipped_orders)|
 |14|US|on_stop 清仓 (最终仓位清零)|
 |15|US|送股 + synthetic fills (stock dividend)|
@@ -1251,3 +1294,9 @@ C28-03  final_nav == initial_cash
 |21|HK|碎股卖出拒绝 (LOT_IMPOSSIBLE)|
 |22|US|BUY 去重拒绝 (DUPLICATE_BUY)|
 |23|US|资金不足拒绝 (INSUFFICIENT_CASH)|
+|29|US|LIMIT 订单可成交性 (LIMIT_NOT_MARKETABLE)|
+|30|CN|涨跌停买卖方向约束|
+|31|Mixed|拒绝混合币种|
+|32|US|停牌 bar 不刷新有效价格|
+|33|US|多策略无 allocation 时默认隔离|
+|B1|US|结束日 deferred order 过期|

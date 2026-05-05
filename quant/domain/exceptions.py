@@ -10,6 +10,7 @@ class OrderRejectionReason(Enum):
     BAR_UNAVAILABLE = auto()
     PRICE_INVALID = auto()
     PRICE_AT_LIMIT = auto()
+    LIMIT_NOT_MARKETABLE = auto()
     PRICE_DEVIATION = auto()
     INVALID_QUANTITY = auto()
     LOT_IMPOSSIBLE = auto()

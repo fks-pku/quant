@@ -17,7 +17,7 @@ from quant.features.backtest.commission import calculate_commission, VOLUME_PART
 from quant.features.backtest.market_rules import (
     get_market,
     get_lot_size,
-    is_price_at_limit,
+    get_price_limit_direction,
     get_settled_quantity,
     fifo_lot_slices,
 )
@@ -90,14 +90,19 @@ def execute_order(
     if market == "CN" and prev_bar:
         prev_close = prev_bar.get('close', 0)
         fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-        if is_price_at_limit(symbol, raw_open, prev_close, fill_date_val, ipo_dates):
+        limit_direction = get_price_limit_direction(symbol, raw_open, prev_close, fill_date_val, ipo_dates)
+        if (
+            (limit_direction == "UP" and order.side == "BUY")
+            or (limit_direction == "DOWN" and order.side == "SELL")
+        ):
             diag.limit_rejected_orders += 1
             raise OrderRejectedError(OrderRejectionReason.PRICE_AT_LIMIT, symbol)
 
-    fill_price = apply_slippage(raw_open, order.side, slippage_bps)
+    order_type = (order.order_type or "MARKET").upper()
+    fill_price = resolve_base_fill_price(order, raw_open, order_type, slippage_bps)
 
     risk_price = order.risk_check_price
-    if risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
+    if order_type != "LIMIT" and risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
         raise OrderRejectedError(OrderRejectionReason.PRICE_DEVIATION, symbol)
 
     qty = order.quantity
@@ -122,6 +127,7 @@ def execute_order(
 
     impact_bps = compute_market_impact(quantity, bar_volume, market_impact_factor)
     fill_price = apply_market_impact(fill_price, order.side, impact_bps)
+    enforce_limit_after_impact(order, fill_price, order_type)
 
     if order.side == 'BUY':
         return _execute_buy(
@@ -145,6 +151,34 @@ def apply_slippage(price: float, side: str, bps: float) -> float:
     if side == 'BUY':
         return price + slippage
     return price - slippage
+
+
+def resolve_base_fill_price(order: "DeferredOrder", raw_open: float, order_type: str, slippage_bps: float) -> float:
+    if order_type != "LIMIT":
+        return apply_slippage(raw_open, order.side, slippage_bps)
+    limit_price = order.price
+    if not isinstance(limit_price, (int, float)) or limit_price <= 0:
+        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, order.symbol,
+                                 f"limit price={limit_price!r}")
+    if order.side == "BUY" and raw_open > limit_price:
+        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
+                                 f"open={raw_open} > limit={limit_price}")
+    if order.side == "SELL" and raw_open < limit_price:
+        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
+                                 f"open={raw_open} < limit={limit_price}")
+    return float(raw_open)
+
+
+def enforce_limit_after_impact(order: "DeferredOrder", fill_price: float, order_type: str) -> None:
+    if order_type != "LIMIT":
+        return
+    limit_price = order.price
+    if order.side == "BUY" and fill_price > limit_price:
+        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
+                                 f"impacted fill={fill_price} > limit={limit_price}")
+    if order.side == "SELL" and fill_price < limit_price:
+        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
+                                 f"impacted fill={fill_price} < limit={limit_price}")
 
 
 def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -> tuple:

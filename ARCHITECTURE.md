@@ -80,6 +80,7 @@ quant/
 | PortfolioLike | Portfolio contract (cash, positions, nav, update_position, reset_daily) | Portfolio, SubPortfolio |
 | RiskEngineLike | Risk engine contract (check_order, record_order, reset_daily) | RiskEngine |
 | LLMAdapterLike | LLM adapter contract (analyze) | OpenAIAdapter, ClaudeAdapter, OllamaAdapter, MiniMaxAdapter |
+| ResearchStore | Research persistence interface (candidates, seen hashes, artifacts) | FileResearchStore |
 
 ## Architecture Invariants
 
@@ -127,7 +128,7 @@ bar buffering, price helpers, rebalance gating, position liquidation, and serial
 | Module | Responsibility | Key Files |
 |--------|---------------|-----------|
 | `domain/` | Pure business logic | models/, events/, ports/ |
-| `infrastructure/` | External adapter implementations | events/, data/, execution/ |
+| `infrastructure/` | External adapter implementations | events/, data/, execution/, research/ |
 | `features/` | Use case orchestration | backtest/, trading/, portfolio/, cio/, strategies/, research/ |
 | `shared/` | Cross-cutting utilities | utils/, config/, models/ |
 | `api/` | HTTP routing | *_bp.py, state/runtime.py |

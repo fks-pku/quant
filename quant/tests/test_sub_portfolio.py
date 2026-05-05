@@ -272,6 +272,52 @@ class TestSubPortfolioBacktest:
         if greedy_trades:
             assert greedy_trades[0].quantity * 100.0 <= 30000 + 1
 
+    def test_unknown_strategy_allocation_rejected(self):
+        bt = make_backtester({
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        })
+        strategy = type("KnownStrategy", (), {"name": "Known"})()
+        with pytest.raises(ValueError, match="unknown strategies"):
+            bt.run(
+                start=START, end=START,
+                strategies=[strategy], initial_cash=100000,
+                data_provider=None, symbols=["AAPL"],
+                strategy_allocations={"Known": 0.5, "Ghost": 0.1},
+            )
+
+    def test_missing_strategy_allocation_rejected(self):
+        bt = make_backtester({
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        })
+        strat_a = type("StrategyA", (), {"name": "A"})()
+        strat_b = type("StrategyB", (), {"name": "B"})()
+        with pytest.raises(ValueError, match="missing strategies"):
+            bt.run(
+                start=START, end=START,
+                strategies=[strat_a, strat_b], initial_cash=100000,
+                data_provider=None, symbols=["AAPL"],
+                strategy_allocations={"A": 0.5},
+            )
+
+    def test_duplicate_strategy_names_rejected_before_allocation(self):
+        bt = make_backtester({
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        })
+        strat_a = type("StrategyA", (), {"name": "Dup"})()
+        strat_b = type("StrategyB", (), {"name": "Dup"})()
+        with pytest.raises(ValueError, match="Duplicate strategy names"):
+            bt.run(
+                start=START, end=START,
+                strategies=[strat_a, strat_b], initial_cash=100000,
+                data_provider=None, symbols=["AAPL"],
+            )
+
     def test_same_symbol_different_strategies(self):
         config = {
             "backtest": {"slippage_bps": 0},

@@ -2,7 +2,6 @@ import time
 import random
 import hashlib
 import logging
-import requests
 from abc import ABC, abstractmethod
 from typing import List, Dict
 from xml.etree import ElementTree as ET
@@ -26,6 +25,8 @@ class ArxivAdapter(SourceAdapter):
     def search(self, max_results: int = 10) -> List[RawStrategy]:
         url = f"{self.base_url}?search_query=cat:{self.category}&start=0&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"
         try:
+            import requests
+
             resp = requests.get(url, timeout=30)
             resp.raise_for_status()
             return self._parse_xml(resp.text)
