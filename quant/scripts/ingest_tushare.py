@@ -43,6 +43,7 @@ def main() -> None:
         sys.exit(1)
 
     logger.info(f"Fetched {len(df)} rows")
+    storage.save_bars(df, "1d")
     logger.info("Data cached in DuckDB")
     provider.disconnect()
 
