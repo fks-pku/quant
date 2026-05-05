@@ -170,7 +170,8 @@ def run_backtest():
                 end_dt = datetime.strptime(end_date, '%Y-%m-%d')
                 bench_eq = benchmark_provider.get_benchmark_equity(start_dt, end_dt, initial_cash)
                 if not bench_eq.empty:
-                    benchmark_curve = [[str(idx), float(v)] for idx, v in bench_eq.items()]
+                    benchmark_curve = [[str(bench_eq.index[0]), float(initial_cash)]]
+                    benchmark_curve += [[str(idx), float(v)] for idx, v in bench_eq.items()]
 
             trades_list = []
             for t in result.trades:
