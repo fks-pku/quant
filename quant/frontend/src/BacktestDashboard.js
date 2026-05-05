@@ -449,6 +449,27 @@ export default function BacktestDashboard() {
             ))}
           </div>
 
+          {result.metrics.alpha != null && (
+            <div className="bt-metrics" style={{ marginTop: 12, borderTop: '1px solid #252540', paddingTop: 12 }}>
+              <div className="bt-metric">
+                <div className="bt-metric-value" style={{ color: colorPnl(result.metrics.alpha_pct) }}>{fmtPct(result.metrics.alpha_pct)}</div>
+                <div className="bt-metric-label">Alpha</div>
+              </div>
+              <div className="bt-metric">
+                <div className="bt-metric-value">{result.metrics.beta != null ? result.metrics.beta.toFixed(2) : '\u2014'}</div>
+                <div className="bt-metric-label">Beta</div>
+              </div>
+              <div className="bt-metric">
+                <div className="bt-metric-value">{result.metrics.information_ratio != null ? result.metrics.information_ratio.toFixed(2) : '\u2014'}</div>
+                <div className="bt-metric-label">Info Ratio</div>
+              </div>
+              <div className="bt-metric">
+                <div className="bt-metric-value" style={{ color: colorPnl(result.metrics.benchmark_return_pct) }}>{fmtPct(result.metrics.benchmark_return_pct)}</div>
+                <div className="bt-metric-label">Bench Return</div>
+              </div>
+            </div>
+          )}
+
           <div className="bt-chart">
             <div className="bt-chart-title">Equity Curve</div>
             <EquityChart curve={result.equity_curve} benchmarkCurve={result.benchmark_equity_curve} currency={currency} />
