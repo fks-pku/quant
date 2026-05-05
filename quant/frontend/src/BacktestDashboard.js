@@ -26,21 +26,25 @@ const fmtPct = (v) => {
 
 const colorPnl = (v) => v >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
-function EquityChart({ curve, currency = false }) {
+function EquityChart({ curve, benchmarkCurve, currency = false }) {
   if (!curve || curve.length < 2) return null;
 
   const W = 700;
   const H = 200;
   const padL = 60;
   const padR = 20;
-  const padT = 10;
+  const padT = 20;
   const padB = 30;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
   const values = curve.map(([, v]) => v);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
+  let allValues = [...values];
+  if (benchmarkCurve && benchmarkCurve.length >= 2) {
+    allValues = allValues.concat(benchmarkCurve.map(([, v]) => v));
+  }
+  const minV = Math.min(...allValues);
+  const maxV = Math.max(...allValues);
   const rangeV = maxV - minV || 1;
 
   const scaleX = (i) => padL + (i / (curve.length - 1)) * plotW;
@@ -48,6 +52,11 @@ function EquityChart({ curve, currency = false }) {
 
   const points = curve.map(([d, v], i) => `${scaleX(i)},${scaleY(v)}`).join(' ');
   const areaPoints = `${scaleX(0)},${padT + plotH} ${points} ${scaleX(curve.length - 1)},${padT + plotH}`;
+
+  let benchPoints = '';
+  if (benchmarkCurve && benchmarkCurve.length >= 2) {
+    benchPoints = benchmarkCurve.map(([d, v], i) => `${scaleX(i)},${scaleY(v)}`).join(' ');
+  }
 
   const gridLines = 5;
   const gridYVals = Array.from({ length: gridLines }, (_, i) => minV + (rangeV * i) / (gridLines - 1));
@@ -79,11 +88,22 @@ function EquityChart({ curve, currency = false }) {
       })}
       <polygon points={areaPoints} fill="url(#eqGrad)" />
       <polyline points={points} fill="none" stroke="#00d4ff" strokeWidth="1.5" />
+      {benchPoints && (
+        <polyline points={benchPoints} fill="none" stroke="#888899" strokeWidth="1.2" strokeDasharray="5,3" />
+      )}
       {dateLabels.map((dl, i) => (
         <text key={i} x={dl.x} y={H - 6} textAnchor="middle" fill="#666680" fontSize="9">
           {dl.label}
         </text>
       ))}
+      {benchPoints && (
+        <g transform={`translate(${padL + 4}, ${padT + 12})`}>
+          <line x1={0} y1={0} x2={12} y2={0} stroke="#00d4ff" strokeWidth="1.5" />
+          <text x={16} y={3} fill="#00d4ff" fontSize="9">Strategy</text>
+          <line x1={64} y1={0} x2={76} y2={0} stroke="#888899" strokeWidth="1.2" strokeDasharray="5,3" />
+          <text x={80} y={3} fill="#888899" fontSize="9">Benchmark</text>
+        </g>
+      )}
     </svg>
   );
 }
@@ -431,7 +451,7 @@ export default function BacktestDashboard() {
 
           <div className="bt-chart">
             <div className="bt-chart-title">Equity Curve</div>
-            <EquityChart curve={result.equity_curve} currency={currency} />
+            <EquityChart curve={result.equity_curve} benchmarkCurve={result.benchmark_equity_curve} currency={currency} />
           </div>
 
           <div className="bt-chart">
