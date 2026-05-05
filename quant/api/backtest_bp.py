@@ -33,7 +33,7 @@ def run_backtest():
                 return "510300"
             return None
 
-        bench_provider = None
+        benchmark_provider = None
         benchmark_symbol = detect_benchmark_symbol(symbols)
 
         try:
@@ -117,15 +117,18 @@ def run_backtest():
                 strategy = strategy_class(**strategy_kwargs)
 
                 if benchmark_symbol:
-                    bench_df = db.get_bars(
-                        benchmark_symbol,
-                        datetime.strptime(start_date, '%Y-%m-%d'),
-                        datetime.strptime(end_date, '%Y-%m-%d'),
-                        "1d",
-                    )
-                    if not bench_df.empty:
-                        from quant.features.backtest.benchmark import BenchmarkProvider
-                        bench_provider = BenchmarkProvider(bench_df)
+                    try:
+                        bench_df = db.get_bars(
+                            benchmark_symbol,
+                            datetime.strptime(start_date, '%Y-%m-%d'),
+                            datetime.strptime(end_date, '%Y-%m-%d'),
+                            "1d",
+                        )
+                        if not bench_df.empty:
+                            from quant.features.backtest.benchmark import BenchmarkProvider
+                            benchmark_provider = BenchmarkProvider(bench_df)
+                    except Exception:
+                        benchmark_provider = None
 
                 config = {
                     "backtest": {"slippage_bps": slippage_bps},
@@ -148,7 +151,7 @@ def run_backtest():
             finally:
                 db.close()
 
-            backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes, benchmark_provider=bench_provider)
+            backtester = Backtester(config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio, lot_sizes=lot_sizes, benchmark_provider=benchmark_provider)
             result = backtester.run(
                 start=datetime.strptime(start_date, '%Y-%m-%d'),
                 end=datetime.strptime(end_date, '%Y-%m-%d'),
@@ -162,10 +165,10 @@ def run_backtest():
             equity_serializable = [[str(r[0]), float(r[1])] for r in equity_list]
 
             benchmark_curve = []
-            if bench_provider is not None:
+            if benchmark_provider is not None:
                 start_dt = datetime.strptime(start_date, '%Y-%m-%d')
                 end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-                bench_eq = bench_provider.get_benchmark_equity(start_dt, end_dt, initial_cash)
+                bench_eq = benchmark_provider.get_benchmark_equity(start_dt, end_dt, initial_cash)
                 if not bench_eq.empty:
                     benchmark_curve = [[str(idx), float(v)] for idx, v in bench_eq.items()]
 
