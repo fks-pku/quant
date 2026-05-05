@@ -1,5 +1,6 @@
 """回测引擎核心测试 — 市场无关的通用功能。"""
 from datetime import datetime, date, timedelta
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -408,6 +409,86 @@ class TestWalkForwardEngine:
         assert hasattr(result, "windows")
         assert hasattr(result, "aggregate_sharpe")
         assert hasattr(result, "is_viable")
+
+    def test_records_param_trials_and_stability_metadata(self, monkeypatch):
+        data = make_us_bars(["AAPL"], START, 80, {"AAPL": 150.0})
+        engine = WalkForwardEngine(
+            train_window_days=50,
+            test_window_days=10,
+            step_days=10,
+            min_trades=30,
+            portfolio_class=Portfolio,
+            risk_engine_class=RiskEngine,
+            sub_portfolio_class=SubPortfolio,
+        )
+        selected = [{"lookback": 5}, {"lookback": 10}, {"lookback": 5}]
+
+        def fake_find_best_params(strategy_factory, train_data, param_grid, initial_cash, config):
+            params = selected.pop(0)
+            tested = [{"lookback": 5}, {"lookback": 10}]
+            return params, 1.2, tested, len(tested), 35
+
+        def fake_run_single_backtest(config, strategy, data, initial_cash):
+            return SimpleNamespace(
+                sharpe_ratio=1.1,
+                total_return=0.05,
+                max_drawdown_pct=0.02,
+                trades=[object()] * 35,
+            )
+
+        monkeypatch.setattr(engine, "_find_best_params", fake_find_best_params)
+        monkeypatch.setattr(engine, "_run_single_backtest", fake_run_single_backtest)
+
+        result = engine.run(
+            strategy_factory=lambda params: SimpleNamespace(name="WFTest"),
+            data=data,
+            param_grid={"lookback": [5, 10]},
+        )
+
+        assert result.param_trials == 6
+        assert result.tested_param_sets == [{"lookback": 5}, {"lookback": 10}]
+        assert result.selected_params_by_window == [{"lookback": 5}, {"lookback": 10}, {"lookback": 5}]
+        assert result.parameter_stability == pytest.approx(2 / 3)
+        assert result.min_train_trades == 35
+        assert result.min_test_trades == 35
+        assert result.multiple_testing_adjusted_alpha == pytest.approx(0.05 / 6)
+
+    def test_insufficient_oos_trades_marks_result_not_viable(self, monkeypatch):
+        data = make_us_bars(["AAPL"], START, 70, {"AAPL": 150.0})
+        engine = WalkForwardEngine(
+            train_window_days=50,
+            test_window_days=10,
+            step_days=10,
+            min_trades=30,
+            portfolio_class=Portfolio,
+            risk_engine_class=RiskEngine,
+            sub_portfolio_class=SubPortfolio,
+        )
+
+        def fake_find_best_params(strategy_factory, train_data, param_grid, initial_cash, config):
+            tested = [{"lookback": 5}]
+            return {"lookback": 5}, 1.5, tested, len(tested), 40
+
+        def fake_run_single_backtest(config, strategy, data, initial_cash):
+            return SimpleNamespace(
+                sharpe_ratio=1.4,
+                total_return=0.08,
+                max_drawdown_pct=0.01,
+                trades=[object()] * 3,
+            )
+
+        monkeypatch.setattr(engine, "_find_best_params", fake_find_best_params)
+        monkeypatch.setattr(engine, "_run_single_backtest", fake_run_single_backtest)
+
+        result = engine.run(
+            strategy_factory=lambda params: SimpleNamespace(name="WFSmallSample"),
+            data=data,
+            param_grid={"lookback": [5]},
+        )
+
+        assert result.min_test_trades == 3
+        assert result.is_viable is False
+        assert any("test trades" in warning for warning in result.viability_warnings)
 
 
 class TestAdjustedPriceSeparation:
@@ -950,6 +1031,57 @@ class TestCriticalRegression:
         sells = [t for t in result.trades if t.side == "SELL"]
         assert len(sells) >= 1, "on_stop close-out should produce SELL trades"
         assert abs(sum(t.quantity for t in sells) - 100) < 1e-6
+
+    def test_final_trading_day_deferred_order_expires_without_synthetic_fill(self):
+        """Orders generated on the final trading day cannot fill without a real next bar."""
+        data = make_us_bars(["AAPL"], START, 2, {"AAPL": 150.0})
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config)
+        final_date = data["timestamp"].max().date()
+
+        class FinalDayBuyer:
+            name = "FinalDayBuyer"
+            context = None
+            _positions = {}
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if td == final_date:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", None, "FinalDayBuyer"
+                    )
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[FinalDayBuyer()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["AAPL"],
+        )
+
+        assert result.trades == []
+        assert result.diagnostics.discarded_orders == 1
+        assert result.diagnostics.expired_orders == 1
 
     def test_context_drain_resets_buy_dedup(self):
         """OrderManager drain clears the BUY dedup set."""

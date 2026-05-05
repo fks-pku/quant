@@ -110,3 +110,4 @@ python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 
 - Thread safety: `threading.RLock()` for shared state
 - Logging: `from quant.shared.utils.logger import setup_logger`
 - DuckDB readers must use `read_only=True`
+- Text files must be UTF-8; run `python scripts/check_text_encoding.py` after automated doc rewrites

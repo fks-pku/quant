@@ -272,40 +272,10 @@ class Backtester:
 
             current_date += timedelta(days=1)
 
-        # Execute remaining deferred orders from the final trading day
-        # (Step 8 orders that never got a next-day Step 4 to execute them)
-        if deferred_orders and last_prices:
-            for order in deferred_orders:
-                sym = order.symbol
-                close_price = last_prices.get(sym)
-                if not close_price or close_price <= 0:
-                    diag.discarded_orders += 1
-                    continue
-                bar = {
-                    'symbol': sym, 'open': close_price, 'high': close_price,
-                    'low': close_price, 'close': close_price, 'volume': 10_000_000,
-                    'timestamp': current_date,
-                }
-                order_pf = portfolio_map.get(order.strategy, primary_portfolio)
-                try:
-                    trades = execute_order(
-                        order=order, portfolio=order_pf, symbol=sym, bar=bar,
-                        entry_times=entry_times, entry_prices=entry_prices,
-                        diag=diag, lot_sizes=self.lot_sizes, ipo_dates=self.ipo_dates,
-                        slippage_bps=self.slippage_bps, commission_config=self.commission,
-                        prev_bar=None,
-                        risk_price_deviation_limit=self.risk_price_deviation_limit,
-                    )
-                except OrderRejectedError as e:
-                    diag.record_rejection(e.reason)
-                    diag.discarded_orders += 1
-                    continue
-                all_trades.extend(trades)
-                for s in strategies:
-                    sn = getattr(s, 'name', s.__class__.__name__)
-                    if order.strategy is None or sn == order.strategy:
-                        for t in trades:
-                            s.on_fill(s.context, t)
+        if deferred_orders:
+            expired_count = len(deferred_orders)
+            diag.expired_orders += expired_count
+            diag.discarded_orders += expired_count
             deferred_orders = []
 
         for strategy in strategies:

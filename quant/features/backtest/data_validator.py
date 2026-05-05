@@ -49,6 +49,9 @@ class DataValidator:
         if DataValidator._check_empty(data, report):
             return report
         DataValidator._check_columns(data, report)
+        if not REQUIRED_COLUMNS.issubset(data.columns):
+            DataValidator._collect_stats(data, report)
+            return report
         DataValidator._check_timestamp(data, report)
         DataValidator._check_duplicates(data, report)
         DataValidator._check_negative_prices(data, report)
@@ -248,13 +251,17 @@ class DataValidator:
     @staticmethod
     def _collect_stats(data: pd.DataFrame, report: ValidationReport) -> None:
         report.stats["total_rows"] = len(data)
-        report.stats["symbols"] = sorted(data["symbol"].unique().tolist())
+        if "symbol" in data.columns:
+            report.stats["symbols"] = sorted(data["symbol"].unique().tolist())
 
         if "timestamp" in data.columns:
-            if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
-                ts = pd.to_datetime(data["timestamp"])
-            else:
-                ts = data["timestamp"]
+            try:
+                if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
+                    ts = pd.to_datetime(data["timestamp"])
+                else:
+                    ts = data["timestamp"]
+            except Exception:
+                return
             report.stats["date_range"] = (
                 str(ts.min().date()) + " ~ " + str(ts.max().date())
             )

@@ -21,6 +21,7 @@ class BacktestDiagnostics:
     t1_rejected_sells: int = 0
     limit_rejected_orders: int = 0
     discarded_orders: int = 0
+    expired_orders: int = 0
     risk_skipped_orders: int = 0
     truncated_sells: int = 0
     submission_rejected: int = 0

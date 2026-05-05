@@ -1,7 +1,9 @@
 """Walk-forward analysis framework with 6m train / 1m test / monthly step."""
 
+import math
 import logging
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Callable, Optional
 import pandas as pd
@@ -25,6 +27,9 @@ class WFWindowResult:
     test_return: float
     test_max_dd: float
     params: Dict[str, Any]
+    train_trades: int = 0
+    test_trades: int = 0
+    param_trials: int = 0
 
 
 @dataclass
@@ -40,6 +45,16 @@ class WFResult:
     test_sharpe_std: float
     pct_profitable: float
     is_viable: bool
+    param_trials: int = 0
+    tested_param_sets: List[Dict[str, Any]] = field(default_factory=list)
+    selected_params_by_window: List[Dict[str, Any]] = field(default_factory=list)
+    parameter_stability: float = 0.0
+    min_train_trades: int = 0
+    min_test_trades: int = 0
+    multiple_testing_adjusted_alpha: float = 0.05
+    oos_p_value: float = 1.0
+    oos_p_value_adjusted: float = 1.0
+    viability_warnings: List[str] = field(default_factory=list)
 
 
 class WalkForwardEngine:
@@ -51,7 +66,7 @@ class WalkForwardEngine:
         test_window_days: int = 21,
         step_days: int = 21,
         rebalance_freq: str = "monthly",
-        min_trades: int = 3,
+        min_trades: int = 30,
         lot_sizes: Optional[Dict[str, int]] = None,
         ipo_dates: Optional[Dict[str, date]] = None,
         portfolio_class=None,
@@ -99,6 +114,9 @@ class WalkForwardEngine:
         """
         config = config or {}
         window_results: List[WFWindowResult] = []
+        total_param_trials = 0
+        tested_param_sets: List[Dict[str, Any]] = []
+        seen_param_sets = set()
 
         if data is None or data.empty:
             return WFResult(
@@ -156,9 +174,15 @@ class WalkForwardEngine:
                 step_idx += self.step_days
                 continue
             
-            best_params, best_train_sharpe = self._find_best_params(
+            best_params, best_train_sharpe, window_tested_params, window_param_trials, train_trades = self._find_best_params(
                 strategy_factory, train_data, param_grid, initial_cash, config
             )
+            total_param_trials += window_param_trials
+            for params in window_tested_params:
+                key = self._param_key(params)
+                if key not in seen_param_sets:
+                    seen_param_sets.add(key)
+                    tested_param_sets.append(params)
             
             if best_train_sharpe == float('-inf'):
                 step_idx += self.step_days
@@ -176,6 +200,7 @@ class WalkForwardEngine:
                 continue
 
             test_max_dd = test_result.max_drawdown_pct
+            test_trades = len(test_result.trades)
             
             window_results.append(WFWindowResult(
                 train_start=train_start,
@@ -186,7 +211,10 @@ class WalkForwardEngine:
                 test_sharpe=test_result.sharpe_ratio,
                 test_return=test_result.total_return,
                 test_max_dd=test_max_dd,
-                params=best_params
+                params=best_params,
+                train_trades=train_trades,
+                test_trades=test_trades,
+                param_trials=window_param_trials,
             ))
             
             step_idx += self.step_days
@@ -224,14 +252,34 @@ class WalkForwardEngine:
         else:
             sharpe_degradation = 1.0
         pct_profitable = float(len([w for w in window_results if w.test_return > 0]) / len(window_results)) if window_results else 0.0
-        
-        is_viable = avg_test > 0.5 and sharpe_degradation < 0.5 and pct_profitable > 0.5
 
-        from collections import Counter
-        param_tuples = [tuple(sorted(w.params.items())) for w in window_results if w.params]
+        selected_params_by_window = [w.params for w in window_results]
+        parameter_stability = self._calculate_parameter_stability(selected_params_by_window)
+        min_train_trades = min((w.train_trades for w in window_results), default=0)
+        min_test_trades = min((w.test_trades for w in window_results), default=0)
+        adjusted_alpha = 0.05 / max(1, total_param_trials)
+        oos_p_value = self._calculate_oos_p_value(test_sharpes)
+        adjusted_p_value = min(1.0, oos_p_value * max(1, total_param_trials))
+
+        viability_warnings = self._collect_viability_warnings(
+            avg_test=avg_test,
+            sharpe_degradation=sharpe_degradation,
+            pct_profitable=pct_profitable,
+            window_count=len(window_results),
+            min_train_trades=min_train_trades,
+            min_test_trades=min_test_trades,
+            parameter_stability=parameter_stability,
+            adjusted_p_value=adjusted_p_value,
+        )
+        is_viable = len(viability_warnings) == 0
+
+        param_tuples = [self._param_key(w.params) for w in window_results if w.params]
         if param_tuples:
             most_common_tuple, _ = Counter(param_tuples).most_common(1)[0]
-            best_params = dict(most_common_tuple)
+            best_params = next(
+                w.params for w in window_results
+                if w.params and self._param_key(w.params) == most_common_tuple
+            ).copy()
         else:
             best_params = {}
         
@@ -246,7 +294,17 @@ class WalkForwardEngine:
             avg_test_sharpe=avg_test,
             test_sharpe_std=test_std,
             pct_profitable=pct_profitable,
-            is_viable=is_viable
+            is_viable=is_viable,
+            param_trials=total_param_trials,
+            tested_param_sets=tested_param_sets,
+            selected_params_by_window=selected_params_by_window,
+            parameter_stability=parameter_stability,
+            min_train_trades=min_train_trades,
+            min_test_trades=min_test_trades,
+            multiple_testing_adjusted_alpha=adjusted_alpha,
+            oos_p_value=oos_p_value,
+            oos_p_value_adjusted=adjusted_p_value,
+            viability_warnings=viability_warnings,
         )
 
     def _find_best_params(
@@ -256,32 +314,95 @@ class WalkForwardEngine:
         param_grid: Dict[str, List[Any]],
         initial_cash: float,
         config: Dict[str, Any]
-    ) -> tuple[Dict[str, Any], float]:
+    ) -> tuple[Dict[str, Any], float, List[Dict[str, Any]], int, int]:
         """Find best params using grid search on training data."""
         import itertools
         param_names = list(param_grid.keys())
         param_values = [param_grid[name] for name in param_names]
+        tested_params = [
+            dict(zip(param_names, values))
+            for values in itertools.product(*param_values)
+        ]
         best_params: Dict[str, Any] = {}
         best_sharpe = float('-inf')
+        best_train_trades = 0
         
-        for values in itertools.product(*param_values):
-            params = dict(zip(param_names, values))
-            
+        for params in tested_params:
             try:
                 strategy = strategy_factory(params)
                 result = self._run_single_backtest(config, strategy, train_data, initial_cash)
-                
-                if len(result.trades) < self.min_trades:
+                trade_count = len(result.trades)
+
+                if trade_count < self.min_trades:
                     continue
                 
                 if result.sharpe_ratio > best_sharpe:
                     best_sharpe = result.sharpe_ratio
                     best_params = params
+                    best_train_trades = trade_count
             except (ValueError, TypeError, RuntimeError) as e:
                 logger.warning("WalkForward grid search failed for params %s: %s", params, e)
                 continue
         
-        return best_params, best_sharpe
+        return best_params, best_sharpe, tested_params, len(tested_params), best_train_trades
+
+    @staticmethod
+    def _param_key(params: Dict[str, Any]) -> tuple:
+        try:
+            return tuple(sorted(params.items()))
+        except TypeError:
+            return tuple(sorted((k, repr(v)) for k, v in params.items()))
+
+    @staticmethod
+    def _calculate_parameter_stability(selected_params: List[Dict[str, Any]]) -> float:
+        if not selected_params:
+            return 0.0
+        if all(not params for params in selected_params):
+            return 1.0
+        keys = [WalkForwardEngine._param_key(params) for params in selected_params]
+        _, count = Counter(keys).most_common(1)[0]
+        return float(count / len(keys))
+
+    @staticmethod
+    def _calculate_oos_p_value(test_sharpes: List[float]) -> float:
+        if len(test_sharpes) < 2:
+            return 1.0
+        avg = float(np.mean(test_sharpes))
+        std = float(np.std(test_sharpes, ddof=1))
+        if std <= 1e-12:
+            return 0.0 if avg > 0 else 1.0
+        z_score = avg / (std / math.sqrt(len(test_sharpes)))
+        return float(math.erfc(abs(z_score) / math.sqrt(2)))
+
+    def _collect_viability_warnings(
+        self,
+        avg_test: float,
+        sharpe_degradation: float,
+        pct_profitable: float,
+        window_count: int,
+        min_train_trades: int,
+        min_test_trades: int,
+        parameter_stability: float,
+        adjusted_p_value: float,
+    ) -> List[str]:
+        warnings: List[str] = []
+        if avg_test <= 0.5:
+            warnings.append(f"avg test Sharpe {avg_test:.3f} <= 0.5")
+        if sharpe_degradation >= 0.5:
+            warnings.append(f"Sharpe degradation {sharpe_degradation:.3f} >= 0.5")
+        if pct_profitable <= 0.5:
+            warnings.append(f"profitable window ratio {pct_profitable:.3f} <= 0.5")
+        if window_count < 2:
+            warnings.append("need at least 2 out-of-sample windows for stability")
+        if min_train_trades < self.min_trades:
+            warnings.append(f"min train trades {min_train_trades} below required {self.min_trades}")
+        if min_test_trades < self.min_trades:
+            warnings.append(f"min test trades {min_test_trades} below required {self.min_trades}")
+        if parameter_stability < 0.5:
+            warnings.append(f"parameter stability {parameter_stability:.3f} below required 0.5")
+        if adjusted_p_value >= 0.05:
+            warnings.append(f"multiple-testing adjusted p-value {adjusted_p_value:.3f} >= 0.05")
+        return warnings
 
     def _run_single_backtest(
         self,
@@ -431,6 +552,9 @@ class WalkForwardExporter:
                 "test_sharpe": w.test_sharpe,
                 "test_return": w.test_return,
                 "test_max_dd": w.test_max_dd,
+                "train_trades": w.train_trades,
+                "test_trades": w.test_trades,
+                "param_trials": w.param_trials,
                 **{f"param_{k}": v for k, v in w.params.items()}
             }
             for w in result.windows
@@ -447,6 +571,14 @@ class WalkForwardExporter:
             "test_sharpe_std": result.test_sharpe_std,
             "pct_profitable": result.pct_profitable,
             "is_viable": result.is_viable,
+            "param_trials": result.param_trials,
+            "parameter_stability": result.parameter_stability,
+            "min_train_trades": result.min_train_trades,
+            "min_test_trades": result.min_test_trades,
+            "multiple_testing_adjusted_alpha": result.multiple_testing_adjusted_alpha,
+            "oos_p_value": result.oos_p_value,
+            "oos_p_value_adjusted": result.oos_p_value_adjusted,
+            "viability_warnings": "; ".join(result.viability_warnings),
             **{f"best_param_{k}": v for k, v in result.best_params.items()}
         }])
         summary_df.to_csv(f"{output_path}_summary.csv", index=False)

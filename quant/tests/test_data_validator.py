@@ -74,6 +74,32 @@ class TestCheckColumns:
         assert not report.ok
         assert any("Missing required columns" in e for e in report.errors)
 
+    def test_missing_symbol_returns_report_without_exception(self):
+        df = pd.DataFrame({
+            "timestamp": [START],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.0],
+            "volume": [1000000],
+        })
+        report = DataValidator.validate(df)
+        assert not report.ok
+        assert any("symbol" in e for e in report.errors)
+
+    def test_missing_timestamp_returns_report_without_exception(self):
+        df = pd.DataFrame({
+            "symbol": ["AAPL"],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.0],
+            "volume": [1000000],
+        })
+        report = DataValidator.validate(df)
+        assert not report.ok
+        assert any("timestamp" in e for e in report.errors)
+
     def test_extra_columns_ok(self):
         df = _make_good_data()
         df["extra"] = 42
@@ -262,6 +288,13 @@ class TestCollectStats:
         report = DataValidator.validate(df)
         assert report.stats["total_rows"] == 10
         assert sorted(report.stats["symbols"]) == ["AAPL", "MSFT"]
+
+    def test_collect_stats_tolerates_missing_optional_columns(self):
+        report = ValidationReport()
+        df = pd.DataFrame({"close": [100.0]})
+        DataValidator._collect_stats(df, report)
+        assert report.stats["total_rows"] == 1
+        assert "symbols" not in report.stats
 
 
 class TestPreflight:
