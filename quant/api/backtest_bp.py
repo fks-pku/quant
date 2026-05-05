@@ -30,7 +30,7 @@ def run_backtest():
         def detect_benchmark_symbol(symbols):
             from quant.domain.models.market import is_cn_symbol
             if any(is_cn_symbol(s) for s in symbols):
-                return "510300"
+                return "000300"
             return None
 
         benchmark_provider = None

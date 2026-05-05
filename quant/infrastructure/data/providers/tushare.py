@@ -111,7 +111,7 @@ class TushareProvider(DataFeed):
             if symbol.startswith("399"):
                 return f"{symbol}.SZ"
             return f"{symbol}.SH"
-        if symbol[0] in ("6", "9"):
+        if symbol[0] in ("5", "6", "9"):
             return f"{symbol}.SH"
         return f"{symbol}.SZ"
 
