@@ -25,7 +25,7 @@
 
 - 改策略框架：只动 `base.py`, `registry.py`
 - 新增策略：在 `strategies/` 下新建目录
-- 每个策略需要配一个CLAUDE.md，展示其基本概述
+- 每个策略需要配一个AGENTS.md，展示其基本概述
 
 ## Known Pitfalls
 

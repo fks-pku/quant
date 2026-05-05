@@ -1,4 +1,4 @@
-# CLAUDE.md — Quant Trading System
+# AGENTS.md — Quant Trading System
 
 ## Architecture
 
@@ -6,7 +6,7 @@ Hexagonal (Ports & Adapters) + Event-Driven architecture. Domain is the center, 
 
 **See `ARCHITECTURE.md`** for full code map, module boundaries, domain models/events/ports tables.
 
-**See `docs/CLAUDE.md`** for categorized navigation of all reference documentation.
+**See `docs/AGENTS.md`** for categorized navigation of all reference documentation.
 
 ## Directory Structure
 
@@ -62,21 +62,21 @@ quant/
 | strategies | features/strategies/ | 策略框架 + 实现 |
 | research | features/research/ | 量化策略研究 |
 
-### Module CLAUDE.md
+### Module AGENTS.md
 
-Each module has its own `CLAUDE.md` for local constraints:
+Each module has its own `AGENTS.md` for local constraints:
 
-- `quant/domain/CLAUDE.md` — domain models, events, ports contracts
-- `quant/infrastructure/CLAUDE.md` — adapter patterns, DuckDB rules
-- `quant/features/backtest/CLAUDE.md`
-- `quant/features/trading/CLAUDE.md`
-- `quant/features/strategies/CLAUDE.md`
-- `quant/features/research/CLAUDE.md`
-- `quant/features/portfolio/CLAUDE.md`
-- `quant/features/cio/CLAUDE.md`
-- `quant/api/CLAUDE.md` — Flask route conventions
-- `quant/frontend/CLAUDE.md` — React conventions
-- `quant/shared/CLAUDE.md` — re-export compatibility layer
+- `quant/domain/AGENTS.md` — domain models, events, ports contracts
+- `quant/infrastructure/AGENTS.md` — adapter patterns, DuckDB rules
+- `quant/features/backtest/AGENTS.md`
+- `quant/features/trading/AGENTS.md`
+- `quant/features/strategies/AGENTS.md`
+- `quant/features/research/AGENTS.md`
+- `quant/features/portfolio/AGENTS.md`
+- `quant/features/cio/AGENTS.md`
+- `quant/api/AGENTS.md` — Flask route conventions
+- `quant/frontend/AGENTS.md` — React conventions
+- `quant/shared/AGENTS.md` — re-export compatibility layer
 
 ## Reference Documentation
 
@@ -88,7 +88,7 @@ Each module has its own `CLAUDE.md` for local constraints:
 | Commission Models | `docs/reference/commission-models.md` | Per-market fees |
 | Import Paths | `docs/reference/import-paths.md` | All import reference |
 | Deprecated Paths | `docs/reference/deprecated-paths.md` | Old paths to avoid |
-| Docs Index | `docs/CLAUDE.md` | Categorized reference navigation |
+| Docs Index | `docs/AGENTS.md` | Categorized reference navigation |
 
 ## Commands
 

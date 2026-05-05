@@ -47,7 +47,7 @@
 
 ## Agent Navigation
 
-1. Start at root `CLAUDE.md` for task routing and constraints
+1. Start at root `AGENTS.md` for task routing and constraints
 2. See `ARCHITECTURE.md` for code map and module boundaries
-3. See `docs/CLAUDE.md` (this file) for reference document navigation
-4. See `<module>/CLAUDE.md` for module-local constraints
+3. See `docs/AGENTS.md` (this file) for reference document navigation
+4. See `<module>/AGENTS.md` for module-local constraints

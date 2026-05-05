@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rebuild the documentation hierarchy following DevClaw's L0-L4 progressive disclosure model: slim root CLAUDE.md (~150 lines), add ARCHITECTURE.md, add docs/CLAUDE.md index, create 5 new module CLAUDE.md files, extract reference docs to docs/reference/, consolidate two docs/ directories.
+**Goal:** Rebuild the documentation hierarchy following DevClaw's L0-L4 progressive disclosure model: slim root AGENTS.md (~150 lines), add ARCHITECTURE.md, add docs/AGENTS.md index, create 5 new module AGENTS.md files, extract reference docs to docs/reference/, consolidate two docs/ directories.
 
-**Architecture:** The plan extracts reference material from root CLAUDE.md into dedicated docs/reference/ files, creates a new ARCHITECTURE.md for code-map content, slims root CLAUDE.md to routing/constraints only, adds docs/CLAUDE.md as L1 navigation index, writes 5 new module CLAUDE.md files for domain/infrastructure/api/frontend/shared, migrates historical docs, and removes outdated files.
+**Architecture:** The plan extracts reference material from root AGENTS.md into dedicated docs/reference/ files, creates a new ARCHITECTURE.md for code-map content, slims root AGENTS.md to routing/constraints only, adds docs/AGENTS.md as L1 navigation index, writes 5 new module AGENTS.md files for domain/infrastructure/api/frontend/shared, migrates historical docs, and removes outdated files.
 
 **Tech Stack:** Markdown only — no code changes, only documentation reorganization.
 
@@ -359,23 +359,23 @@ git commit -m "docs: add ARCHITECTURE.md code map"
 
 ---
 
-## Task 4: Slim Down Root CLAUDE.md
+## Task 4: Slim Down Root AGENTS.md
 
 **Files:**
-- Modify: `CLAUDE.md`
+- Modify: `AGENTS.md`
 
-- [ ] **Step 1: Read current CLAUDE.md**
+- [ ] **Step 1: Read current AGENTS.md**
 
 Read the full file (already done, 275 lines)
 
-- [ ] **Step 2: Rewrite root CLAUDE.md (~150 lines)**
+- [ ] **Step 2: Rewrite root AGENTS.md (~150 lines)**
 
-The new CLAUDE.md keeps: architecture overview, directory structure, dependency rules, feature index table, commands, key conventions. Everything else moves to ARCHITECTURE.md and docs/reference/.
+The new AGENTS.md keeps: architecture overview, directory structure, dependency rules, feature index table, commands, key conventions. Everything else moves to ARCHITECTURE.md and docs/reference/.
 
 New content:
 
 ```markdown
-# CLAUDE.md — Quant Trading System
+# AGENTS.md — Quant Trading System
 
 ## Architecture
 
@@ -383,7 +383,7 @@ Hexagonal (Ports & Adapters) + Event-Driven architecture. Domain is the center, 
 
 **See `ARCHITECTURE.md`** for full code map, module boundaries, domain models/events/ports tables.
 
-**See `docs/CLAUDE.md`** for categorized navigation of all reference documentation.
+**See `docs/AGENTS.md`** for categorized navigation of all reference documentation.
 
 ## Directory Structure
 
@@ -439,21 +439,21 @@ quant/
 | strategies | features/strategies/ | 策略框架 + 实现 |
 | research | features/research/ | 量化策略研究 |
 
-### Module CLAUDE.md
+### Module AGENTS.md
 
-Each module has its own `CLAUDE.md` for local constraints:
+Each module has its own `AGENTS.md` for local constraints:
 
-- `quant/domain/CLAUDE.md` — domain models, events, ports contracts
-- `quant/infrastructure/CLAUDE.md` — adapter patterns, DuckDB rules
-- `quant/features/backtest/CLAUDE.md`
-- `quant/features/trading/CLAUDE.md`
-- `quant/features/strategies/CLAUDE.md`
-- `quant/features/research/CLAUDE.md`
-- `quant/features/portfolio/CLAUDE.md`
-- `quant/features/cio/CLAUDE.md`
-- `quant/api/CLAUDE.md` — Flask route conventions
-- `quant/frontend/CLAUDE.md` — React conventions
-- `quant/shared/CLAUDE.md` — re-export compatibility layer
+- `quant/domain/AGENTS.md` — domain models, events, ports contracts
+- `quant/infrastructure/AGENTS.md` — adapter patterns, DuckDB rules
+- `quant/features/backtest/AGENTS.md`
+- `quant/features/trading/AGENTS.md`
+- `quant/features/strategies/AGENTS.md`
+- `quant/features/research/AGENTS.md`
+- `quant/features/portfolio/AGENTS.md`
+- `quant/features/cio/AGENTS.md`
+- `quant/api/AGENTS.md` — Flask route conventions
+- `quant/frontend/AGENTS.md` — React conventions
+- `quant/shared/AGENTS.md` — re-export compatibility layer
 
 ## Reference Documentation
 
@@ -465,7 +465,7 @@ Each module has its own `CLAUDE.md` for local constraints:
 | Commission Models | `docs/reference/commission-models.md` | Per-market fees |
 | Import Paths | `docs/reference/import-paths.md` | All import reference |
 | Deprecated Paths | `docs/reference/deprecated-paths.md` | Old paths to avoid |
-| Docs Index | `docs/CLAUDE.md` | Categorized reference navigation |
+| Docs Index | `docs/AGENTS.md` | Categorized reference navigation |
 
 ## Commands
 
@@ -491,24 +491,24 @@ python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 
 
 - [ ] **Step 3: Verify line count ≤ 160**
 
-Run: `wc -l CLAUDE.md`
+Run: `wc -l AGENTS.md`
 Expected: ≤ 160
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add CLAUDE.md
-git commit -m "docs: slim root CLAUDE.md to ~150 lines, extract refs to docs/"
+git add AGENTS.md
+git commit -m "docs: slim root AGENTS.md to ~150 lines, extract refs to docs/"
 ```
 
 ---
 
-## Task 5: Write docs/CLAUDE.md L1 Navigation Index
+## Task 5: Write docs/AGENTS.md L1 Navigation Index
 
 **Files:**
-- Create: `docs/CLAUDE.md`
+- Create: `docs/AGENTS.md`
 
-- [ ] **Step 1: Write docs/CLAUDE.md (~80 lines)**
+- [ ] **Step 1: Write docs/AGENTS.md (~80 lines)**
 
 ```markdown
 # docs/ — Quant System Reference Documentation
@@ -558,31 +558,31 @@ git commit -m "docs: slim root CLAUDE.md to ~150 lines, extract refs to docs/"
 
 ## Agent Navigation
 
-1. Start at root `CLAUDE.md` for task routing and constraints
+1. Start at root `AGENTS.md` for task routing and constraints
 2. See `ARCHITECTURE.md` for code map and module boundaries
-3. See `docs/CLAUDE.md` (this file) for reference document navigation
-4. See `<module>/CLAUDE.md` for module-local constraints
+3. See `docs/AGENTS.md` (this file) for reference document navigation
+4. See `<module>/AGENTS.md` for module-local constraints
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/CLAUDE.md
-git commit -m "docs: add docs/CLAUDE.md L1 navigation index"
+git add docs/AGENTS.md
+git commit -m "docs: add docs/AGENTS.md L1 navigation index"
 ```
 
 ---
 
-## Task 6: Write 5 New Module CLAUDE.md Files
+## Task 6: Write 5 New Module AGENTS.md Files
 
 **Files:**
-- Create: `quant/domain/CLAUDE.md`
-- Create: `quant/infrastructure/CLAUDE.md`
-- Create: `quant/api/CLAUDE.md`
-- Create: `quant/frontend/CLAUDE.md`
-- Create: `quant/shared/CLAUDE.md`
+- Create: `quant/domain/AGENTS.md`
+- Create: `quant/infrastructure/AGENTS.md`
+- Create: `quant/api/AGENTS.md`
+- Create: `quant/frontend/AGENTS.md`
+- Create: `quant/shared/AGENTS.md`
 
-- [ ] **Step 1: Write quant/domain/CLAUDE.md**
+- [ ] **Step 1: Write quant/domain/AGENTS.md**
 
 ```markdown
 # Domain Layer
@@ -642,7 +642,7 @@ None. Domain has zero external dependencies — the most important invariant.
 - Events must be hashable if used in sets — use frozen dataclass for all Event subclasses
 ```
 
-- [ ] **Step 2: Write quant/infrastructure/CLAUDE.md**
+- [ ] **Step 2: Write quant/infrastructure/AGENTS.md**
 
 ```markdown
 # Infrastructure Layer
@@ -684,7 +684,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - Tushare provider requires token configuration in config.yaml
 ```
 
-- [ ] **Step 3: Write quant/api/CLAUDE.md**
+- [ ] **Step 3: Write quant/api/AGENTS.md**
 
 ```markdown
 # API Layer
@@ -729,7 +729,7 @@ Blueprints:
 - Do not cache DuckDB connections across requests
 ```
 
-- [ ] **Step 4: Write quant/frontend/CLAUDE.md**
+- [ ] **Step 4: Write quant/frontend/AGENTS.md**
 
 ```markdown
 # Frontend Layer
@@ -777,7 +777,7 @@ State:
 - Strategy list is cached in runtime.py at startup — restart API server after adding strategies
 ```
 
-- [ ] **Step 5: Write quant/shared/CLAUDE.md**
+- [ ] **Step 5: Write quant/shared/AGENTS.md**
 
 ```markdown
 # Shared Layer
@@ -827,8 +827,8 @@ None — shared has no business logic, only utilities.
 - [ ] **Step 6: Commit all 5 files**
 
 ```bash
-git add quant/domain/CLAUDE.md quant/infrastructure/CLAUDE.md quant/api/CLAUDE.md quant/frontend/CLAUDE.md quant/shared/CLAUDE.md
-git commit -m "docs: add 5 new module CLAUDE.md files (domain, infrastructure, api, frontend, shared)"
+git add quant/domain/AGENTS.md quant/infrastructure/AGENTS.md quant/api/AGENTS.md quant/frontend/AGENTS.md quant/shared/AGENTS.md
+git commit -m "docs: add 5 new module AGENTS.md files (domain, infrastructure, api, frontend, shared)"
 ```
 
 ---
@@ -840,7 +840,7 @@ git commit -m "docs: add 5 new module CLAUDE.md files (domain, infrastructure, a
 - Migrate: `quant/docs/md/quant-system-prd.md` → `docs/reference/`
 - Remove: `quant/docs/md/framework_0416.md`, `v1.md`, `evaluate_v1.md`, `technical_manual.md`
 - Remove: `quant/docs/md/` (directory after migration)
-- Remove: `rule.md` (content absorbed into root CLAUDE.md)
+- Remove: `rule.md` (content absorbed into root AGENTS.md)
 - Modify: `docs/superpowers/specs/2026-04-24-agent-friendly-md-system-design.md` (update file inventory)
 
 - [ ] **Step 1: Migrate historical docs**
@@ -873,9 +873,9 @@ git commit -m "docs: migrate historical docs to docs/reference/, remove outdated
 
 ## Task 8: Final Verification
 
-- [ ] **Step 1: Verify root CLAUDE.md ≤ 160 lines**
+- [ ] **Step 1: Verify root AGENTS.md ≤ 160 lines**
 
-Run: `wc -l CLAUDE.md`
+Run: `wc -l AGENTS.md`
 Expected: ≤ 160
 
 - [ ] **Step 2: Verify ARCHITECTURE.md ≤ 220 lines**
@@ -883,14 +883,14 @@ Expected: ≤ 160
 Run: `wc -l ARCHITECTURE.md`
 Expected: ≤ 220
 
-- [ ] **Step 3: Verify docs/CLAUDE.md ≤ 90 lines**
+- [ ] **Step 3: Verify docs/AGENTS.md ≤ 90 lines**
 
-Run: `wc -l docs/CLAUDE.md`
+Run: `wc -l docs/AGENTS.md`
 Expected: ≤ 90
 
-- [ ] **Step 4: Verify all module CLAUDE.md files exist**
+- [ ] **Step 4: Verify all module AGENTS.md files exist**
 
-Run: `ls quant/domain/CLAUDE.md quant/infrastructure/CLAUDE.md quant/api/CLAUDE.md quant/frontend/CLAUDE.md quant/shared/CLAUDE.md quant/features/*/CLAUDE.md`
+Run: `ls quant/domain/AGENTS.md quant/infrastructure/AGENTS.md quant/api/AGENTS.md quant/frontend/AGENTS.md quant/shared/AGENTS.md quant/features/*/AGENTS.md`
 Expected: All files exist
 
 - [ ] **Step 5: Verify reference docs exist**
@@ -910,5 +910,5 @@ Expected: "rule.md removed"
 
 ```bash
 git add -A
-git commit -m "docs: verify all CLAUDE.md line counts and reference docs"
+git commit -m "docs: verify all AGENTS.md line counts and reference docs"
 ```

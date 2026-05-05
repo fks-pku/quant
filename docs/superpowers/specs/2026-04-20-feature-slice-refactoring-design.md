@@ -8,8 +8,8 @@
 
 - 后端全面重构，前端只适配 API
 - REST API 路径保持不变
-- 每个 feature 配 CLAUDE.md（非 CLAUDE.md）
-- 最外层加全局 CLAUDE.md
+- 每个 feature 配 AGENTS.md（非 AGENTS.md）
+- 最外层加全局 AGENTS.md
 
 ## 1. 目录总结构
 
@@ -64,7 +64,7 @@ features/backtest/
 ├── engine.py            # 回测引擎（原 core/backtester.py）
 ├── walkforward.py       # 步进验证（原 core/walkforward.py）
 ├── analytics.py         # 绩效分析（原 core/analytics.py）
-├── CLAUDE.md
+├── AGENTS.md
 └── __init__.py
 ```
 
@@ -82,7 +82,7 @@ features/trading/
 ├── risk.py              # 风控（原 core/risk.py）
 ├── scheduler.py         # 调度器（原 core/scheduler.py）
 ├── portfolio.py         # 仓位/净值跟踪（原 core/portfolio.py）
-├── CLAUDE.md
+├── AGENTS.md
 └── __init__.py
 ```
 
@@ -99,7 +99,7 @@ features/portfolio/
 ├── service.py           # 仓位查询/管理编排
 ├── tracker.py           # 策略仓位跟踪（原 execution/strategy_position_tracker.py）
 ├── coordinator.py       # 多策略协调（原 execution/portfolio_coordinator.py）
-├── CLAUDE.md
+├── AGENTS.md
 └── __init__.py
 ```
 
@@ -125,7 +125,7 @@ features/cio/
 │   └── ollama_adapter.py
 ├── config/
 │   └── cio_config.yaml
-├── CLAUDE.md
+├── AGENTS.md
 └── __init__.py
 ```
 
@@ -152,7 +152,7 @@ features/strategies/
 ├── cross_sectional_mr/
 │   ├── strategy.py
 │   └── config.yaml
-├── CLAUDE.md
+├── AGENTS.md
 └── __init__.py
 ```
 
@@ -283,9 +283,9 @@ api/
 | 硬编码策略元数据（20+ 全局变量） | 从 registry + config 动态读取 |
 | 18 处 lazy import 隐藏依赖 | 消除循环风险后转为顶层 import |
 
-## 9. CLAUDE.md 体系
+## 9. AGENTS.md 体系
 
-### 每个 Feature 的 CLAUDE.md 模板
+### 每个 Feature 的 AGENTS.md 模板
 
 ```markdown
 # <Feature Name>
@@ -313,7 +313,7 @@ api/
 - <历史踩过的坑>
 ```
 
-### 全局 CLAUDE.md（最外层 + quant/ 根）
+### 全局 AGENTS.md（最外层 + quant/ 根）
 
 包含：架构概览、Feature 索引、依赖规则、Python 包约定、常用命令。
 
@@ -326,7 +326,7 @@ api/
 3. **Phase 3**: feature 搬迁（portfolio → trading → backtest → cio → strategies）
 4. **Phase 4**: API 层重构（拆解 state.py，薄路由化）
 5. **Phase 5**: 入口文件适配（api_server.py / quant_system.py / backtest_runner.py）
-6. **Phase 6**: 写各 feature CLAUDE.md + 更新根 CLAUDE.md + 最外层全局 CLAUDE.md
+6. **Phase 6**: 写各 feature AGENTS.md + 更新根 AGENTS.md + 最外层全局 AGENTS.md
 
 ## 11. Import 路径变更
 
@@ -352,5 +352,5 @@ shared/models/\_\_init__.py 保持便捷导出：`from quant.shared.models impor
 |------|------|--------|
 | 改回测功能影响的文件范围 | 跨 core/, api/, strategies/ 6-10 文件 | 仅 features/backtest/ 内 2-3 文件 |
 | 改策略不影响其他功能 | 否（state.py 硬编码所有策略元数据） | 是（strategies feature 自包含） |
-| AI 改一个功能的上下文 | 需读 5+ 目录 | 只读 1 个 feature 目录 + CLAUDE.md |
+| AI 改一个功能的上下文 | 需读 5+ 目录 | 只读 1 个 feature 目录 + AGENTS.md |
 | api/state.py | 446 行上帝模块 | <50 行纯运行时状态 |

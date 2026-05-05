@@ -31,7 +31,7 @@ quant/features/backtest/
 ├── analytics.py          UNCHANGED
 ├── walkforward.py        MINOR CLEANUP
 ├── __init__.py
-├── CLAUDE.md
+├── AGENTS.md
 ```
 
 ### Module dependency chain (strict DAG, no cycles)
