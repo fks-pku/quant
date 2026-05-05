@@ -4,10 +4,11 @@ SubPortfolio is a drop-in replacement for Portfolio (duck-typed). Each strategy
 gets its own SubPortfolio with an allocated share of the master Portfolio's cash.
 Positions are tracked independently per strategy.
 
-Cash management:
-  - SubPortfolio.cash is a computed property: allocated_capital - _cash_used
-  - The cash SETTER mirrors every delta to the master Portfolio's real cash
-  - This ensures master.cash always reflects the sum of all sub-portfolio deployments
+Capital isolation model (fund-like):
+  - On creation: allocated_capital is deducted from master's cash pool
+  - During trading: sub manages its own cash — no cross-leakage to/from master
+  - On close(): remaining cash returns to master, sub is decommissioned
+  - SubPortfolio.cash = allocated_capital - _cash_used (computed, NOT mirrored)
 """
 
 from datetime import date, datetime
@@ -34,6 +35,8 @@ class SubPortfolio(PortfolioLike):
         self.currency = master.currency if hasattr(master, 'currency') else "USD"
         self.orders: List[Dict[str, Any]] = []
         self.snapshots: List[Any] = []
+        self._closed: bool = False
+        master.cash -= allocated_capital
 
     @property
     def cash(self) -> float:
@@ -43,9 +46,7 @@ class SubPortfolio(PortfolioLike):
     def cash(self, value: float):
         if value < 0:
             value = 0.0
-        delta = value - self.cash
         self._cash_used = self.allocated_capital - value
-        self._master.cash += delta
 
     @property
     def nav(self) -> float:
@@ -69,7 +70,7 @@ class SubPortfolio(PortfolioLike):
         return sum(p.market_value * 0.5 for p in self.positions.values())
 
     def can_afford(self, cost: float) -> bool:
-        return self.cash >= cost and self._master.cash >= cost
+        return self.cash >= cost
 
     def update_position(
         self,
@@ -177,6 +178,20 @@ class SubPortfolio(PortfolioLike):
 
     def reset_daily(self) -> None:
         self._starting_nav = self.nav
+
+    def close(self) -> float:
+        """Return remaining capital to master and decommission this sub-account."""
+        with self._lock:
+            if self._closed:
+                return 0.0
+            remaining = self.cash
+            if remaining > 0:
+                self._master.cash += remaining
+            self._cash_used = 0.0
+            self.allocated_capital = 0.0
+            self.positions.clear()
+            self._closed = True
+            return remaining
 
     def to_dict(self) -> Dict[str, Any]:
         return {

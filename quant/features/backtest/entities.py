@@ -22,6 +22,8 @@ class BacktestDiagnostics:
     limit_rejected_orders: int = 0
     discarded_orders: int = 0
     risk_skipped_orders: int = 0
+    truncated_sells: int = 0
+    submission_rejected: int = 0
     rejection_counts: Dict[str, int] = field(default_factory=dict)
 
     def record_rejection(self, reason: OrderRejectionReason) -> None:
@@ -103,6 +105,7 @@ class _BacktestOrderManager:
         self._buy_dedup_set: set = set()
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
+        self._rejected_count: int = 0
 
     def _resolve_price(self, price: Optional[float], symbol: str) -> float:
         if isinstance(price, (int, float)) and price > 0:
@@ -134,6 +137,7 @@ class _BacktestOrderManager:
             self._passes_dedup(symbol, side)
             self._passes_risk(symbol, quantity, effective, side)
         except OrderRejectedError:
+            self._rejected_count += 1
             return None
         order = {
             "symbol": symbol,
@@ -166,6 +170,11 @@ class _BacktestOrderManager:
         self._buffer.clear()
         self._buy_dedup_set.clear()
         return orders
+
+    def drain_rejection_count(self) -> int:
+        c = self._rejected_count
+        self._rejected_count = 0
+        return c
 
 
 class _BacktestContext:

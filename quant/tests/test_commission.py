@@ -1,11 +1,13 @@
 """Unit tests for commission module."""
 
+import datetime as dt
 import math
 
 import pytest
 
 from quant.features.backtest.commission import (
     calculate_commission,
+    get_rate_for_date,
     _calculate_cn_commission,
     _calculate_hk_commission,
     _calculate_us_commission,
@@ -24,6 +26,8 @@ from quant.features.backtest.commission import (
     US_SEC_FEE_RATE,
     US_FINRA_TAF_PER_SHARE,
     VOLUME_PARTICIPATION_LIMIT,
+    CN_STAMP_DUTY_RATE_HISTORY,
+    HK_STAMP_DUTY_RATE_HISTORY,
 )
 from quant.features.backtest.entities import CommissionConfig
 
@@ -167,3 +171,100 @@ class TestCalculateCommissionBySymbol:
     def test_volume_participation_limit_constant(self):
         from quant.features.backtest.commission import VOLUME_PARTICIPATION_LIMIT
         assert VOLUME_PARTICIPATION_LIMIT == 0.05
+
+
+class TestDateAwareCNStampDuty:
+    """CN stamp duty: 0.1% before 2023-08-28, halved to 0.05% after."""
+
+    def test_stamp_duty_before_cutoff(self):
+        trade_date = dt.date(2023, 8, 27)
+        price, qty = 50.0, 1000
+        breakdown = _calculate_cn_commission(price * qty, "SELL", trade_date=trade_date)
+        expected = price * qty * 0.001
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_stamp_duty_on_cutoff(self):
+        trade_date = dt.date(2023, 8, 28)
+        price, qty = 50.0, 1000
+        breakdown = _calculate_cn_commission(price * qty, "SELL", trade_date=trade_date)
+        expected = price * qty * 0.0005
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_stamp_duty_after_cutoff(self):
+        trade_date = dt.date(2024, 6, 15)
+        price, qty = 50.0, 1000
+        breakdown = _calculate_cn_commission(price * qty, "SELL", trade_date=trade_date)
+        expected = price * qty * 0.0005
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_no_stamp_duty_for_buy_regardless_of_date(self):
+        breakdown_before = _calculate_cn_commission(50000, "BUY", trade_date=dt.date(2023, 8, 27))
+        breakdown_after = _calculate_cn_commission(50000, "BUY", trade_date=dt.date(2024, 1, 15))
+        assert breakdown_before["stamp_duty"] == 0.0
+        assert breakdown_after["stamp_duty"] == 0.0
+
+
+class TestDateAwareHKStampDuty:
+    """HK stamp duty: 0.1% before 2021-08-01, raised to 0.13% until 2023-11-16, back to 0.1%."""
+
+    def test_stamp_duty_before_first_raise(self):
+        trade_date = dt.date(2020, 6, 1)
+        breakdown = _calculate_hk_commission(100000, "BUY", trade_date=trade_date)
+        expected = math.ceil(100000 * 0.001)
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_stamp_duty_during_raised_period(self):
+        trade_date = dt.date(2022, 6, 1)
+        breakdown = _calculate_hk_commission(100000, "BUY", trade_date=trade_date)
+        expected = math.ceil(100000 * 0.0013)
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_stamp_duty_after_reduction(self):
+        trade_date = dt.date(2024, 6, 1)
+        breakdown = _calculate_hk_commission(100000, "BUY", trade_date=trade_date)
+        expected = math.ceil(100000 * 0.001)
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_stamp_duty_transition_on_raise_date(self):
+        breakdown = _calculate_hk_commission(100000, "BUY", trade_date=dt.date(2021, 8, 1))
+        expected = math.ceil(100000 * 0.0013)
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+    def test_stamp_duty_transition_on_reduction_date(self):
+        breakdown = _calculate_hk_commission(100000, "BUY", trade_date=dt.date(2023, 11, 17))
+        expected = math.ceil(100000 * 0.001)
+        assert breakdown["stamp_duty"] == pytest.approx(expected, rel=1e-4)
+
+
+class TestGetRateForDate:
+    """Unit tests for the get_rate_for_date helper function."""
+
+    def test_returns_default_when_table_empty(self):
+        rate = get_rate_for_date({}, dt.date(2023, 1, 1), 0.005)
+        assert rate == 0.005
+
+    def test_returns_latest_when_trade_date_none(self):
+        table = {
+            dt.date(2020, 1, 1): 0.001,
+            dt.date(2023, 8, 28): 0.0005,
+        }
+        rate = get_rate_for_date(table, None, 0.001)
+        assert rate == 0.0005
+
+    def test_returns_default_when_no_entry_before_date(self):
+        table = {dt.date(2023, 8, 28): 0.0005}
+        rate = get_rate_for_date(table, dt.date(2020, 1, 1), 0.001)
+        assert rate == 0.001
+
+    def test_returns_correct_rate_for_date_between_entries(self):
+        table = {
+            dt.date(2021, 8, 1): 0.0013,
+            dt.date(2023, 11, 17): 0.001,
+        }
+        rate = get_rate_for_date(table, dt.date(2022, 6, 1), 0.001)
+        assert rate == 0.0013
+
+    def test_returns_correct_rate_on_entry_date(self):
+        table = {dt.date(2023, 8, 28): 0.0005}
+        rate = get_rate_for_date(table, dt.date(2023, 8, 28), 0.001)
+        assert rate == 0.0005

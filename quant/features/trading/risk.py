@@ -94,7 +94,7 @@ class RiskEngine(RiskEngineLike):
             )
 
         today = as_of_date or date.today()
-        fill_date = today + timedelta(days=1) if as_of_date is not None else today
+        fill_date = today + timedelta(days=1)
         settled = self.portfolio.settled_quantity(symbol, fill_date)
         pos = self.portfolio.get_position(symbol)
         total_qty = pos.quantity if pos else 0

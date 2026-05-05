@@ -8,10 +8,7 @@ from quant.features.backtest.market_rules import get_earliest_lot_time
 
 def calculate_daily_nav(portfolio_map: Dict[str, Any], primary_portfolio: Any, use_subs: bool) -> float:
     if use_subs:
-        return primary_portfolio.cash + sum(
-            sum(p.market_value for p in pf.positions.values())
-            for pf in portfolio_map.values()
-        )
+        return primary_portfolio.cash + sum(pf.nav for pf in portfolio_map.values())
     return primary_portfolio.nav
 
 

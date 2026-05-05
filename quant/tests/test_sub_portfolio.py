@@ -23,21 +23,22 @@ class TestSubPortfolioUnit:
         assert sub.allocated_capital == 40000
         assert sub.nav == 40000
         assert sub.strategy_name == "test"
+        assert master.cash == 60000
 
-    def test_buy_depletes_sub_cash_and_master(self):
+    def test_buy_depletes_sub_cash_only(self):
         master = Portfolio(initial_cash=100000)
         sub = SubPortfolio("test", 40000, master)
         sub.cash -= 10000
         assert sub.cash == 30000
-        assert master.cash == 90000
+        assert master.cash == 60000
 
-    def test_sell_replenishes_sub_cash_and_master(self):
+    def test_sell_replenishes_sub_cash_only(self):
         master = Portfolio(initial_cash=100000)
         sub = SubPortfolio("test", 40000, master)
         sub.cash -= 10000
         sub.cash += 12000
         assert sub.cash == 42000
-        assert master.cash == 102000
+        assert master.cash == 60000
 
     def test_can_afford_checks_sub_allocation(self):
         master = Portfolio(initial_cash=100000)
@@ -45,14 +46,14 @@ class TestSubPortfolioUnit:
         assert sub.can_afford(40000) is True
         assert sub.can_afford(40001) is False
 
-    def test_can_afford_checks_master_cash(self):
+    def test_can_afford_sub_isolation_from_master(self):
         master = Portfolio(initial_cash=100000)
-        subA = SubPortfolio("A", 80000, master)
-        subB = SubPortfolio("B", 80000, master)
-        subA.cash -= 80000
-        assert master.cash == 20000
-        assert subB.cash == 80000
-        assert subB.can_afford(25000) is False
+        subA = SubPortfolio("A", 60000, master)
+        subB = SubPortfolio("B", 40000, master)
+        subA.cash -= 60000
+        assert master.cash == 0
+        assert subB.cash == 40000
+        assert subB.can_afford(35000) is True
 
     def test_update_position_buy(self):
         master = Portfolio(initial_cash=100000)
@@ -87,10 +88,7 @@ class TestSubPortfolioUnit:
         subA.cash -= 15000
         subB.update_position("MSFT", quantity=50, price=200.0, cost=10000.0)
         subB.cash -= 10000
-        total_nav = master.cash + sum(
-            sum(p.market_value for p in pf.positions.values())
-            for pf in [subA, subB]
-        )
+        total_nav = master.cash + subA.nav + subB.nav
         assert total_nav == pytest.approx(100000.0, rel=1e-4)
 
     def test_check_daily_loss(self):
@@ -106,6 +104,37 @@ class TestSubPortfolioUnit:
         sub.cash -= 5000
         sub.reset_daily()
         assert sub.starting_nav == sub.nav
+
+    def test_close_returns_cash_to_master(self):
+        master = Portfolio(initial_cash=100000)
+        sub = SubPortfolio("test", 40000, master)
+        sub.update_position("AAPL", quantity=100, price=150.0, cost=15000.0, trade_date=date(2025, 1, 3))
+        sub.cash -= 15000
+        sub.close_position("AAPL", 200.0)
+        remaining = sub.close()
+        assert remaining == pytest.approx(45000)
+        assert sub.cash == 0
+        assert sub.allocated_capital == 0
+        assert len(sub.positions) == 0
+        assert master.cash == pytest.approx(105000)
+
+    def test_close_idempotent(self):
+        master = Portfolio(initial_cash=100000)
+        sub = SubPortfolio("test", 40000, master)
+        assert sub.close() == 40000
+        assert sub.close() == 0.0
+        assert sub.close() == 0.0
+
+    def test_close_after_profit_returns_all(self):
+        master = Portfolio(initial_cash=100000)
+        sub = SubPortfolio("test", 40000, master)
+        sub.cash -= 30000
+        sub.update_position("AAPL", quantity=200, price=150.0, cost=30000.0, trade_date=date(2025, 1, 2))
+        sub.cash -= 30000
+        sub.close_position("AAPL", 200.0)
+        rem = sub.close()
+        assert rem == 40000
+        assert master.cash == 100000
 
 
 class TestSubPortfolioBacktest:

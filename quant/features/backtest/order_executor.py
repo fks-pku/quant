@@ -27,6 +27,36 @@ logger = logging.getLogger(__name__)
 DEFAULT_RISK_PRICE_DEVIATION_LIMIT = 0.15
 
 
+def compute_market_impact(quantity: float, daily_volume: float, impact_factor: float) -> float:
+    """Square-root market impact model (bps).
+
+    impact_bps = impact_factor * sqrt(quantity / daily_volume) * 10000
+
+    Args:
+        quantity: order quantity in shares
+        daily_volume: daily bar volume in shares
+        impact_factor: configurable impact coefficient (0 = disabled, 0.001-0.01 typical)
+
+    Returns impact in basis points.
+    """
+    if impact_factor <= 0 or daily_volume <= 0 or quantity <= 0:
+        return 0.0
+    participation = quantity / daily_volume
+    if participation <= 0:
+        return 0.0
+    return impact_factor * (participation ** 0.5) * 10000
+
+
+def apply_market_impact(fill_price: float, side: str, impact_bps: float) -> float:
+    """Apply market impact to fill price. BUY increases price, SELL decreases."""
+    if impact_bps <= 0:
+        return fill_price
+    adjustment = fill_price * (impact_bps / 10000)
+    if side == 'BUY':
+        return fill_price + adjustment
+    return fill_price - adjustment
+
+
 def execute_order(
     order: "DeferredOrder",
     portfolio: Any,
@@ -41,6 +71,7 @@ def execute_order(
     commission_config: Any,
     prev_bar: Optional["BacktestBar"] = None,
     risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
+    market_impact_factor: float = 0.0,
 ) -> List[Trade]:
     if bar is None:
         raise OrderRejectedError(OrderRejectionReason.BAR_UNAVAILABLE, symbol)
@@ -88,6 +119,9 @@ def execute_order(
             raise OrderRejectedError(OrderRejectionReason.VOLUME_ZERO, symbol)
         quantity = float(max_qty)
         diag.volume_limited_trades += 1
+
+    impact_bps = compute_market_impact(quantity, bar_volume, market_impact_factor)
+    fill_price = apply_market_impact(fill_price, order.side, impact_bps)
 
     if order.side == 'BUY':
         return _execute_buy(
@@ -146,7 +180,8 @@ def _execute_buy(
     order, portfolio, symbol, fill_ts, fill_price, quantity,
     signal_date, market, entry_times, entry_prices, diag, commission_config,
 ) -> List[Trade]:
-    cost_breakdown = calculate_commission(symbol, fill_price, quantity, order.side, commission_config)
+    fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
+    cost_breakdown = calculate_commission(symbol, fill_price, quantity, order.side, commission_config, fill_date_val)
     commission = sum(cost_breakdown.values())
 
     total_cost = fill_price * quantity + commission
@@ -167,7 +202,6 @@ def _execute_buy(
         entry_times.setdefault((strategy_key, symbol), fill_ts)
         entry_prices.setdefault((strategy_key, symbol), fill_price)
 
-    fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
     portfolio.update_position(symbol, quantity=quantity, price=fill_price, cost=total_cost, trade_date=fill_date_val)
     portfolio.cash -= total_cost
 
@@ -211,9 +245,10 @@ def _execute_sell(
 
     sell_qty = min(quantity, settled_qty)
     if sell_qty < quantity:
+        diag.truncated_sells += 1
         logger.warning("SELL %s truncated: requested %d, settled %d", symbol, quantity, sell_qty)
 
-    cost_breakdown = calculate_commission(symbol, fill_price, sell_qty, order.side, commission_config)
+    cost_breakdown = calculate_commission(symbol, fill_price, sell_qty, order.side, commission_config, fill_date_val)
     commission = sum(cost_breakdown.values())
 
     diag.total_commission += commission

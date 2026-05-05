@@ -37,13 +37,16 @@ class Backtester:
     def __init__(self, config: Dict[str, Any], event_bus: Optional[EventPublisher] = None,
                  lot_sizes: Optional[Dict[str, int]] = None,
                  ipo_dates: Optional[Dict[str, datetime]] = None,
-                 portfolio_class=None, risk_engine_class=None, sub_portfolio_class=None):
+                 portfolio_class=None, risk_engine_class=None, sub_portfolio_class=None,
+                 benchmark_provider=None):
         self.config = config
         self.event_bus = event_bus
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
         self.risk_price_deviation_limit = config.get("backtest", {}).get("risk_price_deviation_limit", 0.15)
+        self.market_impact_factor = config.get("backtest", {}).get("market_impact_factor", 0.0)
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
+        self.benchmark_provider = benchmark_provider
         if portfolio_class is None or risk_engine_class is None or sub_portfolio_class is None:
             raise ValueError(
                 "portfolio_class, risk_engine_class, and sub_portfolio_class are required. "
@@ -203,6 +206,7 @@ class Backtester:
                             commission_config=self.commission,
                             prev_bar=prev_close_bars.get(sym),
                             risk_price_deviation_limit=self.risk_price_deviation_limit,
+                            market_impact_factor=self.market_impact_factor,
                         )
                     except OrderRejectedError as e:
                         diag.record_rejection(e.reason)
@@ -242,12 +246,22 @@ class Backtester:
             # --- Step 8: Collect pending orders ---
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "drain_orders"):
-                    for order in strategy.context.drain_orders(signal_date=current_date):
-                        pending_orders.append(order)
+                    try:
+                        for order in strategy.context.drain_orders(signal_date=current_date):
+                            pending_orders.append(order)
+                    except (OrderRejectedError, ValueError) as e:
+                        logger.warning("Invalid order from strategy %s on %s: %s",
+                                       getattr(strategy, 'name', strategy.__class__.__name__),
+                                       current_date, e)
 
             for order in pending_orders:
                 deferred_orders.append(order)
             pending_orders = []
+
+            # Collect submission-level rejections (dedup, price-unresolvable, risk)
+            for strategy in strategies:
+                if hasattr(strategy, "context") and hasattr(strategy.context, "order_manager"):
+                    diag.submission_rejected += strategy.context.order_manager.drain_rejection_count()
 
             # --- Step 9: Record NAV + reset daily state ---
             nav = calculate_daily_nav(portfolio_map, primary_portfolio, use_subs)
@@ -257,6 +271,42 @@ class Backtester:
             self._reset_daily(portfolio_map, risk_map, use_subs, diag)
 
             current_date += timedelta(days=1)
+
+        # Execute remaining deferred orders from the final trading day
+        # (Step 8 orders that never got a next-day Step 4 to execute them)
+        if deferred_orders and last_prices:
+            for order in deferred_orders:
+                sym = order.symbol
+                close_price = last_prices.get(sym)
+                if not close_price or close_price <= 0:
+                    diag.discarded_orders += 1
+                    continue
+                bar = {
+                    'symbol': sym, 'open': close_price, 'high': close_price,
+                    'low': close_price, 'close': close_price, 'volume': 10_000_000,
+                    'timestamp': current_date,
+                }
+                order_pf = portfolio_map.get(order.strategy, primary_portfolio)
+                try:
+                    trades = execute_order(
+                        order=order, portfolio=order_pf, symbol=sym, bar=bar,
+                        entry_times=entry_times, entry_prices=entry_prices,
+                        diag=diag, lot_sizes=self.lot_sizes, ipo_dates=self.ipo_dates,
+                        slippage_bps=self.slippage_bps, commission_config=self.commission,
+                        prev_bar=None,
+                        risk_price_deviation_limit=self.risk_price_deviation_limit,
+                    )
+                except OrderRejectedError as e:
+                    diag.record_rejection(e.reason)
+                    diag.discarded_orders += 1
+                    continue
+                all_trades.extend(trades)
+                for s in strategies:
+                    sn = getattr(s, 'name', s.__class__.__name__)
+                    if order.strategy is None or sn == order.strategy:
+                        for t in trades:
+                            s.on_fill(s.context, t)
+            deferred_orders = []
 
         for strategy in strategies:
             strategy.on_stop(strategy.context)
@@ -298,8 +348,21 @@ class Backtester:
                             for t in trades:
                                 s.on_fill(s.context, t)
 
+        # Record final NAV after all post-loop executions (deferred + on_stop)
+        nav = calculate_daily_nav(portfolio_map, primary_portfolio, use_subs)
+        equity_curve_dates.append(current_date)
+        equity_curve_values.append(nav)
+
         equity_curve = pd.Series(equity_curve_values, index=equity_curve_dates)
-        metrics = calculate_performance_metrics(equity_curve, all_trades, initial_cash)
+
+        benchmark_returns = None
+        if self.benchmark_provider is not None:
+            try:
+                benchmark_returns = self.benchmark_provider.get_benchmark_returns(start, end)
+            except Exception:
+                benchmark_returns = None
+
+        metrics = calculate_performance_metrics(equity_curve, all_trades, initial_cash, benchmark_returns)
 
         diag.total_gross_pnl = sum(t.pnl for t in all_trades) + diag.total_commission
 

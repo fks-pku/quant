@@ -12,7 +12,10 @@ from quant.domain.models.trade import Trade
 __all__ = ["calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
            "calculate_performance_metrics", "PerformanceMetrics",
            "calculate_rolling_sharpe",
-           "calculate_statistical_significance"]
+           "calculate_statistical_significance",
+           "calculate_alpha", "calculate_beta",
+           "calculate_information_ratio", "calculate_tracking_error",
+           "calculate_up_down_capture"]
 
 
 def calculate_sharpe(returns: pd.Series, periods_per_year: int = 252) -> float:
@@ -226,21 +229,115 @@ def _erf_approx(x: float) -> float:
 def calculate_statistical_significance(returns: pd.Series, benchmark_returns: pd.Series = None) -> dict:
     if returns.empty:
         return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
-    mean_ret = returns.mean()
-    std_ret = returns.std()
-    n = len(returns)
+
+    if benchmark_returns is not None and not benchmark_returns.empty:
+        aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty or len(aligned) < 2:
+            return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
+        excess = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+        mean_ret = excess.mean()
+        std_ret = excess.std()
+        n = len(excess)
+    else:
+        mean_ret = returns.mean()
+        std_ret = returns.std()
+        n = len(returns)
+
     if std_ret == 0 or n < 2:
         return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (mean_ret, mean_ret)}
     se = std_ret / np.sqrt(n)
     t_stat = mean_ret / se
     try:
         from scipy import stats as scipy_stats
-        p_value = 2 * (1 - scipy_stats.t.cdf(abs(t_stat), df=n - 1))
+        if benchmark_returns is not None and not benchmark_returns.empty:
+            p_value = 1.0 - scipy_stats.t.cdf(t_stat, df=n - 1)
+        else:
+            p_value = 2.0 * (1.0 - scipy_stats.t.cdf(abs(t_stat), df=n - 1))
     except ImportError:
         z = abs(t_stat)
-        p_value = max(0.0, 2.0 * (1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0)))))
+        if benchmark_returns is not None and not benchmark_returns.empty:
+            p_value = max(0.0, 1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0))))
+        else:
+            p_value = max(0.0, 2.0 * (1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0)))))
     ci_95 = (mean_ret - 1.96 * se, mean_ret + 1.96 * se)
     return {"t_stat": float(t_stat), "p_value": float(p_value), "is_significant": p_value < 0.05, "confidence_interval": ci_95}
+
+
+def calculate_alpha(returns: pd.Series, benchmark_returns: pd.Series, periods_per_year: int = 252) -> float:
+    """Annualized alpha: strategy annual return - benchmark annual return."""
+    if returns.empty or benchmark_returns.empty:
+        return 0.0
+    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
+    if aligned.empty:
+        return 0.0
+    strat_annual = aligned.iloc[:, 0].mean() * periods_per_year
+    bench_annual = aligned.iloc[:, 1].mean() * periods_per_year
+    return float(strat_annual - bench_annual)
+
+
+def calculate_beta(returns: pd.Series, benchmark_returns: pd.Series) -> float:
+    """Simple OLS beta: Cov(strategy, benchmark) / Var(benchmark)."""
+    if returns.empty or benchmark_returns.empty:
+        return 0.0
+    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
+    if aligned.empty or len(aligned) < 2:
+        return 0.0
+    x = aligned.iloc[:, 1]
+    y = aligned.iloc[:, 0]
+    var_x = x.var()
+    if var_x == 0:
+        return 0.0
+    return float(x.cov(y) / var_x)
+
+
+def calculate_tracking_error(returns: pd.Series, benchmark_returns: pd.Series, periods_per_year: int = 252) -> float:
+    """Annualized tracking error: std of excess returns."""
+    if returns.empty or benchmark_returns.empty:
+        return 0.0
+    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
+    if aligned.empty:
+        return 0.0
+    excess = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+    return float(excess.std() * np.sqrt(periods_per_year))
+
+
+def calculate_information_ratio(returns: pd.Series, benchmark_returns: pd.Series, periods_per_year: int = 252) -> float:
+    """Annualized information ratio: alpha / tracking error."""
+    alpha = calculate_alpha(returns, benchmark_returns, periods_per_year)
+    te = calculate_tracking_error(returns, benchmark_returns, periods_per_year)
+    if te == 0:
+        return 0.
+    return alpha / te
+
+
+def calculate_up_down_capture(returns: pd.Series, benchmark_returns: pd.Series) -> Tuple[float, float]:
+    """Up-market and down-market capture ratios.
+
+    Up capture = mean(strategy return in up benchmarks) / mean(benchmark return in up periods)
+    Down capture = mean(strategy return in down benchmarks) / mean(benchmark return in down periods)
+    """
+    if returns.empty or benchmark_returns.empty:
+        return 1.0, 1.0
+    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
+    if aligned.empty:
+        return 1.0, 1.0
+    strat = aligned.iloc[:, 0]
+    bench = aligned.iloc[:, 1]
+
+    up_mask = bench > 0
+    down_mask = bench < 0
+
+    if up_mask.sum() == 0 or bench[up_mask].mean() == 0:
+        up_capture = 1.0
+    else:
+        up_capture = float(strat[up_mask].mean() / bench[up_mask].mean())
+
+    if down_mask.sum() == 0 or bench[down_mask].mean() == 0:
+        down_capture = 1.0
+    else:
+        down_capture = float(strat[down_mask].mean() / bench[down_mask].mean())
+
+    return up_capture, down_capture
 
 
 @dataclass
@@ -267,14 +364,26 @@ class PerformanceMetrics:
     tail_ratio: float
     recovery_factor: float
     statistical_significance: dict
+    benchmark_return: Optional[float] = None
+    alpha: Optional[float] = None
+    beta: Optional[float] = None
+    information_ratio: Optional[float] = None
+    tracking_error: Optional[float] = None
+    up_capture: Optional[float] = None
+    down_capture: Optional[float] = None
 
 
 def calculate_performance_metrics(
     equity_curve: pd.Series,
     trades: List[Trade],
     initial_cash: Optional[float] = None,
+    benchmark_returns: Optional[pd.Series] = None,
 ) -> PerformanceMetrics:
-    """Calculate all performance metrics from equity curve and trades."""
+    """Calculate all performance metrics from equity curve and trades.
+
+    If benchmark_returns is provided, also compute benchmark comparison
+    metrics (alpha, beta, information ratio, tracking error, up/down capture).
+    """
     if equity_curve.empty:
         return PerformanceMetrics(
             total_return=0.0,
@@ -300,32 +409,48 @@ def calculate_performance_metrics(
             recovery_factor=0.0,
             statistical_significance={"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
         )
-    
+
     returns = equity_curve.pct_change().dropna()
-    
+
     base = initial_cash if initial_cash is not None and initial_cash > 0 else equity_curve.iloc[0]
     total_return = float((equity_curve.iloc[-1] - base) / base)
     sharpe = calculate_sharpe(returns)
     sortino = calculate_sortino(returns)
     max_dd, max_dd_pct, _, _ = calculate_max_drawdown(equity_curve)
     calmar = calculate_calmar(returns, max_dd_pct)
-    
+
     win_rate = calculate_win_rate(trades)
     profit_factor = calculate_profit_factor(trades)
     payoff = calculate_payoff_ratio(trades)
     expectancy = calculate_expectancy(trades)
     avg_duration = calculate_avg_trade_duration(trades)
-    
+
     winning_trades = len([t for t in trades if t.pnl > 0 and t.side == "SELL"])
     losing_trades = len([t for t in trades if t.pnl <= 0 and t.side == "SELL"])
-    
+
     rolling_sharpe = calculate_rolling_sharpe(returns)
     ulcer_idx = calculate_ulcer_index(equity_curve)
     gtp_ratio = calculate_gain_to_pain_ratio(trades)
     tail = calculate_tail_ratio(returns)
     recovery = calculate_recovery_factor(trades, max_dd)
-    stat_sig = calculate_statistical_significance(returns)
-    
+    stat_sig = calculate_statistical_significance(returns, benchmark_returns)
+
+    bench_return = None
+    alpha = None
+    beta = None
+    ir_val = None
+    te = None
+    up_cap = None
+    down_cap = None
+
+    if benchmark_returns is not None and not benchmark_returns.empty:
+        bench_return = float(benchmark_returns.mean() * 252)
+        alpha = calculate_alpha(returns, benchmark_returns)
+        beta = calculate_beta(returns, benchmark_returns)
+        ir_val = calculate_information_ratio(returns, benchmark_returns)
+        te = calculate_tracking_error(returns, benchmark_returns)
+        up_cap, down_cap = calculate_up_down_capture(returns, benchmark_returns)
+
     return PerformanceMetrics(
         total_return=total_return,
         sharpe_ratio=sharpe,
@@ -348,5 +473,12 @@ def calculate_performance_metrics(
         gain_to_pain_ratio=gtp_ratio,
         tail_ratio=tail,
         recovery_factor=recovery,
-        statistical_significance=stat_sig
+        statistical_significance=stat_sig,
+        benchmark_return=bench_return,
+        alpha=alpha,
+        beta=beta,
+        information_ratio=ir_val,
+        tracking_error=te,
+        up_capture=up_cap,
+        down_capture=down_cap,
     )

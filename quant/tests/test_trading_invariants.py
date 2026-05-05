@@ -91,17 +91,17 @@ class TestCase2PortfolioMultiLot:
 
 
 # ---------------------------------------------------------------------------
-# CASE-3: SubPortfolio cash sync
+# CASE-3: SubPortfolio capital isolation
 # ---------------------------------------------------------------------------
 
 class TestCase3SubPortfolioCashSync:
-    def test_t3_01_master_reflects_sub_changes(self):
+    def test_t3_01_master_not_affected_by_sub_spending(self):
         master = Portfolio(initial_cash=100_000)
         subA = SubPortfolio("A", 40_000, master)
         subB = SubPortfolio("B", 60_000, master)
         subA.cash -= 10_000
         subB.cash -= 20_000
-        assert master.cash == pytest.approx(70_000)
+        assert master.cash == pytest.approx(0)
 
     def test_t3_02_sub_cash_values(self):
         master = Portfolio(initial_cash=100_000)
@@ -112,13 +112,25 @@ class TestCase3SubPortfolioCashSync:
         assert subA.cash == pytest.approx(30_000)
         assert subB.cash == pytest.approx(40_000)
 
-    def test_t3_03_sum_equals_master(self):
+    def test_t3_03_total_nav_reflects_spending_without_assets(self):
         master = Portfolio(initial_cash=100_000)
         subA = SubPortfolio("A", 40_000, master)
         subB = SubPortfolio("B", 60_000, master)
         subA.cash -= 10_000
         subB.cash -= 20_000
-        assert subA.cash + subB.cash == pytest.approx(master.cash)
+        total = master.cash + subA.nav + subB.nav
+        assert total == pytest.approx(70_000)
+
+    def test_t3_05_total_nav_with_positions(self):
+        master = Portfolio(initial_cash=100_000)
+        subA = SubPortfolio("A", 40_000, master)
+        subB = SubPortfolio("B", 60_000, master)
+        subA.update_position("AAPL", quantity=100, price=150.0, cost=15000.0, trade_date=D1)
+        subA.cash -= 15000
+        subB.update_position("MSFT", quantity=50, price=200.0, cost=10000.0, trade_date=D1)
+        subB.cash -= 10000
+        total = master.cash + subA.nav + subB.nav
+        assert total == pytest.approx(100_000)
 
     def test_t3_04_negative_clamped(self):
         master = Portfolio(initial_cash=100_000)

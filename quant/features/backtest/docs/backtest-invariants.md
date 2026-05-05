@@ -6,11 +6,11 @@
 
 ## 通用约定
 
-| 参数 | 值 |
-|------|-----|
-| 信号执行 | **T+1**：当日 Step7 `on_after_trading` 信号，次日 Step4 以 **open** 价执行 |
-| NAV 记录 | Step 9（Step6 持仓市价更新之后，用当日 **close** 计市值） |
-| 日循环 | (1) on_before_trading (2) load bars (3) dividends (4) exec deferred (5) on_data (6) update prices (7) on_after_trading (8) pending->deferred (9) NAV + reset |
+| 参数     | 值                                                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 信号执行   | **T+1**：当日 Step7 `on_after_trading` 信号，次日 Step4 以 **open** 价执行                                                                                               |
+| NAV 记录 | Step 9（Step6 持仓市价更新之后，用当日 **close** 计市值）                                                                                                                     |
+| 日循环    | (1) on_before_trading (2) load bars (3) dividends (4) exec deferred (5) on_data (6) update prices (7) on_after_trading (8) pending->deferred (9) NAV + reset |
 
 ### 核心不变式
 
@@ -19,14 +19,17 @@
 - I3 `final_nav == initial_cash + sum(trade.pnl) + sum(dividend_net)`
 - I4 `diag.total_gross_pnl == sum(trade.pnl) + diag.total_commission`
 - I5 `equity_curve[t] == NAV of day t`
+- I6 `position.realized_pnl == sum(trade.realized_pnl)` (每个仓位平仓后)
+- I7 `NAV[t] == NAV[t-1]` 在停牌日 (无成交、无除权)
+- I8 被拒绝订单不影响 `cash` 和 `NAV` (拒绝当天 NAV 不变)
 
 ### 市场参数
 
-| 市场 | 手数 | T+1 | 佣金 | 印花税 | 其他费 |
-|------|------|-----|------|--------|--------|
-| US | 无 | 无 | per_share/percent | SEC+FINRA (SELL) | - |
-| CN | 100 | 有 | 0.025% min 5 | 0.05% (SELL) | transfer+regulator |
-| HK | config | 无 | 0.03% min 3 | 0.1% (BUY+SELL, ceil) | SFC+clear+trade+sys 0.50 |
+| 市场  | 手数     | T+1 | 佣金                | 印花税                   | 其他费                      |
+| --- | ------ | --- | ----------------- | --------------------- | ------------------------ |
+| US  | 无      | 无   | per_share/percent | SEC+FINRA (SELL)      | -                        |
+| CN  | 100    | 有   | 0.025% min 5      | 0.05% (SELL)          | transfer+regulator       |
+| HK  | config | 无   | 0.03% min 3       | 0.1% (BUY+SELL, ceil) | SFC+clear+trade+sys 0.50 |
 
 ### 测试辅助函数
 
@@ -331,7 +334,7 @@ master 持有所有真实现金，标的持仓为两个子组合之和。
     master(真实资金池, initial_cash=100,000)
       subA(allocated=40,000): 持有AAPL, cash变动通过setter同步master
       subB(allocated=60,000): 持有AAPL, cash变动通过setter同步master
-
+    
     NAV       = master.cash + sum(sub.positions.market_value)
     总持仓(sym) = subA.qty[sym] + subB.qty[sym]
     加权成本    = (subA.cost_basis + subB.cost_basis) / 总持仓
@@ -398,7 +401,6 @@ master 持有所有真实现金，标的持仓为两个子组合之和。
     C5-07  final_nav == initial_cash + sum(trade.pnl)
 
 ---
-
 
 ## CASE-6: 多批次 FIFO 卖出
 
@@ -530,10 +532,10 @@ D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
 
 ---
 
-
 ## CASE-8: 综合案例
 
 组合所有要素: **SubPortfolio双策略 + US/CN跨市场 + 除权除息 + CN红利税
+
 + 多批次FIFO + T+1结算 + 佣金**。
 
 ### 配置
@@ -559,7 +561,7 @@ D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
       D0: BUY 100 AAPL -> D1 exec
       D3: SELL 40 AAPL -> D4 exec (FIFO from D1 lot)
       D5: SELL 60 AAPL -> D6 exec (remaining D1 lot)
-
+    
     StratB (CN+US):
       D0: BUY 100 600519 -> D1 exec
       D4: BUY  50 AAPL   -> D5 exec
@@ -608,17 +610,18 @@ D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
 
 ### 行情数据
 
-| 日期 | open | close | volume |
-|------|------|-------|--------|
-| D1 | 100 | 101 | 1M |
-| D2 | 100 | 101 | 1M |
-| D3 | 110 | 111 | 1M |
-| D4 | 130 | 131 | 1M |
-| D5 | 131 | 132 | 1M |
+| 日期  | open | close | volume |
+| --- | ---- | ----- | ------ |
+| D1  | 100  | 101   | 1M     |
+| D2  | 100  | 101   | 1M     |
+| D3  | 110  | 111   | 1M     |
+| D4  | 130  | 131   | 1M     |
+| D5  | 131  | 132   | 1M     |
 
 ### 推导
 
 SELL 50 股 (FIFO: 全部来自 D2 lot 的 40 股 + D3 lot 的 10 股):
+
 - Lot D2 (40@100): sub_realized = (130-100)*40 = 1200
 - Lot D3 (10@110): sub_realized = (130-110)*10 = 200
 - `total_realized = 1200 + 200 = 1400`
@@ -658,10 +661,10 @@ CN 市场 `adj_close ≈ close × adj_factor`（adj_factor 可达 100+），若�
 
 ### 行情数据
 
-| 日期 | open | close | adj_close | adj_factor | volume |
-|------|------|-------|-----------|------------|--------|
-| D0-D20 | ~11.88 | ~11.88 | ~1402 | 118.0 | 10M | (21 天积累到信号检查窗口)
-| D21 | 11.85 | 11.88 | 1401.84 | 118.0 | 10M | signal: BUY |
+| 日期     | open   | close  | adj_close | adj_factor | volume |
+| ------ | ------ | ------ | --------- | ---------- | ------ |
+| D0-D20 | ~11.88 | ~11.88 | ~1402     | 118.0      | 10M    |
+| D21    | 11.85  | 11.88  | 1401.84   | 118.0      | 10M    |
 
 ### 策略
 
@@ -707,6 +710,520 @@ C10-04  _price(bar) == close 而非 adj_close
 
 ---
 
+---
+
+---
+
+## CASE-11: CN 涨跌停拒绝
+
+验证涨停板买入和跌停板卖出被正确拒绝。
+
+### 配置 (同CASE-3 CN零滑点)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 10.00 | 10.00 | 10M    |
+| 2024-06-04 | D1  | 11.00 | 10.50 | 10M    |
+| 2024-06-05 | D2  | 10.00 | 10.00 | 10M    |
+
+### 信号
+
+D0 after close → BUY 100 600519 → D1 执行
+
+### 推导(D1 涨停拒绝)
+
+```
+prev_close_bars["600519"].close = 10.00 (D0 bar)
+is_price_at_limit("600519", 11.00, 10.00, ...)
+  upper = _round_half_up(10.00 * 1.10) = 11.00
+  open_rounded = _round_half_up(11.00) = 11.00
+  open_rounded >= upper → True → PRICE_AT_LIMIT
+diag.limit_rejected_orders += 1
+NAV 不变 = 100,000
+```
+
+### 断言
+
+```
+C11-01  diag.limit_rejected_orders == 1
+C11-02  diag.fill_count == 0
+C11-03  equity_curve == [100000, 100000, 100000] (NAV 不变)
+C11-04  diag.discarded_orders >= 1
+```
+
+---
+
+## CASE-12: 停牌日处理
+
+验证停牌日延迟订单丢弃 + NAV 不变 + diag 计数。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 1M     |
+| 2024-06-04 | D1  | 102.0 | 102.0 | 0      |
+| 2024-06-05 | D2  | 105.0 | 106.0 | 1M     |
+| 2024-06-06 | D3  | 107.0 | 108.0 | 1M     |
+
+### 信号
+
+- D0: BUY 100 AAPL → D1 执行 (停牌 → 丢弃)
+- D2: BUY 100 AAPL → D3 执行 (正常)
+
+### 推导
+
+```
+D1 Step2: D1 bar volume=0 → is_suspended → _suspended=True
+  diag.suspended_days += 1
+D1 Step4: deferred BUY → bar._suspended → diag.discarded_orders += 1
+D1 Step9: NAV = D0 NAV = 100,000 (无持仓、无成交)
+D3 Step4: BUY 执行 @ open=107.00
+```
+
+### 断言
+
+```
+C12-01  diag.suspended_days == 1
+C12-02  diag.discarded_orders >= 1
+C12-03  equity_curve[0] == equity_curve[1] (D1 NAV 不变)
+C12-04  diag.fill_count == 1 (仅 D3 成交)
+C12-05  equity_curve[-1] > equity_curve[0] (D3 BUY 执行后)
+```
+
+---
+
+## CASE-13: 风控拒绝 (仓位上限)
+
+验证 `max_position_pct` 风控拒绝在完整回测管线中生效。
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 0},
+    "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 0.05, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 1M     |
+| 2024-06-04 | D1  | 105.0 | 106.0 | 1M     |
+
+### 信号
+
+D0: BUY 200 AAPL → submit_order → _passes_risk:
+  value = 200×100 = 20,000, limit = 100,000×0.05 = 5,000
+  → approved=False → _risk_rejected_count += 1 → OrderRejectedError(RISK_REJECTED)
+
+### 断言
+
+```
+C13-01  diag.risk_skipped_orders >= 1
+C13-02  diag.fill_count == 0
+C13-03  final_nav == initial_cash (NAV 不变)
+C13-04  diag.rejection_counts["risk_rejected"] >= 1
+```
+
+---
+
+## CASE-14: on_stop 清仓
+
+验证 `on_stop()` 生成的清仓订单正确执行，循环后最终仓位清零。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 1M     |
+| 2024-06-04 | D1  | 105.0 | 108.0 | 1M     |
+| 2024-06-05 | D2  | 110.0 | 112.0 | 1M     |
+
+### 信号
+
+D0: BUY 100 AAPL → D1 执行
+on_stop: SELL 100 AAPL → 循环后以 last_prices 执行
+
+### 推导
+
+```
+D1: BUY @ 105.00, NAV ≈ 100,300 (持仓 100, close=108)
+循环结束:
+  last_prices["AAPL"] = 112.0 (D2 close)
+  on_stop → SELL 100
+  清仓逻辑: fill_price = 112.0 (无滑点), 成交
+  cash 增加, position 清零, fill_count = 2
+```
+
+### 断言
+
+```
+C14-01  diag.fill_count == 2
+C14-02  len(open_positions) == 0 (全部平仓)
+C14-03  final_nav == initial_cash + sum(trade.pnl) (I3)
+C14-04  final_nav > initial_cash
+```
+
+---
+
+## CASE-15: 送股 (Stock Dividend)
+
+验证送股除权 + synthetic fills + 卖出 PnL 正确。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume | Event            |
+| ---------- | --- | ----- | ----- | ------ | ---------------- |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 1M     | signal BUY       |
+| 2024-06-04 | D1  | 105.0 | 108.0 | 1M     | exec BUY         |
+| 2024-06-05 | D2  | 106.0 | 106.0 | 1M     | ex-div stock 0.5 |
+| 2024-06-06 | D3  | 110.0 | 112.0 | 1M     | exec SELL        |
+
+### 信号
+
+D0: BUY 100 → D1 执行, D2: 无信号, D3: SELL 150 → D4 (不在范围内)
+
+D0: BUY 100, D2: SELL 150 → D3 执行
+
+### 推导
+
+```
+D1: BUY 100 @ 105.00, lot(D1, qty=100, price=105), avg_cost=105
+D2 Step3: stock_dividend=0.5
+  pos.adjust_lots_for_stock_dividend(0.5):
+    qty = 100*1.5 = 150, lot_price = 105/1.5 = 70.00
+    avg_cost = (150*70)/150 = 70.00
+  synthetic fill → strategy._positions["AAPL"] += 50
+D2 Step6: market_value = 150 * 106.0 = 15,900
+D3 Step4: SELL 150 @ 110.00
+  FIFO: 150 * (110-70) = 6,000 realized → fill_count=2
+```
+
+### 断言
+
+```
+C15-01  diag.fill_count == 2 (1 buy + 1 sell)
+C15-02  trades SELL: qty=150, entry_price=70.00 (adjusted)
+C15-03  trades SELL: realized_pnl == 150 * (110 - 70) == 6000
+C15-04  strategy._positions["AAPL"] == 150 after D2 (synthetic fill synced)
+C15-05  final_nav > initial_cash
+```
+
+---
+
+## CASE-16: CN T+1 同日买卖拒绝
+
+验证同一天信号 BUY+SELL 同一 CN 标的时，SELL 在 submit_order 阶段即被风控的 T+1 结算检查拦截。
+（注：execute_order 中另有 t1_rejected_sells 计数器作为安全网，但同日场景下风控先拦截。）
+
+### 配置 (同 CASE-3 CN 零滑点)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 50.00 | 51.00 | 10M    |
+| 2024-06-04 | D1  | 52.00 | 53.00 | 12M    |
+| 2024-06-05 | D2  | 53.00 | 54.00 | 10M    |
+
+### 信号
+
+D0: BUY 100 600519, SELL 100 600519 (同天两个信号)
+
+### 推导
+
+```
+D0 Step7: submit_order("600519", 100, "BUY") → buffer
+          submit_order("600519", 100, "SELL")
+            → _passes_risk: _check_cn_t1_settlement
+              settled_qty(D1): 当前无持仓 → settled=0
+              100 <= 0? No → _risk_rejected_count++ → OrderRejectedError(RISK_REJECTED)
+            → return None (SELL 未进入 buffer)
+D1 Step4: deferred_orders = [BUY(600519,qty=100)]
+  BUY 成交, fill_count=1, position 仍持有 100 股
+```
+
+### 断言
+
+```
+C16-01  diag.risk_skipped_orders >= 1 (SELL 被风控拒绝)
+C16-02  diag.fill_count == 1 (仅 BUY)
+C16-03  open_positions 有 1 条 (600519, qty=100)
+C16-04  D2 NAV > D0 NAV (持仓有市值)
+```
+
+---
+
+## CASE-17: 成交量上限 (Volume Participation Limit)
+
+验证订单量超过日成交量 5% 时被截断。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 1000   |
+| 2024-06-04 | D1  | 105.0 | 106.0 | 1000   |
+
+### 信号
+
+D0: BUY 500 AAPL → D1 执行
+
+### 推导
+
+```
+D1 Step4 execute_order:
+  bar_volume = 1000, quantity = 500
+  500 > 1000 * 0.05 = 50 → max_qty = 50
+  quantity = 50, diag.volume_limited_trades += 1
+  实际成交 50 股 (非 500)
+```
+
+### 断言
+
+```
+C17-01  diag.volume_limited_trades >= 1
+C17-02  trades[0].quantity == 50 (截断后数量)
+C17-03  trades[0].intended_qty == 500 (原始订单量保留)
+C17-04  diag.fill_count == 1
+```
+
+---
+
+## CASE-18: 价格偏离拒绝 (Price Deviation)
+
+验证执行价与风控检查价偏差 >15% 时拒绝。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 100.0 | 100.0 | 1M     |
+| 2024-06-04 | D1  | 120.0 | 120.0 | 1M     |
+
+### 信号
+
+D0: BUY 100 AAPL → D1 执行 (D0 close=100 → risk_price=100)
+
+### 推导
+
+```
+D0 Step7 submit_order: _resolve_price(None, AAPL) → last_prices["AAPL"]=100
+  risk_check_price = 100
+D1 Step4: fill_price = apply_slippage(120, BUY, 0) = 120
+  abs(120-100)/100 = 0.20 > 0.15 → PRICE_DEVIATION rejected
+  diag.record_rejection(PRICE_DEVIATION)
+```
+
+### 断言
+
+```
+C18-01  diag.rejection_counts["price_deviation"] >= 1
+C18-02  diag.fill_count == 0
+C18-03  final_nav == initial_cash
+```
+
+---
+
+## CASE-19: 空回测 (No-Trade)
+
+验证策略不产生任何订单时所有指标和状态正确。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+D0-D4: 同 CASE-1
+
+### 信号
+
+（无）
+
+### 断言
+
+```
+C19-01  equity_curve == [100000, 100000, 100000, 100000, 100000]
+C19-02  diag.fill_count == 0
+C19-03  len(trades) == 0
+C19-04  final_nav == initial_cash
+C19-05  total_return == 0.0
+C19-06  max_drawdown == 0.0
+```
+
+---
+
+## CASE-20: CN 碎股卖出 (Odd-lot Pass-through)
+
+验证 CN <100 股卖出可以通过（与 HK 不同）。
+
+### 配置 (同 CASE-3 CN 零滑点)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume | Event            |
+| ---------- | --- | ----- | ----- | ------ | ---------------- |
+| 2024-06-03 | D0  | 50.00 | 51.00 | 10M    | signal BUY       |
+| 2024-06-04 | D1  | 52.00 | 53.00 | 10M    | exec BUY         |
+| 2024-06-05 | D2  | 53.00 | 53.00 | 10M    | ex-div stock 0.5 |
+| 2024-06-06 | D3  | 54.00 | 55.00 | 10M    | exec SELL 50     |
+| 2024-06-07 | D4  | 56.00 | 57.00 | 10M    | exec SELL 100    |
+
+### 信号
+
+D0: BUY 100 → D1
+D2: (除权 → 150 shares)
+D3: SELL 50 (碎股) → D4
+D4: SELL 100 → D5
+
+### 推导
+
+```
+D2: stock_dividend 0.5 → pos.qty=150
+D4 Step4: SELL 50, CN apply_lot_rounding(50,100,"SELL","CN"):
+  50 >= 100? No → return float(50), False (pass through!)
+  settled_qty=150 → sell_qty=min(50,150)=50 → 成交
+D5 Step4: SELL 100, apply_lot_rounding(100,100,"SELL","CN"):
+  100 >= 100 → lot_qty=100 → 成交
+```
+
+### 断言
+
+```
+C20-01  diag.fill_count == 3 (1 buy + 2 sells)
+C20-02  trades[SELL1].quantity == 50 (碎股通过)
+C20-03  trades[SELL2].quantity == 100
+C20-04  open_positions 为空
+```
+
+---
+
+## CASE-21: HK 碎股卖出拒绝 (LOT_IMPOSSIBLE)
+
+验证 HK 卖出 <1 手被 LOT_IMPOSSIBLE 拒绝（与 CN 不同）。
+
+### 配置 (零滑点 HK)
+
+### 行情
+
+| Date       | Day | Open   | Close  | Volume |
+| ---------- | --- | ------ | ------ | ------ |
+| 2024-06-03 | D0  | 300.00 | 305.00 | 1M     |
+| 2024-06-04 | D1  | 310.00 | 315.00 | 1M     |
+| 2024-06-05 | D2  | 312.00 | 312.00 | 1M     |
+| 2024-06-06 | D3  | 315.00 | 320.00 | 1M     |
+
+### 信号
+
+D0: BUY 100 00700 → D1, D2: SELL 50 00700 → D3
+
+### 推导
+
+```
+D1: BUY 100 → 成交 (1手), position.qty=100
+D3 Step4: SELL 50, HK apply_lot_rounding(50,100,"SELL","HK"):
+  lot_qty = (50//100)*100 = 0 < 100 → return None → LOT_IMPOSSIBLE
+  diag.rejection_counts["lot_impossible"] += 1
+```
+
+### 断言
+
+```
+C21-01  diag.rejection_counts["lot_impossible"] >= 1
+C21-02  diag.fill_count == 1 (仅 BUY)
+C21-03  open_positions 有 1 条 (HK.00700, qty=100)
+```
+
+---
+
+## CASE-22: BUY 去重拒绝 (DUPLICATE_BUY)
+
+验证同一策略同一天对同一标的两次 BUY，第二次被去重拒绝。
+
+### 配置 (零摩擦 US)
+
+### 行情
+
+D0-D4: 同 CASE-1
+
+### 信号
+
+D0: BUY 100 AAPL, BUY 50 AAPL (两次 BUY 同标的同天)
+
+### 推导
+
+```
+D0 Step7: submit_order("AAPL", 100, "BUY", ...)
+  → _passes_dedup("AAPL", "BUY"): AAPL not in set → pass
+  → buffer: [BUY 100]
+  → _buy_dedup_set.add("AAPL")
+
+D0 Step7: submit_order("AAPL", 50, "BUY", ...)
+  → _passes_dedup("AAPL", "BUY"): AAPL in set → OrderRejectedError(DUPLICATE_BUY)
+  → return None (静默拒绝)
+```
+
+### 断言
+
+```
+C27-01  diag.fill_count == 1 (仅第一次 BUY)
+C27-02  trades[0].quantity == 100 (非 150)
+C27-03  trades[0].intended_qty == 100
+```
+
+---
+
+## CASE-23: 资金不足拒绝 (INSUFFICIENT_CASH)
+
+验证下单金额超过可用现金时被拒绝。
+
+### 配置 (零摩擦 US, max_position_pct=3.0 让风控放行)
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume |
+| ---------- | --- | ----- | ----- | ------ |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 10M    |
+| 2024-06-04 | D1  | 105.0 | 106.0 | 10M    |
+
+### 信号
+
+D0: BUY 2000 AAPL → D1
+
+### 推导
+
+```
+Risk check: value=2000*100=200,000, nav=100,000, max_pos_pct=1.0 → pass (200K<100K*1.0)
+但 execute_order._execute_buy:
+  total_cost = 105*2000 + 0 = 210,000 > cash(100,000) → INSUFFICIENT_CASH
+  diag.record_rejection(INSUFFICIENT_CASH)
+```
+
+### 断言
+
+```
+C28-01  diag.rejection_counts["insufficient_cash"] >= 1
+C28-02  diag.fill_count == 0
+C28-03  final_nav == initial_cash
+```
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -721,3 +1238,16 @@ C10-04  _price(bar) == close 而非 adj_close
 |8|US+CN|跨市场+分红+FIFO+T+1+佣金+双策略综合|
 |9|US|position.realized_pnl == sum(trade.realized_pnl) 部分卖出一致性|
 |10|CN|策略 _adj(复权) vs _price(真实价) 隔离, 防止下单量静默丢弃|
+|11|CN|涨停拒绝 (limit_rejected_orders)|
+|12|US|停牌日 (suspended_days + discarded + NAV 不变)|
+|13|US|风控拒绝管线 (risk_skipped_orders)|
+|14|US|on_stop 清仓 (最终仓位清零)|
+|15|US|送股 + synthetic fills (stock dividend)|
+|16|CN|T+1 同日买卖拒绝 (T1_SETTLEMENT)|
+|17|US|成交量上限 (volume_limited_trades)|
+|18|US|价格偏离拒绝 (PRICE_DEVIATION)|
+|19|US|空回测 (no-trade edge case)|
+|20|CN|碎股卖出通过 (odd-lot pass-through)|
+|21|HK|碎股卖出拒绝 (LOT_IMPOSSIBLE)|
+|22|US|BUY 去重拒绝 (DUPLICATE_BUY)|
+|23|US|资金不足拒绝 (INSUFFICIENT_CASH)|

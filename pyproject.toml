@@ -4,4 +4,5 @@ markers = [
     "integration: Integration tests (full Backtester or WalkForward pipeline)",
     "slow: Slow tests (>1s runtime)",
     "regression: Regression tests for previously fixed bugs",
+    "fuzz: Property-based fuzz tests using hypothesis (slower, run on CI with higher iteration count)",
 ]
