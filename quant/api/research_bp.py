@@ -103,6 +103,76 @@ def _make_backtest_fn():
 
     return _run_backtest
 
+
+def _make_rigor_backtest_runner():
+    from quant.features.backtest.engine import Backtester
+    from quant.features.strategies.registry import StrategyRegistry
+    from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+    from quant.features.backtest.walkforward import DataFrameProvider
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.risk import RiskEngine
+    from quant.features.trading.sub_portfolio import SubPortfolio
+    import pandas as pd
+
+    def _run(strategy_id, request):
+        registry = StrategyRegistry()
+        strategy_class = registry.get(strategy_id)
+        if strategy_class is None:
+            return {"metrics": {}, "equity_curve": [], "trades": [], "errors": [f"Strategy {strategy_id} not in registry"]}
+
+        symbols = list(request.get("symbols") or [])
+        start_text = request.get("start")
+        end_text = request.get("end")
+        start = datetime.strptime(start_text, "%Y-%m-%d")
+        end = datetime.strptime(end_text, "%Y-%m-%d")
+
+        db_provider = DuckDBProvider()
+        db_provider.connect()
+        all_data = []
+        try:
+            for sym in symbols:
+                bars = db_provider.get_bars(sym, start, end, "1d")
+                if not bars.empty:
+                    all_data.append(bars)
+        finally:
+            db_provider.disconnect()
+
+        if not all_data:
+            return {"metrics": {}, "equity_curve": [], "trades": [], "errors": [f"No data for {strategy_id}"]}
+
+        data_df = pd.concat(all_data, ignore_index=True)
+        strategy = strategy_class(symbols=symbols)
+        bt_config = {
+            "backtest": {"slippage_bps": request.get("cost_config", {}).get("slippage_bps", 5)},
+            "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+            "data": {"default_timeframe": "1d"},
+            "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
+        }
+        backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
+        bt_result = backtester.run(
+            start=start,
+            end=end,
+            strategies=[strategy],
+            initial_cash=float(request.get("initial_cash", 100000)),
+            data_provider=DataFrameProvider(data_df),
+            symbols=symbols,
+        )
+        return {
+            "metrics": {
+                "sharpe": bt_result.sharpe_ratio,
+                "sharpe_ratio": bt_result.sharpe_ratio,
+                "max_drawdown_pct": bt_result.max_drawdown_pct,
+                "total_return": bt_result.total_return,
+                "win_rate": bt_result.win_rate,
+            },
+            "equity_curve": [],
+            "trades": [],
+            "errors": [],
+        }
+
+    return _run
+
+
 research_bp = Blueprint("research", __name__)
 
 _research_jobs: dict = {}
@@ -136,6 +206,14 @@ def _make_artifact_store(cfg: ResearchConfig):
 
     root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
     return FileArtifactStore(root)
+
+
+def _make_rigor_hub(cfg: ResearchConfig, experiment_store=None):
+    if not cfg.rigor_enabled or not cfg.auto_backtest:
+        return None
+    from quant.features.research.rigor import RigorHub
+
+    return RigorHub(_make_rigor_backtest_runner(), config=cfg.rigor_config, experiment_store=experiment_store)
 
 
 def _make_research_scout(cfg: ResearchConfig):
@@ -212,6 +290,7 @@ def _get_scheduler() -> ResearchScheduler:
             research_store=research_store,
             experiment_store=_make_experiment_store(cfg),
             artifact_store=_make_artifact_store(cfg),
+            rigor_hub=_make_rigor_hub(cfg),
         )
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:
@@ -262,6 +341,7 @@ def run_research():
         research_store=research_store,
         experiment_store=experiment_store,
         artifact_store=artifact_store,
+        rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store),
     )
 
     def _run():

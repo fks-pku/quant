@@ -31,6 +31,7 @@ class ResearchEngine:
         artifact_store: Optional[ResearchArtifactStore] = None,
         spec_builder: Optional[Any] = None,
         validator: Optional[Any] = None,
+        rigor_hub: Optional[Any] = None,
     ):
         self.config = config or ResearchConfig()
         self.scout = scout or StrategyScout()
@@ -43,6 +44,7 @@ class ResearchEngine:
         if self.config.validation_enabled and self.spec_builder is None:
             self.spec_builder = StrategySpecBuilder(self.config.validation_config)
         self.validator = validator
+        self.rigor_hub = rigor_hub
         shared_registry = {}
         self.integrator = integrator or StrategyIntegrator(
             Path(strategies_dir) if strategies_dir else _default_dir,
@@ -148,6 +150,9 @@ class ResearchEngine:
             if self.config.auto_backtest and integrated_ids:
                 self._run_backtests(integrated_ids, result)
 
+            if self.config.rigor_enabled and self.rigor_hub is not None and integrated_ids:
+                self._run_rigor(integrated_ids, result)
+
             self.research_store.save_run_result(result)
             if run_id is not None:
                 self.experiment_store.complete_run(run_id, "completed")
@@ -170,6 +175,48 @@ class ResearchEngine:
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _run_rigor(self, strategy_ids: List[str], result: ResearchResult) -> None:
+        for sid in strategy_ids:
+            try:
+                walkforward = self.rigor_hub.evaluate(
+                    sid,
+                    list(self.config.default_symbols),
+                    self.config.default_backtest_start,
+                    self.config.default_backtest_end,
+                )
+            except Exception as exc:
+                result.errors.append(f"Rigor error for {sid}: {exc}")
+                self.pool.reject(sid, reason=f"Rigor exception: {exc}")
+                result.rejected += 1
+                continue
+
+            if walkforward.is_viable:
+                result.walkforward_passed += 1
+                result.log.append(ResearchLogEntry(
+                    phase="walkforward", title=sid, source="", source_url="",
+                    verdict="pass",
+                    reason=f"worst_oos_sharpe={walkforward.worst_oos_sharpe:.2f}",
+                    scores={
+                        "aggregate_oos_sharpe": walkforward.aggregate_oos_sharpe,
+                        "worst_oos_sharpe": walkforward.worst_oos_sharpe,
+                        "pct_profitable_splits": walkforward.pct_profitable_splits,
+                    },
+                ))
+                continue
+
+            self.pool.reject(sid, reason=f"Walk-forward failed: worst_oos_sharpe={walkforward.worst_oos_sharpe:.2f}")
+            result.rejected += 1
+            result.log.append(ResearchLogEntry(
+                phase="walkforward", title=sid, source="", source_url="",
+                verdict="fail",
+                reason=f"worst_oos_sharpe={walkforward.worst_oos_sharpe:.2f}",
+                scores={
+                    "aggregate_oos_sharpe": walkforward.aggregate_oos_sharpe,
+                    "worst_oos_sharpe": walkforward.worst_oos_sharpe,
+                    "pct_profitable_splits": walkforward.pct_profitable_splits,
+                },
+            ))
 
     def _validation_action(
         self,
