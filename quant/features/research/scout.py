@@ -1,7 +1,8 @@
+import hashlib
 from typing import Dict, List, Optional
 
 from quant.domain.ports import ResearchSource
-from quant.features.research.discovery import SourceHub, hash_strategy_text
+from quant.features.research.discovery import SourceHub
 from quant.features.research.models import RawStrategy
 
 
@@ -18,4 +19,5 @@ class StrategyScout:
 
     @staticmethod
     def hash_strategy(raw: RawStrategy) -> str:
-        return hash_strategy_text(raw.title, raw.description)
+        text = f"{raw.title.lower().strip()}::{raw.description.lower().strip()[:200]}"
+        return hashlib.md5(text.encode()).hexdigest()

@@ -1,11 +1,21 @@
 import ast
+import hashlib
 import logging
+import sys
+import types
 from pathlib import Path
 
 from quant.domain.ports import ResearchSource
+from quant.features.research.models import RawStrategy, ResearchConfig
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+flask_stub = types.ModuleType("flask")
+flask_stub.Blueprint = lambda *args, **kwargs: types.SimpleNamespace(route=lambda *a, **k: lambda fn: fn)
+flask_stub.jsonify = lambda value=None, **kwargs: value if value is not None else kwargs
+flask_stub.request = types.SimpleNamespace(get_json=lambda: {})
+sys.modules.setdefault("flask", flask_stub)
 
 
 class DictSource(ResearchSource):
@@ -188,6 +198,45 @@ def test_strategy_scout_search_api_accepts_injected_sources():
 
     assert [result.title for result in results] == ["Injected"]
     assert source.calls == [({}, 1)]
+
+
+def test_strategy_scout_hash_strategy_preserves_legacy_seen_hash_formula():
+    from quant.features.research.scout import StrategyScout
+
+    raw = RawStrategy(
+        title="  Daily   Momentum  ",
+        description="Ranks   liquid\nstocks by daily momentum.",
+        source="arxiv",
+        source_url="https://example.test/hash",
+    )
+    expected_text = f"{raw.title.lower().strip()}::{raw.description.lower().strip()[:200]}"
+
+    assert StrategyScout.hash_strategy(raw) == hashlib.md5(expected_text.encode()).hexdigest()
+
+
+def test_api_research_scout_composition_wires_default_source_names():
+    from quant.api.research_bp import _make_research_scout
+
+    scout = _make_research_scout(ResearchConfig())
+
+    assert {"arxiv", "ssrn"}.issubset(scout._source_hub._sources.keys())
+
+
+def test_api_research_scout_composition_wires_configured_nber_source():
+    from quant.api.research_bp import _make_research_scout
+
+    scout = _make_research_scout(ResearchConfig(sources=["nber"]))
+
+    assert set(scout._source_hub._sources.keys()) == {"nber"}
+
+
+def test_script_keyword_scout_uses_source_hub_injected_sources():
+    from quant.scripts.run_research import _create_keyword_scout
+
+    scout = _create_keyword_scout()
+
+    assert not hasattr(scout, "_adapters")
+    assert len(scout._source_hub._sources) > 1
 
 
 def test_feature_discovery_and_scout_do_not_import_infrastructure_or_http_fetching_libraries():

@@ -138,6 +138,20 @@ def _make_artifact_store(cfg: ResearchConfig):
     return FileArtifactStore(root)
 
 
+def _make_research_scout(cfg: ResearchConfig):
+    from quant.features.research.scout import StrategyScout
+    from quant.infrastructure.research.sources import ArxivSource, BlogSource, NBERSource, SSRNSource
+
+    factories = {
+        "arxiv": ArxivSource,
+        "ssrn": SSRNSource,
+        "nber": NBERSource,
+        "blog": BlogSource,
+    }
+    source_names = cfg.sources or ["arxiv", "ssrn"]
+    return StrategyScout(sources={name: factories[name]() for name in source_names if name in factories})
+
+
 def _close_research_store(store) -> None:
     close = getattr(store, "close", None)
     if callable(close):
@@ -192,6 +206,7 @@ def _get_scheduler() -> ResearchScheduler:
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
         engine = ResearchEngine(
             config=cfg,
+            scout=_make_research_scout(cfg),
             evaluator=evaluator,
             backtest_fn=_make_backtest_fn(),
             research_store=research_store,
@@ -241,6 +256,7 @@ def run_research():
     artifact_store = _make_artifact_store(cfg)
     engine = ResearchEngine(
         config=cfg,
+        scout=_make_research_scout(cfg),
         evaluator=evaluator,
         backtest_fn=_make_backtest_fn(),
         research_store=research_store,

@@ -161,31 +161,28 @@ class HeuristicEvaluator:
 # Enhanced scout — searches multiple arXiv categories
 # =============================================================================
 
-class _KeywordArxivAdapter:
-    """ArXiv adapter that searches by keyword queries, not just category."""
-
+class _KeywordArxivSource:
     def __init__(self, query: str = "", category: str = "q-fin", name: str = "arxiv"):
-        import urllib.parse
-        self._name = name
-        self._encoded_query = urllib.parse.quote(query)
-        self._category = category
-        self._base_url = "http://export.arxiv.org/api/query"
+        from quant.infrastructure.research.sources import ArxivSource
 
-    def search(self, max_results: int = 10):
-        from quant.features.research.models import RawStrategy
-        from quant.features.research.scout import ArxivAdapter
-        try:
-            import requests
-            url = f"{self._base_url}?search_query={self._encoded_query}+AND+cat:{self._category}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
-            resp = requests.get(url, timeout=30)
-            resp.raise_for_status()
-            parser = ArxivAdapter()
-            results = parser._parse_xml(resp.text)
-            for r in results:
-                r.source = self._name
-            return results
-        except Exception:
-            return []
+        self._name = name
+        self._query = query
+        self._category = category
+        self._source = ArxivSource(category=category)
+
+    @property
+    def source_name(self):
+        return self._name
+
+    def search(self, query, max_results: int = 10):
+        arxiv_query = f"{self._query} AND cat:{self._category}" if self._query else f"cat:{self._category}"
+        results = self._source.search(
+            {"query": arxiv_query, "sort_by": "relevance", "sort_order": "descending"},
+            max_results=max_results,
+        )
+        for result in results:
+            result["source"] = self._name
+        return results
 
 
 _STRATEGY_QUERIES = [
@@ -200,17 +197,12 @@ _STRATEGY_QUERIES = [
 def _create_keyword_scout():
     from quant.features.research.scout import StrategyScout
 
-    class KeywordScout(StrategyScout):
-        def __init__(self):
-            super().__init__()
-            adapters = {}
-            for query, cat in _STRATEGY_QUERIES:
-                name = f"arxiv-{query.replace(' ', '-')[:20]}"
-                adapters[name] = _KeywordArxivAdapter(query=query, category=cat, name="arxiv")
-            adapters["arxiv-TR"] = _KeywordArxivAdapter(query="ti:trading strategy daily OR ti:systematic trading", category="q-fin.TR", name="arxiv")
-            self._adapters = adapters
-
-    return KeywordScout()
+    sources = {}
+    for query, cat in _STRATEGY_QUERIES:
+        name = f"arxiv-{query.replace(' ', '-')[:20]}"
+        sources[name] = _KeywordArxivSource(query=query, category=cat, name="arxiv")
+    sources["arxiv-TR"] = _KeywordArxivSource(query="ti:trading strategy daily OR ti:systematic trading", category="q-fin.TR", name="arxiv")
+    return StrategyScout(sources=sources)
 
 
 # =============================================================================
