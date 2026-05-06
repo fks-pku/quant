@@ -48,3 +48,13 @@
 - `ResearchEngine`, `StrategyIntegrator`, and `CandidatePool` depend on `quant.domain.ports.ResearchStore`.
 - File persistence is an infrastructure adapter (`quant.infrastructure.research.FileResearchStore`) injected by the API/composition root.
 - Do not write filesystem, DuckDB, HTTP client, or other external adapter logic directly in this feature unless it is hidden behind an injected port.
+
+## Research Pipeline Upgrade Notes
+
+- `ResearchEngine` also accepts injected `ExperimentStore`, `ResearchArtifactStore`, validator, and rigor hub dependencies. Do not instantiate infrastructure adapters inside feature code.
+- `discovery/` contains pure source orchestration. External HTTP adapters live under `quant/infrastructure/research/sources/`.
+- `validation/` contains strategy spec generation and statistical validation. Market and factor data must arrive through injected domain ports.
+- `rigor/` contains purged walk-forward, cost/capacity checks, regime labels, and metric recording. Backtest runners are supplied by API/script composition roots.
+- `tracking/` contains pure run hashing and comparison helpers. Run and artifact persistence stays in infrastructure adapters.
+- `ensemble/` builds research-time ensemble recommendations from experiment metrics and return/equity artifacts. It must not import or modify `features/portfolio/`.
+- Feature-to-feature imports remain forbidden. Shared research result/config types belong in `models.py`; runtime wiring belongs in API/scripts.

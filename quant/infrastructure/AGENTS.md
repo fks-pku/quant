@@ -40,3 +40,10 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 - `research/FileResearchStore` implements the `ResearchStore` domain port.
 - Research feature code must receive it through dependency injection; infrastructure must not import from `features/`.
+- `research/DuckDBResearchStore` implements `ResearchStore` with DuckDB-backed candidates, discoveries, evaluations, and run results.
+- `research/DuckDBExperimentStore` implements `ExperimentStore` for run lifecycle, metrics, and artifact metadata.
+- `research/FileArtifactStore` implements `ResearchArtifactStore` for JSON/table research artifacts.
+- `research/sources/` contains `ResearchSource` adapters (`ArxivSource`, `SSRNSource`, `NBERSource`, `BlogSource`) and rate limiting.
+- `research/market_data/DuckDBResearchMarketData` implements `ResearchMarketData`.
+- `research/factors/FFFactorStore` and `research/factors/ChenZimmermannStore` implement `FactorData`.
+- Keep DuckDB/filesystem/HTTP logic in infrastructure adapters, not in `features/research/`.

@@ -57,3 +57,7 @@ None. Domain has zero external dependencies — the most important invariant.
 ## Recent Additions
 
 - `ResearchStore` is the domain port for research persistence. Feature code depends on this port only; file-backed implementations live in infrastructure.
+- `ResearchSource`, `ResearchMarketData`, and `FactorData` are research input ports. They return dictionaries/lists/`Any` values and keep HTTP, DuckDB, and factor-file details outside domain and feature code.
+- `ExperimentStore` is the research run tracking port for run lifecycle, metrics, and artifact metadata.
+- `ResearchArtifactStore` is the artifact payload port for JSON/table save and artifact loading.
+- Research ports must keep zero external dependencies and must not expose pandas, numpy, DuckDB, or requests types in signatures.
