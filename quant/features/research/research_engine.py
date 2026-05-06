@@ -224,18 +224,44 @@ class ResearchEngine:
 
         specs = [item[2] for item in pending_validation]
         if hasattr(self.validator, "validate_many"):
-            validation_reports = self.validator.validate_many(
-                specs,
-                self.config.default_backtest_start,
-                self.config.default_backtest_end,
-            )
+            try:
+                validation_reports = self.validator.validate_many(
+                    specs,
+                    self.config.default_backtest_start,
+                    self.config.default_backtest_end,
+                )
+            except Exception as exc:
+                logger.error(f"Batch validation failed: {exc}")
+                self._validate_pending_individually(pending_validation, result, integrated_ids, evaluation_rows)
+                return
         else:
-            validation_reports = [
-                self.validator.validate(spec, self.config.default_backtest_start, self.config.default_backtest_end)
-                for spec in specs
-            ]
+            self._validate_pending_individually(pending_validation, result, integrated_ids, evaluation_rows)
+            return
 
         for (raw, evaluation_report, spec), validation_report in zip(pending_validation, validation_reports):
+            result.validated += 1
+            if self._record_validation_result(raw, evaluation_report, spec, validation_report, result, evaluation_rows):
+                self._integrate_candidate(raw, evaluation_report, result, integrated_ids, evaluation_rows)
+
+    def _validate_pending_individually(
+        self,
+        pending_validation: List[Tuple[RawStrategy, EvaluationReport, Any]],
+        result: ResearchResult,
+        integrated_ids: List[str],
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> None:
+        for raw, evaluation_report, spec in pending_validation:
+            try:
+                validation_report = self.validator.validate(
+                    spec,
+                    self.config.default_backtest_start,
+                    self.config.default_backtest_end,
+                )
+            except Exception as exc:
+                result.validated += 1
+                self._record_validation_exception(raw, evaluation_report, spec, exc, result, evaluation_rows)
+                continue
+
             result.validated += 1
             if self._record_validation_result(raw, evaluation_report, spec, validation_report, result, evaluation_rows):
                 self._integrate_candidate(raw, evaluation_report, result, integrated_ids, evaluation_rows)
@@ -281,6 +307,31 @@ class ResearchEngine:
         evaluation_rows.append((raw, report, "validation_fail", reason))
         logger.info(f"'{raw.title}' failed validation: {reason}")
         return False
+
+    def _record_validation_exception(
+        self,
+        raw: RawStrategy,
+        report: EvaluationReport,
+        spec: Any,
+        exc: Exception,
+        result: ResearchResult,
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> None:
+        reason = f"Validation error for {raw.title}: {exc}"
+        result.errors.append(reason)
+        result.rejected += 1
+        result.log.append(ResearchLogEntry(
+            phase="validate", title=raw.title, source=raw.source,
+            source_url=raw.source_url, verdict="error",
+            reason=str(exc),
+            scores={
+                "strategy_type": report.strategy_type,
+                "spec_status": getattr(spec, "status", ""),
+                "formula": getattr(spec, "signal_formula_key", ""),
+            },
+        ))
+        evaluation_rows.append((raw, report, "validation_error", str(exc)))
+        logger.error(reason)
 
     def _integrate_candidate(
         self,

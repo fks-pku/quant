@@ -389,3 +389,44 @@ def test_research_engine_validation_enabled_without_validator_skips_unsupported_
         assert research_store.get_candidate("stat_arb") is None
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_records_validation_exceptions_without_aborting_run():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw("Daily Momentum")]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _report("momentum")
+
+    class FailingValidator:
+        def validate_many(self, specs, start, end):
+            raise RuntimeError("market data offline")
+
+        def validate(self, spec, start, end):
+            raise RuntimeError("market data offline")
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, validation_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+            validator=FailingValidator(),
+        )
+
+        result = engine.run_full_pipeline()
+
+        assert result.integrated == 0
+        assert result.validated == 1
+        assert result.rejected == 1
+        assert any("Validation error for Daily Momentum" in error for error in result.errors)
+        assert (tmp_path / "research" / "last_result.json").exists()
+        assert research_store.get_candidate("daily_momentum") is None
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
