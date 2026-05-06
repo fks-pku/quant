@@ -4,8 +4,6 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 def _deep_freeze(value: Any) -> Any:
-    if isinstance(value, MappingProxyType):
-        return value
     if isinstance(value, Mapping):
         return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):

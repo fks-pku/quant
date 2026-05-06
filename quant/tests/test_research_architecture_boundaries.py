@@ -243,6 +243,19 @@ def test_research_frozen_models_store_immutable_nested_state():
     else:
         raise AssertionError("nested split mapping must be immutable")
 
+    proxy_labels = []
+    proxy_meta = {"labels": proxy_labels, "flags": {"seen"}}
+    proxy_split = MappingProxyType({"meta": proxy_meta})
+    proxy_walkforward = PurgedWalkForwardResult([proxy_split], 1.0, 0.2, None, 0.1, 0.75, True)
+    proxy_labels.append("mutated")
+    proxy_meta["extra"] = "mutated"
+
+    assert isinstance(proxy_walkforward.splits[0], MappingProxyType)
+    assert isinstance(proxy_walkforward.splits[0]["meta"], MappingProxyType)
+    assert proxy_walkforward.splits[0]["meta"]["labels"] == ()
+    assert proxy_walkforward.splits[0]["meta"]["flags"] == frozenset({"seen"})
+    assert "extra" not in proxy_walkforward.splits[0]["meta"]
+
 
 def test_imported_modules_resolves_relative_imports():
     path = ROOT / "features" / "research" / "_example.py"
