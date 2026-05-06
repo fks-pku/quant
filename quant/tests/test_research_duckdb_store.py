@@ -1,11 +1,20 @@
 import json
 import shutil
+import sys
+import types
 import uuid
 from pathlib import Path
 
 import pytest
 
-from quant.features.research.models import EvaluationReport, RawStrategy, ResearchResult
+flask_stub = types.ModuleType("flask")
+flask_stub.Blueprint = lambda *args, **kwargs: types.SimpleNamespace(route=lambda *a, **k: lambda fn: fn)
+flask_stub.jsonify = lambda value=None, **kwargs: value if value is not None else kwargs
+flask_stub.request = types.SimpleNamespace(get_json=lambda: {})
+sys.modules.setdefault("flask", flask_stub)
+
+from quant.api.research_bp import _make_research_store
+from quant.features.research.models import EvaluationReport, RawStrategy, ResearchConfig, ResearchResult
 from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
 from quant.infrastructure.research.migration import migrate_file_research_store
 from quant.infrastructure.research.repository import FileResearchStore
@@ -182,5 +191,56 @@ def test_migration_copies_candidates_and_seen_hashes():
         assert duckdb_store.get_candidate("daily_momentum_breakout")["status"] == "paused"
         assert duckdb_store.list_by_status("rejected")[0]["id"] == "rejected_strategy"
         assert duckdb_store.has_seen("hash-1") is True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_api_store_selection_requires_explicit_duckdb_backend():
+    root = _test_root()
+    try:
+        tracking_db_path = root / "tracking.duckdb"
+        default_store = _make_research_store(
+            ResearchConfig(research_dir=str(root / "research"), tracking_db_path=str(tracking_db_path))
+        )
+        explicit_store = _make_research_store(
+            ResearchConfig(
+                research_dir=str(root / "research"),
+                tracking_db_path=str(tracking_db_path),
+                research_store_backend="duckdb",
+            )
+        )
+
+        assert isinstance(default_store, FileResearchStore)
+        assert isinstance(explicit_store, DuckDBResearchStore)
+        explicit_store.close()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_duckdb_store_close_is_idempotent_and_supports_context_manager():
+    root = _test_root()
+    try:
+        with DuckDBResearchStore(root / "research") as store:
+            store.upsert_candidate(_candidate())
+            assert store.get_candidate("daily_momentum_breakout")["id"] == "daily_momentum_breakout"
+
+        store.close()
+        store.close()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_migration_returns_empty_counts_for_missing_or_corrupt_json():
+    root = _test_root()
+    try:
+        duckdb_store = DuckDBResearchStore(root / "duckdb_store")
+        missing_counts = migrate_file_research_store(root / "missing.json", duckdb_store)
+
+        corrupt_path = root / "corrupt.json"
+        corrupt_path.write_text("{not-json", encoding="utf-8")
+        corrupt_counts = migrate_file_research_store(corrupt_path, duckdb_store)
+
+        assert missing_counts == {"candidates": 0, "seen_hashes": 0}
+        assert corrupt_counts == {"candidates": 0, "seen_hashes": 0}
     finally:
         shutil.rmtree(root, ignore_errors=True)

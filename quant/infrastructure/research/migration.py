@@ -9,8 +9,11 @@ from quant.infrastructure.research.duckdb_research_store import DuckDBResearchSt
 
 def migrate_file_research_store(json_path: Path | str, duckdb_store: DuckDBResearchStore) -> Dict[str, int]:
     path = Path(json_path)
-    with path.open("r", encoding="utf-8") as f:
-        state = json.load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"candidates": 0, "seen_hashes": 0}
 
     candidates = state.get("candidates", {})
     for candidate in candidates.values():
@@ -27,4 +30,3 @@ def migrate_file_research_store(json_path: Path | str, duckdb_store: DuckDBResea
         )
 
     return {"candidates": len(candidates), "seen_hashes": len(seen_hashes)}
-

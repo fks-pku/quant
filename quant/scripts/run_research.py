@@ -246,6 +246,7 @@ def main():
         default_symbols=["AAPL", "MSFT", "GOOGL", "SPY", "QQQ"],
         default_backtest_start="2020-01-01",
         default_backtest_end="2024-12-31",
+        research_store_backend=args.research_store,
     )
 
     if args.research_store == "duckdb":

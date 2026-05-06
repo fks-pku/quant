@@ -115,12 +115,15 @@ def _make_research_store(cfg: ResearchConfig):
     from quant.infrastructure.research.repository import FileResearchStore
 
     root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
-    tracking_db_path = cfg.tracking_db_path or ""
-    if tracking_db_path.lower().endswith(".duckdb"):
-        return DuckDBResearchStore(root, db_path=tracking_db_path)
-    if str(root).lower().endswith(".duckdb"):
+    if cfg.research_store_backend == "duckdb":
         return DuckDBResearchStore(root)
     return FileResearchStore(root)
+
+
+def _close_research_store(store) -> None:
+    close = getattr(store, "close", None)
+    if callable(close):
+        close()
 
 
 def _create_llm_adapter(cfg: ResearchConfig):
@@ -250,28 +253,40 @@ def get_research_status(research_id):
 
 @research_bp.route("/api/research/candidates")
 def list_candidates():
-    pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
-    return jsonify({"candidates": pool.list_candidates()})
+    store = _make_research_store(_load_research_config())
+    try:
+        pool = CandidatePool(research_store=store)
+        return jsonify({"candidates": pool.list_candidates()})
+    finally:
+        _close_research_store(store)
 
 
 @research_bp.route("/api/research/promote/<strategy_id>", methods=["POST"])
 def promote_candidate(strategy_id):
-    pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
-    success = pool.promote(strategy_id)
-    if success:
-        return jsonify({"success": True, "strategy_id": strategy_id, "status": "paused"})
-    return jsonify({"success": False, "error": "Promotion failed"}), 400
+    store = _make_research_store(_load_research_config())
+    try:
+        pool = CandidatePool(research_store=store)
+        success = pool.promote(strategy_id)
+        if success:
+            return jsonify({"success": True, "strategy_id": strategy_id, "status": "paused"})
+        return jsonify({"success": False, "error": "Promotion failed"}), 400
+    finally:
+        _close_research_store(store)
 
 
 @research_bp.route("/api/research/reject/<strategy_id>", methods=["POST"])
 def reject_candidate(strategy_id):
     data = request.get_json() or {}
     reason = data.get("reason", "")
-    pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
-    success = pool.reject(strategy_id, reason=reason)
-    if success:
-        return jsonify({"success": True, "strategy_id": strategy_id, "status": "rejected"})
-    return jsonify({"success": False, "error": "Rejection failed"}), 400
+    store = _make_research_store(_load_research_config())
+    try:
+        pool = CandidatePool(research_store=store)
+        success = pool.reject(strategy_id, reason=reason)
+        if success:
+            return jsonify({"success": True, "strategy_id": strategy_id, "status": "rejected"})
+        return jsonify({"success": False, "error": "Rejection failed"}), 400
+    finally:
+        _close_research_store(store)
 
 
 @research_bp.route("/api/research/schedule", methods=["GET"])

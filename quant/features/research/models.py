@@ -189,6 +189,7 @@ class ResearchConfig:
     llm_base_url: Optional[str] = None
     llm_group_id: Optional[str] = None
     research_dir: Optional[str] = None
+    research_store_backend: str = "file"
     validation_enabled: bool = True
     validation_min_obs: int = 252
     validation_config: dict = field(default_factory=dict)

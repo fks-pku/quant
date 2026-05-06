@@ -25,7 +25,7 @@ class DuckDBResearchStore(ResearchStore):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._artifact_store = FileResearchStore(self.root_dir)
-        self._conn = duckdb.connect(str(self.db_path))
+        self._conn: duckdb.DuckDBPyConnection | None = duckdb.connect(str(self.db_path))
         self._ensure_schema()
 
     def upsert_candidate(self, info: Dict[str, Any]) -> None:
@@ -157,7 +157,15 @@ class DuckDBResearchStore(ResearchStore):
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+    def __enter__(self) -> "DuckDBResearchStore":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
 
     def _ensure_schema(self) -> None:
         with self._lock:
@@ -199,4 +207,3 @@ class DuckDBResearchStore(ResearchStore):
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
-
