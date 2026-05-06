@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -31,6 +31,93 @@ class EvaluationReport:
     regime_robustness_score: float = 0.0
     risk_flags: List[str] = field(default_factory=list)
     rejection_reason: str = ""
+
+
+@dataclass(frozen=True)
+class StrategySpec:
+    strategy_id: str
+    strategy_type: str
+    signal_formula_key: str
+    universe: List[str]
+    horizon_days: int
+    lookback_days: int
+    execution_lag_days: int
+    required_fields: List[str]
+    status: str
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    strategy_id: str
+    status: str
+    rank_ic: float
+    rank_ic_ir: float
+    ic_decay: List[float]
+    fdr_adjusted_p: float
+    fdr_significant: bool
+    ff_alpha_monthly: float
+    ff_alpha_tstat: float
+    ff_r2: float
+    long_short_spread: float
+    hit_rate: float
+    data_start: str
+    data_end: str
+    n_observations: int
+    errors: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PurgedWalkForwardResult:
+    splits: List[Dict[str, Any]]
+    aggregate_oos_sharpe: float
+    worst_oos_sharpe: float
+    deflated_sharpe_ratio: Optional[float]
+    sharpe_degradation: float
+    pct_profitable_splits: float
+    is_viable: bool
+
+
+@dataclass(frozen=True)
+class RegimeLabel:
+    regime: str
+    start_date: str
+    end_date: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class CostEstimate:
+    commission: float
+    spread_cost: float
+    market_impact: float
+    total_bps: float
+    capacity_adv_pct: float
+    capacity_ok: bool
+
+
+@dataclass(frozen=True)
+class RunMetadata:
+    run_id: str
+    strategy_id: str
+    config_hash: str
+    data_hash: str
+    code_version: str
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class EnsembleResult:
+    strategy_ids: List[str]
+    weights: List[float]
+    portfolio_sharpe: float
+    portfolio_max_dd: float
+    portfolio_cagr: float
+    diversification_ratio: float
+    mean_correlation: float
+    effective_n: float
 
 
 @dataclass
@@ -74,6 +161,16 @@ class ResearchConfig:
     llm_base_url: Optional[str] = None
     llm_group_id: Optional[str] = None
     research_dir: Optional[str] = None
+    validation_enabled: bool = True
+    validation_min_obs: int = 252
+    validation_config: dict = field(default_factory=dict)
+    scout_config: dict = field(default_factory=dict)
+    rigor_enabled: bool = True
+    rigor_config: dict = field(default_factory=dict)
+    tracking_enabled: bool = True
+    tracking_db_path: str = ""
+    ensemble_enabled: bool = True
+    ensemble_config: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -84,6 +181,13 @@ class ResearchResult:
     backtested: int = 0
     promoted_auto: int = 0
     rejected: int = 0
+    specified: int = 0
+    needs_manual_spec: int = 0
+    validated: int = 0
+    validated_passed: int = 0
+    walkforward_passed: int = 0
+    ensemble_built: bool = False
+    run_id: Optional[str] = None
     errors: List[str] = field(default_factory=list)
     log: List[ResearchLogEntry] = field(default_factory=list)
 
@@ -95,6 +199,13 @@ class ResearchResult:
             "backtested": self.backtested,
             "promoted_auto": self.promoted_auto,
             "rejected": self.rejected,
+            "specified": self.specified,
+            "needs_manual_spec": self.needs_manual_spec,
+            "validated": self.validated,
+            "validated_passed": self.validated_passed,
+            "walkforward_passed": self.walkforward_passed,
+            "ensemble_built": self.ensemble_built,
+            "run_id": self.run_id,
             "errors": self.errors,
             "log": [e.to_dict() for e in self.log],
         }
