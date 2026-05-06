@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import NotRequired, Optional, TypedDict
+from typing import Optional, TypedDict
+
+from typing_extensions import NotRequired
 
 from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
 

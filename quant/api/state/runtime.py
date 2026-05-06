@@ -15,7 +15,7 @@ portfolio_data: Dict[str, float] = {
 strategies_data: list = []
 positions_data: list = []
 orders_data: list = []
-selected_strategy = 'VolatilityRegime'
+selected_strategy = 'DualMACrossover'
 simulation_running = False
 _backtest_results: Dict[str, Any] = {}
 _backtest_lock = threading.Lock()
@@ -193,7 +193,7 @@ def _init_default_symbols():
     global _STRATEGY_DEFAULT_SYMBOLS
     if _STRATEGY_DEFAULT_SYMBOLS:
         return
-    _default_sym_str = 'HK.00700'
+    _default_sym_str = '000001'
     for _sid in list(STRATEGY_ID_TO_REGISTRY.keys()):
         _STRATEGY_DEFAULT_SYMBOLS[_sid] = _default_sym_str
 
