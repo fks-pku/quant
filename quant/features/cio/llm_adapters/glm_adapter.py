@@ -11,7 +11,7 @@ class GLMAdapter(LLMAdapter):
 
     def __init__(
         self,
-        model: str = "glm-4-plus",
+        model: str = "glm-5.1",
         api_key: str = "",
         base_url: str = "https://open.bigmodel.cn/api/paas/v4/",
         temperature: float = 0.3,
