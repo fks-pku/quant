@@ -1,0 +1,8 @@
+strategy:
+  name: ContinuoustimeTradingAndEmergenceOfVolatilityStrategy
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  symbols: [SPY]
