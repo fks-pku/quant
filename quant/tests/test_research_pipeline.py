@@ -119,6 +119,39 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_integrator_generated_strategy_template_avoids_sibling_feature_import():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        engine.run_full_pipeline()
+
+        generated = tmp_path / "strategies" / "daily_momentum_breakout" / "strategy.py"
+        text = generated.read_text(encoding="utf-8")
+        assert "quant.features.strategies" not in text
+        namespace = {}
+        exec(compile(text, str(generated), "exec"), namespace)
+        assert namespace["DailyMomentumBreakoutStrategy"]().symbols == ["SPY", "QQQ"]
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_candidate_pool_updates_persistent_status():
     tmp_path = _test_root()
     research_store = FileResearchStore(tmp_path / "research")

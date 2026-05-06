@@ -86,23 +86,32 @@ Type: {report.strategy_type}
 Summary: {report.summary}
 """
 
-from typing import Any, List
+from typing import Any, List, Optional
 
-from quant.features.strategies import Strategy, strategy
+
+def strategy(name: str):
+    def decorator(cls):
+        cls._registry_name = name
+        return cls
+    return decorator
 
 
 @strategy("{class_name}")
-class {class_name}(Strategy):
-    def __init__(self, symbols: List[str] = None):
-        super().__init__(name="{class_name}")
+class {class_name}:
+    def __init__(self, symbols: Optional[List[str]] = None):
+        self.name = "{class_name}"
+        self.context = None
         self._symbols = symbols or [{symbols_str}]
+        self._positions = {{}}
 
     @property
     def symbols(self) -> List[str]:
         return self._symbols
 
+    def on_start(self, context: Any = None) -> None:
+        self.context = context
+
     def on_data(self, context: Any, data: Any) -> None:
-        # TODO: Implement {report.strategy_type} logic based on paper
         pass
 
     def on_before_trading(self, context: Any, trading_date: Any) -> None:
@@ -110,6 +119,34 @@ class {class_name}(Strategy):
 
     def on_after_trading(self, context: Any, trading_date: Any) -> None:
         pass
+
+    def on_fill(self, context: Any = None, fill: Any = None) -> None:
+        if fill is None or not hasattr(fill, "symbol"):
+            return
+        quantity = float(getattr(fill, "quantity", 0) or 0)
+        side = str(getattr(fill, "side", "")).upper()
+        if side == "SELL":
+            quantity = -quantity
+        self._positions[fill.symbol] = self._positions.get(fill.symbol, 0.0) + quantity
+
+    def on_stop(self, context: Any = None) -> None:
+        pass
+
+    def get_position(self, symbol: str) -> float:
+        return self._positions.get(symbol, 0.0)
+
+    def get_all_positions(self) -> dict:
+        return dict(self._positions)
+
+    def buy(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
+        if self.context is None or not hasattr(self.context, "submit_order"):
+            return None
+        return self.context.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
+
+    def sell(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
+        if self.context is None or not hasattr(self.context, "submit_order"):
+            return None
+        return self.context.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
 '''
 
     def _generate_readme(self, raw: RawStrategy, report: EvaluationReport) -> str:
