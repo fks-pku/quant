@@ -136,6 +136,14 @@ def _create_llm_adapter(cfg: ResearchConfig):
             base_url=cfg.llm_base_url or "https://api.minimax.chat/v1",
             group_id=cfg.llm_group_id or "",
         )
+    elif cfg.llm_provider == "deepseek":
+        from quant.features.cio.llm_adapters.deepseek_adapter import DeepSeekAdapter
+        return DeepSeekAdapter(
+            model=cfg.llm_model or "deepseek-chat",
+            api_key=cfg.llm_api_key or "",
+            temperature=cfg.llm_temperature,
+            base_url=cfg.llm_base_url or "https://api.deepseek.com/v1",
+        )
     return None
 
 

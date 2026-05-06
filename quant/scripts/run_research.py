@@ -224,7 +224,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
     parser.add_argument("--backtest", action="store_true", help="Run backtests (requires DuckDB data)")
     parser.add_argument("--no-heuristic", action="store_true", help="Use LLM evaluator instead of heuristic")
-    parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama"],
+    parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama", "deepseek"],
                         help="LLM provider (only with --no-heuristic)")
     parser.add_argument("--llm-model", default=None, help="LLM model override")
     args = parser.parse_args()
@@ -333,8 +333,8 @@ def main():
 
 def _create_llm_evaluator(args):
     from quant.features.research.evaluator import StrategyEvaluator
-    provider = args.llm or "minimax"
-    model = args.llm_model or "MiniMax-M2.7"
+    provider = args.llm or "deepseek"
+    model = args.llm_model or "deepseek-chat"
     llm = _create_llm_adapter(provider, model)
     if llm is None:
         logger.error("No LLM adapter available. Add --no-llm to use heuristic mode.")
@@ -356,6 +356,9 @@ def _create_llm_adapter(provider, model):
     elif provider == "ollama":
         from quant.features.cio.llm_adapters.ollama_adapter import OllamaAdapter
         return OllamaAdapter(model=model)
+    elif provider == "deepseek":
+        from quant.features.cio.llm_adapters.deepseek_adapter import DeepSeekAdapter
+        return DeepSeekAdapter(model=model, api_key=os.environ.get("DEEPSEEK_API_KEY", ""))
     return None
 
 

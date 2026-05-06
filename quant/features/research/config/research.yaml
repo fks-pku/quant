@@ -18,11 +18,9 @@ research:
     - QQQ
 
 llm:
-  provider: minimax  # openai | claude | ollama | minimax
-  model: MiniMax-M2.7
-  # api_key: Set via MINIMAX_API_KEY environment variable
+  provider: deepseek  # openai | claude | ollama | minimax | deepseek
+  model: deepseek-chat
+  # api_key: Set via DEEPSEEK_API_KEY environment variable
   # Or uncomment and set directly (not recommended for security):
   # api_key: "..."
   temperature: 0.3
-  # base_url: "https://api.minimax.chat/v1"  # Optional: custom endpoint
-  # group_id: Set via MINIMAX_GROUP_ID env var for MiniMax

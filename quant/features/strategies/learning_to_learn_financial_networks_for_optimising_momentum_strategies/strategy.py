@@ -3,7 +3,7 @@
 Source: arxiv (http://arxiv.org/abs/2308.12212v1)
 Authors: Xingyue Pu
 Type: momentum
-Summary: Detected: momentum
+Summary: Promising network momentum strategy using end-to-end learning, but complexity and data needs may challenge daily-bar adaptation.
 """
 
 from typing import Any, List
@@ -15,7 +15,7 @@ from quant.features.strategies import Strategy, strategy
 class LearningToLearnFinancialNetworksForOptimisingMomentumStrategiesStrategy(Strategy):
     def __init__(self, symbols: List[str] = None):
         super().__init__(name="LearningToLearnFinancialNetworksForOptimisingMomentumStrategiesStrategy")
-        self._symbols = symbols or ["SPY"]
+        self._symbols = symbols or ["ES", "NQ", "CL", "GC", "6E"]
 
     @property
     def symbols(self) -> List[str]:

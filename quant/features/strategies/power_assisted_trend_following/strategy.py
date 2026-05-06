@@ -3,7 +3,7 @@
 Source: arxiv (http://arxiv.org/abs/2003.09298v1)
 Authors: Andreas A. Aigner
 Type: momentum
-Summary: Detected: none
+Summary: A trend-following strategy using a novel DSP-based indicator to measure trend strength, adaptable to daily bars with moderate complexity.
 """
 
 from typing import Any, List
@@ -15,7 +15,7 @@ from quant.features.strategies import Strategy, strategy
 class PowerAssistedTrendFollowingStrategy(Strategy):
     def __init__(self, symbols: List[str] = None):
         super().__init__(name="PowerAssistedTrendFollowingStrategy")
-        self._symbols = symbols or ["SPY"]
+        self._symbols = symbols or ["SPY", "QQQ", "EEM"]
 
     @property
     def symbols(self) -> List[str]:

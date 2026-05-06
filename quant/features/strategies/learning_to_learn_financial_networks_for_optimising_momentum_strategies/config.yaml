@@ -5,4 +5,4 @@ strategy:
   priority: 999
 
 parameters:
-  symbols: [SPY]
+  symbols: [ES, NQ, CL, GC, 6E]

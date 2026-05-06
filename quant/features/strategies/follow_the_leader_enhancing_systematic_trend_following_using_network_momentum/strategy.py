@@ -3,7 +3,7 @@
 Source: arxiv (http://arxiv.org/abs/2501.07135v1)
 Authors: Linze Li
 Type: momentum
-Summary: Detected: momentum
+Summary: A trend-following strategy enhanced with network momentum from lead-lag relationships, suitable for daily bars on liquid futures.
 """
 
 from typing import Any, List
@@ -15,7 +15,7 @@ from quant.features.strategies import Strategy, strategy
 class FollowTheLeaderEnhancingSystematicTrendfollowingUsingNetworkMomentumStrategy(Strategy):
     def __init__(self, symbols: List[str] = None):
         super().__init__(name="FollowTheLeaderEnhancingSystematicTrendfollowingUsingNetworkMomentumStrategy")
-        self._symbols = symbols or ["ES", "NQ"]
+        self._symbols = symbols or ["ES", "NQ", "CL", "GC", "6E"]
 
     @property
     def symbols(self) -> List[str]:

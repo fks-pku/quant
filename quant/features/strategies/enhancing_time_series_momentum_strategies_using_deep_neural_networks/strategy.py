@@ -3,7 +3,7 @@
 Source: arxiv (http://arxiv.org/abs/1904.04912v3)
 Authors: Bryan Lim
 Type: momentum
-Summary: Detected: momentum
+Summary: Deep Momentum Networks enhance time series momentum with LSTM-based trend and sizing, showing strong performance on futures but requiring careful adaptation to daily bars.
 """
 
 from typing import Any, List
@@ -15,7 +15,7 @@ from quant.features.strategies import Strategy, strategy
 class EnhancingTimeSeriesMomentumStrategiesUsingDeepNeuralNetworksStrategy(Strategy):
     def __init__(self, symbols: List[str] = None):
         super().__init__(name="EnhancingTimeSeriesMomentumStrategiesUsingDeepNeuralNetworksStrategy")
-        self._symbols = symbols or ["ES", "NQ"]
+        self._symbols = symbols or ["ES", "NQ", "CL", "GC", "6E"]
 
     @property
     def symbols(self) -> List[str]:

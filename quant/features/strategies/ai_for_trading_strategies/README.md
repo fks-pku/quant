@@ -6,12 +6,12 @@
 - **Published:** 2022-06-26T15:31:58Z
 
 ## Evaluation
-- **Suitability Score:** 4.5/10
-- **Complexity Score:** 3.0/10
+- **Suitability Score:** 6.5/10
+- **Complexity Score:** 7.0/10
 - **Data Requirement:** medium
 - **Daily Adaptable:** True
-- **Estimated Edge:** 2.2%
-- **Type:** volatility
+- **Estimated Edge:** 8.0%
+- **Type:** momentum
 
 ## Summary
-Detected: none
+Machine learning models show promise for crude oil daily trading but require careful implementation and validation.

@@ -6,12 +6,12 @@
 - **Published:** 2023-08-23T15:51:29Z
 
 ## Evaluation
-- **Suitability Score:** 6.3/10
-- **Complexity Score:** 3.8/10
-- **Data Requirement:** medium
+- **Suitability Score:** 7.5/10
+- **Complexity Score:** 8.0/10
+- **Data Requirement:** high-frequency
 - **Daily Adaptable:** True
-- **Estimated Edge:** 3.2%
+- **Estimated Edge:** 15.0%
 - **Type:** momentum
 
 ## Summary
-Detected: momentum
+Promising network momentum strategy using end-to-end learning, but complexity and data needs may challenge daily-bar adaptation.

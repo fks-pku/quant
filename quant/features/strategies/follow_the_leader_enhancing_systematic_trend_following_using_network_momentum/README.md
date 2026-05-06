@@ -6,12 +6,12 @@
 - **Published:** 2025-01-13T08:53:44Z
 
 ## Evaluation
-- **Suitability Score:** 6.2/10
-- **Complexity Score:** 3.8/10
+- **Suitability Score:** 7.5/10
+- **Complexity Score:** 7.0/10
 - **Data Requirement:** medium
 - **Daily Adaptable:** True
-- **Estimated Edge:** 3.1%
+- **Estimated Edge:** 8.0%
 - **Type:** momentum
 
 ## Summary
-Detected: momentum
+A trend-following strategy enhanced with network momentum from lead-lag relationships, suitable for daily bars on liquid futures.

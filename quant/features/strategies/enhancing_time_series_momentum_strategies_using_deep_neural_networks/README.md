@@ -6,12 +6,12 @@
 - **Published:** 2019-04-09T21:06:55Z
 
 ## Evaluation
-- **Suitability Score:** 4.9/10
-- **Complexity Score:** 3.8/10
-- **Data Requirement:** medium
+- **Suitability Score:** 7.5/10
+- **Complexity Score:** 8.0/10
+- **Data Requirement:** high-frequency
 - **Daily Adaptable:** True
-- **Estimated Edge:** 2.5%
+- **Estimated Edge:** 15.0%
 - **Type:** momentum
 
 ## Summary
-Detected: momentum
+Deep Momentum Networks enhance time series momentum with LSTM-based trend and sizing, showing strong performance on futures but requiring careful adaptation to daily bars.
