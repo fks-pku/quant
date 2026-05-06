@@ -150,7 +150,7 @@ def _create_llm_adapter(cfg: ResearchConfig):
             model=cfg.llm_model or "glm-5.1",
             api_key=cfg.llm_api_key or "",
             temperature=cfg.llm_temperature,
-            base_url=cfg.llm_base_url or "https://open.bigmodel.cn/api/paas/v4/",
+            base_url=cfg.llm_base_url or "https://api.z.ai/api/coding/paas/v4/",
         )
     return None
 

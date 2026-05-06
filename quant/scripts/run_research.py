@@ -334,7 +334,8 @@ def main():
 def _create_llm_evaluator(args):
     from quant.features.research.evaluator import StrategyEvaluator
     provider = args.llm or "deepseek"
-    model = args.llm_model or "deepseek-chat"
+    default_models = {"deepseek": "deepseek-chat", "glm": "glm-5.1", "openai": "gpt-4o-mini", "claude": "claude-sonnet-4-20250514", "ollama": "llama3", "minimax": "MiniMax-M2.7"}
+    model = args.llm_model or default_models.get(provider, "deepseek-chat")
     llm = _create_llm_adapter(provider, model)
     if llm is None:
         logger.error("No LLM adapter available. Add --no-llm to use heuristic mode.")
