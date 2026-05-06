@@ -36,6 +36,7 @@ def _imported_modules(path, tree=None):
             module = _resolve_import_from(path, node)
             if module:
                 modules.append(module)
+                modules.extend(f"{module}.{alias.name}" for alias in node.names if alias.name != "*")
     return modules
 
 
@@ -227,9 +228,18 @@ def test_research_frozen_models_store_immutable_nested_state():
 
 def test_imported_modules_resolves_relative_imports():
     path = ROOT / "features" / "research" / "_example.py"
-    tree = ast.parse("from ..backtest import runner\nfrom ...infrastructure import research\n")
+    tree = ast.parse(
+        "from ..backtest import runner\n"
+        "from ...infrastructure import research\n"
+        "from quant.features import backtest\n"
+        "from quant import infrastructure\n"
+        "from .. import backtest\n"
+        "from ... import infrastructure\n"
+    )
 
     modules = _imported_modules(path, tree=tree)
 
     assert "quant.features.backtest" in modules
     assert "quant.infrastructure" in modules
+    assert modules.count("quant.features.backtest") == 3
+    assert modules.count("quant.infrastructure") == 3
