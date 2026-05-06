@@ -477,7 +477,7 @@ Use deterministic p-values:
 p_values = [0.001, 0.02, 0.04, 0.20]
 ```
 
-Assert Benjamini-Hochberg at `alpha=0.05` marks the first three as significant and the last one as not significant.
+Assert standard Benjamini-Hochberg at `alpha=0.05` returns adjusted p-values approximately `[0.004, 0.04, 0.053333, 0.20]`, so the first two values are significant and the last two are not significant.
 
 - [ ] **Step 3: Write validator tests**
 
