@@ -1,4 +1,3 @@
-"""港股市场回测集成测试 — 手数、T+0、端到端。"""
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -12,7 +11,7 @@ from quant.tests.conftest import (
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.commission import HK_MIN_COMMISSION
 from quant.features.backtest.walkforward import DataFrameProvider
-from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
+from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 
 
 HK_SYMBOLS = ["00700", "00005", "00941"]
@@ -125,7 +124,7 @@ class TestHKT0DayTrading:
 
 
 class TestHKEndToEnd:
-    def test_simple_momentum_hk_backtest(self):
+    def test_dual_ma_crossover_hk_backtest(self):
         np.random.seed(42)
         data = make_hk_bars(
             HK_SYMBOLS, START, 120,
@@ -133,12 +132,10 @@ class TestHKEndToEnd:
             daily_return=0.002,
         )
         bt = make_backtester()
-        strategy = SimpleMomentum(
+        strategy = DualMACrossover(
             symbols=HK_SYMBOLS,
-            momentum_lookback=20,
-            holding_period=21,
-            top_pct=0.33,
-            bottom_pct=0.0,
+            fast_period=5,
+            slow_period=20,
             max_position_pct=0.15,
         )
         result = run_simple_backtest(bt, data, [strategy], HK_SYMBOLS, initial_cash=2000000)

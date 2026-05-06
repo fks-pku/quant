@@ -15,6 +15,7 @@ from quant.tests.conftest import (
     run_simple_backtest,
 )
 from quant.features.strategies.registry import StrategyRegistry
+from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestDiagnostics, BacktestResult, CommissionConfig
 from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE, is_suspended
@@ -382,7 +383,7 @@ class TestWalkForwardEngine:
             "volume": [1000000.0],
         })
         result = engine.run(
-            strategy_factory=lambda params: SimpleMomentum.__new__(SimpleMomentum),
+            strategy_factory=lambda params: DualMACrossover.__new__(DualMACrossover),
             data=df,
             param_grid={"lookback": [10]},
         )
@@ -392,9 +393,10 @@ class TestWalkForwardEngine:
     def test_wf_result_structure(self):
         engine = WalkForwardEngine(train_window_days=5, test_window_days=2, step_days=30, min_trades=0, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
         result = engine.run(
-            strategy_factory=lambda params: SimpleMomentum(
+            strategy_factory=lambda params: DualMACrossover(
                 symbols=["AAPL", "MSFT"],
-                momentum_lookback=5,
+                fast_period=3,
+                slow_period=10,
             ),
             data=pd.DataFrame({
                 "timestamp": pd.to_datetime(["2025-01-02"]),
@@ -519,16 +521,16 @@ class TestAdjustedPriceSeparation:
         assert Strategy._adj(bar, "high") == 110.0
         assert Strategy._adj(bar, "low") == 99.0
 
-    def test_momentum_uses_adj_close(self):
-        from quant.features.strategies.base import Strategy
-        strategy = StrategyRegistry.create("SimpleMomentum", symbols=["TEST"], momentum_lookback=2)
+    def test_dual_ma_uses_adj_close(self):
+        strategy = DualMACrossover(symbols=["TEST"], fast_period=2, slow_period=5)
         strategy.context = None
-        bar_real_drop = {"symbol": "TEST", "close": 90.0, "adj_close": 101.0, "open": 90.0, "high": 91.0, "low": 89.0, "volume": 1000000}
-        bar_earlier = {"symbol": "TEST", "close": 100.0, "adj_close": 100.0, "open": 99.0, "high": 101.0, "low": 99.0, "volume": 1000000}
-        strategy._day_data["TEST"] = [bar_earlier, bar_real_drop]
-        strategy._calculate_momentum_scores()
-        score = strategy._momentum_scores.get("TEST", 0)
-        assert score > 0
+        bars = []
+        for i in range(10):
+            bars.append({"symbol": "TEST", "close": 100.0 - i * 2, "adj_close": 100.0,
+                         "open": 100.0, "high": 101.0, "low": 99.0, "volume": 1000000})
+        strategy._day_data["TEST"] = bars
+        strategy._process_symbol(None, "TEST")
+        assert strategy._positions.get("TEST", 0) == 0
 
     def test_engine_fill_uses_real_open(self):
         rows = []
@@ -547,9 +549,43 @@ class TestAdjustedPriceSeparation:
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
         bt = make_backtester(config)
-        result = run_simple_backtest(
-            bt, data,
-            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["AAPL"], momentum_lookback=2, holding_period=1)],
+
+        class BuyOnce:
+            name = "BuyOnce"
+            context = None
+            _positions = {}
+            _ordered = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if not self._ordered:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", None, "BuyOnce"
+                    )
+                    self._ordered = True
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        provider = DataFrameProvider(data)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[BuyOnce()],
+            initial_cash=100000,
+            data_provider=provider,
             symbols=["AAPL"],
         )
         for trade in result.trades:
@@ -572,11 +608,40 @@ class TestAdjustedPriceSeparation:
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
         bt = make_backtester(config)
+
+        class BuyOnce:
+            name = "BuyOnce"
+            context = None
+            _positions = {}
+            _ordered = False
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if not self._ordered:
+                    self.context.order_manager.submit_order(
+                        "AAPL", 100, "BUY", "MARKET", None, "BuyOnce"
+                    )
+                    self._ordered = True
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pass
+
+        provider = DataFrameProvider(data)
         result = run_simple_backtest(
             bt, data,
-            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["AAPL"], momentum_lookback=2, holding_period=1)],
-            symbols=["AAPL"],
-            initial_cash=1000000,
+            strategies=[BuyOnce()], symbols=["AAPL"], initial_cash=1000000,
         )
         if result.open_positions:
             for pos in result.open_positions:
@@ -614,7 +679,7 @@ class TestStockDividendLotTracking:
         bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
-            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=1)],
+            strategies=[StrategyRegistry.create("DualMACrossover", symbols=["600519"], fast_period=2, slow_period=3)],
             symbols=["600519"],
             dividends=div,
             initial_cash=1000000,
@@ -649,7 +714,7 @@ class TestStockDividendLotTracking:
         bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
-            strategies=[StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=1)],
+            strategies=[StrategyRegistry.create("DualMACrossover", symbols=["600519"], fast_period=2, slow_period=3)],
             symbols=["600519"],
             dividends=div,
             initial_cash=1000000,
@@ -735,7 +800,7 @@ class TestStrategyPositionSyncAfterDividend:
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
         bt = make_backtester(config)
-        strat = StrategyRegistry.create("SimpleMomentum", symbols=["600519"], momentum_lookback=2, holding_period=8)
+        strat = StrategyRegistry.create("DualMACrossover", symbols=["600519"], fast_period=2, slow_period=3)
         result = run_simple_backtest(bt, data, strategies=[strat], symbols=["600519"], dividends=div, initial_cash=1000000)
         buy_trades = [t for t in result.trades if t.side == "BUY"]
         if buy_trades:

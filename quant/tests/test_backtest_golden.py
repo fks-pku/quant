@@ -1,19 +1,3 @@
-"""Golden-file regression tests for backtest engine stability.
-
-These tests run known strategies on fixed synthetic data and compare
-the resulting equity curve against a committed golden file. Any deviation
-indicates an engine behavior change (intentional or bug).
-
-Usage:
-    # Normal: compares against golden file
-    pytest quant/tests/test_backtest_golden.py -q
-
-    # Regenerate: delete the golden file and re-run
-    rm quant/tests/golden/*.csv && pytest quant/tests/test_backtest_golden.py -q
-
-Golden files are stored in quant/tests/golden/ and committed to git.
-"""
-
 import json
 import os
 from datetime import datetime
@@ -23,7 +7,7 @@ import pytest
 
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.walkforward import DataFrameProvider
-from quant.features.strategies.simple_momentum.strategy import SimpleMomentum
+from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 from quant.tests.conftest import make_backtester, make_us_bars
 
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "golden")
@@ -50,11 +34,9 @@ def _write_golden(filename, df):
 
 
 def _build_synthetic_data():
-    """Fixed synthetic data: 252 trading days, 5 US symbols with deterministic prices."""
     import hashlib
 
     def _det_hash(s, max_val):
-        """Deterministic integer from string hash (PYTHONHASHSEED-safe)."""
         return int(hashlib.md5(s.encode()).hexdigest(), 16) % max_val
 
     symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA"]
@@ -89,23 +71,17 @@ def _build_synthetic_data():
     return pd.DataFrame(new_rows)
 
 
-# ---------------------------------------------------------------------------
-# Golden test: SimpleMomentum on synthetic US data
-# ---------------------------------------------------------------------------
-
-GOLDEN_EQUITY = "golden_simple_momentum_equity.csv"
-GOLDEN_TRADES = "golden_simple_momentum_trades.json"
+GOLDEN_EQUITY = "golden_dual_ma_equity.csv"
+GOLDEN_TRADES = "golden_dual_ma_trades.json"
 
 
 @pytest.fixture(scope="module")
-def golden_momentum_run():
-    """Run SimpleMomentum on synthetic data. Cached at module scope."""
+def golden_dual_ma_run():
     data = _build_synthetic_data()
     bt = make_backtester(US_CONFIG)
     provider = DataFrameProvider(data)
     symbols = sorted(data["symbol"].unique().tolist())
-    strat = SimpleMomentum(momentum_lookback=20, holding_period=21, top_pct=0.2, bottom_pct=0.2,
-                           max_position_pct=0.20)
+    strat = DualMACrossover(fast_period=5, slow_period=20, max_position_pct=0.95)
     return bt.run(
         start=data["timestamp"].min(), end=data["timestamp"].max(),
         strategies=[strat], initial_cash=1_000_000,
@@ -113,9 +89,9 @@ def golden_momentum_run():
     )
 
 
-class TestGoldenSimpleMomentum:
-    def test_equity_curve_matches(self, golden_momentum_run):
-        result = golden_momentum_run
+class TestGoldenDualMACrossover:
+    def test_equity_curve_matches(self, golden_dual_ma_run):
+        result = golden_dual_ma_run
         equity = result.equity_curve
 
         existing = _read_golden(GOLDEN_EQUITY)
@@ -131,8 +107,8 @@ class TestGoldenSimpleMomentum:
                 f"Equity curve diverges at index {i}: {equity.iloc[i]} vs {existing.iloc[i, 0]}"
             )
 
-    def test_trade_count_matches(self, golden_momentum_run):
-        result = golden_momentum_run
+    def test_trade_count_matches(self, golden_dual_ma_run):
+        result = golden_dual_ma_run
         trade_summary = {
             "count": len(result.trades),
             "buy_count": len([t for t in result.trades if t.side == "BUY"]),
@@ -156,7 +132,7 @@ class TestGoldenSimpleMomentum:
             f"Final NAV: {trade_summary['final_nav']} vs {expected['final_nav']}"
         )
 
-    def test_invariants_hold(self, golden_momentum_run):
-        result = golden_momentum_run
+    def test_invariants_hold(self, golden_dual_ma_run):
+        result = golden_dual_ma_run
         from quant.tests.test_backtest_fuzz import _verify_all_invariants
         _verify_all_invariants(result, initial_cash=1_000_000)

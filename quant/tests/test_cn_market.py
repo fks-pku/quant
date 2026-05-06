@@ -1,4 +1,3 @@
-"""A股市场回测集成测试 — T+1、手数、分红税、端到端。"""
 from datetime import datetime, date, timedelta
 
 import numpy as np
@@ -14,8 +13,7 @@ from quant.features.backtest.engine import Backtester
 from quant.features.backtest.dividend_processor import calculate_cn_dividend_tax
 from quant.features.backtest.walkforward import DataFrameProvider
 from quant.features.strategies.base import Strategy
-from quant.features.strategies.daily_return_anomaly.strategy import DailyReturnAnomaly
-from quant.features.strategies.regime_filtered_momentum.strategy import RegimeFilteredMomentum
+from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 
 
 CN_SYMBOLS = ["600519", "000858", "300750", "601318"]
@@ -207,21 +205,21 @@ class TestCNDividendTax:
 
 
 class TestCNEndToEnd:
-    def test_daily_return_anomaly_backtest(self):
+    def test_dual_ma_crossover_backtest(self):
         np.random.seed(42)
         data = make_cn_bars(CN_SYMBOLS, START, 120, {"600519": 50, "000858": 30, "300750": 40, "601318": 45})
         bt = make_backtester()
-        strategy = DailyReturnAnomaly(symbols=CN_SYMBOLS, holding_days=5, top_pct=0.25)
+        strategy = DualMACrossover(symbols=CN_SYMBOLS, fast_period=5, slow_period=20)
         result = run_simple_backtest(bt, data, [strategy], CN_SYMBOLS, initial_cash=2000000)
         assert result.final_nav > 0
         assert result.diagnostics.total_commission >= 0
 
-    def test_regime_filtered_momentum_backtest(self):
+    def test_dual_ma_crossover_multi_backtest(self):
         np.random.seed(123)
         symbols = ["600519", "000858", "601318", "600036", "000333"]
         data = make_cn_bars(symbols, START, 120, {"600519": 50, "000858": 30, "601318": 45, "600036": 35, "000333": 25})
         bt = make_backtester()
-        strategy = RegimeFilteredMomentum(symbols=symbols, holding_days=10, top_pct=0.3)
+        strategy = DualMACrossover(symbols=symbols, fast_period=5, slow_period=20)
         result = run_simple_backtest(bt, data, [strategy], strategy.symbols, initial_cash=2000000)
         assert result.final_nav > 0
 
@@ -277,19 +275,12 @@ class TestCNEndToEnd:
         assert len([t for t in result.trades if t.side == "BUY"]) >= 1
 
     def test_backward_adjusted_price_quantity_uses_real_close(self):
-        """CN adj_close ≈ close * adj_factor (post-复权). Strategy MUST use real
-        close for quantity calc, not adj_close, or lot rounding kills the order.
-
-        Regression test for: dual_ma_crossover 000001 zero-trade bug where
-        adj_close ≈ 1700, qty = int(nav*0.95/1700) = 55 < 100 lot → silently dropped.
-        """
         np.random.seed(777)
         symbols = ["000001"]
         n_days = 60
 
-        # Real prices in normal market range
         base_price = 12.0
-        adj_factor = 118.0  # Simulate CN cumulative adjustment factor
+        adj_factor = 118.0
 
         rows = []
         current = datetime(2024, 1, 2)
@@ -325,8 +316,6 @@ class TestCNEndToEnd:
         }
         bt = make_backtester(config)
 
-        # Strategy that uses _adj (backward-adjusted) for signals
-        # but _price (real close) for quantity — the invariant
         class AdjAwareTestStrategy:
             name = "AdjAwareTest"
             context = None
