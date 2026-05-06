@@ -5,12 +5,13 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from quant.domain.ports import ExperimentStore, ResearchArtifactStore
 from quant.domain.ports.research_store import ResearchStore
-from quant.features.research.models import ResearchConfig, ResearchResult, ResearchLogEntry, RawStrategy
+from quant.features.research.models import EvaluationReport, ResearchConfig, ResearchResult, ResearchLogEntry, RawStrategy
 from quant.features.research.scout import StrategyScout
 from quant.features.research.evaluator import StrategyEvaluator
 from quant.features.research.integrator import StrategyIntegrator
 from quant.features.research.pool import CandidatePool
 from quant.features.research.tracking import RunRecorder
+from quant.features.research.validation.strategy_spec_builder import StrategySpecBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class ResearchEngine:
         research_store: Optional[ResearchStore] = None,
         experiment_store: Optional[ExperimentStore] = None,
         artifact_store: Optional[ResearchArtifactStore] = None,
+        spec_builder: Optional[Any] = None,
+        validator: Optional[Any] = None,
     ):
         self.config = config or ResearchConfig()
         self.scout = scout or StrategyScout()
@@ -36,6 +39,10 @@ class ResearchEngine:
         self.research_store = research_store or _NullResearchStore()
         self.experiment_store = experiment_store
         self.artifact_store = artifact_store
+        self.spec_builder = spec_builder
+        if self.config.validation_enabled and self.spec_builder is None:
+            self.spec_builder = StrategySpecBuilder(self.config.validation_config)
+        self.validator = validator
         shared_registry = {}
         self.integrator = integrator or StrategyIntegrator(
             Path(strategies_dir) if strategies_dir else _default_dir,
@@ -79,6 +86,7 @@ class ResearchEngine:
 
             integrated_ids = []
             evaluation_rows = []
+            pending_validation = []
             for raw in raw_strategies:
                 try:
                     strategy_hash = StrategyScout.hash_strategy(raw)
@@ -117,30 +125,14 @@ class ResearchEngine:
                         result.rejected += 1
                         continue
 
-                    strategy_id = self.integrator.integrate(raw, report)
-                    if strategy_id:
-                        result.integrated += 1
-                        integrated_ids.append(strategy_id)
-                        result.log.append(ResearchLogEntry(
-                            phase="integrate", title=raw.title, source=raw.source,
-                            source_url=raw.source_url, verdict="pass",
-                            reason=f"Integrated as {strategy_id}",
-                            scores={
-                                "suitability": report.suitability_score,
-                                "complexity": report.complexity_score,
-                                "edge": report.estimated_edge,
-                                "type": report.strategy_type,
-                            },
-                        ))
-                        evaluation_rows.append((raw, report, "pass", f"Integrated as {strategy_id}"))
-                    else:
-                        result.errors.append(f"Integration failed for '{raw.title}'")
-                        result.log.append(ResearchLogEntry(
-                            phase="integrate", title=raw.title, source=raw.source,
-                            source_url=raw.source_url, verdict="error",
-                            reason="Integration failed",
-                        ))
-                        evaluation_rows.append((raw, report, "error", "Integration failed"))
+                    validation_action = self._validation_action(raw, report, result, evaluation_rows)
+                    if validation_action is False:
+                        continue
+                    if validation_action is not True:
+                        pending_validation.append((raw, report, validation_action))
+                        continue
+
+                    self._integrate_candidate(raw, report, result, integrated_ids, evaluation_rows)
                 except Exception as e:
                     logger.error(f"Pipeline error for '{raw.title}': {e}")
                     result.errors.append(str(e))
@@ -150,6 +142,7 @@ class ResearchEngine:
                         reason=str(e),
                     ))
 
+            self._validate_and_integrate_pending(pending_validation, result, integrated_ids, evaluation_rows)
             self.research_store.write_evaluations(evaluation_rows)
 
             if self.config.auto_backtest and integrated_ids:
@@ -177,6 +170,151 @@ class ResearchEngine:
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _validation_action(
+        self,
+        raw: RawStrategy,
+        report: EvaluationReport,
+        result: ResearchResult,
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> Any:
+        if not self.config.validation_enabled or self.spec_builder is None:
+            return True
+
+        spec = self.spec_builder.build(raw, report)
+        result.specified += 1
+
+        if self.validator is None:
+            result.log.append(ResearchLogEntry(
+                phase="validate", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="skip",
+                reason="No validator injected",
+                scores={
+                    "strategy_type": report.strategy_type,
+                    "spec_status": spec.status,
+                    "formula": spec.signal_formula_key,
+                },
+            ))
+            return True
+
+        if spec.status != "ready":
+            result.needs_manual_spec += 1
+            reason = spec.reason or f"spec status={spec.status}"
+            result.log.append(ResearchLogEntry(
+                phase="specify", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="skip",
+                reason=reason,
+                scores={"strategy_type": report.strategy_type, "spec_status": spec.status},
+            ))
+            evaluation_rows.append((raw, report, "needs_manual_spec", reason))
+            logger.info(f"'{raw.title}' needs manual specification ({spec.status})")
+            return False
+
+        return spec
+
+    def _validate_and_integrate_pending(
+        self,
+        pending_validation: List[Tuple[RawStrategy, EvaluationReport, Any]],
+        result: ResearchResult,
+        integrated_ids: List[str],
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> None:
+        if not pending_validation or self.validator is None:
+            return
+
+        specs = [item[2] for item in pending_validation]
+        if hasattr(self.validator, "validate_many"):
+            validation_reports = self.validator.validate_many(
+                specs,
+                self.config.default_backtest_start,
+                self.config.default_backtest_end,
+            )
+        else:
+            validation_reports = [
+                self.validator.validate(spec, self.config.default_backtest_start, self.config.default_backtest_end)
+                for spec in specs
+            ]
+
+        for (raw, evaluation_report, spec), validation_report in zip(pending_validation, validation_reports):
+            result.validated += 1
+            if self._record_validation_result(raw, evaluation_report, spec, validation_report, result, evaluation_rows):
+                self._integrate_candidate(raw, evaluation_report, result, integrated_ids, evaluation_rows)
+
+    def _record_validation_result(
+        self,
+        raw: RawStrategy,
+        report: EvaluationReport,
+        spec: Any,
+        validation_report: Any,
+        result: ResearchResult,
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> bool:
+        if validation_report.status == "pass":
+            result.validated_passed += 1
+            result.log.append(ResearchLogEntry(
+                phase="validate", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="pass",
+                reason=f"rank_ic={validation_report.rank_ic:.4f}",
+                scores={
+                    "rank_ic": validation_report.rank_ic,
+                    "rank_ic_ir": validation_report.rank_ic_ir,
+                    "fdr_adjusted_p": validation_report.fdr_adjusted_p,
+                    "hit_rate": validation_report.hit_rate,
+                    "formula": spec.signal_formula_key,
+                },
+            ))
+            return True
+
+        reason = "; ".join(validation_report.errors) or f"validation status={validation_report.status}"
+        result.rejected += 1
+        result.log.append(ResearchLogEntry(
+            phase="validate", title=raw.title, source=raw.source,
+            source_url=raw.source_url, verdict="fail",
+            reason=reason,
+            scores={
+                "rank_ic": validation_report.rank_ic,
+                "fdr_adjusted_p": validation_report.fdr_adjusted_p,
+                "hit_rate": validation_report.hit_rate,
+                "formula": spec.signal_formula_key,
+            },
+        ))
+        evaluation_rows.append((raw, report, "validation_fail", reason))
+        logger.info(f"'{raw.title}' failed validation: {reason}")
+        return False
+
+    def _integrate_candidate(
+        self,
+        raw: RawStrategy,
+        report: EvaluationReport,
+        result: ResearchResult,
+        integrated_ids: List[str],
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> None:
+        strategy_id = self.integrator.integrate(raw, report)
+        if strategy_id:
+            result.integrated += 1
+            integrated_ids.append(strategy_id)
+            result.log.append(ResearchLogEntry(
+                phase="integrate", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="pass",
+                reason=f"Integrated as {strategy_id}",
+                scores={
+                    "suitability": report.suitability_score,
+                    "complexity": report.complexity_score,
+                    "edge": report.estimated_edge,
+                    "type": report.strategy_type,
+                },
+            ))
+            evaluation_rows.append((raw, report, "pass", f"Integrated as {strategy_id}"))
+            return
+
+        result.errors.append(f"Integration failed for '{raw.title}'")
+        result.log.append(ResearchLogEntry(
+            phase="integrate", title=raw.title, source=raw.source,
+            source_url=raw.source_url, verdict="error",
+            reason="Integration failed",
+        ))
+        evaluation_rows.append((raw, report, "error", "Integration failed"))
 
 
 class _NullResearchStore(ResearchStore):
