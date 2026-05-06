@@ -1,8 +1,0 @@
-strategy:
-  name: AiForTradingStrategiesStrategy
-  enabled: false
-  status: candidate
-  priority: 999
-
-parameters:
-  symbols: [CL=F, USO]
