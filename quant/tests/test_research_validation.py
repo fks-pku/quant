@@ -326,7 +326,39 @@ def test_research_engine_validation_disabled_preserves_integration_behavior():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
-def test_research_engine_validation_enabled_without_validator_is_non_blocking():
+def test_research_engine_validation_enabled_without_validator_allows_ready_specs():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw("Daily Momentum")]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _report("momentum")
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, validation_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_full_pipeline()
+
+        assert result.specified == 1
+        assert result.integrated == 1
+        assert result.validated == 0
+        assert result.needs_manual_spec == 0
+        assert research_store.get_candidate("daily_momentum") is not None
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_validation_enabled_without_validator_skips_unsupported_specs():
     tmp_path = _test_root()
 
     class FixedScout:
@@ -349,8 +381,11 @@ def test_research_engine_validation_enabled_without_validator_is_non_blocking():
 
         result = engine.run_full_pipeline()
 
-        assert result.integrated == 1
+        assert result.specified == 1
+        assert result.integrated == 0
         assert result.validated == 0
-        assert research_store.get_candidate("stat_arb") is not None
+        assert result.needs_manual_spec == 1
+        assert result.rejected == 0
+        assert research_store.get_candidate("stat_arb") is None
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)

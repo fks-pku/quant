@@ -184,19 +184,6 @@ class ResearchEngine:
         spec = self.spec_builder.build(raw, report)
         result.specified += 1
 
-        if self.validator is None:
-            result.log.append(ResearchLogEntry(
-                phase="validate", title=raw.title, source=raw.source,
-                source_url=raw.source_url, verdict="skip",
-                reason="No validator injected",
-                scores={
-                    "strategy_type": report.strategy_type,
-                    "spec_status": spec.status,
-                    "formula": spec.signal_formula_key,
-                },
-            ))
-            return True
-
         if spec.status != "ready":
             result.needs_manual_spec += 1
             reason = spec.reason or f"spec status={spec.status}"
@@ -209,6 +196,19 @@ class ResearchEngine:
             evaluation_rows.append((raw, report, "needs_manual_spec", reason))
             logger.info(f"'{raw.title}' needs manual specification ({spec.status})")
             return False
+
+        if self.validator is None:
+            result.log.append(ResearchLogEntry(
+                phase="validate", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="skip",
+                reason="No validator injected",
+                scores={
+                    "strategy_type": report.strategy_type,
+                    "spec_status": spec.status,
+                    "formula": spec.signal_formula_key,
+                },
+            ))
+            return True
 
         return spec
 
