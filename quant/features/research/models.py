@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 @dataclass
@@ -38,13 +39,17 @@ class StrategySpec:
     strategy_id: str
     strategy_type: str
     signal_formula_key: str
-    universe: List[str]
+    universe: Tuple[str, ...]
     horizon_days: int
     lookback_days: int
     execution_lag_days: int
-    required_fields: List[str]
+    required_fields: Tuple[str, ...]
     status: str
     reason: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "universe", tuple(self.universe))
+        object.__setattr__(self, "required_fields", tuple(self.required_fields))
 
 
 @dataclass(frozen=True)
@@ -53,7 +58,7 @@ class ValidationReport:
     status: str
     rank_ic: float
     rank_ic_ir: float
-    ic_decay: List[float]
+    ic_decay: Tuple[float, ...]
     fdr_adjusted_p: float
     fdr_significant: bool
     ff_alpha_monthly: float
@@ -64,18 +69,29 @@ class ValidationReport:
     data_start: str
     data_end: str
     n_observations: int
-    errors: List[str] = field(default_factory=list)
+    errors: Tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "ic_decay", tuple(self.ic_decay))
+        object.__setattr__(self, "errors", tuple(self.errors))
 
 
 @dataclass(frozen=True)
 class PurgedWalkForwardResult:
-    splits: List[Dict[str, Any]]
+    splits: Tuple[Mapping[str, Any], ...]
     aggregate_oos_sharpe: float
     worst_oos_sharpe: float
     deflated_sharpe_ratio: Optional[float]
     sharpe_degradation: float
     pct_profitable_splits: float
     is_viable: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "splits",
+            tuple(MappingProxyType(dict(split)) for split in self.splits),
+        )
 
 
 @dataclass(frozen=True)
@@ -110,14 +126,18 @@ class RunMetadata:
 
 @dataclass(frozen=True)
 class EnsembleResult:
-    strategy_ids: List[str]
-    weights: List[float]
+    strategy_ids: Tuple[str, ...]
+    weights: Tuple[float, ...]
     portfolio_sharpe: float
     portfolio_max_dd: float
     portfolio_cagr: float
     diversification_ratio: float
     mean_correlation: float
     effective_n: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "strategy_ids", tuple(self.strategy_ids))
+        object.__setattr__(self, "weights", tuple(self.weights))
 
 
 @dataclass
