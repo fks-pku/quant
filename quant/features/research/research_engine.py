@@ -12,6 +12,7 @@ from quant.features.research.integrator import StrategyIntegrator
 from quant.features.research.pool import CandidatePool
 from quant.features.research.tracking import RunRecorder
 from quant.features.research.validation.strategy_spec_builder import StrategySpecBuilder
+from quant.features.research.ensemble import ResearchEnsembleBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,8 @@ class ResearchEngine:
             if self.config.rigor_enabled and self.rigor_hub is not None and integrated_ids:
                 self._run_rigor(integrated_ids, result)
 
+            self._build_ensemble(integrated_ids, result)
+
             self.research_store.save_run_result(result)
             if run_id is not None:
                 self.experiment_store.complete_run(run_id, "completed")
@@ -218,6 +221,24 @@ class ResearchEngine:
                     "pct_profitable_splits": walkforward.pct_profitable_splits,
                 },
             ))
+
+    def _build_ensemble(self, strategy_ids: List[str], result: ResearchResult) -> None:
+        if not self.config.ensemble_enabled:
+            return
+        if self.experiment_store is None or self.artifact_store is None:
+            return
+        configured_ids = self.config.ensemble_config.get("strategy_ids")
+        ids = list(configured_ids or strategy_ids)
+        try:
+            ensemble = ResearchEnsembleBuilder(
+                self.experiment_store,
+                self.artifact_store,
+                self.config.ensemble_config,
+            ).build(ids or None, run_id=result.run_id or "")
+        except Exception as exc:
+            result.errors.append(f"Ensemble error: {exc}")
+            return
+        result.ensemble_built = not bool(ensemble.get("no_op"))
 
     def _validation_action(
         self,

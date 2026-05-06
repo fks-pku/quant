@@ -8,6 +8,8 @@ from quant.features.research.models import ResearchConfig, ResearchResult
 from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
+from quant.features.research.ensemble import ResearchEnsembleBuilder
+from quant.features.research.tracking.comparison import StrategyComparator
 
 
 def _make_backtest_fn():
@@ -455,3 +457,104 @@ def trigger_scheduled():
     scheduler = _get_scheduler()
     scheduler.trigger_now()
     return jsonify({"success": True, "message": "Scheduled research triggered"})
+
+
+@research_bp.route("/api/research/experiments/<strategy_id>", methods=["GET"])
+def list_research_experiments(strategy_id):
+    cfg = _load_research_config()
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Research tracking is disabled"}), 404
+    try:
+        limit = int(request.args.get("limit", 50))
+        runs = StrategyComparator(store).list_runs(strategy_id=strategy_id, limit=limit)
+        return jsonify({"strategy_id": strategy_id, "runs": runs})
+    finally:
+        _close_research_store(store)
+
+
+@research_bp.route("/api/research/experiments/<strategy_id>/<run_id>", methods=["GET"])
+def get_research_experiment(strategy_id, run_id):
+    cfg = _load_research_config()
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Research tracking is disabled"}), 404
+    try:
+        run = store.get_run(run_id)
+        if run is None or run.get("strategy_id") != strategy_id:
+            return jsonify({"error": "Experiment run not found"}), 404
+        return jsonify({
+            "strategy_id": strategy_id,
+            "run": run,
+            "metrics": store.list_metrics(run_id),
+            "artifacts": store.get_artifacts(run_id),
+        })
+    finally:
+        _close_research_store(store)
+
+
+@research_bp.route("/api/research/compare", methods=["GET"])
+def compare_research_experiments():
+    cfg = _load_research_config()
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Research tracking is disabled"}), 404
+    try:
+        ids = [item.strip() for item in request.args.get("ids", "").split(",") if item.strip()]
+        metric = request.args.get("metric", "sharpe")
+        comparator = StrategyComparator(store)
+        rows = []
+        for strategy_id in ids:
+            best = comparator.best_metric(metric, strategy_id=strategy_id)
+            rows.append({"strategy_id": strategy_id, "metric": metric, "best": best})
+        return jsonify({"ids": ids, "metric": metric, "results": rows})
+    finally:
+        _close_research_store(store)
+
+
+@research_bp.route("/api/research/ensemble", methods=["GET"])
+def get_research_ensemble():
+    cfg = _load_research_config()
+    experiment_store = _make_experiment_store(cfg)
+    artifact_store = _make_artifact_store(cfg)
+    if experiment_store is None or artifact_store is None:
+        _close_research_store(experiment_store)
+        _close_research_store(artifact_store)
+        return jsonify({"error": "Research tracking is disabled"}), 404
+    try:
+        ids = [item.strip() for item in request.args.get("ids", "").split(",") if item.strip()]
+        result = ResearchEnsembleBuilder(experiment_store, artifact_store, cfg.ensemble_config).build(ids or None)
+        return jsonify(result)
+    finally:
+        _close_research_store(experiment_store)
+        _close_research_store(artifact_store)
+
+
+@research_bp.route("/api/research/ensemble/rebuild", methods=["POST"])
+def rebuild_research_ensemble():
+    cfg = _load_research_config()
+    data = request.get_json() or {}
+    experiment_store = _make_experiment_store(cfg)
+    artifact_store = _make_artifact_store(cfg)
+    if experiment_store is None or artifact_store is None:
+        _close_research_store(experiment_store)
+        _close_research_store(artifact_store)
+        return jsonify({"error": "Research tracking is disabled"}), 404
+    run_id = ""
+    try:
+        ids = data.get("strategy_ids") or data.get("ids")
+        if isinstance(ids, str):
+            ids = [item.strip() for item in ids.split(",") if item.strip()]
+        if data.get("record_run", True):
+            run_id = experiment_store.start_run("research_ensemble", {"strategy_ids": ids or []})
+        result = ResearchEnsembleBuilder(experiment_store, artifact_store, cfg.ensemble_config).build(ids or None, run_id=run_id)
+        if run_id:
+            experiment_store.complete_run(run_id, "completed")
+        return jsonify(result)
+    except Exception as exc:
+        if run_id:
+            experiment_store.complete_run(run_id, "failed", error=str(exc))
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        _close_research_store(experiment_store)
+        _close_research_store(artifact_store)
