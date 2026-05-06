@@ -225,6 +225,24 @@ def test_research_frozen_models_store_immutable_nested_state():
     else:
         raise AssertionError("split mapping must be immutable")
 
+    nested_values = []
+    nested_meta = {"labels": nested_values, "flags": {"seen"}}
+    nested_split = {"meta": nested_meta}
+    nested_walkforward = PurgedWalkForwardResult([nested_split], 1.0, 0.2, None, 0.1, 0.75, True)
+    nested_values.append("mutated")
+    nested_meta["extra"] = "mutated"
+
+    assert isinstance(nested_walkforward.splits[0]["meta"], MappingProxyType)
+    assert nested_walkforward.splits[0]["meta"]["labels"] == ()
+    assert nested_walkforward.splits[0]["meta"]["flags"] == frozenset({"seen"})
+    assert "extra" not in nested_walkforward.splits[0]["meta"]
+    try:
+        nested_walkforward.splits[0]["meta"]["labels"] += ("mutated",)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("nested split mapping must be immutable")
+
 
 def test_imported_modules_resolves_relative_imports():
     path = ROOT / "features" / "research" / "_example.py"

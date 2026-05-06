@@ -3,6 +3,20 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, MappingProxyType):
+        return value
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_deep_freeze(item) for item in value)
+    if isinstance(value, frozenset):
+        return frozenset(_deep_freeze(item) for item in value)
+    return value
+
+
 @dataclass
 class RawStrategy:
     title: str
@@ -48,8 +62,8 @@ class StrategySpec:
     reason: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "universe", tuple(self.universe))
-        object.__setattr__(self, "required_fields", tuple(self.required_fields))
+        object.__setattr__(self, "universe", _deep_freeze(self.universe))
+        object.__setattr__(self, "required_fields", _deep_freeze(self.required_fields))
 
 
 @dataclass(frozen=True)
@@ -72,8 +86,8 @@ class ValidationReport:
     errors: Tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "ic_decay", tuple(self.ic_decay))
-        object.__setattr__(self, "errors", tuple(self.errors))
+        object.__setattr__(self, "ic_decay", _deep_freeze(self.ic_decay))
+        object.__setattr__(self, "errors", _deep_freeze(self.errors))
 
 
 @dataclass(frozen=True)
@@ -87,11 +101,7 @@ class PurgedWalkForwardResult:
     is_viable: bool
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "splits",
-            tuple(MappingProxyType(dict(split)) for split in self.splits),
-        )
+        object.__setattr__(self, "splits", _deep_freeze(self.splits))
 
 
 @dataclass(frozen=True)
@@ -136,8 +146,8 @@ class EnsembleResult:
     effective_n: float
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "strategy_ids", tuple(self.strategy_ids))
-        object.__setattr__(self, "weights", tuple(self.weights))
+        object.__setattr__(self, "strategy_ids", _deep_freeze(self.strategy_ids))
+        object.__setattr__(self, "weights", _deep_freeze(self.weights))
 
 
 @dataclass
