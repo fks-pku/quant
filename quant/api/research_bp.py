@@ -211,11 +211,12 @@ def run_research():
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator
     evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
+    research_store = _make_research_store(cfg)
     engine = ResearchEngine(
         config=cfg,
         evaluator=evaluator,
         backtest_fn=_make_backtest_fn(),
-        research_store=_make_research_store(cfg),
+        research_store=research_store,
     )
 
     def _run():
@@ -226,6 +227,8 @@ def run_research():
         except Exception as e:
             with _research_lock:
                 _research_jobs[job_id] = {"status": "error", "error": str(e)}
+        finally:
+            _close_research_store(research_store)
 
     result_obj = ResearchResult()
     with _research_lock:

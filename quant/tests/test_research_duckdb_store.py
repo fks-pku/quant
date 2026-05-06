@@ -13,6 +13,7 @@ flask_stub.jsonify = lambda value=None, **kwargs: value if value is not None els
 flask_stub.request = types.SimpleNamespace(get_json=lambda: {})
 sys.modules.setdefault("flask", flask_stub)
 
+import quant.api.research_bp as research_bp
 from quant.api.research_bp import _make_research_store
 from quant.features.research.models import EvaluationReport, RawStrategy, ResearchConfig, ResearchResult
 from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
@@ -244,3 +245,41 @@ def test_migration_returns_empty_counts_for_missing_or_corrupt_json():
         assert corrupt_counts == {"candidates": 0, "seen_hashes": 0}
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_run_research_closes_background_store(monkeypatch):
+    class ClosingStore:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeEngine:
+        def __init__(self, research_store=None, **kwargs):
+            self.research_store = research_store
+
+        def run_full_pipeline(self, sources=None, result=None):
+            result.discovered = 1
+
+    class ImmediateThread:
+        def __init__(self, target, daemon=False):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            self.target()
+
+    store = ClosingStore()
+    monkeypatch.setattr(research_bp.request, "get_json", lambda: {})
+    monkeypatch.setattr(research_bp, "_load_research_config", ResearchConfig)
+    monkeypatch.setattr(research_bp, "_create_llm_adapter", lambda cfg: None)
+    monkeypatch.setattr(research_bp, "_make_backtest_fn", lambda: None)
+    monkeypatch.setattr(research_bp, "_make_research_store", lambda cfg: store)
+    monkeypatch.setattr(research_bp, "ResearchEngine", FakeEngine)
+    monkeypatch.setattr(research_bp.threading, "Thread", ImmediateThread)
+
+    response = research_bp.run_research()
+
+    assert response["status"] == "running"
+    assert store.closed is True
