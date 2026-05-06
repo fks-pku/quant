@@ -19,7 +19,8 @@ class ResearchEnsembleBuilder:
         self.artifact_store = artifact_store
         self.config = config or {}
         self.matrix_builder = CorrelationMatrixBuilder()
-        self.optimizer = EnsembleOptimizer(max_weight=float(self.config.get("max_weight", 1.0)))
+        max_weight = self.config.get("max_weight_per_strategy", self.config.get("max_weight", 1.0))
+        self.optimizer = EnsembleOptimizer(max_weight=float(max_weight))
 
     def build(self, strategy_ids: Optional[Iterable[str]] = None, run_id: str = "") -> Dict[str, Any]:
         ids = list(strategy_ids or self._discover_strategy_ids())
@@ -40,6 +41,11 @@ class ResearchEnsembleBuilder:
         returns = self.matrix_builder.aligned_frame(returns_by_strategy)
         if returns.shape[1] < 2 or returns.empty:
             return self._no_op(list(returns_by_strategy.keys()), "Strategy returns do not overlap")
+        if not self.optimizer.can_allocate(int(returns.shape[1])):
+            return self._no_op(
+                list(returns.columns),
+                "max_weight_per_strategy is infeasible for selected strategies",
+            )
 
         correlation = self.matrix_builder.build(returns_by_strategy)
         weights = {

@@ -1,5 +1,6 @@
 import uuid
 import threading
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, jsonify, request
@@ -10,6 +11,7 @@ from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
 from quant.features.research.ensemble import ResearchEnsembleBuilder
 from quant.features.research.tracking.comparison import StrategyComparator
+from quant.features.research.tracking import RunRecorder
 
 
 def _make_backtest_fn():
@@ -239,6 +241,58 @@ def _close_research_store(store) -> None:
         close()
 
 
+def _pipeline_response_fields(result: ResearchResult) -> dict:
+    data = result.to_dict()
+    return {
+        "run_id": data["run_id"],
+        "specified": data["specified"],
+        "needs_manual_spec": data["needs_manual_spec"],
+        "validated": data["validated"],
+        "walkforward_passed": data["walkforward_passed"],
+        "ensemble_built": data["ensemble_built"],
+    }
+
+
+def _research_run_metadata(cfg: ResearchConfig, sources=None) -> dict:
+    return {
+        "config_hash": RunRecorder.hash_config(asdict(cfg)),
+        "data_hash": RunRecorder.hash_data({
+            "sources": sources or cfg.sources,
+            "max_results_per_source": cfg.max_results_per_source,
+        }),
+        "code_version": RunRecorder.get_code_version(),
+    }
+
+
+def _load_latest_ensemble_recommendation(experiment_store, artifact_store):
+    for run in experiment_store.list_runs(limit=50):
+        if run.get("strategy_id") not in {"research_ensemble", "research_pipeline"}:
+            continue
+        run_id = str(run.get("run_id", ""))
+        if not run_id:
+            continue
+        for artifact in experiment_store.get_artifacts(run_id):
+            name = str(artifact.get("name", "")).lower()
+            artifact_type = str(artifact.get("artifact_type", "")).lower()
+            path = str(artifact.get("path", "")).lower()
+            if name != "ensemble" and artifact_type != "ensemble" and not path.endswith("ensemble.json"):
+                continue
+            artifact_id = str(artifact.get("artifact_id") or artifact.get("path") or "")
+            if not artifact_id:
+                continue
+            data = artifact_store.load_artifact(artifact_id)
+            if isinstance(data, dict):
+                return data
+        for artifact_id in (f"experiments/{run_id}/ensemble.json", f"{run_id}/ensemble.json"):
+            try:
+                data = artifact_store.load_artifact(artifact_id)
+            except (FileNotFoundError, OSError, ValueError, KeyError):
+                continue
+            if isinstance(data, dict):
+                return data
+    return None
+
+
 def _create_llm_adapter(cfg: ResearchConfig):
     if cfg.llm_provider == "openai":
         from quant.features.cio.llm_adapters.openai_adapter import OpenAIAdapter
@@ -338,6 +392,10 @@ def run_research():
     research_store = _make_research_store(cfg)
     experiment_store = _make_experiment_store(cfg)
     artifact_store = _make_artifact_store(cfg)
+    result_obj = ResearchResult()
+    start_run = getattr(experiment_store, "start_run", None)
+    if cfg.tracking_enabled and callable(start_run):
+        result_obj.run_id = start_run("research_pipeline", _research_run_metadata(cfg, sources))
     engine = ResearchEngine(
         config=cfg,
         scout=_make_research_scout(cfg),
@@ -362,13 +420,12 @@ def run_research():
             _close_research_store(experiment_store)
             _close_research_store(artifact_store)
 
-    result_obj = ResearchResult()
     with _research_lock:
         _research_jobs[job_id] = {"status": "running", "result": result_obj}
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
-    return jsonify({"research_id": job_id, "status": "running"})
+    return jsonify({"research_id": job_id, "status": "running", **_pipeline_response_fields(result_obj)})
 
 
 @research_bp.route("/api/research/status/<research_id>")
@@ -522,8 +579,19 @@ def get_research_ensemble():
         _close_research_store(artifact_store)
         return jsonify({"error": "Research tracking is disabled"}), 404
     try:
-        ids = [item.strip() for item in request.args.get("ids", "").split(",") if item.strip()]
-        result = ResearchEnsembleBuilder(experiment_store, artifact_store, cfg.ensemble_config).build(ids or None)
+        result = _load_latest_ensemble_recommendation(experiment_store, artifact_store)
+        if result is None:
+            result = {
+                "no_op": True,
+                "reason": "No ensemble recommendation found",
+                "strategy_ids": [],
+                "correlation_matrix": {"strategy_ids": [], "matrix": []},
+                "effective_n": 0.0,
+                "weights": {},
+                "portfolio": {},
+                "metrics": {},
+                "methods": [],
+            }
         return jsonify(result)
     finally:
         _close_research_store(experiment_store)
@@ -548,6 +616,8 @@ def rebuild_research_ensemble():
         if data.get("record_run", True):
             run_id = experiment_store.start_run("research_ensemble", {"strategy_ids": ids or []})
         result = ResearchEnsembleBuilder(experiment_store, artifact_store, cfg.ensemble_config).build(ids or None, run_id=run_id)
+        if run_id:
+            result["run_id"] = run_id
         if run_id:
             experiment_store.complete_run(run_id, "completed")
         return jsonify(result)

@@ -34,10 +34,15 @@ class EnsembleOptimizer:
             return 0.0
         return float(1.0 / denom)
 
+    def can_allocate(self, n_assets: int) -> bool:
+        return n_assets <= 0 or self.max_weight * n_assets >= 1.0 - 1e-12
+
     def _apply_cap(self, weights: np.ndarray) -> np.ndarray:
         if weights.size == 0:
             return weights
-        cap = max(self.max_weight, 1.0 / weights.size)
+        if not self.can_allocate(int(weights.size)):
+            raise ValueError("max_weight_per_strategy is infeasible for the number of strategies")
+        cap = self.max_weight
         capped = np.minimum(weights.astype("float64"), cap)
         for _ in range(weights.size * 2):
             remainder = 1.0 - float(capped.sum())

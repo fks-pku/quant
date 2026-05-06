@@ -60,18 +60,21 @@ class ResearchEngine:
             result = ResearchResult()
         run_id = None
         if self.config.tracking_enabled and self.experiment_store is not None:
-            run_id = self.experiment_store.start_run(
-                "research_pipeline",
-                {
-                    "config_hash": RunRecorder.hash_config(asdict(self.config)),
-                    "data_hash": RunRecorder.hash_data({
-                        "sources": sources or self.config.sources,
-                        "max_results_per_source": self.config.max_results_per_source,
-                    }),
-                    "code_version": RunRecorder.get_code_version(),
-                },
-            )
-            result.run_id = run_id
+            if result.run_id:
+                run_id = result.run_id
+            else:
+                run_id = self.experiment_store.start_run(
+                    "research_pipeline",
+                    {
+                        "config_hash": RunRecorder.hash_config(asdict(self.config)),
+                        "data_hash": RunRecorder.hash_data({
+                            "sources": sources or self.config.sources,
+                            "max_results_per_source": self.config.max_results_per_source,
+                        }),
+                        "code_version": RunRecorder.get_code_version(),
+                    },
+                )
+                result.run_id = run_id
 
         try:
             logger.info("Starting research pipeline")

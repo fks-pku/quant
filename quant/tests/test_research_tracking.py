@@ -333,6 +333,34 @@ def test_research_engine_marks_tracked_run_failed_before_reraising():
     assert experiment_store.completed == [("run-failed", "failed", "scout unavailable")]
 
 
+def test_research_engine_reuses_prestarted_run_id():
+    class EmptyScout:
+        def search(self, sources=None, max_results=10):
+            return []
+
+    class PrestartedExperimentStore:
+        def __init__(self):
+            self.completed = []
+
+        def start_run(self, strategy_id, metadata):
+            raise AssertionError("prestarted run should be reused")
+
+        def complete_run(self, run_id, status, error=""):
+            self.completed.append((run_id, status, error))
+
+    experiment_store = PrestartedExperimentStore()
+    engine = ResearchEngine(
+        config=ResearchConfig(auto_backtest=False, tracking_enabled=True),
+        scout=EmptyScout(),
+        experiment_store=experiment_store,
+    )
+
+    result = engine.run_full_pipeline(result=ResearchResult(run_id="prestarted-run"))
+
+    assert result.run_id == "prestarted-run"
+    assert experiment_store.completed == [("prestarted-run", "completed", "")]
+
+
 def test_research_engine_still_runs_without_experiment_store():
     class FixedScout:
         def search(self, sources=None, max_results=10):
