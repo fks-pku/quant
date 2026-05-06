@@ -227,11 +227,12 @@ def main():
     parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama", "deepseek", "glm"],
                         help="LLM provider (only with --no-heuristic)")
     parser.add_argument("--llm-model", default=None, help="LLM model override")
+    parser.add_argument("--research-store", default="file", choices=["file", "duckdb"], help="Research store backend")
+    parser.add_argument("--research-db", default=None, help="DuckDB research state path when --research-store=duckdb")
     args = parser.parse_args()
 
     from quant.features.research.models import ResearchConfig
     from quant.features.research.research_engine import ResearchEngine
-    from quant.infrastructure.research.repository import FileResearchStore
 
     var_root = Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research"
     var_root.mkdir(parents=True, exist_ok=True)
@@ -247,7 +248,12 @@ def main():
         default_backtest_end="2024-12-31",
     )
 
-    store = FileResearchStore(str(var_root))
+    if args.research_store == "duckdb":
+        from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
+        store = DuckDBResearchStore(str(var_root), db_path=args.research_db)
+    else:
+        from quant.infrastructure.research.repository import FileResearchStore
+        store = FileResearchStore(str(var_root))
     scout = _create_keyword_scout()
 
     if args.no_heuristic:

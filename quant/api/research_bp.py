@@ -111,9 +111,15 @@ _research_scheduler: ResearchScheduler = None
 
 
 def _make_research_store(cfg: ResearchConfig):
+    from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
     from quant.infrastructure.research.repository import FileResearchStore
 
     root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
+    tracking_db_path = cfg.tracking_db_path or ""
+    if tracking_db_path.lower().endswith(".duckdb"):
+        return DuckDBResearchStore(root, db_path=tracking_db_path)
+    if str(root).lower().endswith(".duckdb"):
+        return DuckDBResearchStore(root)
     return FileResearchStore(root)
 
 
