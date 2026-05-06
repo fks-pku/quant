@@ -19,8 +19,24 @@ def _test_root() -> Path:
     return root
 
 
-def test_duckdb_experiment_store_records_run_lifecycle_and_queries():
+def test_duckdb_experiment_store_records_run_lifecycle_and_queries(monkeypatch):
     root = _test_root()
+
+    class FixedUuid:
+        def __init__(self, value):
+            self.hex = value
+
+    uuids = iter(
+        [
+            FixedUuid("z-first-run"),
+            FixedUuid("a-second-run"),
+            FixedUuid("metric-1"),
+            FixedUuid("metric-2"),
+        ]
+    )
+    monkeypatch.setattr("quant.infrastructure.research.duckdb_experiment_store.uuid.uuid4", lambda: next(uuids))
+    monkeypatch.setattr(DuckDBExperimentStore, "_now", staticmethod(lambda: "2026-05-06T00:00:00+00:00"))
+
     store = DuckDBExperimentStore(root / "research")
     try:
         first_run_id = store.start_run(

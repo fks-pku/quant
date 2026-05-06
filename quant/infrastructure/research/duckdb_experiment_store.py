@@ -97,7 +97,7 @@ class DuckDBExperimentStore(ExperimentStore):
             sql = """
                 SELECT run_id, strategy_id, status, started_at, completed_at, metadata_json, error
                 FROM runs
-                ORDER BY started_at DESC, run_id DESC
+                ORDER BY started_at DESC, rowid DESC
                 LIMIT ?
             """
             params: List[Any] = [limit]
@@ -106,7 +106,7 @@ class DuckDBExperimentStore(ExperimentStore):
                 SELECT run_id, strategy_id, status, started_at, completed_at, metadata_json, error
                 FROM runs
                 WHERE strategy_id = ?
-                ORDER BY started_at DESC, run_id DESC
+                ORDER BY started_at DESC, rowid DESC
                 LIMIT ?
             """
             params = [strategy_id, limit]
