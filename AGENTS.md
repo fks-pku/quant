@@ -1,113 +1,53 @@
 # AGENTS.md — Quant Trading System
 
-## Architecture
+Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10+.
 
-Hexagonal (Ports & Adapters) + Event-Driven architecture. Domain is the center, Ports define interfaces, Infrastructure implements adapters, Features orchestrate use cases.
+**详细架构**: `ARCHITECTURE.md` | **参考文档索引**: `docs/AGENTS.md`
 
-**See `ARCHITECTURE.md`** for full code map, module boundaries, domain models/events/ports tables.
+## Module Index
 
-**See `docs/AGENTS.md`** for categorized navigation of all reference documentation.
+> 渐进式披露：此文件仅做索引。进入模块前读对应 AGENTS.md，按需深入。
 
-## Directory Structure
+| Module | Path | Description | AGENTS.md |
+|--------|------|-------------|-----------|
+| domain | `quant/domain/` | 纯业务逻辑，零外部依赖 (CENTER) | `quant/domain/AGENTS.md` |
+| infrastructure | `quant/infrastructure/` | 端口实现 (ADAPTERS): DuckDB, providers, brokers | `quant/infrastructure/AGENTS.md` |
+| backtest | `quant/features/backtest/` | 回测引擎、步进验证、绩效分析 | `quant/features/backtest/AGENTS.md` |
+| trading | `quant/features/trading/` | 交易引擎、风控、调度器 | `quant/features/trading/AGENTS.md` |
+| portfolio | `quant/features/portfolio/` | 仓位管理 | `quant/features/portfolio/AGENTS.md` |
+| cio | `quant/features/cio/` | CIO 市场评估、LLM 分析 | `quant/features/cio/AGENTS.md` |
+| strategies | `quant/features/strategies/` | 策略框架 + 实现 (13 strategies) | `quant/features/strategies/AGENTS.md` |
+| research | `quant/features/research/` | 自动策略研究管线 | `quant/features/research/AGENTS.md` |
+| shared | `quant/shared/` | 跨模块工具 (logger, config) | `quant/shared/AGENTS.md` |
+| api | `quant/api/` | Flask REST 路由层 | `quant/api/AGENTS.md` |
+| frontend | `quant/frontend/` | React Dashboard UI | `quant/frontend/AGENTS.md` |
+| tests | `quant/tests/` | 测试套件 (~315 tests) | `quant/tests/AGENTS.md` |
+| scripts | `quant/scripts/` | CLI 工具脚本 | — |
 
-```
-quant/
-├── domain/              # Pure business logic, zero external dependencies (CENTER)
-│   ├── models/          # Domain models (Order, Position, Trade, Fill, Bar, AccountInfo)
-│   ├── events/          # Domain events (EventType, Event, OrderEvents, MarketEvents...)
-│   └── ports/           # Abstract interfaces (DataFeed, BrokerAdapter, Strategy, Storage, EventPublisher)
-├── infrastructure/      # Implements domain ports (ADAPTERS)
-│   ├── events/          # EventBus (implements EventPublisher)
-│   ├── data/
-│   │   ├── storage_duckdb.py  # DuckDBStorage (implements Storage port)
-│   │   └── providers/        # External data fetchers (implement DataFeed port)
-│   ├── execution/       # Broker adapters + order execution
-│   └── var/             # Runtime data (DuckDB, gitignore)
-├── features/            # Business use case orchestration (APPLICATION LAYER)
-│   ├── backtest/        # Full backtest闭环
-│   ├── trading/         # Live/paper trading
-│   ├── portfolio/       # Position management
-│   ├── cio/             # CIO market assessment
-│   ├── strategies/      # Strategy framework + implementations
-│   └── research/        # Quantitative strategy research
-├── shared/              # Cross-feature pure shared utilities
-│   ├── models/          # Compatibility layer → re-export from domain
-│   ├── utils/           # Utilities (logger, config_loader, datetime_utils)
-│   └── config/          # Configuration (config.yaml, brokers.yaml, strategies.yaml)
-├── api/                 # Flask thin routing layer
-├── frontend/            # React Dashboard UI
-├── scripts/             # CLI utility scripts
-└── tests/              # Tests
-```
+## Architecture Rules (铁律)
 
-## Dependency Rules (铁律)
+详见 `ARCHITECTURE.md` "Architecture Invariants" 节。核心：
 
-1. **domain/ zero external dependencies** — does not depend on any other layer
-2. **features/ only depend on domain** — through ports injection. If EventBus is needed, accept `EventPublisher` port via constructor
-3. **infrastructure/ implements domain ports** — depends on domain. Cannot import features. Cross-layer via event bus
-4. **shared/ has no business semantics** — pure utilities (models/ only re-exports)
-5. **api/ only calls features**
-6. **Feature-to-feature import is forbidden** — shared types must be elevated to `domain/models/`
-7. **Inter-layer communication**: direct call + Event Bus + DI
-8. **domain ports return `Any` type**, not `pd.DataFrame` — pandas conversion in infrastructure layer
-
-## Feature Index
-
-| Feature | Path | Description |
-|---------|------|-------------|
-| backtest | features/backtest/ | 回测引擎、步进验证、绩效分析 |
-| trading | features/trading/ | 交易引擎、风控、调度器、组合管理 |
-| portfolio | features/portfolio/ | 仓位管理 |
-| cio | features/cio/ | CIO 市场评估 |
-| strategies | features/strategies/ | 策略框架 + 实现 |
-| research | features/research/ | 量化策略研究 |
-
-### Module AGENTS.md
-
-Each module has its own `AGENTS.md` for local constraints:
-
-- `quant/domain/AGENTS.md` — domain models, events, ports contracts
-- `quant/infrastructure/AGENTS.md` — adapter patterns, DuckDB rules
-- `quant/features/backtest/AGENTS.md`
-- `quant/features/trading/AGENTS.md`
-- `quant/features/strategies/AGENTS.md`
-- `quant/features/research/AGENTS.md`
-- `quant/features/portfolio/AGENTS.md`
-- `quant/features/cio/AGENTS.md`
-- `quant/api/AGENTS.md` — Flask route conventions
-- `quant/frontend/AGENTS.md` — React conventions
-- `quant/shared/AGENTS.md` — re-export compatibility layer
-
-## Reference Documentation
-
-| Doc | Path | Description |
-|-----|------|-------------|
-| Architecture | `ARCHITECTURE.md` | Code map, module boundaries, invariants |
-| Data Architecture | `docs/reference/data-architecture.md` | Two-port separation, providers, storage |
-| Symbol Registry | `docs/reference/symbol-registry.md` | Market code patterns |
-| Commission Models | `docs/reference/commission-models.md` | Per-market fees |
-| Import Paths | `docs/reference/import-paths.md` | All import reference |
-| Deprecated Paths | `docs/reference/deprecated-paths.md` | Old paths to avoid |
-| Docs Index | `docs/AGENTS.md` | Categorized reference navigation |
+1. **domain/ 零外部依赖**
+2. **features/ 只依赖 domain** (通过 ports 注入)
+3. **infrastructure/ 实现 domain ports** (不导入 features)
+4. **Feature-to-feature 禁止直接导入** — 共享类型提升到 `domain/models/`
+5. **domain ports 返回 `Any`**，不用 `pd.DataFrame`
 
 ## Commands
 
 ```bash
-python quant/api_server.py                                        # 启动 API 服务
-python -m pytest quant/tests/ -q                                  # 运行测试
-python quant/backtest_runner.py --strategy SimpleMomentum ...     # CLI 回测
-python quant/quant_system.py --mode paper                         # CLI 实盘/模拟
-python quant/scripts/ingest_akshare.py --symbol 600519 ...        # 从 akshare 抓取 A-share 数据存入 DuckDB
+python quant/api_server.py                                     # API 服务
+python -m pytest quant/tests/ -q                               # 测试
+python quant/backtest_runner.py --strategy SimpleMomentum ...  # CLI 回测
+python quant/quant_system.py --mode paper                      # 实盘/模拟
 python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 2025-01-01
 ```
 
 ## Key Conventions
 
-- Python 3.10+ with type hints
 - No comments unless explicitly requested
 - Frozen dataclasses for immutable value objects
-- ABC + abstract methods for ports
-- Thread safety: `threading.RLock()` for shared state
-- Logging: `from quant.shared.utils.logger import setup_logger`
-- DuckDB readers must use `read_only=True`
-- Text files must be UTF-8; run `python scripts/check_text_encoding.py` after automated doc rewrites
+- `threading.RLock()` for shared state
+- DuckDB readers: `read_only=True`
+- Text files: UTF-8; run `python scripts/check_text_encoding.py` after doc rewrites
