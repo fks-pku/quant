@@ -61,6 +61,13 @@ def test_infrastructure_research_does_not_import_features():
     assert offenders == []
 
 
+def test_research_cli_does_not_reuse_api_private_wiring():
+    imports = _imported_modules(ROOT / "scripts" / "run_research.py")
+
+    assert "quant.api.research_bp" not in imports
+    assert not any(module.startswith("quant.api.research_bp.") for module in imports)
+
+
 def test_domain_ports_do_not_import_external_libraries_or_features():
     files = _python_files(ROOT / "domain" / "ports")
     forbidden = ("pandas", "numpy", "duckdb", "requests", "quant.features", "quant.infrastructure")

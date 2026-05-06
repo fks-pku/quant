@@ -184,6 +184,7 @@ class ResearchEngine:
                     list(self.config.default_symbols),
                     self.config.default_backtest_start,
                     self.config.default_backtest_end,
+                    run_id=result.run_id,
                 )
             except Exception as exc:
                 result.errors.append(f"Rigor error for {sid}: {exc}")

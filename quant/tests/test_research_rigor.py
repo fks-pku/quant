@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from quant.domain.models.trade import Trade
 from quant.features.research.models import EvaluationReport, PurgedWalkForwardResult, RawStrategy, ResearchConfig
 from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.rigor import CostModel, RigorHub, generate_purged_walk_forward_splits
@@ -178,6 +179,7 @@ def test_rigor_hub_calls_runner_once_per_split_and_aggregates_oos_metrics():
     assert result.worst_oos_sharpe == pytest.approx(min(split["test_sharpe"] for split in result.splits))
     assert result.deflated_sharpe_ratio is None
     assert result.is_viable is True
+    assert result.splits[0]["regime"] == "unknown"
     assert calls[0][0] == "daily_momentum"
     assert {"start", "end", "symbols", "initial_cash", "cost_config", "run_label"}.issubset(calls[0][1])
 
@@ -246,6 +248,123 @@ def test_rigor_hub_fails_capacity_when_trades_exceed_adv_cap():
     assert result.splits[0]["capacity_ok"] is False
 
 
+def test_rigor_hub_records_metrics_with_pipeline_run_id():
+    class RecordingExperimentStore:
+        def __init__(self):
+            self.calls = []
+
+        def record_metrics(self, run_id, metrics):
+            self.calls.append((run_id, list(metrics)))
+
+    def runner(strategy_id, request):
+        return {"metrics": {"sharpe": 0.70, "train_sharpe": 0.90}, "equity_curve": [], "trades": [], "errors": []}
+
+    store = RecordingExperimentStore()
+    hub = RigorHub(
+        runner,
+        config={
+            "purged_walkforward": {
+                "train_window_days": 20,
+                "test_window_days": 5,
+                "step_days": 10,
+                "purge_days": 2,
+                "embargo_days": 0,
+                "min_train_observations": 20,
+            }
+        },
+        experiment_store=store,
+    )
+
+    hub.evaluate("daily_momentum", symbols=["SPY"], start="2020-01-01", end="2020-02-28", run_id="run-123")
+
+    assert store.calls
+    assert {call[0] for call in store.calls} == {"run-123"}
+
+
+def test_rigor_hub_records_capacity_metrics_when_trade_volume_available():
+    class RecordingExperimentStore:
+        def __init__(self):
+            self.calls = []
+
+        def record_metrics(self, run_id, metrics):
+            self.calls.extend(list(metrics))
+
+    def runner(strategy_id, request):
+        return {
+            "metrics": {"sharpe": 0.70, "train_sharpe": 0.90},
+            "equity_curve": [],
+            "trades": [
+                {
+                    "trade_value": 100_000,
+                    "average_daily_volume": 1_000_000,
+                    "price": 100,
+                    "volatility": 0.02,
+                }
+            ],
+            "errors": [],
+        }
+
+    store = RecordingExperimentStore()
+    hub = RigorHub(
+        runner,
+        config={
+            "purged_walkforward": {
+                "train_window_days": 20,
+                "test_window_days": 5,
+                "step_days": 10,
+                "purge_days": 2,
+                "embargo_days": 0,
+                "min_train_observations": 20,
+            },
+            "cost_model": {"max_adv_pct": 0.05},
+        },
+        experiment_store=store,
+    )
+
+    hub.evaluate("daily_momentum", symbols=["SPY"], start="2020-01-01", end="2020-02-28", run_id="run-123")
+
+    metrics = {metric["metric_name"]: metric["metric_value"] for metric in store.calls if metric["window_label"] == "walkforward_1"}
+    assert metrics["capacity_ok"] == 0.0
+    assert metrics["capacity_adv_pct"] == pytest.approx(0.10)
+    assert metrics["cost_bps"] > 0.0
+
+
+def test_rigor_trade_serializer_includes_trade_value_and_adv():
+    from quant.features.research.rigor.backtest_hub import serialize_backtest_trades
+
+    trade = Trade(
+        symbol="SPY",
+        quantity=10,
+        entry_price=100,
+        exit_price=110,
+        entry_time=pd.Timestamp("2020-01-01").to_pydatetime(),
+        exit_time=pd.Timestamp("2020-01-02").to_pydatetime(),
+        side="SELL",
+        fill_price=110,
+        intended_qty=10,
+    )
+    data = pd.DataFrame(
+        [
+            {"date": "2020-01-01", "symbol": "SPY", "close": 100, "volume": 1_000},
+            {"date": "2020-01-02", "symbol": "SPY", "close": 110, "volume": 2_000},
+        ]
+    )
+
+    rows = serialize_backtest_trades([trade], data)
+
+    assert rows == [
+        {
+            "symbol": "SPY",
+            "side": "SELL",
+            "quantity": 10.0,
+            "price": 110.0,
+            "trade_value": 1100.0,
+            "average_daily_volume": 160000.0,
+            "volatility": 0.0,
+        }
+    ]
+
+
 def test_research_engine_runs_optional_rigor_gate_for_integrated_candidates():
     tmp_path = _test_root()
 
@@ -261,8 +380,8 @@ def test_research_engine_runs_optional_rigor_gate_for_integrated_candidates():
         def __init__(self):
             self.calls = []
 
-        def evaluate(self, strategy_id, symbols, start, end):
-            self.calls.append((strategy_id, symbols, start, end))
+        def evaluate(self, strategy_id, symbols, start, end, run_id=None):
+            self.calls.append((strategy_id, symbols, start, end, run_id))
             return PurgedWalkForwardResult(
                 splits=[{"test_sharpe": 0.50}],
                 aggregate_oos_sharpe=0.50,
@@ -273,8 +392,19 @@ def test_research_engine_runs_optional_rigor_gate_for_integrated_candidates():
                 is_viable=True,
             )
 
+    class TrackingStore:
+        def __init__(self):
+            self.completed = []
+
+        def start_run(self, name, metadata):
+            return "pipeline-run-1"
+
+        def complete_run(self, run_id, status, error=None):
+            self.completed.append((run_id, status, error))
+
     try:
         rigor_hub = PassingRigorHub()
+        experiment_store = TrackingStore()
         research_store = FileResearchStore(tmp_path / "research")
         engine = ResearchEngine(
             config=ResearchConfig(
@@ -286,6 +416,7 @@ def test_research_engine_runs_optional_rigor_gate_for_integrated_candidates():
             scout=FixedScout(),
             evaluator=FixedEvaluator(),
             research_store=research_store,
+            experiment_store=experiment_store,
             strategies_dir=str(tmp_path / "strategies"),
             rigor_hub=rigor_hub,
         )
@@ -294,6 +425,8 @@ def test_research_engine_runs_optional_rigor_gate_for_integrated_candidates():
 
         assert result.integrated == 1
         assert result.walkforward_passed == 1
-        assert rigor_hub.calls == [("daily_momentum", ["SPY", "QQQ"], "2020-01-01", "2024-12-31")]
+        assert result.run_id == "pipeline-run-1"
+        assert rigor_hub.calls == [("daily_momentum", ["SPY", "QQQ"], "2020-01-01", "2024-12-31", "pipeline-run-1")]
+        assert experiment_store.completed == [("pipeline-run-1", "completed", None)]
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)

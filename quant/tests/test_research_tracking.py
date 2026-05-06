@@ -202,6 +202,67 @@ def test_research_api_background_run_closes_artifact_store(monkeypatch):
     assert stores["artifact"].closed is True
 
 
+def test_scheduler_rigor_hub_reuses_active_experiment_store(monkeypatch):
+    class FakeBlueprint:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def route(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+    fake_request = types.SimpleNamespace(get_json=lambda: {})
+    fake_flask = types.SimpleNamespace(
+        Blueprint=FakeBlueprint,
+        jsonify=lambda data: data,
+        request=fake_request,
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+
+    import importlib
+
+    research_module = importlib.import_module("quant.api.research_bp")
+
+    class FakeEngine:
+        last_kwargs = None
+
+        def __init__(self, **kwargs):
+            FakeEngine.last_kwargs = kwargs
+
+    class FakeScheduler:
+        def __init__(self, engine, config):
+            self.engine = engine
+            self.config = config
+
+    experiment_store = object()
+    captured = {}
+    cfg = ResearchConfig(auto_backtest=True, rigor_enabled=True, tracking_enabled=True)
+
+    def make_rigor_hub(config, experiment_store=None):
+        captured["experiment_store"] = experiment_store
+        return "rigor-hub"
+
+    monkeypatch.setattr(research_module, "_research_scheduler", None)
+    monkeypatch.setattr(research_module, "_load_research_config", lambda: cfg)
+    monkeypatch.setattr(research_module, "_make_research_store", lambda config: object())
+    monkeypatch.setattr(research_module, "_create_llm_adapter", lambda config: None)
+    monkeypatch.setattr(research_module, "_make_research_scout", lambda config: object())
+    monkeypatch.setattr(research_module, "_make_backtest_fn", lambda: None)
+    monkeypatch.setattr(research_module, "_make_experiment_store", lambda config: experiment_store)
+    monkeypatch.setattr(research_module, "_make_artifact_store", lambda config: object())
+    monkeypatch.setattr(research_module, "_make_rigor_hub", make_rigor_hub)
+    monkeypatch.setattr(research_module, "ResearchEngine", FakeEngine)
+    monkeypatch.setattr(research_module, "ResearchScheduler", FakeScheduler)
+
+    scheduler = research_module._get_scheduler()
+
+    assert scheduler.engine is not None
+    assert FakeEngine.last_kwargs["experiment_store"] is experiment_store
+    assert captured["experiment_store"] is experiment_store
+    assert FakeEngine.last_kwargs["rigor_hub"] == "rigor-hub"
+
+
 def test_run_recorder_helpers_are_deterministic_and_safe():
     assert RunRecorder.hash_config({"b": 2, "a": 1}) == RunRecorder.hash_config({"a": 1, "b": 2})
     assert RunRecorder.hash_config({"a": 1}) != RunRecorder.hash_config({"a": 2})

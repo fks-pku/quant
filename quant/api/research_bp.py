@@ -109,6 +109,7 @@ def _make_rigor_backtest_runner():
     from quant.features.strategies.registry import StrategyRegistry
     from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
     from quant.features.backtest.walkforward import DataFrameProvider
+    from quant.features.research.rigor.backtest_hub import serialize_backtest_trades
     from quant.features.trading.portfolio import Portfolio
     from quant.features.trading.risk import RiskEngine
     from quant.features.trading.sub_portfolio import SubPortfolio
@@ -166,7 +167,7 @@ def _make_rigor_backtest_runner():
                 "win_rate": bt_result.win_rate,
             },
             "equity_curve": [],
-            "trades": [],
+            "trades": serialize_backtest_trades(bt_result.trades, data_df),
             "errors": [],
         }
 
@@ -279,6 +280,8 @@ def _get_scheduler() -> ResearchScheduler:
     if _research_scheduler is None:
         cfg = _load_research_config()
         research_store = _make_research_store(cfg)
+        experiment_store = _make_experiment_store(cfg)
+        artifact_store = _make_artifact_store(cfg)
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
@@ -288,9 +291,9 @@ def _get_scheduler() -> ResearchScheduler:
             evaluator=evaluator,
             backtest_fn=_make_backtest_fn(),
             research_store=research_store,
-            experiment_store=_make_experiment_store(cfg),
-            artifact_store=_make_artifact_store(cfg),
-            rigor_hub=_make_rigor_hub(cfg),
+            experiment_store=experiment_store,
+            artifact_store=artifact_store,
+            rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store),
         )
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:

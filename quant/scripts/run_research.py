@@ -205,6 +205,155 @@ def _create_keyword_scout():
     return StrategyScout(sources=sources)
 
 
+def _run_backtest_for_cli(strategy_id, symbols, start_text, end_text, initial_cash, cost_config):
+    from datetime import datetime
+
+    import pandas as pd
+
+    from quant.features.backtest.engine import Backtester
+    from quant.features.backtest.walkforward import DataFrameProvider
+    from quant.features.strategies.registry import StrategyRegistry
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.risk import RiskEngine
+    from quant.features.trading.sub_portfolio import SubPortfolio
+    from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+
+    registry = StrategyRegistry()
+    strategy_class = registry.get(strategy_id)
+    if strategy_class is None:
+        return None, None, [f"Strategy {strategy_id} not in registry for backtest"]
+
+    start = datetime.strptime(start_text, "%Y-%m-%d")
+    end = datetime.strptime(end_text, "%Y-%m-%d")
+    db_provider = DuckDBProvider()
+    db_provider.connect()
+    all_data = []
+    try:
+        for symbol in symbols:
+            bars = db_provider.get_bars(symbol, start, end, "1d")
+            if not bars.empty:
+                all_data.append(bars)
+    finally:
+        db_provider.disconnect()
+
+    if not all_data:
+        return None, None, [f"No data for {strategy_id}"]
+
+    data_df = pd.concat(all_data, ignore_index=True)
+    strategy = strategy_class(symbols=symbols)
+    bt_config = {
+        "backtest": {"slippage_bps": dict(cost_config or {}).get("slippage_bps", 5)},
+        "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+        "data": {"default_timeframe": "1d"},
+        "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
+    }
+    backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
+    result = backtester.run(
+        start=start,
+        end=end,
+        strategies=[strategy],
+        initial_cash=float(initial_cash),
+        data_provider=DataFrameProvider(data_df),
+        symbols=symbols,
+    )
+    return result, data_df, []
+
+
+def _make_script_backtest_fn():
+    from datetime import datetime
+
+    from quant.features.research.models import ResearchLogEntry
+
+    def _run_backtest(strategy_id, result, config, integrator, pool):
+        symbols = list(config.default_symbols)
+        bt_result, data_df, errors = _run_backtest_for_cli(
+            strategy_id,
+            symbols,
+            config.default_backtest_start,
+            config.default_backtest_end,
+            100000,
+            {"slippage_bps": 5},
+        )
+        if errors:
+            result.errors.extend(errors)
+            return
+
+        info = integrator.get_registry_entry(strategy_id)
+        if info is None:
+            return
+
+        start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
+        end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
+        info["backtest"] = {
+            "sharpe": round(bt_result.sharpe_ratio, 2),
+            "max_dd": round(bt_result.max_drawdown_pct, 2),
+            "cagr": round(bt_result.total_return * 100 / max(1, (end - start).days / 365.25), 2),
+            "win_rate": round(bt_result.win_rate * 100, 2),
+            "period": f"{config.default_backtest_start}-{config.default_backtest_end}",
+        }
+        meta = info.setdefault("research_meta", {})
+        meta["backtest_result"] = info["backtest"]
+        if bt_result.sharpe_ratio < config.backtest_sharpe_threshold:
+            pool.reject(strategy_id, reason=f"Backtest Sharpe {bt_result.sharpe_ratio:.2f} below threshold")
+            result.rejected += 1
+            result.log.append(ResearchLogEntry(
+                phase="backtest", title=info.get("name", strategy_id),
+                source="", source_url="", verdict="fail",
+                reason=f"Sharpe {bt_result.sharpe_ratio:.2f} < {config.backtest_sharpe_threshold}",
+                scores={
+                    "sharpe": round(bt_result.sharpe_ratio, 2),
+                    "max_dd": round(bt_result.max_drawdown_pct, 2),
+                    "win_rate": round(bt_result.win_rate * 100, 2),
+                },
+            ))
+            return
+
+        result.backtested += 1
+        result.log.append(ResearchLogEntry(
+            phase="backtest", title=info.get("name", strategy_id),
+            source="", source_url="", verdict="pass",
+            reason=f"Sharpe {bt_result.sharpe_ratio:.2f}",
+            scores={
+                "sharpe": round(bt_result.sharpe_ratio, 2),
+                "max_dd": round(bt_result.max_drawdown_pct, 2),
+                "win_rate": round(bt_result.win_rate * 100, 2),
+            },
+        ))
+
+    return _run_backtest
+
+
+def _make_script_rigor_backtest_runner():
+    from quant.features.research.rigor import serialize_backtest_trades
+
+    def _run(strategy_id, request):
+        symbols = list(request.get("symbols") or [])
+        bt_result, data_df, errors = _run_backtest_for_cli(
+            strategy_id,
+            symbols,
+            request.get("start"),
+            request.get("end"),
+            request.get("initial_cash", 100000),
+            request.get("cost_config", {}),
+        )
+        if errors:
+            return {"metrics": {}, "equity_curve": [], "trades": [], "errors": errors}
+        return {
+            "metrics": {
+                "sharpe": bt_result.sharpe_ratio,
+                "sharpe_ratio": bt_result.sharpe_ratio,
+                "max_drawdown_pct": bt_result.max_drawdown_pct,
+                "total_return": bt_result.total_return,
+                "win_rate": bt_result.win_rate,
+            },
+            "equity_curve": [],
+            "trades": serialize_backtest_trades(bt_result.trades, data_df),
+            "errors": [],
+        }
+
+    return _run
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -258,11 +407,10 @@ def main():
     backtest_fn = None
     rigor_hub = None
     if args.backtest:
-        from quant.api.research_bp import _make_backtest_fn, _make_rigor_backtest_runner
         from quant.features.research.rigor import RigorHub
-        backtest_fn = _make_backtest_fn()
-        rigor_hub = RigorHub(_make_rigor_backtest_runner(), config=config.rigor_config)
-        logger.warning("Backtests enabled — requires DuckDB data")
+        backtest_fn = _make_script_backtest_fn()
+        rigor_hub = RigorHub(_make_script_rigor_backtest_runner(), config=config.rigor_config)
+        logger.warning("Backtests enabled - requires DuckDB data")
 
     strategies_dir = str(Path(__file__).resolve().parent.parent / "features" / "strategies")
     engine = ResearchEngine(
