@@ -120,6 +120,24 @@ def _make_research_store(cfg: ResearchConfig):
     return FileResearchStore(root)
 
 
+def _make_experiment_store(cfg: ResearchConfig):
+    if not cfg.tracking_enabled:
+        return None
+    from quant.infrastructure.research.duckdb_experiment_store import DuckDBExperimentStore
+
+    root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
+    return DuckDBExperimentStore(root, db_path=cfg.tracking_db_path or None)
+
+
+def _make_artifact_store(cfg: ResearchConfig):
+    if not cfg.tracking_enabled:
+        return None
+    from quant.infrastructure.research.file_artifact_store import FileArtifactStore
+
+    root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
+    return FileArtifactStore(root)
+
+
 def _close_research_store(store) -> None:
     close = getattr(store, "close", None)
     if callable(close):
@@ -172,7 +190,14 @@ def _get_scheduler() -> ResearchScheduler:
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn(), research_store=research_store)
+        engine = ResearchEngine(
+            config=cfg,
+            evaluator=evaluator,
+            backtest_fn=_make_backtest_fn(),
+            research_store=research_store,
+            experiment_store=_make_experiment_store(cfg),
+            artifact_store=_make_artifact_store(cfg),
+        )
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:
             _research_scheduler.start()
@@ -212,11 +237,15 @@ def run_research():
     from quant.features.research.evaluator import StrategyEvaluator
     evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
     research_store = _make_research_store(cfg)
+    experiment_store = _make_experiment_store(cfg)
+    artifact_store = _make_artifact_store(cfg)
     engine = ResearchEngine(
         config=cfg,
         evaluator=evaluator,
         backtest_fn=_make_backtest_fn(),
         research_store=research_store,
+        experiment_store=experiment_store,
+        artifact_store=artifact_store,
     )
 
     def _run():
@@ -229,6 +258,7 @@ def run_research():
                 _research_jobs[job_id] = {"status": "error", "error": str(e)}
         finally:
             _close_research_store(research_store)
+            _close_research_store(experiment_store)
 
     result_obj = ResearchResult()
     with _research_lock:
