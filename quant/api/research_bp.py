@@ -144,6 +144,14 @@ def _create_llm_adapter(cfg: ResearchConfig):
             temperature=cfg.llm_temperature,
             base_url=cfg.llm_base_url or "https://api.deepseek.com/v1",
         )
+    elif cfg.llm_provider == "glm":
+        from quant.features.cio.llm_adapters.glm_adapter import GLMAdapter
+        return GLMAdapter(
+            model=cfg.llm_model or "glm-4-plus",
+            api_key=cfg.llm_api_key or "",
+            temperature=cfg.llm_temperature,
+            base_url=cfg.llm_base_url or "https://open.bigmodel.cn/api/paas/v4/",
+        )
     return None
 
 

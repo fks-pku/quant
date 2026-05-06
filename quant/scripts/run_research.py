@@ -224,7 +224,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
     parser.add_argument("--backtest", action="store_true", help="Run backtests (requires DuckDB data)")
     parser.add_argument("--no-heuristic", action="store_true", help="Use LLM evaluator instead of heuristic")
-    parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama", "deepseek"],
+    parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama", "deepseek", "glm"],
                         help="LLM provider (only with --no-heuristic)")
     parser.add_argument("--llm-model", default=None, help="LLM model override")
     args = parser.parse_args()
@@ -359,6 +359,9 @@ def _create_llm_adapter(provider, model):
     elif provider == "deepseek":
         from quant.features.cio.llm_adapters.deepseek_adapter import DeepSeekAdapter
         return DeepSeekAdapter(model=model, api_key=os.environ.get("DEEPSEEK_API_KEY", ""))
+    elif provider == "glm":
+        from quant.features.cio.llm_adapters.glm_adapter import GLMAdapter
+        return GLMAdapter(model=model, api_key=os.environ.get("GLM_API_KEY", ""))
     return None
 
 

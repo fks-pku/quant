@@ -18,7 +18,7 @@ research:
     - QQQ
 
 llm:
-  provider: deepseek  # openai | claude | ollama | minimax | deepseek
+  provider: deepseek  # openai | claude | ollama | minimax | deepseek | glm
   model: deepseek-chat
   # api_key: Set via DEEPSEEK_API_KEY environment variable
   # Or uncomment and set directly (not recommended for security):

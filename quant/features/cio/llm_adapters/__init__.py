@@ -6,5 +6,6 @@ from quant.features.cio.llm_adapters.claude_adapter import ClaudeAdapter
 from quant.features.cio.llm_adapters.ollama_adapter import OllamaAdapter
 from quant.features.cio.llm_adapters.minimax_adapter import MiniMaxAdapter
 from quant.features.cio.llm_adapters.deepseek_adapter import DeepSeekAdapter
+from quant.features.cio.llm_adapters.glm_adapter import GLMAdapter
 
-__all__ = ["LLMAdapter", "OpenAIAdapter", "ClaudeAdapter", "OllamaAdapter", "MiniMaxAdapter", "DeepSeekAdapter"]
+__all__ = ["LLMAdapter", "OpenAIAdapter", "ClaudeAdapter", "OllamaAdapter", "MiniMaxAdapter", "DeepSeekAdapter", "GLMAdapter"]
