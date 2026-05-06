@@ -1,5 +1,7 @@
 import json
 import shutil
+import sys
+import types
 import uuid
 from pathlib import Path
 
@@ -121,6 +123,83 @@ def test_file_artifact_store_saves_and_loads_json_and_table_artifacts():
         assert store.load_artifact(table_meta["artifact_id"]) == [{"name": "sharpe", "value": 1.25}]
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_file_artifact_store_rejects_artifact_paths_outside_root():
+    root = _test_root()
+    outside = root / "outside.json"
+    outside.write_text(json.dumps({"secret": True}), encoding="utf-8")
+    store = FileArtifactStore(root / "artifacts")
+    try:
+        with pytest.raises(ValueError, match="outside artifact root"):
+            store.load_artifact(str(outside))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_research_api_background_run_closes_artifact_store(monkeypatch):
+    class FakeBlueprint:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def route(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+    fake_request = types.SimpleNamespace(get_json=lambda: {})
+    fake_flask = types.SimpleNamespace(
+        Blueprint=FakeBlueprint,
+        jsonify=lambda data: data,
+        request=fake_request,
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+
+    import importlib
+
+    research_module = importlib.import_module("quant.api.research_bp")
+
+    class ClosableStore:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class ImmediateThread:
+        def __init__(self, target, daemon=True):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            self.target()
+
+    class FakeEngine:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_full_pipeline(self, sources=None, result=None):
+            return result
+
+    stores = {
+        "research": ClosableStore(),
+        "experiment": ClosableStore(),
+        "artifact": ClosableStore(),
+    }
+    monkeypatch.setattr(research_module, "_load_research_config", lambda: ResearchConfig(auto_backtest=False, tracking_enabled=True))
+    monkeypatch.setattr(research_module, "_create_llm_adapter", lambda cfg: None)
+    monkeypatch.setattr(research_module, "_make_backtest_fn", lambda: None)
+    monkeypatch.setattr(research_module, "_make_research_store", lambda cfg: stores["research"])
+    monkeypatch.setattr(research_module, "_make_experiment_store", lambda cfg: stores["experiment"])
+    monkeypatch.setattr(research_module, "_make_artifact_store", lambda cfg: stores["artifact"])
+    monkeypatch.setattr(research_module, "ResearchEngine", FakeEngine)
+    monkeypatch.setattr(research_module.threading, "Thread", ImmediateThread)
+
+    research_module.run_research()
+
+    assert stores["research"].closed is True
+    assert stores["experiment"].closed is True
+    assert stores["artifact"].closed is True
 
 
 def test_run_recorder_helpers_are_deterministic_and_safe():

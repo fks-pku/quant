@@ -27,7 +27,13 @@ class FileArtifactStore(ResearchArtifactStore):
         path = Path(artifact_id)
         if not path.is_absolute():
             path = self.root_dir / path
-        return json.loads(path.read_text(encoding="utf-8"))
+        root = self.root_dir.resolve()
+        resolved_path = path.resolve()
+        try:
+            resolved_path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"Artifact path is outside artifact root: {artifact_id}") from exc
+        return json.loads(resolved_path.read_text(encoding="utf-8"))
 
     def _artifact_path(self, run_id: str, name: str, suffix: str) -> Path:
         safe_run_id = self._safe_part(run_id)

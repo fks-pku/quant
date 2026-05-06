@@ -259,6 +259,7 @@ def run_research():
         finally:
             _close_research_store(research_store)
             _close_research_store(experiment_store)
+            _close_research_store(artifact_store)
 
     result_obj = ResearchResult()
     with _research_lock:
