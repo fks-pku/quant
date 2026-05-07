@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from quant.features.backtest.engine import Backtester
-from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 from quant.tests.conftest import make_backtester, make_us_bars
 

@@ -7,7 +7,7 @@ import pytest
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.sub_portfolio import SubPortfolio
 from quant.features.backtest.engine import Backtester
-from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.tests.conftest import make_backtester
 
 

@@ -20,8 +20,8 @@ from hypothesis.strategies import composite
 import pandas as pd
 import pytest
 
-from quant.features.backtest.walkforward import DataFrameProvider
-from quant.tests.conftest import make_backtester
+from quant.features.backtest.data_provider import DataFrameProvider
+from quant.tests.conftest import make_backtester, make_scripted_strategy
 
 pytestmark = pytest.mark.fuzz
 
@@ -239,61 +239,6 @@ def us_dividend_input(draw):
         ))
 
     return data, dividends, symbols, signals
-
-
-# ==========================================================================
-# Scripted strategy
-# ==========================================================================
-
-def make_scripted_strategy(name, signals):
-    """Create a strategy that replays predefined signals.
-
-    signals: list of (day_index, symbol, side, quantity)
-    """
-    sig_by_day: dict = {}
-    for day, sym, side, qty in signals:
-        sig_by_day.setdefault(day, []).append((sym, side, qty))
-
-    class S:
-        pass
-
-    S.name = name
-    S.context = None
-    S._positions: dict = {}
-    S._day = -1
-
-    def on_start(self, ctx):
-        self.context = ctx
-
-    def on_before_trading(self, ctx, td):
-        pass
-
-    def on_data(self, ctx, data):
-        pass
-
-    def on_after_trading(self, ctx, td):
-        self._day += 1
-        for sym, side, qty in sig_by_day.get(self._day, []):
-            ctx.order_manager.submit_order(sym, qty, side, "MARKET", None, name)
-
-    def on_fill(self, ctx, fill):
-        q = fill.quantity if fill.side == "BUY" else -fill.quantity
-        self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + q
-
-    def get_position(self, symbol):
-        return self._positions.get(symbol, 0)
-
-    def on_stop(self, ctx):
-        pass
-
-    S.on_start = on_start
-    S.on_before_trading = on_before_trading
-    S.on_data = on_data
-    S.on_after_trading = on_after_trading
-    S.on_fill = on_fill
-    S.get_position = get_position
-    S.on_stop = on_stop
-    return S()
 
 
 # ==========================================================================

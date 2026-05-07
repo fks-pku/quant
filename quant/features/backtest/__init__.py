@@ -4,7 +4,8 @@ from quant.features.backtest.entities import (
     BacktestDiagnostics,
     BacktestResultExporter,
 )
-from quant.features.backtest.walkforward import WalkForwardEngine, DataFrameProvider
+from quant.features.backtest.walkforward import WalkForwardEngine
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.backtest.analytics import (
     calculate_sharpe,
     calculate_sortino,

@@ -11,7 +11,7 @@ from quant.tests.conftest import (
 )
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.dividend_processor import calculate_cn_dividend_tax
-from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.strategies.base import Strategy
 from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 

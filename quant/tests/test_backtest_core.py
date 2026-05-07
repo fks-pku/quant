@@ -20,7 +20,8 @@ from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestDiagnostics, BacktestResult, CommissionConfig
 from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE, is_suspended
 from quant.features.backtest.commission import VOLUME_PARTICIPATION_LIMIT
-from quant.features.backtest.walkforward import DataFrameProvider, WalkForwardEngine
+from quant.features.backtest.walkforward import WalkForwardEngine
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
 from quant.features.trading.sub_portfolio import SubPortfolio
@@ -809,7 +810,7 @@ class TestStrategyPositionSyncAfterDividend:
 
 class TestDataFrameProviderDedup:
     def test_get_bars_no_duplicates(self):
-        from quant.features.backtest.walkforward import DataFrameProvider
+        from quant.features.backtest.data_provider import DataFrameProvider
         start = datetime(2025, 1, 2)
         rows = [
             {"symbol": "AAPL", "timestamp": start, "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1000},
@@ -822,7 +823,7 @@ class TestDataFrameProviderDedup:
         assert bars.iloc[0]["volume"] == 1000
 
     def test_trading_dates_are_date_objects(self):
-        from quant.features.backtest.walkforward import DataFrameProvider
+        from quant.features.backtest.data_provider import DataFrameProvider
         start = datetime(2025, 1, 2)
         data = make_us_bars(["AAPL"], start, 5, {"AAPL": 150.0})
         provider = DataFrameProvider(data)

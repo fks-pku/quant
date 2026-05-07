@@ -18,7 +18,8 @@
 | `nav_calculator.py` | NAV 计算 + 未平仓提取 |
 | `analytics.py` | 绩效指标：Sharpe、Sortino、MaxDD、胜率、盈亏比等 |
 | `data_validator.py` | 数据校验：列完整性、重复检测、OHLC 逻辑、价格跳变、日期缺口等 |
-| `walkforward.py` | 步进验证 + `DataFrameProvider` 内存数据适配层 |
+| `data_provider.py` | `DataFrameProvider` 内存数据适配层：Bar/分红预索引、O(1) 点查 |
+| `walkforward.py` | 步进验证引擎 + 结果导出 |
 
 ## 模块依赖链（严格 DAG）
 
@@ -37,7 +38,8 @@ nav_calculator.py         (依赖 entities)
     ↓
 engine.py                 (编排器，依赖所有模块)
 analytics.py              (独立，依赖 entities via domain)
-walkforward.py            (依赖 engine + analytics)
+data_provider.py          (零内部依赖，懒导入 data_validator)
+walkforward.py            (依赖 engine + analytics + data_provider)
 ```
 
 ## 对外契约
@@ -93,6 +95,7 @@ while current_date ≤ end:
 | 数据结构定义 | `entities.py` |
 | 绩效指标计算 | `analytics.py` |
 | 数据校验规则 | `data_validator.py` |
+| 数据预索引/点查 | `data_provider.py` |
 | 步进验证逻辑 | `walkforward.py` |
 
 ## Known Pitfalls

@@ -24,7 +24,7 @@ class BenchmarkProvider:
         if data is None:
             raise ValueError("Benchmark data cannot be None")
 
-        from quant.features.backtest.walkforward import DataFrameProvider
+        from quant.features.backtest.data_provider import DataFrameProvider
 
         if isinstance(data, DataFrameProvider):
             self._data = data.data

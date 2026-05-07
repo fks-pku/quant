@@ -9,7 +9,7 @@ from quant.tests.conftest import (
     run_simple_backtest,
 )
 from quant.features.backtest.engine import Backtester
-from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 
 

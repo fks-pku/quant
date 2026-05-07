@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from quant.features.backtest.engine import Backtester
-from quant.features.backtest.walkforward import DataFrameProvider
+from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.strategies.base import Strategy
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
@@ -176,6 +176,57 @@ def make_test_strategy(name: str, symbols: List[str],
                        on_after: Optional[Callable] = None) -> _TestStrategy:
     """Factory for test strategies with minimal boilerplate."""
     return _TestStrategy(name, symbols, on_after)
+
+
+def make_scripted_strategy(name: str, signals: list):
+    """Create a strategy that replays predefined signals.
+
+    signals: list of (day_index, symbol, side, quantity)
+    """
+    sig_by_day: dict = {}
+    for day, sym, side, qty in signals:
+        sig_by_day.setdefault(day, []).append((sym, side, qty))
+
+    class S:
+        pass
+
+    S.name = name
+    S.context = None
+    S._positions: dict = {}
+    S._day = -1
+
+    def on_start(self, ctx):
+        self.context = ctx
+
+    def on_before_trading(self, ctx, td):
+        pass
+
+    def on_data(self, ctx, data):
+        pass
+
+    def on_after_trading(self, ctx, td):
+        self._day += 1
+        for sym, side, qty in sig_by_day.get(self._day, []):
+            ctx.order_manager.submit_order(sym, qty, side, "MARKET", None, name)
+
+    def on_fill(self, ctx, fill):
+        q = fill.quantity if fill.side == "BUY" else -fill.quantity
+        self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + q
+
+    def get_position(self, symbol):
+        return self._positions.get(symbol, 0)
+
+    def on_stop(self, ctx):
+        pass
+
+    S.on_start = on_start
+    S.on_before_trading = on_before_trading
+    S.on_data = on_data
+    S.on_after_trading = on_after_trading
+    S.on_fill = on_fill
+    S.get_position = get_position
+    S.on_stop = on_stop
+    return S()
 
 
 class MockDataProvider:
