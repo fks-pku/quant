@@ -1,7 +1,7 @@
 """Standalone data validation for backtest input — pure functions, zero internal dependencies."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Iterable
 
 import numpy as np
 import pandas as pd
@@ -10,6 +10,21 @@ import pandas as pd
 REQUIRED_COLUMNS = {"timestamp", "symbol", "open", "high", "low", "close", "volume"}
 MAX_DAILY_PRICE_CHANGE_PCT = 0.50
 CONSECUTIVE_SAME_CLOSE_WINDOW = 20
+
+
+def _ensure_datetime(data: pd.DataFrame, col: str) -> pd.Series:
+    if not pd.api.types.is_datetime64_any_dtype(data[col]):
+        return pd.to_datetime(data[col])
+    return data[col]
+
+
+def _iter_symbol_sorted(data: pd.DataFrame, ts: pd.Series) -> Iterable[Tuple[str, pd.DataFrame]]:
+    for symbol in data["symbol"].unique():
+        mask = data["symbol"] == symbol
+        sym_data = data.loc[mask].copy()
+        sym_data["_ts"] = ts[mask]
+        sym_data = sym_data.sort_values("_ts")
+        yield symbol, sym_data
 
 
 @dataclass
@@ -105,10 +120,7 @@ class DataValidator:
     def _check_duplicates(data: pd.DataFrame, report: ValidationReport) -> None:
         if "timestamp" not in data.columns or "symbol" not in data.columns:
             return
-        if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
-            ts = pd.to_datetime(data["timestamp"])
-        else:
-            ts = data["timestamp"]
+        ts = _ensure_datetime(data, "timestamp")
 
         keys = data["symbol"].astype(str) + "_" + ts.dt.date.astype(str)
         dup_mask = keys.duplicated(keep=False)
@@ -177,10 +189,7 @@ class DataValidator:
         if "timestamp" not in data.columns or "symbol" not in data.columns:
             return
 
-        if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
-            ts = pd.to_datetime(data["timestamp"])
-        else:
-            ts = data["timestamp"]
+        ts = _ensure_datetime(data, "timestamp")
 
         for symbol in data["symbol"].unique():
             sym_ts = ts[data["symbol"] == symbol].dropna().sort_values().reset_index(drop=True)
@@ -200,16 +209,9 @@ class DataValidator:
         if not {"timestamp", "symbol", "close"}.issubset(data.columns):
             return
 
-        if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
-            ts = pd.to_datetime(data["timestamp"])
-        else:
-            ts = data["timestamp"]
+        ts = _ensure_datetime(data, "timestamp")
 
-        for symbol in data["symbol"].unique():
-            mask = data["symbol"] == symbol
-            sym_data = data.loc[mask].copy()
-            sym_data["_ts"] = ts[mask]
-            sym_data = sym_data.sort_values("_ts")
+        for symbol, sym_data in _iter_symbol_sorted(data, ts):
             close = sym_data["close"]
             prev_close = close.shift(1)
             pct_change = (close - prev_close) / prev_close.replace(0, np.nan).abs()
@@ -226,16 +228,9 @@ class DataValidator:
         if not {"timestamp", "symbol", "close", "volume"}.issubset(data.columns):
             return
 
-        if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
-            ts = pd.to_datetime(data["timestamp"])
-        else:
-            ts = data["timestamp"]
+        ts = _ensure_datetime(data, "timestamp")
 
-        for symbol in data["symbol"].unique():
-            mask = data["symbol"] == symbol
-            sym_data = data.loc[mask].copy()
-            sym_data["_ts"] = ts[mask]
-            sym_data = sym_data.sort_values("_ts")
+        for symbol, sym_data in _iter_symbol_sorted(data, ts):
 
             same_close = (
                 (sym_data["close"] == sym_data["close"].shift(1))
@@ -256,10 +251,7 @@ class DataValidator:
 
         if "timestamp" in data.columns:
             try:
-                if not pd.api.types.is_datetime64_any_dtype(data["timestamp"]):
-                    ts = pd.to_datetime(data["timestamp"])
-                else:
-                    ts = data["timestamp"]
+                ts = _ensure_datetime(data, "timestamp")
             except Exception:
                 return
             report.stats["date_range"] = (

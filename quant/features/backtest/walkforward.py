@@ -1,13 +1,16 @@
 """Walk-forward analysis framework with 6m train / 1m test / monthly step."""
 
+import itertools
 import math
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Any, Callable, Optional
+from typing import Dict, List, Any, Callable, Optional, Tuple
 import pandas as pd
 import numpy as np
+
+from quant.domain.ports.event_publisher import EventPublisher
 
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestResult
@@ -56,6 +59,22 @@ class WFResult:
     oos_p_value_adjusted: float = 1.0
     viability_warnings: List[str] = field(default_factory=list)
 
+    @classmethod
+    def empty(cls) -> "WFResult":
+        return cls(
+            windows=[],
+            aggregate_sharpe=0.0,
+            aggregate_max_dd=0.0,
+            consistency=0.0,
+            best_params={},
+            sharpe_degradation=0.0,
+            avg_train_sharpe=0.0,
+            avg_test_sharpe=0.0,
+            test_sharpe_std=0.0,
+            pct_profitable=0.0,
+            is_viable=False,
+        )
+
 
 class WalkForwardEngine:
     """Walk-forward analysis engine with configurable train/test windows."""
@@ -69,10 +88,10 @@ class WalkForwardEngine:
         min_trades: int = 30,
         lot_sizes: Optional[Dict[str, int]] = None,
         ipo_dates: Optional[Dict[str, date]] = None,
-        portfolio_class=None,
-        risk_engine_class=None,
-        sub_portfolio_class=None,
-        event_bus=None,
+        portfolio_class: Optional[type] = None,
+        risk_engine_class: Optional[type] = None,
+        sub_portfolio_class: Optional[type] = None,
+        event_bus: Optional[EventPublisher] = None,
     ):
         self.train_window_days = train_window_days
         self.test_window_days = test_window_days
@@ -119,20 +138,10 @@ class WalkForwardEngine:
         seen_param_sets = set()
 
         if data is None or data.empty:
-            return WFResult(
-                windows=[], aggregate_sharpe=0.0, aggregate_max_dd=0.0,
-                consistency=0.0, best_params={}, sharpe_degradation=0.0,
-                avg_train_sharpe=0.0, avg_test_sharpe=0.0, test_sharpe_std=0.0,
-                pct_profitable=0.0, is_viable=False
-            )
+            return WFResult.empty()
         if 'timestamp' not in data.columns:
             logger.warning("Data missing 'timestamp' column — cannot run walk-forward")
-            return WFResult(
-                windows=[], aggregate_sharpe=0.0, aggregate_max_dd=0.0,
-                consistency=0.0, best_params={}, sharpe_degradation=0.0,
-                avg_train_sharpe=0.0, avg_test_sharpe=0.0, test_sharpe_std=0.0,
-                pct_profitable=0.0, is_viable=False
-            )
+            return WFResult.empty()
 
         if not pd.api.types.is_datetime64_any_dtype(data['timestamp']):
             data = data.copy()
@@ -145,12 +154,7 @@ class WalkForwardEngine:
         n_dates = len(unique_dates)
         
         if n_dates < self.train_window_days + self.test_window_days:
-            return WFResult(
-                windows=[], aggregate_sharpe=0.0, aggregate_max_dd=0.0,
-                consistency=0.0, best_params={}, sharpe_degradation=0.0,
-                avg_train_sharpe=0.0, avg_test_sharpe=0.0, test_sharpe_std=0.0,
-                pct_profitable=0.0, is_viable=False
-            )
+            return WFResult.empty()
         
         step_idx = 0
         while True:
@@ -220,19 +224,7 @@ class WalkForwardEngine:
             step_idx += self.step_days
         
         if not window_results:
-            return WFResult(
-                windows=[],
-                aggregate_sharpe=0.0,
-                aggregate_max_dd=0.0,
-                consistency=0.0,
-                best_params={},
-                sharpe_degradation=0.0,
-                avg_train_sharpe=0.0,
-                avg_test_sharpe=0.0,
-                test_sharpe_std=0.0,
-                pct_profitable=0.0,
-                is_viable=False
-            )
+            return WFResult.empty()
         
         aggregate_sharpe = np.mean([w.test_sharpe for w in window_results])
         aggregate_max_dd = max(w.test_max_dd for w in window_results) if window_results else 0.0
@@ -314,9 +306,8 @@ class WalkForwardEngine:
         param_grid: Dict[str, List[Any]],
         initial_cash: float,
         config: Dict[str, Any]
-    ) -> tuple[Dict[str, Any], float, List[Dict[str, Any]], int, int]:
+    ) -> Tuple[Dict[str, Any], float, List[Dict[str, Any]], int, int]:
         """Find best params using grid search on training data."""
-        import itertools
         param_names = list(param_grid.keys())
         param_values = [param_grid[name] for name in param_names]
         tested_params = [
@@ -347,7 +338,7 @@ class WalkForwardEngine:
         return best_params, best_sharpe, tested_params, len(tested_params), best_train_trades
 
     @staticmethod
-    def _param_key(params: Dict[str, Any]) -> tuple:
+    def _param_key(params: Dict[str, Any]) -> Tuple:
         try:
             return tuple(sorted(params.items()))
         except TypeError:
@@ -441,9 +432,9 @@ class DataFrameProvider:
     def __init__(self, data: pd.DataFrame, dividends: Optional[pd.DataFrame] = None):
         self.data = data
         self.dividends = dividends if dividends is not None else pd.DataFrame()
-        self._bar_map: Dict[tuple, Dict] = {}
+        self._bar_map: Dict[Tuple, Dict] = {}
         self._trading_dates: set = set()
-        self._dividend_map: Dict[tuple, Dict] = {}
+        self._dividend_map: Dict[Tuple, Dict] = {}
         self._build_index()
         self._build_dividend_index()
 
@@ -461,7 +452,7 @@ class DataFrameProvider:
         records = df.to_dict('records')
         symbols = df['symbol'].tolist()
         timestamps = df['timestamp'].tolist()
-        buf: Dict[tuple, Dict] = {}
+        buf: Dict[Tuple, Dict] = {}
         for rec, sym, ts in zip(records, symbols, timestamps):
             key = ts.date() if hasattr(ts, 'date') else ts
             dict_key = (sym, key)
@@ -479,8 +470,7 @@ class DataFrameProvider:
             dt = ts.date() if hasattr(ts, 'date') else ts
             self._trading_dates.add(dt)
         if dup_count > 0:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "DataFrameProvider._build_index: resolved %d duplicate (symbol, date) rows (kept highest volume)",
                 dup_count,
             )

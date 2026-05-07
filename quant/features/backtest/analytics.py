@@ -15,7 +15,12 @@ __all__ = ["calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
            "calculate_statistical_significance",
            "calculate_alpha", "calculate_beta",
            "calculate_information_ratio", "calculate_tracking_error",
-           "calculate_up_down_capture"]
+           "calculate_up_down_capture",
+           "calculate_calmar", "calculate_win_rate", "calculate_profit_factor",
+           "calculate_avg_trade_duration", "calculate_ulcer_index",
+           "calculate_gain_to_pain_ratio", "calculate_tail_ratio",
+           "calculate_recovery_factor", "calculate_payoff_ratio",
+           "calculate_expectancy", "MAX_PROFIT_FACTOR"]
 
 
 def calculate_sharpe(returns: pd.Series, periods_per_year: int = 252) -> float:
@@ -89,7 +94,7 @@ def calculate_win_rate(trades: List[Trade]) -> float:
     return winning_trades / len(rt)
 
 
-def _gross_profit_loss(trades: List[Trade]) -> tuple:
+def _gross_profit_loss(trades: List[Trade]) -> Tuple[float, float]:
     rt = _round_trip_trades(trades)
     if not rt:
         return 0.0, 0.0
@@ -216,6 +221,11 @@ def calculate_rolling_sharpe(returns: pd.Series, window: int = 63, periods_per_y
     return result.fillna(0.0)
 
 
+def _align_returns(returns: pd.Series, benchmark_returns: pd.Series) -> Tuple[pd.Series, pd.Series]:
+    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
+    return aligned.iloc[:, 0], aligned.iloc[:, 1]
+
+
 def _erf_approx(x: float) -> float:
     a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
     p = 0.3275911
@@ -226,15 +236,15 @@ def _erf_approx(x: float) -> float:
     return sign * y
 
 
-def calculate_statistical_significance(returns: pd.Series, benchmark_returns: pd.Series = None) -> dict:
+def calculate_statistical_significance(returns: pd.Series, benchmark_returns: Optional[pd.Series] = None) -> dict:
     if returns.empty:
         return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
 
     if benchmark_returns is not None and not benchmark_returns.empty:
-        aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
-        if aligned.empty or len(aligned) < 2:
+        strat_aligned, bench_aligned = _align_returns(returns, benchmark_returns)
+        if strat_aligned.empty or len(strat_aligned) < 2:
             return {"t_stat": 0.0, "p_value": 1.0, "is_significant": False, "confidence_interval": (0.0, 0.0)}
-        excess = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+        excess = strat_aligned - bench_aligned
         mean_ret = excess.mean()
         std_ret = excess.std()
         n = len(excess)
@@ -267,11 +277,11 @@ def calculate_alpha(returns: pd.Series, benchmark_returns: pd.Series, periods_pe
     """Annualized alpha: strategy annual return - benchmark annual return."""
     if returns.empty or benchmark_returns.empty:
         return 0.0
-    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
-    if aligned.empty:
+    strat_aligned, bench_aligned = _align_returns(returns, benchmark_returns)
+    if strat_aligned.empty:
         return 0.0
-    strat_annual = aligned.iloc[:, 0].mean() * periods_per_year
-    bench_annual = aligned.iloc[:, 1].mean() * periods_per_year
+    strat_annual = strat_aligned.mean() * periods_per_year
+    bench_annual = bench_aligned.mean() * periods_per_year
     return float(strat_annual - bench_annual)
 
 
@@ -279,11 +289,11 @@ def calculate_beta(returns: pd.Series, benchmark_returns: pd.Series) -> float:
     """Simple OLS beta: Cov(strategy, benchmark) / Var(benchmark)."""
     if returns.empty or benchmark_returns.empty:
         return 0.0
-    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
-    if aligned.empty or len(aligned) < 2:
+    strat_aligned, bench_aligned = _align_returns(returns, benchmark_returns)
+    if strat_aligned.empty or len(strat_aligned) < 2:
         return 0.0
-    x = aligned.iloc[:, 1]
-    y = aligned.iloc[:, 0]
+    x = bench_aligned
+    y = strat_aligned
     var_x = x.var()
     if var_x == 0:
         return 0.0
@@ -294,10 +304,10 @@ def calculate_tracking_error(returns: pd.Series, benchmark_returns: pd.Series, p
     """Annualized tracking error: std of excess returns."""
     if returns.empty or benchmark_returns.empty:
         return 0.0
-    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
-    if aligned.empty:
+    strat_aligned, bench_aligned = _align_returns(returns, benchmark_returns)
+    if strat_aligned.empty:
         return 0.0
-    excess = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+    excess = strat_aligned - bench_aligned
     return float(excess.std() * np.sqrt(periods_per_year))
 
 
@@ -318,11 +328,9 @@ def calculate_up_down_capture(returns: pd.Series, benchmark_returns: pd.Series) 
     """
     if returns.empty or benchmark_returns.empty:
         return 1.0, 1.0
-    aligned = pd.concat([returns, benchmark_returns], axis=1).dropna()
-    if aligned.empty:
+    strat, bench = _align_returns(returns, benchmark_returns)
+    if strat.empty:
         return 1.0, 1.0
-    strat = aligned.iloc[:, 0]
-    bench = aligned.iloc[:, 1]
 
     up_mask = bench > 0
     down_mask = bench < 0

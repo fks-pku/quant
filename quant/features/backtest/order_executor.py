@@ -3,7 +3,7 @@
 from __future__ import annotations
 import logging
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Dict, List, Any, Optional
+from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 
 import pandas as pd
 
@@ -106,8 +106,8 @@ def execute_order(
         raise OrderRejectedError(OrderRejectionReason.PRICE_DEVIATION, symbol)
 
     qty = order.quantity
-    lot_sizes = lot_sizes or {}
-    lot_size = get_lot_size(symbol, lot_sizes)
+    effective_lot_sizes = lot_sizes or {}
+    lot_size = get_lot_size(symbol, effective_lot_sizes)
 
     quantity, lot_adjusted = apply_lot_rounding(qty, lot_size, order.side, market)
     if quantity is None:
@@ -181,7 +181,7 @@ def enforce_limit_after_impact(order: "DeferredOrder", fill_price: float, order_
                                  f"impacted fill={fill_price} < limit={limit_price}")
 
 
-def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -> tuple:
+def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -> Tuple[Optional[float], bool]:
     if market not in ("HK", "CN"):
         return float(quantity), False
     if side == 'BUY':
@@ -191,28 +191,38 @@ def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -
         if lot_qty != int(quantity):
             return float(lot_qty), True
         return float(lot_qty), False
-    else:
-        if market == "HK":
+    if market == "HK":
+        lot_qty = (int(quantity) // lot_size) * lot_size
+        if lot_qty < lot_size:
+            return None, False
+        if lot_qty != int(quantity):
+            return float(lot_qty), True
+        return float(lot_qty), False
+    if market == "CN":
+        if int(quantity) < 1:
+            return None, False
+        if quantity >= lot_size:
             lot_qty = (int(quantity) // lot_size) * lot_size
-            if lot_qty < lot_size:
-                return None, False
             if lot_qty != int(quantity):
                 return float(lot_qty), True
             return float(lot_qty), False
-        if market == "CN":
-            if int(quantity) < 1:
-                return None, False
-            if quantity >= lot_size:
-                lot_qty = (int(quantity) // lot_size) * lot_size
-                if lot_qty != int(quantity):
-                    return float(lot_qty), True
-                return float(lot_qty), False
-            return float(quantity), False
+        return float(quantity), False
+    return float(quantity), False
 
 
 def _execute_buy(
-    order, portfolio, symbol, fill_ts, fill_price, quantity,
-    signal_date, market, entry_times, entry_prices, diag, commission_config,
+    order: "DeferredOrder",
+    portfolio: Any,
+    symbol: str,
+    fill_ts: datetime,
+    fill_price: float,
+    quantity: float,
+    signal_date: Optional[date],
+    market: str,
+    entry_times: Dict[Any, datetime],
+    entry_prices: Dict[Any, float],
+    diag: BacktestDiagnostics,
+    commission_config: Any,
 ) -> List[Trade]:
     fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
     cost_breakdown = calculate_commission(symbol, fill_price, quantity, order.side, commission_config, fill_date_val)
@@ -262,8 +272,18 @@ def _execute_buy(
 
 
 def _execute_sell(
-    order, portfolio, symbol, fill_ts, fill_price, quantity,
-    signal_date, market, entry_times, entry_prices, diag, commission_config,
+    order: "DeferredOrder",
+    portfolio: Any,
+    symbol: str,
+    fill_ts: datetime,
+    fill_price: float,
+    quantity: float,
+    signal_date: Optional[date],
+    market: str,
+    entry_times: Dict[Any, datetime],
+    entry_prices: Dict[Any, float],
+    diag: BacktestDiagnostics,
+    commission_config: Any,
 ) -> List[Trade]:
     pos = portfolio.get_position(symbol)
     if not pos or pos.quantity <= 0:

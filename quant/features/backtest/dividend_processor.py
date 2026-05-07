@@ -2,7 +2,7 @@
 
 import logging
 from datetime import date, datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Union
 
 from quant.features.backtest.market_rules import get_market
 
@@ -19,7 +19,7 @@ def process_dividends(
     current_date: datetime,
     last_prices: Dict[str, float],
     entry_times: Dict[str, datetime],
-    diag: Any = None,
+    diag: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
     stock_dividends: List[Dict[str, Any]] = []
     if not data_provider or not hasattr(data_provider, 'get_dividend_for_date'):
@@ -66,7 +66,7 @@ def process_dividends(
     return stock_dividends
 
 
-def calculate_cn_dividend_tax(pos: Any, cash_div: float, current_date: Any) -> float:
+def calculate_cn_dividend_tax(pos: Any, cash_div: float, current_date: Union[date, datetime]) -> float:
     total_tax = 0.0
     today = current_date.date() if hasattr(current_date, 'date') else current_date
     for lot_date, lot in pos.iter_lots():

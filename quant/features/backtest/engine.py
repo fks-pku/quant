@@ -31,6 +31,10 @@ from quant.features.backtest.nav_calculator import calculate_daily_nav, extract_
 logger = logging.getLogger(__name__)
 
 
+def _strategy_name(strategy) -> str:
+    return getattr(strategy, 'name', strategy.__class__.__name__)
+
+
 class Backtester:
     """Backtester with realistic execution."""
 
@@ -106,7 +110,7 @@ class Backtester:
 
         seen_names = set()
         for strategy in strategies:
-            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            sname = _strategy_name(strategy)
             if sname in seen_names:
                 raise ValueError(
                     f"Duplicate strategy name '{sname}'. Each strategy must have a unique name "
@@ -115,7 +119,7 @@ class Backtester:
             seen_names.add(sname)
 
         for strategy in strategies:
-            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            sname = _strategy_name(strategy)
             pf = portfolio_map[sname]
             re = risk_map[sname]
             strategy.context = create_context(pf, re, self.event_bus, data_provider)
@@ -176,53 +180,19 @@ class Backtester:
                             intended_qty=additional, cost_breakdown={},
                             entry_time=current_date, exit_time=current_date,
                             signal_date=current_date, fill_date=current_date,
-                            strategy_name=getattr(strategy, 'name', strategy.__class__.__name__),
+                            strategy_name=_strategy_name(strategy),
                         ))
 
             # --- Step 4: Execute deferred orders from T-1 ---
-            try:
-                for order in deferred_orders:
-                    sym = order.symbol
-                    bar = today_bars.get(sym, {})
-                    if not bar or bar.get('_suspended'):
-                        diag.discarded_orders += 1
-                        continue
-                    order_strategy = order.strategy
-                    if order_strategy and order_strategy not in portfolio_map:
-                        logger.warning("Order strategy '%s' not in portfolio_map, discarding order for %s", order_strategy, sym)
-                        diag.discarded_orders += 1
-                        continue
-                    order_pf = portfolio_map.get(order_strategy, primary_portfolio)
-                    try:
-                        trades = execute_order(
-                            order=order,
-                            portfolio=order_pf,
-                            symbol=sym,
-                            bar=bar,
-                            entry_times=entry_times,
-                            entry_prices=entry_prices,
-                            diag=diag,
-                            lot_sizes=self.lot_sizes,
-                            ipo_dates=self.ipo_dates,
-                            slippage_bps=self.slippage_bps,
-                            commission_config=self.commission,
-                            prev_bar=prev_close_bars.get(sym),
-                            risk_price_deviation_limit=self.risk_price_deviation_limit,
-                            market_impact_factor=self.market_impact_factor,
-                        )
-                    except OrderRejectedError as e:
-                        diag.record_rejection(e.reason)
-                        diag.discarded_orders += 1
-                        continue
-                    all_trades.extend(trades)
-                    target_sname = order.strategy
-                    for s in strategies:
-                        sname = getattr(s, 'name', s.__class__.__name__)
-                        if target_sname is None or sname == target_sname:
-                            for t in trades:
-                                s.on_fill(s.context, t)
-            finally:
-                deferred_orders = []
+            self._execute_deferred_orders(
+                deferred_orders, today_bars, prev_close_bars, last_prices,
+                current_date, portfolio_map, primary_portfolio, use_subs,
+                strategies, all_trades, diag, self.lot_sizes, self.commission,
+                self.slippage_bps, self.market_impact_factor,
+                self.risk_price_deviation_limit,
+                entry_times, entry_prices,
+            )
+            deferred_orders = []
 
             # --- Step 5 prep: Initialize order manager with today's state ---
             for strategy in strategies:
@@ -253,7 +223,7 @@ class Backtester:
                             pending_orders.append(order)
                     except (OrderRejectedError, ValueError) as e:
                         logger.warning("Invalid order from strategy %s on %s: %s",
-                                       getattr(strategy, 'name', strategy.__class__.__name__),
+                                       _strategy_name(strategy),
                                        current_date, e)
 
             for order in pending_orders:
@@ -286,7 +256,7 @@ class Backtester:
         # Execute final close-out orders generated by on_stop when explicitly enabled.
         stop_signal_time = max(last_price_times.values()) if last_price_times else current_date
         for strategy in strategies:
-            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            sname = _strategy_name(strategy)
             ctx = strategy.context
             if not hasattr(ctx, 'drain_orders'):
                 continue
@@ -300,6 +270,7 @@ class Backtester:
                 diag.expired_orders += len(stop_orders)
                 diag.discarded_orders += len(stop_orders)
                 continue
+            synthetic_bars = {}
             for order in stop_orders:
                 sym = order.symbol
                 close_price = last_prices.get(sym)
@@ -308,46 +279,126 @@ class Backtester:
                     diag.discarded_orders += 1
                     continue
                 fill_ts = last_price_times.get(sym, stop_signal_time)
-                bar = {
+                synthetic_bars[sym] = {
                     'symbol': sym, 'open': close_price, 'high': close_price,
                     'low': close_price, 'close': close_price, 'volume': 10_000_000,
                     'timestamp': fill_ts,
                 }
-                order_pf = portfolio_map.get(order.strategy or sname, primary_portfolio)
-                try:
-                    trades = execute_order(
-                        order=order, portfolio=order_pf, symbol=sym, bar=bar,
-                        entry_times=entry_times, entry_prices=entry_prices,
-                        diag=diag, lot_sizes=self.lot_sizes, ipo_dates=self.ipo_dates,
-                        slippage_bps=self.slippage_bps, commission_config=self.commission,
-                        prev_bar=None,
-                        risk_price_deviation_limit=self.risk_price_deviation_limit,
-                        market_impact_factor=self.market_impact_factor,
-                    )
-                except OrderRejectedError as e:
-                    diag.record_rejection(e.reason)
-                    diag.discarded_orders += 1
-                    continue
-                all_trades.extend(trades)
-                diag.forced_closeout_trades += len(trades)
-                for s in strategies:
-                    sn = getattr(s, 'name', s.__class__.__name__)
-                    if sn == sname:
-                        for t in trades:
-                            s.on_fill(s.context, t)
+            trades_before = len(all_trades)
+            self._execute_deferred_orders(
+                stop_orders, synthetic_bars, {}, last_prices,
+                stop_signal_time, portfolio_map, primary_portfolio, use_subs,
+                strategies, all_trades, diag, self.lot_sizes, self.commission,
+                self.slippage_bps, self.market_impact_factor,
+                self.risk_price_deviation_limit,
+                entry_times, entry_prices,
+            )
+            diag.forced_closeout_trades += len(all_trades) - trades_before
 
         # Record final NAV after all post-loop executions (deferred + on_stop)
         nav = calculate_daily_nav(portfolio_map, primary_portfolio, use_subs)
         equity_curve_dates.append(current_date)
         equity_curve_values.append(nav)
 
+        return self._build_backtest_result(
+            equity_curve_dates, equity_curve_values, all_trades,
+            primary_portfolio, use_subs, initial_cash, start, end,
+            symbols, strategies, config=self.config, diag=diag,
+            portfolio_map=portfolio_map, last_prices=last_prices,
+            entry_times=entry_times,
+        )
+
+    def _execute_deferred_orders(
+        self,
+        deferred_orders: list,
+        today_bars: dict,
+        prev_close_bars: dict,
+        last_prices: dict,
+        current_date,
+        portfolio_map: dict,
+        primary_portfolio,
+        use_subs: bool,
+        strategies: list,
+        all_trades: list,
+        diag,
+        lot_sizes: dict,
+        commission_cfg,
+        slippage_bps: float,
+        market_impact_factor: float,
+        risk_price_deviation_limit: float,
+        entry_times: dict,
+        entry_prices: dict,
+    ) -> None:
+        for order in deferred_orders:
+            sym = order.symbol
+            bar = today_bars.get(sym, {})
+            if not bar or bar.get('_suspended'):
+                diag.discarded_orders += 1
+                continue
+            order_strategy = order.strategy
+            if order_strategy and order_strategy not in portfolio_map:
+                logger.warning("Order strategy '%s' not in portfolio_map, discarding order for %s", order_strategy, sym)
+                diag.discarded_orders += 1
+                continue
+            order_pf = portfolio_map.get(order_strategy, primary_portfolio)
+            try:
+                trades = execute_order(
+                    order=order,
+                    portfolio=order_pf,
+                    symbol=sym,
+                    bar=bar,
+                    entry_times=entry_times,
+                    entry_prices=entry_prices,
+                    diag=diag,
+                    lot_sizes=lot_sizes,
+                    ipo_dates=self.ipo_dates,
+                    slippage_bps=slippage_bps,
+                    commission_config=commission_cfg,
+                    prev_bar=prev_close_bars.get(sym),
+                    risk_price_deviation_limit=risk_price_deviation_limit,
+                    market_impact_factor=market_impact_factor,
+                )
+            except OrderRejectedError as e:
+                diag.record_rejection(e.reason)
+                diag.discarded_orders += 1
+                continue
+            all_trades.extend(trades)
+            target_sname = order.strategy
+            if target_sname is None:
+                logger.error("Order for %s has no strategy — fill not dispatched", order.symbol)
+                continue
+            for s in strategies:
+                sname = _strategy_name(s)
+                if sname == target_sname:
+                    for t in trades:
+                        s.on_fill(s.context, t)
+
+    def _build_backtest_result(
+        self,
+        equity_curve_dates: list,
+        equity_curve_values: list,
+        all_trades: list,
+        primary_portfolio,
+        use_subs: bool,
+        initial_cash: float,
+        start,
+        end,
+        symbols: list,
+        strategies: list,
+        config: dict,
+        diag,
+        portfolio_map: dict,
+        last_prices: dict,
+        entry_times: dict,
+    ) -> BacktestResult:
         equity_curve = pd.Series(equity_curve_values, index=equity_curve_dates)
 
         benchmark_returns = None
         if self.benchmark_provider is not None:
             try:
                 benchmark_returns = self.benchmark_provider.get_benchmark_returns(start, end)
-            except Exception:
+            except Exception as e:
+                logger.warning("Benchmark retrieval failed: %s", e)
                 benchmark_returns = None
 
         metrics = calculate_performance_metrics(equity_curve, all_trades, initial_cash, benchmark_returns)

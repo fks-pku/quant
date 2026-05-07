@@ -1,8 +1,13 @@
 """Benchmark provider for comparing strategy against buy-and-hold."""
 
+from datetime import date, datetime
 from typing import Optional, Union
 import pandas as pd
 import numpy as np
+
+
+def _to_date(val) -> date:
+    return val.date() if hasattr(val, "date") else val
 
 
 class BenchmarkProvider:
@@ -15,7 +20,7 @@ class BenchmarkProvider:
     the close-price return series.
     """
 
-    def __init__(self, data, price_column: str = "close"):
+    def __init__(self, data: Union[pd.DataFrame, "DataFrameProvider"], price_column: str = "close"):
         if data is None:
             raise ValueError("Benchmark data cannot be None")
 
@@ -36,7 +41,7 @@ class BenchmarkProvider:
         self._timestamps: Optional[pd.Series] = None
         self._compute_returns()
 
-    def _compute_returns(self):
+    def _compute_returns(self) -> None:
         df = self._data.copy()
         if self._price_column not in df.columns:
             if "close" in df.columns:
@@ -57,24 +62,20 @@ class BenchmarkProvider:
         self._timestamps = close_series.index
         self._daily_returns = close_series.pct_change().dropna()
 
-    def get_benchmark_returns(self, start=None, end=None) -> pd.Series:
+    def get_benchmark_returns(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> pd.Series:
         """Return daily return series, optionally filtered by date range."""
         returns = self._daily_returns
         if returns is None or returns.empty:
             return pd.Series(dtype=float)
         if start is not None:
-            start_d = start.date() if hasattr(start, "date") else start
-            if hasattr(start_d, "date"):
-                start_d = start_d.date()
+            start_d = _to_date(start)
             returns = returns[returns.index >= pd.Timestamp(start_d)]
         if end is not None:
-            end_d = end.date() if hasattr(end, "date") else end
-            if hasattr(end_d, "date"):
-                end_d = end_d.date()
+            end_d = _to_date(end)
             returns = returns[returns.index <= pd.Timestamp(end_d)]
         return returns
 
-    def get_benchmark_equity(self, start=None, end=None, initial_cash: float = 100000.0) -> pd.Series:
+    def get_benchmark_equity(self, start: Optional[datetime] = None, end: Optional[datetime] = None, initial_cash: float = 100000.0) -> pd.Series:
         """Return benchmark equity curve starting from initial_cash."""
         returns = self.get_benchmark_returns(start, end)
         if returns.empty:

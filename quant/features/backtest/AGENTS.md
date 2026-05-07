@@ -129,3 +129,4 @@ while current_date ≤ end:
 - `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询
 - Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）
 - `risk_price_deviation_limit` 从 config 读取（键名 `risk_price_deviation_limit`），而非硬编码 0.15
+- `order.strategy` 为 `None` 时 engine 记录 error 并跳过 fill 分发，不会广播到所有策略

@@ -1,8 +1,13 @@
 """Portfolio and RiskEngine creation — single and sub-portfolio modes."""
 
-from typing import Dict, Any, List, Optional, Type
+import logging
+from typing import Dict, Any, List, Optional, Tuple, Type
 
 from quant.features.backtest.entities import _BacktestContext
+
+
+def _strategy_name(strategy) -> str:
+    return getattr(strategy, 'name', strategy.__class__.__name__)
 
 
 def create_portfolio_contexts(
@@ -15,7 +20,7 @@ def create_portfolio_contexts(
     portfolio_class: Optional[Type] = None,
     risk_engine_class: Optional[Type] = None,
     sub_portfolio_class: Optional[Type] = None,
-) -> tuple:
+) -> Tuple[Dict[str, Any], Dict[str, Any], Any, bool]:
     if portfolio_class is None or risk_engine_class is None or sub_portfolio_class is None:
         raise ValueError(
             "portfolio_class, risk_engine_class, and sub_portfolio_class are required. "
@@ -28,9 +33,8 @@ def create_portfolio_contexts(
     if use_subs:
         portfolio_map: Dict[str, Any] = {}
         risk_map: Dict[str, Any] = {}
-        import logging
         strategy_names = [
-            getattr(strategy, 'name', strategy.__class__.__name__)
+            _strategy_name(strategy)
             for strategy in strategies
         ]
         if len(strategy_names) != len(set(strategy_names)):
@@ -63,7 +67,7 @@ def create_portfolio_contexts(
         if allocation_sum > 1.0 + 1e-12:
             raise ValueError(f"strategy allocations sum to {allocation_sum:.4f}, must be <= 1.0")
         for strategy in strategies:
-            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            sname = _strategy_name(strategy)
             alloc_pct = strategy_allocations.get(sname, 0.0)
             if alloc_pct <= 0:
                 logging.getLogger(__name__).warning(
@@ -79,7 +83,7 @@ def create_portfolio_contexts(
         risk_map = {}
         shared_risk = risk_engine_class(config, master, event_bus)
         for strategy in strategies:
-            sname = getattr(strategy, 'name', strategy.__class__.__name__)
+            sname = _strategy_name(strategy)
             portfolio_map[sname] = master
             risk_map[sname] = shared_risk
         primary_portfolio = master

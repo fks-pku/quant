@@ -1,5 +1,6 @@
 """Pure data structures for backtest results, diagnostics, and context."""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Optional
@@ -73,7 +74,6 @@ class BacktestResultExporter:
 
     @staticmethod
     def to_csv(result: BacktestResult, output_path: str) -> None:
-        import logging
         _log = logging.getLogger(__name__)
         if result.metrics is None or result.metrics.equity_curve.empty:
             _log.warning("No equity curve to export for %s", output_path)
@@ -105,7 +105,7 @@ class BacktestResultExporter:
 
 
 class _BacktestOrderManager:
-    def __init__(self, risk_engine):
+    def __init__(self, risk_engine: Any) -> None:
         self._risk_engine = risk_engine
         self._buffer: List[Dict] = []
         self._buy_dedup_set: set = set()
@@ -137,13 +137,13 @@ class _BacktestOrderManager:
             raise OrderRejectedError(OrderRejectionReason.RISK_REJECTED, symbol)
         self._risk_engine.record_order(symbol=symbol, order_value=value, as_of_date=self._current_date)
 
-    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+    def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
         try:
             if (order_type or "MARKET").upper() == "LIMIT" and (
                 not isinstance(price, (int, float)) or price <= 0
             ):
                 raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
-                                         f"limit price={price!r}")
+                                      f"limit price={price!r}")
             effective = self._resolve_price(price, symbol)
             self._passes_dedup(symbol, side)
             self._passes_risk(symbol, quantity, effective, side)
@@ -189,19 +189,19 @@ class _BacktestOrderManager:
 
 
 class _BacktestContext:
-    def __init__(self, portfolio, risk_engine, event_bus, data_provider):
+    def __init__(self, portfolio: Any, risk_engine: Any, event_bus: Any, data_provider: Any) -> None:
         self.portfolio = portfolio
         self.risk_engine = risk_engine
         self.event_bus = event_bus
         self.data_provider = data_provider
         self.order_manager = _BacktestOrderManager(risk_engine)
 
-    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+    def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
         return self.order_manager.submit_order(symbol, quantity, side, order_type, price, strategy_name)
 
     def prepare_for_trading_day(self, trading_date: date, last_prices: Dict[str, float]):
         self.order_manager._current_date = trading_date
         self.order_manager._last_prices = last_prices
 
-    def drain_orders(self, signal_date: date = None):
+    def drain_orders(self, signal_date: Optional[date] = None):
         return self.order_manager.drain_pending(signal_date)
