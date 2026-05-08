@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -144,7 +144,7 @@ class ValidationReport:
     status: str
     rank_ic: float
     rank_ic_ir: float
-    ic_decay: List[float]
+    ic_decay: List[Tuple[int, float]]
     fdr_adjusted_p: float
     fdr_significant: bool
     ff_alpha_monthly: float
@@ -155,6 +155,7 @@ class ValidationReport:
     data_start: str
     data_end: str
     n_observations: int
+    fama_macbeth_tstat: float = 0.0
     errors: List[str] = field(default_factory=list)
 
 

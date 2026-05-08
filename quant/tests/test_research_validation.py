@@ -99,6 +99,67 @@ class TestFDR:
         assert benjamini_hochberg([], alpha=0.05) == []
 
 
+class TestCrossSectionalValidation:
+    def test_detect_market_patterns(self):
+        from quant.features.research.validation.cross_sectional import detect_market
+
+        assert detect_market("600519") == "cn"
+        assert detect_market("00700") == "hk"
+        assert detect_market("12345") == "hk"
+        assert detect_market("HK.00700") == "hk"
+        assert detect_market("AAPL") == "us"
+
+    def test_cross_sectional_ic_uses_full_universe(self):
+        from quant.features.research.validation.cross_sectional import compute_cross_sectional_ic
+
+        dates = pd.date_range("2022-01-01", periods=120, freq="B")
+        symbols = [f"S{i:02d}" for i in range(30)]
+        rng = np.random.default_rng(7)
+        signals = pd.DataFrame(rng.normal(size=(120, 30)), index=dates, columns=symbols)
+        forward_returns = signals.copy()
+
+        daily_ic = compute_cross_sectional_ic(signals, forward_returns)
+
+        assert daily_ic.mean() > 0.99
+
+    def test_icir_is_mean_over_std(self):
+        from quant.features.research.validation.cross_sectional import compute_icir
+
+        daily_ic = pd.Series([0.01, 0.02, 0.03, 0.04])
+
+        assert compute_icir(daily_ic) == pytest.approx(daily_ic.mean() / daily_ic.std())
+
+    def test_ic_decay_returns_four_horizons(self):
+        from quant.features.research.validation.cross_sectional import compute_ic_decay
+
+        dates = pd.date_range("2022-01-01", periods=120, freq="B")
+        symbols = [f"S{i:02d}" for i in range(30)]
+        base = np.arange(120, dtype=float).reshape(-1, 1)
+        slopes = np.linspace(0.01, 0.03, 30).reshape(1, -1)
+        prices = pd.DataFrame(100.0 + base * slopes, index=dates, columns=symbols)
+        signals = prices.pct_change(20)
+
+        decay = compute_ic_decay(signals, prices, horizons=[1, 5, 10, 21])
+
+        assert [horizon for horizon, _ in decay] == [1, 5, 10, 21]
+        assert all(isinstance(ic, float) for _, ic in decay)
+
+    def test_fama_macbeth_tstat_positive_for_linear_relation(self):
+        from quant.features.research.validation.cross_sectional import compute_fama_macbeth_tstat
+
+        dates = pd.date_range("2022-01-01", periods=120, freq="B")
+        symbols = [f"S{i:02d}" for i in range(30)]
+        rng = np.random.default_rng(11)
+        signals = pd.DataFrame(rng.normal(size=(120, 30)), index=dates, columns=symbols)
+        forward_returns = 0.02 * signals + 0.001 * pd.DataFrame(
+            rng.normal(size=(120, 30)),
+            index=dates,
+            columns=symbols,
+        )
+
+        assert compute_fama_macbeth_tstat(signals, forward_returns) > 0
+
+
 class TestFactorValidator:
     @staticmethod
     def _make_market_data(n_rows=300):
@@ -194,3 +255,166 @@ class TestFactorValidator:
         )
         report = validator.validate(spec)
         assert report.status == "skipped"
+
+    def test_factor_validator_fetches_full_universe_and_populates_decay(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2022-01-01", periods=150, freq="B")
+        symbols = [f"A{i:02d}" for i in range(30)]
+        frames = []
+        for i, symbol in enumerate(symbols):
+            growth = 0.001 + i * 0.0001
+            close = 100.0 * (1.0 + growth) ** np.arange(len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": close,
+                        "high": close * 1.01,
+                        "low": close * 0.99,
+                        "close": close,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+
+        class FakeMarketData:
+            def __init__(self):
+                self.universe_calls = []
+                self.daily_bar_symbols = []
+
+            def get_universe_symbols(self, market):
+                self.universe_calls.append(market)
+                return symbols
+
+            def get_daily_bars(self, symbols, start, end):
+                self.daily_bar_symbols.append(list(symbols))
+                return bars[bars["symbol"].isin(symbols)]
+
+        md = FakeMarketData()
+        validator = FactorValidator(md, config={"min_observations": 50, "execution_lag_days": 1})
+        spec = StrategySpec(
+            strategy_id="test_full_universe",
+            strategy_type="momentum",
+            signal_formula_key="momentum_close_return",
+            universe=["AAPL"],
+            horizon_days=5,
+            lookback_days=20,
+            execution_lag_days=1,
+            required_fields=["close"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert md.universe_calls == ["us"]
+        assert len(md.daily_bar_symbols[0]) == 30
+        assert report.status == "validated"
+        assert len(report.ic_decay) == 4
+        assert isinstance(report.fama_macbeth_tstat, float)
+
+    def test_cross_sectional_validation_enforces_100_date_floor(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2022-01-01", periods=120, freq="B")
+        symbols = [f"A{i:02d}" for i in range(30)]
+        frames = []
+        for i, symbol in enumerate(symbols):
+            growth = 0.001 + i * 0.0001
+            close = 100.0 * (1.0 + growth) ** np.arange(len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": close,
+                        "high": close * 1.01,
+                        "low": close * 0.99,
+                        "close": close,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+
+        class FakeMarketData:
+            def get_universe_symbols(self, market):
+                return symbols
+
+            def get_daily_bars(self, symbols, start, end):
+                return bars[bars["symbol"].isin(symbols)]
+
+        validator = FactorValidator(FakeMarketData(), config={"min_observations": 50})
+        spec = StrategySpec(
+            strategy_id="test_cs_floor",
+            strategy_type="momentum",
+            signal_formula_key="momentum_close_return",
+            universe=["AAPL"],
+            horizon_days=5,
+            lookback_days=20,
+            execution_lag_days=1,
+            required_fields=["close"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert report.status == "error"
+        assert "Insufficient valid cross-sectional dates" in report.errors[0]
+
+    def test_duckdb_market_data_routes_timestamp_market_tables_and_universes(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        from quant.infrastructure.research.market_data.duckdb_research_market_data import (
+            DuckDBResearchMarketData,
+        )
+
+        db_path = tmp_path / "research_market.duckdb"
+        conn = duckdb.connect(str(db_path))
+        schema = "(symbol VARCHAR, timestamp TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)"
+        for table in ("daily_cn", "daily_hk", "daily_us"):
+            conn.execute(f"CREATE TABLE {table} {schema}")
+        conn.execute("INSERT INTO daily_cn VALUES ('600519', '2024-01-02 09:30:00', 1, 2, 0.5, 1.5, 100)")
+        conn.execute("INSERT INTO daily_hk VALUES ('12345', '2024-01-02 09:30:00', 2, 3, 1.5, 2.5, 200)")
+        conn.execute("INSERT INTO daily_hk VALUES ('HK.00700', '2024-01-03 09:30:00', 4, 5, 3.5, 4.5, 250)")
+        conn.execute("INSERT INTO daily_us VALUES ('AAPL', '2024-01-02 09:30:00', 3, 4, 2.5, 3.5, 300)")
+        conn.close()
+
+        market_data = DuckDBResearchMarketData(str(db_path))
+
+        assert market_data.get_universe_symbols("cn") == ["600519"]
+        assert market_data.get_universe_symbols("hk") == ["12345", "HK.00700"]
+        assert market_data.get_universe_symbols("us") == ["AAPL"]
+
+        bars = market_data.get_daily_bars(["600519", "12345", "HK.00700", "AAPL"], "2024-01-01", "2024-01-31")
+
+        assert set(bars["symbol"]) == {"600519", "12345", "HK.00700", "AAPL"}
+        assert "date" in bars.columns
+        assert "timestamp" not in bars.columns
+        assert market_data._table_for_symbol("600519") == "daily_cn"
+        assert market_data._table_for_symbol("12345") == "daily_hk"
+        assert market_data._table_for_symbol("HK.00700") == "daily_hk"
+        assert market_data._table_for_symbol("AAPL") == "daily_us"
+
+    def test_duckdb_market_data_supports_date_schema_fallback(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        from quant.infrastructure.research.market_data.duckdb_research_market_data import (
+            DuckDBResearchMarketData,
+        )
+
+        db_path = tmp_path / "research_market_date.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE daily_us (symbol VARCHAR, date DATE, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)"
+        )
+        conn.execute("CREATE TABLE daily_cn AS SELECT * FROM daily_us WHERE 1 = 0")
+        conn.execute("CREATE TABLE daily_hk AS SELECT * FROM daily_us WHERE 1 = 0")
+        conn.execute("INSERT INTO daily_us VALUES ('AAPL', '2024-01-02', 3, 4, 2.5, 3.5, 300)")
+        conn.close()
+
+        market_data = DuckDBResearchMarketData(str(db_path))
+        bars = market_data.get_daily_bars(["AAPL"], "2024-01-01", "2024-01-31")
+
+        assert list(bars["symbol"]) == ["AAPL"]
+        assert "date" in bars.columns
