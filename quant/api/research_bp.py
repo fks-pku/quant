@@ -104,6 +104,90 @@ def _make_backtest_fn():
     return _run_backtest
 
 
+def _serialize_walkforward_trade(trade, data_df):
+    symbol = getattr(trade, "symbol", "")
+    side = getattr(trade, "side", "")
+    quantity = _safe_float(getattr(trade, "quantity", 0.0))
+    price = _trade_price(trade)
+    trade_value = abs(quantity) * price
+    return {
+        "symbol": symbol,
+        "side": side,
+        "quantity": quantity,
+        "price": price,
+        "pnl": _safe_float(getattr(trade, "pnl", 0.0)),
+        "trade_value": trade_value,
+        "avg_daily_volume": _average_daily_volume(data_df, symbol, _trade_date(trade)),
+    }
+
+
+def _trade_price(trade) -> float:
+    side = str(getattr(trade, "side", "")).upper()
+    names = ["price", "fill_price"]
+    names.extend(["exit_price", "entry_price"] if side == "SELL" else ["entry_price", "exit_price"])
+    for name in names:
+        value = _safe_float(getattr(trade, name, 0.0))
+        if value > 0:
+            return value
+    return 0.0
+
+
+def _trade_date(trade):
+    for name in ("fill_date", "signal_date", "exit_time", "entry_time", "timestamp"):
+        value = getattr(trade, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _average_daily_volume(data_df, symbol, trade_date=None) -> float:
+    if data_df is None or not hasattr(data_df, "empty") or data_df.empty or "volume" not in data_df.columns:
+        return 0.0
+    try:
+        import pandas as pd
+
+        data = data_df
+        if symbol and "symbol" in data.columns:
+            data = data[data["symbol"].astype(str) == str(symbol)]
+        if data.empty:
+            return 0.0
+
+        date_col = "timestamp" if "timestamp" in data.columns else "date" if "date" in data.columns else None
+        if date_col is not None:
+            dated = data.copy()
+            dated[date_col] = pd.to_datetime(dated[date_col], errors="coerce")
+            dated = dated.dropna(subset=[date_col]).sort_values(date_col)
+            if dated.empty:
+                return _median_volume(data)
+            if trade_date is not None:
+                trade_ts = pd.Timestamp(trade_date).normalize()
+                dated_days = dated[date_col].dt.normalize()
+                exact = dated[dated_days == trade_ts]
+                if not exact.empty:
+                    return float(exact["volume"].mean())
+                prior = dated[dated[date_col] <= pd.Timestamp(trade_date)].tail(63)
+                if not prior.empty:
+                    return float(prior["volume"].median())
+            return float(dated.tail(63)["volume"].median())
+        return _median_volume(data)
+    except Exception:
+        return 0.0
+
+
+def _median_volume(data) -> float:
+    try:
+        return float(data["volume"].median())
+    except Exception:
+        return 0.0
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _make_walkforward_runner():
     from quant.features.backtest.engine import Backtester
     from quant.features.strategies.registry import StrategyRegistry
@@ -152,16 +236,7 @@ def _make_walkforward_runner():
         bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=initial_cash, data_provider=data_provider, symbols=symbols)
         returns = bt_result.equity_curve.pct_change().dropna() if hasattr(bt_result, "equity_curve") else pd.Series(dtype=float)
         days = max(1, (end - start).days)
-        trades = [
-            {
-                "symbol": getattr(trade, "symbol", ""),
-                "side": getattr(trade, "side", ""),
-                "quantity": getattr(trade, "quantity", 0),
-                "price": getattr(trade, "price", getattr(trade, "fill_price", 0.0)),
-                "pnl": getattr(trade, "pnl", 0.0),
-            }
-            for trade in getattr(bt_result, "trades", [])
-        ]
+        trades = [_serialize_walkforward_trade(trade, data_df) for trade in getattr(bt_result, "trades", [])]
         return {
             "metrics": {
                 "sharpe": float(getattr(bt_result, "sharpe_ratio", 0.0)),
@@ -224,6 +299,38 @@ def _make_rigor_hub(cfg: ResearchConfig, experiment_store=None):
     )
 
 
+def _make_strategy_scout(cfg: ResearchConfig):
+    from quant.features.research.discovery.source_hub import SourceHub
+    from quant.features.research.scout import StrategyScout
+    from quant.infrastructure.research.sources import ArxivSource, BlogSource, NBERSource, SSRNSource
+
+    source_hub = SourceHub({
+        "arxiv": ArxivSource(),
+        "ssrn": SSRNSource(),
+        "nber": NBERSource(),
+        "blog": BlogSource(),
+    })
+    return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None))
+
+
+def _make_benchmark_data_loader():
+    from quant.features.research.rigor.regime_detector import benchmark_symbol_for_universe
+    from quant.infrastructure.research.market_data import DuckDBResearchMarketData
+
+    market_data = DuckDBResearchMarketData()
+
+    def _load(symbols, start, end):
+        benchmark_symbol = benchmark_symbol_for_universe(symbols)
+        data = market_data.get_daily_bars([benchmark_symbol], start, end)
+        if data is None:
+            return None
+        if hasattr(data, "empty") and data.empty:
+            return None
+        return data
+
+    return _load
+
+
 def _create_llm_adapter(cfg: ResearchConfig):
     if cfg.llm_provider == "openai":
         from quant.features.cio.llm_adapters.openai_adapter import OpenAIAdapter
@@ -273,10 +380,12 @@ def _get_scheduler() -> ResearchScheduler:
         experiment_store, artifact_store = _make_experiment_stores(cfg)
         engine = ResearchEngine(
             config=cfg,
+            scout=_make_strategy_scout(cfg),
             evaluator=evaluator,
             backtest_fn=_make_backtest_fn(),
             research_store=research_store,
             rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
+            benchmark_data_loader=_make_benchmark_data_loader() if cfg.rigor_enabled else None,
         )
         if experiment_store:
             engine._experiment_store = experiment_store
@@ -329,6 +438,7 @@ def run_research():
         ensemble = StrategyEnsemble(experiment_store, cfg.ensemble_config)
     engine = ResearchEngine(
         config=cfg,
+        scout=_make_strategy_scout(cfg),
         evaluator=evaluator,
         backtest_fn=_make_backtest_fn(),
         research_store=_make_research_store(cfg),
@@ -336,6 +446,7 @@ def run_research():
         artifact_store=artifact_store,
         rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
         ensemble=ensemble,
+        benchmark_data_loader=_make_benchmark_data_loader() if cfg.rigor_enabled else None,
     )
 
     def _run():

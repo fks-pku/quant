@@ -1,4 +1,6 @@
+import inspect
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -29,6 +31,7 @@ class ResearchEngine:
         validator: Optional[Any] = None,
         rigor_hub: Optional[Any] = None,
         ensemble: Optional[Any] = None,
+        benchmark_data_loader: Optional[Callable[[List[str], str, str], Any]] = None,
     ):
         self.config = config or ResearchConfig()
         self.scout = scout or StrategyScout()
@@ -49,6 +52,7 @@ class ResearchEngine:
         self._validator = validator
         self._rigor_hub = rigor_hub
         self._ensemble = ensemble
+        self._benchmark_data_loader = benchmark_data_loader
 
     def run_full_pipeline(self, sources: Optional[List[str]] = None, result: Optional[ResearchResult] = None) -> ResearchResult:
         if result is None:
@@ -157,6 +161,7 @@ class ResearchEngine:
                                 reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
                                 scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
                             ))
+                            vreport = self._append_ic_decay_warning(result, raw, vreport)
 
                 strategy_id = self.integrator.integrate(raw, report)
                 if strategy_id:
@@ -216,18 +221,26 @@ class ResearchEngine:
         logger.info(f"Pipeline complete: {result}")
         return result
 
-    def _run_backtests(self, strategy_ids: List[str], result: ResearchResult) -> None:
+    def _run_backtests(self, strategy_ids: List[str], result: ResearchResult, benchmark_data: Any = None) -> None:
         if self._backtest_fn is None:
             logger.warning("No backtest function injected — skipping backtests")
             return
         for sid in strategy_ids:
             try:
                 if self._rigor_hub is not None and self.config.rigor_enabled:
-                    wf_result = self._rigor_hub.run_walkforward(
-                        strategy_id=sid,
-                        symbols=self.config.default_symbols,
-                        start=self.config.default_backtest_start,
-                        end=self.config.default_backtest_end,
+                    split_benchmark_data = benchmark_data
+                    if split_benchmark_data is None:
+                        split_benchmark_data = self._load_benchmark_data(
+                            self.config.default_symbols,
+                            self.config.default_backtest_start,
+                            self.config.default_backtest_end,
+                        )
+                    wf_result = self._run_walkforward(
+                        sid,
+                        self.config.default_symbols,
+                        self.config.default_backtest_start,
+                        self.config.default_backtest_end,
+                        split_benchmark_data,
                     )
                     if not wf_result.is_viable:
                         self.pool.reject(sid, reason=f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}")
@@ -250,6 +263,76 @@ class ResearchEngine:
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _append_ic_decay_warning(self, result: ResearchResult, raw: RawStrategy, vreport: Any) -> Any:
+        decay_values = self._ic_decay_values(getattr(vreport, "ic_decay", []))
+        if len(decay_values) < 4 or decay_values[0] == 0:
+            return vreport
+        remaining = abs(decay_values[3] / decay_values[0])
+        if remaining >= 0.5:
+            return vreport
+        errors = list(getattr(vreport, "errors", []) or [])
+        if "high_ic_decay" not in errors:
+            errors.append("high_ic_decay")
+        vreport = replace(vreport, errors=errors)
+        result.log.append(ResearchLogEntry(
+            phase="validation",
+            title=raw.title,
+            source=raw.source,
+            source_url=raw.source_url,
+            verdict="warn",
+            reason=f"high_ic_decay: IC decay {decay_values[0]:.4f} -> {decay_values[3]:.4f} ({remaining:.0%} remaining)",
+            scores={"ic_1d": decay_values[0], "ic_21d": decay_values[3], "remaining_pct": remaining, "errors": errors},
+        ))
+        return vreport
+
+    @staticmethod
+    def _ic_decay_values(ic_decay: Any) -> List[float]:
+        values = []
+        for item in ic_decay or []:
+            value = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else item
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def _load_benchmark_data(self, symbols: List[str], start: str, end: str) -> Any:
+        if self._benchmark_data_loader is None:
+            return None
+        try:
+            return self._benchmark_data_loader(symbols, start, end)
+        except Exception as e:
+            logger.warning(f"Benchmark data unavailable for rigor regimes: {e}")
+            return None
+
+    def _run_walkforward(
+        self,
+        strategy_id: str,
+        symbols: List[str],
+        start: str,
+        end: str,
+        benchmark_data: Any,
+    ) -> Any:
+        kwargs = {
+            "strategy_id": strategy_id,
+            "symbols": symbols,
+            "start": start,
+            "end": end,
+        }
+        if benchmark_data is not None and self._walkforward_accepts_benchmark_data():
+            kwargs["benchmark_data"] = benchmark_data
+        return self._rigor_hub.run_walkforward(**kwargs)
+
+    def _walkforward_accepts_benchmark_data(self) -> bool:
+        try:
+            parameters = inspect.signature(self._rigor_hub.run_walkforward).parameters
+        except (TypeError, ValueError):
+            return False
+        return "benchmark_data" in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
 
     def _mark_needs_more_validation(self, strategy_id: str, dsr: float, reason: str) -> None:
         info = self.research_store.get_candidate(strategy_id) if self.research_store is not None else None

@@ -3,10 +3,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from quant.features.research.models import PurgedWalkForwardResult, CostEstimate
+from quant.features.research.models import PurgedWalkForwardResult
 from quant.features.research.rigor.purged_cv import generate_purged_walkforward_splits
 from quant.features.research.rigor.cost_model import estimate_costs
 from quant.features.research.rigor.dsr import compute_dsr
+from quant.features.research.rigor.regime_detector import label_split_regime, compute_regime_breakdown
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class RigorHub:
         start: str,
         end: str,
         initial_cash: float = 100000,
+        benchmark_data: Any = None,
     ) -> PurgedWalkForwardResult:
         calendar = pd.bdate_range(start=start, end=end)
         n_obs = len(calendar)
@@ -99,6 +101,7 @@ class RigorHub:
                 split["response"] = response
                 test_sharpe = response.get("metrics", {}).get("sharpe", 0.0) if isinstance(response, dict) else 0.0
                 split["test_sharpe"] = test_sharpe
+                self._attach_regime_label(split, benchmark_data)
                 split_results.append(split)
             except TypeError:
                 raise
@@ -106,6 +109,7 @@ class RigorHub:
                 logger.warning(f"Walk-forward split failed: {e}")
                 split.update(dated_split)
                 split["test_sharpe"] = 0.0
+                self._attach_regime_label(split, benchmark_data)
                 split_results.append(split)
 
         test_sharpes = [s["test_sharpe"] for s in split_results]
@@ -113,10 +117,14 @@ class RigorHub:
         aggregate = sum(test_sharpes) / len(test_sharpes) if test_sharpes else 0.0
         profitable = sum(1 for s in test_sharpes if s > 0) / len(test_sharpes) if test_sharpes else 0.0
         degradation = aggregate - worst_oos if aggregate > 0 else 0.0
+        capacity_ok = self._check_capacity(split_results)
+        regime_breakdown = compute_regime_breakdown(split_results) if benchmark_data is not None else {}
+        bull_only_warning = regime_breakdown.get("bear", {}).get("sharpe", 0.0) < -0.5
 
         is_viable = (
             worst_oos >= self._min_worst_oos_sharpe
             and profitable >= self._min_profitable_pct
+            and capacity_ok
         )
         dsr = None
         if return_series:
@@ -133,6 +141,8 @@ class RigorHub:
             sharpe_degradation=degradation,
             pct_profitable_splits=profitable,
             is_viable=is_viable,
+            regime_breakdown=regime_breakdown,
+            bull_only_warning=bull_only_warning,
         )
 
     def _n_trials(self) -> int:
@@ -143,6 +153,31 @@ class RigorHub:
         except Exception as e:
             logger.warning(f"Experiment run count unavailable: {e}")
             return 1
+
+    def _check_capacity(self, split_results: List[Dict[str, Any]]) -> bool:
+        saw_trades = False
+        for split in split_results:
+            response = split.get("response", {})
+            trades = response.get("trades", []) if isinstance(response, dict) else []
+            for trade in trades:
+                saw_trades = True
+                cost = estimate_costs(
+                    trade_value=float(trade.get("trade_value", 0.0)),
+                    avg_daily_volume=float(trade.get("avg_daily_volume", 0.0)),
+                    price=float(trade.get("price", 100.0)),
+                    volatility=float(trade.get("volatility", 0.2)),
+                    config=self._config.get("cost_model", {}),
+                )
+                if not cost.capacity_ok:
+                    logger.info("Capacity gate fail: trades_present=True")
+                    return False
+        logger.info(f"Capacity gate pass: trades_present={saw_trades}")
+        return True
+
+    @staticmethod
+    def _attach_regime_label(split: Dict[str, Any], benchmark_data: Any) -> None:
+        if benchmark_data is not None:
+            split["regime"] = label_split_regime(split, benchmark_data)
 
     @staticmethod
     def _estimate_observations(start: str, end: str) -> int:

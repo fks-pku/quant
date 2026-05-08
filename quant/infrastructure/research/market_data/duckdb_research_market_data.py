@@ -74,6 +74,8 @@ class DuckDBResearchMarketData(ResearchMarketData):
         value = str(symbol).strip().upper()
         if value.endswith((".SS", ".SZ")):
             return "daily_cn"
+        if value == "HSI":
+            return "daily_hk"
         if value.startswith("HK."):
             return "daily_hk"
         if value.endswith(".HK"):

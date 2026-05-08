@@ -520,6 +520,7 @@ class TestFactorValidator:
         assert market_data._table_for_symbol("600519") == "daily_cn"
         assert market_data._table_for_symbol("12345") == "daily_hk"
         assert market_data._table_for_symbol("HK.00700") == "daily_hk"
+        assert market_data._table_for_symbol("HSI") == "daily_hk"
         assert market_data._table_for_symbol("AAPL") == "daily_us"
 
     def test_duckdb_market_data_supports_date_schema_fallback(self, tmp_path):

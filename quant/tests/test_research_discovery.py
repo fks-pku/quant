@@ -1,4 +1,5 @@
 import logging
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,6 +105,166 @@ class TestSourceHubDefaultSources:
         hub = SourceHub({"s1": s1, "s2": s2})
         results = hub.search()
         assert len(results) == 2
+
+
+class _FakeResponse:
+    def __init__(self, text, status_code=200):
+        self.text = text
+        self.status_code = status_code
+        self.headers = {"content-type": "text/html"}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class TestSSRNSource:
+    def test_ssrn_html_results_are_parsed(self, monkeypatch):
+        from quant.infrastructure.research.sources import ssrn_source
+        from quant.infrastructure.research.sources.ssrn_source import SSRNSource
+
+        calls = []
+        sleeps = []
+        long_description = "A" * 550
+        html = f"""
+        <html>
+          <body>
+            <div class="result-item">
+              <h3><a class="title" href="/sol3/papers.cfm?abstract_id=123456">Cross-Sectional Momentum in Equity Markets</a></h3>
+              <div class="authors">Jane Doe; John Smith</div>
+              <div class="published-date">Posted: 12 Jan 2025</div>
+              <div class="abstract-text">{long_description}</div>
+            </div>
+            <div class="result-item">
+              <h3><a class="title" href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=789">Skipped Result</a></h3>
+              <div class="authors">Other Author</div>
+              <div class="abstract-text">Other description</div>
+            </div>
+          </body>
+        </html>
+        """
+
+        class FakeRequests:
+            @staticmethod
+            def get(url, params=None, headers=None, timeout=None):
+                calls.append({
+                    "url": url,
+                    "params": params,
+                    "headers": headers,
+                    "timeout": timeout,
+                })
+                return _FakeResponse(html)
+
+        monkeypatch.setitem(sys.modules, "requests", FakeRequests)
+        monkeypatch.setattr(ssrn_source.random, "uniform", lambda low, high: 3.5)
+        monkeypatch.setattr(ssrn_source.time, "sleep", sleeps.append)
+        source = SSRNSource(
+            _base_url="https://papers.ssrn.com/sol3/results.cfm",
+            _timeout=7,
+            _max_retries=0,
+        )
+
+        results = source.search({"query": "momentum"}, max_results=1)
+
+        assert len(results) == 1
+        assert results[0] == {
+            "title": "Cross-Sectional Momentum in Equity Markets",
+            "description": long_description[:500],
+            "source": "ssrn",
+            "source_url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123456",
+            "authors": "Jane Doe; John Smith",
+            "published_date": "Posted: 12 Jan 2025",
+        }
+        assert calls[0]["url"] == "https://papers.ssrn.com/sol3/results.cfm"
+        assert calls[0]["params"]["txtKeywords"] == "momentum"
+        assert calls[0]["headers"]["User-Agent"] == "QuantResearchBot/1.0 (academic use)"
+        assert calls[0]["timeout"] == 7
+        assert sleeps == [3.5]
+
+    def test_ssrn_request_error_returns_empty_and_logs_warning(self, monkeypatch, caplog):
+        from quant.infrastructure.research.sources import ssrn_source
+        from quant.infrastructure.research.sources.ssrn_source import SSRNSource
+
+        calls = []
+        sleeps = []
+
+        class FakeRequests:
+            @staticmethod
+            def get(url, params=None, headers=None, timeout=None):
+                calls.append(url)
+                raise TimeoutError("timeout")
+
+        monkeypatch.setitem(sys.modules, "requests", FakeRequests)
+        monkeypatch.setattr(ssrn_source.random, "uniform", lambda low, high: 3.0)
+        monkeypatch.setattr(ssrn_source.time, "sleep", sleeps.append)
+        source = SSRNSource(_max_retries=1, _retry_backoff=0.25)
+
+        with caplog.at_level(logging.WARNING):
+            results = source.search({"query": "momentum"})
+
+        assert results == []
+        assert len(calls) == 2
+        assert sleeps == [3.0, 0.25, 3.0]
+        assert "SSRN search failed" in caplog.text
+
+    def test_ssrn_blocked_page_returns_empty_and_logs_warning(self, monkeypatch, caplog):
+        from quant.infrastructure.research.sources import ssrn_source
+        from quant.infrastructure.research.sources.ssrn_source import SSRNSource
+
+        sleeps = []
+
+        class FakeRequests:
+            @staticmethod
+            def get(url, params=None, headers=None, timeout=None):
+                return _FakeResponse("<html><title>Access Denied</title>captcha required</html>")
+
+        monkeypatch.setitem(sys.modules, "requests", FakeRequests)
+        monkeypatch.setattr(ssrn_source.random, "uniform", lambda low, high: 4.0)
+        monkeypatch.setattr(ssrn_source.time, "sleep", sleeps.append)
+        source = SSRNSource(_max_retries=0)
+
+        with caplog.at_level(logging.WARNING):
+            results = source.search({"query": "momentum"})
+
+        assert results == []
+        assert sleeps == [4.0]
+        assert "blocked" in caplog.text.lower()
+
+    def test_ssrn_retries_429_and_5xx_with_exponential_backoff(self, monkeypatch):
+        from quant.infrastructure.research.sources import ssrn_source
+        from quant.infrastructure.research.sources.ssrn_source import SSRNSource
+
+        calls = []
+        sleeps = []
+        html = """
+        <html><body>
+          <a href="/sol3/papers.cfm?abstract_id=123">Recovered SSRN Result</a>
+          <div class="abstract-text">Recovered description</div>
+        </body></html>
+        """
+        responses = [
+            _FakeResponse("too many requests", status_code=429),
+            _FakeResponse("server unavailable", status_code=503),
+            _FakeResponse(html, status_code=200),
+        ]
+
+        class FakeRequests:
+            @staticmethod
+            def get(url, params=None, headers=None, timeout=None):
+                calls.append(url)
+                return responses.pop(0)
+
+        monkeypatch.setitem(sys.modules, "requests", FakeRequests)
+        monkeypatch.setattr(ssrn_source.random, "uniform", lambda low, high: 3.0)
+        monkeypatch.setattr(ssrn_source.time, "sleep", sleeps.append)
+        source = SSRNSource(_max_retries=2, _retry_backoff=0.5)
+
+        results = source.search({"query": "momentum"}, max_results=1)
+
+        assert len(results) == 1
+        assert results[0]["title"] == "Recovered SSRN Result"
+        assert len(calls) == 3
+        assert sleeps == [3.0, 0.5, 3.0, 1.0, 3.0]
 
 
 class TestDeduplicate:

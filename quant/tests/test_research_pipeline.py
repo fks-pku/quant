@@ -4,9 +4,10 @@ import uuid
 from pathlib import Path
 
 import pytest
+import pandas as pd
 
 from quant.features.research.evaluator import StrategyEvaluator
-from quant.features.research.models import EvaluationReport, RawStrategy, ResearchConfig
+from quant.features.research.models import EvaluationReport, RawStrategy, ResearchConfig, StrategySpec, ValidationReport
 from quant.features.research.pool import CandidatePool
 from quant.features.research.research_engine import ResearchEngine
 from quant.infrastructure.research.repository import FileResearchStore
@@ -192,6 +193,108 @@ def test_research_engine_pauses_low_dsr_candidate_without_backtest():
         assert any(entry.phase == "rigor" and entry.verdict == "warning" for entry in result.log)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_ic_decay_warning_is_logged_without_rejecting():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["SPY"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class FixedValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=0.05,
+                rank_ic_ir=1.0,
+                ic_decay=[(1, 0.05), (5, 0.03), (10, 0.02), (21, 0.01)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=0.0,
+                hit_rate=0.55,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+            )
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, validation_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+            spec_builder=FixedSpecBuilder(),
+            validator=FixedValidator(),
+        )
+
+        result = engine.run_full_pipeline()
+
+        warnings = [entry for entry in result.log if entry.phase == "validation" and entry.verdict == "warn"]
+        assert result.integrated == 1
+        assert result.rejected == 0
+        assert any("high_ic_decay" in entry.reason or "high_ic_decay" in entry.scores for entry in warnings)
+        assert any("high_ic_decay" in entry.scores.get("errors", []) for entry in warnings)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_walkforward_trade_enrichment_adds_capacity_fields():
+    from quant.api.research_bp import _serialize_walkforward_trade
+
+    class Trade:
+        symbol = "SPY"
+        side = "BUY"
+        quantity = 50
+        fill_price = 20.0
+        pnl = 0.0
+        fill_date = "2020-01-03"
+
+    data = pd.DataFrame(
+        [
+            {"symbol": "SPY", "timestamp": "2020-01-02", "volume": 10_000},
+            {"symbol": "SPY", "timestamp": "2020-01-03", "volume": 20_000},
+        ]
+    )
+
+    trade = _serialize_walkforward_trade(Trade(), data)
+
+    assert trade["trade_value"] == pytest.approx(1_000.0)
+    assert trade["avg_daily_volume"] == pytest.approx(20_000.0)
+
+
+def test_api_make_strategy_scout_uses_infrastructure_sources():
+    from quant.api import research_bp as research_module
+
+    scout = research_module._make_strategy_scout(ResearchConfig(sources=["ssrn"]))
+
+    assert scout._source_hub is not None
+    assert scout._hub_sources == ["ssrn"]
+    assert scout._source_hub._sources["ssrn"].__class__.__name__ == "SSRNSource"
 
 
 def test_api_make_rigor_hub_uses_two_arg_walkforward_runner_and_experiment_store(monkeypatch):

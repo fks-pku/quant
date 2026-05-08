@@ -5,6 +5,44 @@ from quant.features.research.rigor.purged_cv import generate_purged_walkforward_
 from quant.features.research.rigor.cost_model import estimate_costs
 from quant.features.research.rigor.backtest_hub import RigorHub
 from quant.features.research.rigor.dsr import compute_dsr
+from quant.features.research.rigor.regime_detector import label_split_regime, compute_regime_breakdown
+
+
+def test_label_split_regime_bull_with_sma_data():
+    idx = pd.date_range("2020-01-01", periods=260, freq="B")
+    data = pd.DataFrame({"close": range(100, 360)}, index=idx)
+    split = {"test_start": 220, "test_end": 250}
+
+    assert label_split_regime(split, data) == "bull"
+
+
+def test_label_split_regime_supports_date_string_slicing():
+    idx = pd.date_range("2020-01-01", periods=260, freq="B")
+    data = pd.DataFrame({"close": list(range(360, 100, -1))}, index=idx)
+    split = {"test_start": "2020-11-04", "test_end": "2020-12-16"}
+
+    assert label_split_regime(split, data) == "bear"
+
+
+def test_label_split_regime_falls_back_to_rolling_return_when_sma_insufficient():
+    idx = pd.date_range("2020-01-01", periods=90, freq="B")
+    data = pd.DataFrame({"close": range(100, 190)}, index=idx)
+    split = {"test_start": 70, "test_end": 89}
+
+    assert label_split_regime(split, data) == "bull"
+
+
+def test_compute_regime_breakdown_groups_split_sharpes():
+    splits = [
+        {"regime": "bull", "test_sharpe": 1.2},
+        {"regime": "bear", "test_sharpe": -0.8},
+    ]
+
+    breakdown = compute_regime_breakdown(splits)
+
+    assert breakdown["bull"]["n_splits"] == 1
+    assert breakdown["bull"]["sharpe"] == pytest.approx(1.2)
+    assert breakdown["bear"]["sharpe"] == pytest.approx(-0.8)
 
 
 class TestPurgedWalkForwardCV:
@@ -312,6 +350,174 @@ class TestRigorHub:
             end="2021-01-01",
         )
         assert result.is_viable is False
+
+    def test_capacity_gate_fails_when_trade_exceeds_adv(self):
+        def fake_runner(strategy_id, request):
+            return {
+                "metrics": {"sharpe": 1.0},
+                "trades": [{"trade_value": 1_000_000, "avg_daily_volume": 100_000, "price": 100.0}],
+            }
+
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                },
+                "thresholds": {
+                    "min_worst_oos_sharpe": 0.3,
+                    "min_profitable_splits_pct": 0.5,
+                },
+                "cost_model": {"max_adv_pct": 0.05},
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+        )
+
+        assert result.is_viable is False
+
+    def test_capacity_gate_logs_result(self, caplog):
+        def fake_runner(strategy_id, request):
+            return {
+                "metrics": {"sharpe": 1.0},
+                "trades": [{"trade_value": 1_000_000, "avg_daily_volume": 100_000, "price": 100.0}],
+            }
+
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                },
+                "thresholds": {
+                    "min_worst_oos_sharpe": 0.3,
+                    "min_profitable_splits_pct": 0.5,
+                },
+                "cost_model": {"max_adv_pct": 0.05},
+            },
+        )
+
+        with caplog.at_level("INFO"):
+            hub.run_walkforward(
+                strategy_id="test_strat",
+                symbols=["SPY"],
+                start="2020-01-01",
+                end="2021-01-01",
+            )
+
+        assert any("Capacity gate fail" in message and "trades_present=True" in message for message in caplog.messages)
+
+    def test_walkforward_labels_regimes_from_benchmark_data(self):
+        def fake_runner(strategy_id, request):
+            return {"metrics": {"sharpe": 1.0}}
+
+        idx = pd.date_range("2020-01-01", periods=262, freq="B")
+        benchmark_data = pd.DataFrame({"close": range(100, 362)}, index=idx)
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                },
+                "thresholds": {
+                    "min_worst_oos_sharpe": 0.3,
+                    "min_profitable_splits_pct": 0.5,
+                },
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+            benchmark_data=benchmark_data,
+        )
+
+        assert result.regime_breakdown["bull"]["n_splits"] > 0
+        assert result.bull_only_warning is False
+
+    def test_bull_only_warning_false_for_bull_plus_unknown(self):
+        def fake_runner(strategy_id, request):
+            return {"metrics": {"sharpe": 1.0}}
+
+        idx = pd.date_range("2020-03-25", periods=45, freq="B")
+        benchmark_data = pd.DataFrame({"close": range(100, 145)}, index=idx)
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                },
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+            benchmark_data=benchmark_data,
+        )
+
+        assert set(result.regime_breakdown) == {"bull", "unknown"}
+        assert result.bull_only_warning is False
+
+    def test_bull_only_warning_true_when_bear_regime_sharpe_is_bad(self):
+        def fake_runner(strategy_id, request):
+            return {"metrics": {"sharpe": -0.8}}
+
+        idx = pd.date_range("2020-01-01", periods=262, freq="B")
+        benchmark_data = pd.DataFrame({"close": list(range(362, 100, -1))}, index=idx)
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 210,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 5,
+                    "min_train_observations": 210,
+                },
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+            benchmark_data=benchmark_data,
+        )
+
+        assert result.regime_breakdown["bear"]["sharpe"] < -0.5
+        assert result.bull_only_warning is True
 
 
 class TestDeflatedSharpeRatio:
