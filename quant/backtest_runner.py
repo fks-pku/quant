@@ -15,6 +15,9 @@ from quant.features.backtest.entities import BacktestResultExporter
 from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.features.strategies.registry import StrategyRegistry
+from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.risk import RiskEngine
+from quant.features.trading.sub_portfolio import SubPortfolio
 from quant.shared.utils.symbol_utils import normalize_symbol_for_backtest as _normalize_symbol
 
 
