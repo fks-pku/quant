@@ -7,10 +7,20 @@ logger = logging.getLogger(__name__)
 
 
 class DuckDBResearchMarketData(ResearchMarketData):
-    def __init__(self, db_path: str = "quant/infrastructure/var/market.duckdb"):
+    def __init__(self, db_path: str = "quant/infrastructure/var/market.duckdb", pit_data: Any = None, pit_as_of_date: str = None):
         self._db_path = db_path
+        self._pit_data = pit_data
+        self._pit_as_of_date = pit_as_of_date
 
     def get_universe_symbols(self, market: str) -> List[str]:
+        if self._pit_data is not None and self._pit_as_of_date:
+            try:
+                universe = self._pit_data.get_universe(self._pit_as_of_date, market)
+                if universe is not None:
+                    return list(universe)
+            except Exception as e:
+                logger.warning(f"PIT universe fetch failed: {e}")
+            return []
         table = self._table_for_market(market)
         if table is None:
             return []
@@ -30,6 +40,16 @@ class DuckDBResearchMarketData(ResearchMarketData):
     def get_daily_bars(self, symbols: List[str], start: str, end: str) -> Any:
         if not symbols:
             return None
+        if self._pit_data is not None and self._pit_as_of_date:
+            try:
+                return self._pit_data.get_bars_pit(symbols, start, end, self._pit_as_of_date)
+            except Exception as e:
+                logger.warning(f"PIT market data fetch failed: {e}")
+                try:
+                    import pandas as pd
+                    return pd.DataFrame()
+                except Exception:
+                    return None
         conn = None
         try:
             import duckdb

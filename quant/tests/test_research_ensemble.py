@@ -2,14 +2,68 @@ from __future__ import annotations
 
 import json
 import math
+import sys
+import types
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pytest
 
 from quant.features.research.ensemble.correlation_matrix import compute_correlation_matrix, compute_effective_n
 from quant.features.research.ensemble.optimizer import equal_weight, inverse_vol, equal_risk
 from quant.features.research.ensemble.ensemble import StrategyEnsemble
 from quant.features.research.models import EnsembleResult
+
+
+def _risk_contribution_shares(corr_matrix: List[List[float]], volatilities: List[float], weights: List[float]) -> np.ndarray:
+    corr = np.asarray(corr_matrix, dtype=float)
+    vols = np.asarray(volatilities, dtype=float)
+    w = np.asarray(weights, dtype=float)
+    cov = corr * np.outer(vols, vols)
+    contributions = w * (cov @ w)
+    return contributions / contributions.sum()
+
+
+def _install_grid_scipy_minimize(monkeypatch):
+    scipy_module = types.ModuleType("scipy")
+    optimize_module = types.ModuleType("scipy.optimize")
+
+    def minimize(objective, x0, method=None, bounds=None, constraints=(), options=None):
+        assert method == "SLSQP"
+        cap = bounds[0][1]
+        step = 0.005
+        best_x = np.asarray(x0, dtype=float)
+        best_fun = float(objective(best_x))
+        grid = np.arange(0.0, cap + step / 2, step)
+        for w0 in grid:
+            for w1 in grid:
+                w2 = 1.0 - w0 - w1
+                if w2 < -1e-12 or w2 > cap + 1e-12:
+                    continue
+                candidate = np.array([w0, w1, w2], dtype=float)
+                value = float(objective(candidate))
+                if value < best_fun:
+                    best_x = candidate
+                    best_fun = value
+        return types.SimpleNamespace(success=True, x=best_x, fun=best_fun)
+
+    optimize_module.minimize = minimize
+    scipy_module.optimize = optimize_module
+    monkeypatch.setitem(sys.modules, "scipy", scipy_module)
+    monkeypatch.setitem(sys.modules, "scipy.optimize", optimize_module)
+
+
+def _install_failing_scipy_minimize(monkeypatch):
+    scipy_module = types.ModuleType("scipy")
+    optimize_module = types.ModuleType("scipy.optimize")
+
+    def minimize(objective, x0, method=None, bounds=None, constraints=(), options=None):
+        return types.SimpleNamespace(success=False, x=np.asarray(x0, dtype=float), fun=float("inf"))
+
+    optimize_module.minimize = minimize
+    scipy_module.optimize = optimize_module
+    monkeypatch.setitem(sys.modules, "scipy", scipy_module)
+    monkeypatch.setitem(sys.modules, "scipy.optimize", optimize_module)
 
 
 class _FakeExperimentStore:
@@ -120,6 +174,34 @@ class TestOptimizer:
     def test_equal_risk_sums_to_one(self):
         w = equal_risk([[1, 0.5], [0.5, 1]], [0.2, 0.3])
         assert sum(w) == pytest.approx(1.0)
+
+    def test_equal_risk_contributions_are_close_for_identity_covariance(self):
+        corr = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        volatilities = [0.2, 0.4, 0.8]
+        weights = equal_risk(corr, volatilities, max_weight=0.8)
+        shares = _risk_contribution_shares(corr, volatilities, weights)
+        assert sum(weights) == pytest.approx(1.0)
+        assert all(weight >= 0.0 for weight in weights)
+        assert max(shares) - min(shares) <= 0.02
+
+    def test_equal_risk_uses_covariance_to_equalize_risk_contributions(self, monkeypatch):
+        _install_grid_scipy_minimize(monkeypatch)
+        corr = [[1.0, 0.8, 0.0], [0.8, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        volatilities = [0.2, 0.2, 0.2]
+        weights = equal_risk(corr, volatilities, max_weight=0.8)
+        shares = _risk_contribution_shares(corr, volatilities, weights)
+        assert sum(weights) == pytest.approx(1.0)
+        assert all(0.0 <= weight <= 0.8 for weight in weights)
+        assert weights[2] > weights[0]
+        assert max(shares) - min(shares) <= 0.03
+
+    def test_equal_risk_falls_back_to_capped_inverse_vol_when_optimizer_fails(self, monkeypatch):
+        _install_failing_scipy_minimize(monkeypatch)
+        corr = [[1.0, 0.2, 0.1], [0.2, 1.0, 0.3], [0.1, 0.3, 1.0]]
+        weights = equal_risk(corr, [0.01, 0.5, 0.6], max_weight=0.55)
+        assert sum(weights) == pytest.approx(1.0)
+        assert all(0.0 <= weight <= 0.55 + 1e-10 for weight in weights)
+        assert weights[0] == pytest.approx(0.55, abs=1e-6)
 
     def test_equal_risk_empty(self):
         assert equal_risk([], []) == []

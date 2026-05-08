@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -14,6 +15,7 @@ from quant.features.research.validation.cross_sectional import (
     detect_market,
 )
 from quant.features.research.validation.ff_decomposition import decompose_alpha
+from quant.features.research.validation.sensitivity import run_sensitivity_sweep
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ class FactorValidator:
         self._min_stocks = self._config.get("min_stocks", 20)
         self._min_cs_dates = max(100, self._config.get("min_cross_sectional_dates", 100))
         self._factor_validation_enabled = bool(self._config.get("factor_validation_enabled", False))
+        self._sensitivity_enabled = bool(self._config.get("sensitivity_enabled", False))
 
     def validate(self, spec: StrategySpec) -> ValidationReport:
         if spec.status != "ready":
@@ -63,9 +66,11 @@ class FactorValidator:
             return self._error_report(spec, [f"Insufficient data: {len(data)} < {self._min_obs}"])
 
         if {"symbol", "date"}.issubset(data.columns):
-            return self._validate_cross_sectional(spec, data, compute_signal)
+            report = self._validate_cross_sectional(spec, data, compute_signal)
+        else:
+            report = self._validate_single_symbol(spec, data, compute_signal)
 
-        return self._validate_single_symbol(spec, data, compute_signal)
+        return self._with_sensitivity(spec, report)
 
     def _resolve_universe(self, spec: StrategySpec) -> List[str]:
         fallback = list(spec.universe)
@@ -75,7 +80,7 @@ class FactorValidator:
             return fallback
         try:
             universe = self._market_data.get_universe_symbols(detect_market(fallback[0]))
-            return list(universe) if universe else fallback
+            return list(universe) if universe is not None else fallback
         except Exception as e:
             logger.warning(f"Universe fetch failed: {e}")
             return fallback
@@ -226,6 +231,24 @@ class FactorValidator:
             logger.warning(f"Factor decomposition unavailable: {e}")
             errors = ["factor_data_unavailable"] if self._factor_validation_enabled else []
             return zeros, errors
+
+    def _with_sensitivity(self, spec: StrategySpec, report: ValidationReport) -> ValidationReport:
+        if not self._sensitivity_enabled or report.status != "validated":
+            return report
+        try:
+            sensitivity = run_sensitivity_sweep(
+                spec,
+                self._market_data,
+                {"lookback_days": spec.lookback_days, "horizon_days": spec.horizon_days},
+                self._config,
+            )
+            status = "stable" if sensitivity.is_stable else "unstable"
+            errors = list(report.errors or [])
+            errors.append(f"sensitivity: {status} (max_degradation={sensitivity.max_degradation_pct:.1f}%)")
+            return replace(report, errors=errors)
+        except Exception as e:
+            logger.warning(f"Sensitivity sweep unavailable: {e}")
+            return report
 
     def _error_report(self, spec, errors):
         return ValidationReport(

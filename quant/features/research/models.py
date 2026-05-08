@@ -77,6 +77,8 @@ class ResearchConfig:
     validation_enabled: bool = True
     validation_min_obs: int = 252
     validation_config: dict = field(default_factory=dict)
+    pit_enabled: bool = False
+    pit_universe_snapshot_dir: str = "quant/infrastructure/var/research/universe_snapshots"
     scout_config: dict = field(default_factory=dict)
     rigor_enabled: bool = True
     rigor_config: dict = field(default_factory=dict)

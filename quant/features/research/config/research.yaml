@@ -16,6 +16,23 @@ research:
     - GOOGL
     - SPY
     - QQQ
+  validation_config:
+    sensitivity_enabled: false
+    sensitivity_lookback_grid: [10, 15, 20, 25, 30]
+    sensitivity_horizon_grid: [1, 3, 5, 10, 21]
+    sensitivity_max_degradation_pct: 30
+  pit_enabled: false
+  pit_universe_snapshot_dir: quant/infrastructure/var/research/universe_snapshots
+
+validation:
+  sensitivity_enabled: false
+  sensitivity_lookback_grid: [10, 15, 20, 25, 30]
+  sensitivity_horizon_grid: [1, 3, 5, 10, 21]
+  sensitivity_max_degradation_pct: 30
+
+pit:
+  enabled: false
+  universe_snapshot_dir: quant/infrastructure/var/research/universe_snapshots
 
 llm:
   provider: deepseek  # openai | claude | ollama | minimax | deepseek | glm

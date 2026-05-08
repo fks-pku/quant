@@ -11,6 +11,7 @@ from quant.domain.ports.research_market_data import ResearchMarketData
 from quant.domain.ports.factor_data import FactorData
 from quant.domain.ports.experiment_store import ExperimentStore
 from quant.domain.ports.research_artifact_store import ResearchArtifactStore
+from quant.domain.ports.pit_data import PITData
 
 __all__ = [
     "DataFeed",
@@ -30,4 +31,5 @@ __all__ = [
     "FactorData",
     "ExperimentStore",
     "ResearchArtifactStore",
+    "PITData",
 ]

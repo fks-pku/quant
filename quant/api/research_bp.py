@@ -313,11 +313,27 @@ def _make_strategy_scout(cfg: ResearchConfig):
     return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None))
 
 
-def _make_benchmark_data_loader():
-    from quant.features.research.rigor.regime_detector import benchmark_symbol_for_universe
+def _make_pit_data(cfg: ResearchConfig):
+    if not getattr(cfg, "pit_enabled", False):
+        return None
+    from quant.infrastructure.research.pit_duckdb import PITDuckDBData
+
+    return PITDuckDBData()
+
+
+def _make_research_market_data(cfg: ResearchConfig, as_of_date: str = None):
     from quant.infrastructure.research.market_data import DuckDBResearchMarketData
 
-    market_data = DuckDBResearchMarketData()
+    return DuckDBResearchMarketData(
+        pit_data=_make_pit_data(cfg),
+        pit_as_of_date=as_of_date or getattr(cfg, "default_backtest_end", None),
+    )
+
+
+def _make_benchmark_data_loader(cfg: ResearchConfig):
+    from quant.features.research.rigor.regime_detector import benchmark_symbol_for_universe
+
+    market_data = _make_research_market_data(cfg)
 
     def _load(symbols, start, end):
         benchmark_symbol = benchmark_symbol_for_universe(symbols)
@@ -385,7 +401,7 @@ def _get_scheduler() -> ResearchScheduler:
             backtest_fn=_make_backtest_fn(),
             research_store=research_store,
             rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
-            benchmark_data_loader=_make_benchmark_data_loader() if cfg.rigor_enabled else None,
+            benchmark_data_loader=_make_benchmark_data_loader(cfg) if cfg.rigor_enabled else None,
         )
         if experiment_store:
             engine._experiment_store = experiment_store
@@ -446,7 +462,7 @@ def run_research():
         artifact_store=artifact_store,
         rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
         ensemble=ensemble,
-        benchmark_data_loader=_make_benchmark_data_loader() if cfg.rigor_enabled else None,
+        benchmark_data_loader=_make_benchmark_data_loader(cfg) if cfg.rigor_enabled else None,
     )
 
     def _run():
