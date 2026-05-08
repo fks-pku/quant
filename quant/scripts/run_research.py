@@ -247,7 +247,12 @@ def main():
         default_backtest_end="2024-12-31",
     )
 
-    store = FileResearchStore(str(var_root))
+    if getattr(config, "tracking_enabled", False) and config.tracking_db_path:
+        from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
+
+        store = DuckDBResearchStore(db_path=config.tracking_db_path, artifact_root=str(var_root))
+    else:
+        store = FileResearchStore(str(var_root))
     scout = _create_keyword_scout()
 
     if args.no_heuristic:
@@ -263,6 +268,10 @@ def main():
         logger.warning("Backtests enabled — requires DuckDB data")
 
     strategies_dir = str(Path(__file__).resolve().parent.parent / "features" / "strategies")
+    rigor_hub = None
+    if config.rigor_enabled:
+        from quant.features.research.rigor.backtest_hub import RigorHub
+        rigor_hub = RigorHub(backtest_runner=backtest_fn, config=config.rigor_config) if backtest_fn else None
     engine = ResearchEngine(
         config=config,
         scout=scout,
@@ -270,6 +279,7 @@ def main():
         research_store=store,
         backtest_fn=backtest_fn,
         strategies_dir=strategies_dir,
+        rigor_hub=rigor_hub,
     )
 
     print("=" * 70)

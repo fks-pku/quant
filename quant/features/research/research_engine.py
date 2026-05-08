@@ -23,6 +23,12 @@ class ResearchEngine:
         backtest_fn: Optional[Callable] = None,
         strategies_dir: Optional[str] = None,
         research_store: Optional[ResearchStore] = None,
+        experiment_store: Optional[Any] = None,
+        artifact_store: Optional[Any] = None,
+        spec_builder: Optional[Any] = None,
+        validator: Optional[Any] = None,
+        rigor_hub: Optional[Any] = None,
+        ensemble: Optional[Any] = None,
     ):
         self.config = config or ResearchConfig()
         self.scout = scout or StrategyScout()
@@ -37,12 +43,38 @@ class ResearchEngine:
         )
         self.pool = pool or CandidatePool(strategy_registry=self.integrator.registry, research_store=self.research_store)
         self._backtest_fn = backtest_fn
+        self._experiment_store = experiment_store
+        self._artifact_store = artifact_store
+        self._spec_builder = spec_builder
+        self._validator = validator
+        self._rigor_hub = rigor_hub
+        self._ensemble = ensemble
 
     def run_full_pipeline(self, sources: Optional[List[str]] = None, result: Optional[ResearchResult] = None) -> ResearchResult:
         if result is None:
             result = ResearchResult()
         logger.info("Starting research pipeline")
 
+        run_id = None
+        if self._tracking_enabled():
+            run_id = self._experiment_store.start_run("research_pipeline", {})
+            result.run_id = run_id
+
+        try:
+            result = self._execute_pipeline(sources, result)
+        except Exception as e:
+            if run_id is not None:
+                self._experiment_store.complete_run(run_id, "failed", error=str(e))
+            raise
+
+        if run_id is not None:
+            self._experiment_store.complete_run(run_id, "completed")
+        return result
+
+    def _tracking_enabled(self) -> bool:
+        return getattr(self.config, "tracking_enabled", False) and self._experiment_store is not None
+
+    def _execute_pipeline(self, sources: Optional[List[str]], result: ResearchResult) -> ResearchResult:
         raw_strategies = self.scout.search(sources=sources, max_results=self.config.max_results_per_source)
         result.discovered = len(raw_strategies)
         self.research_store.write_discoveries(raw_strategies)
@@ -94,6 +126,38 @@ class ResearchEngine:
                     result.rejected += 1
                     continue
 
+                if self.config.validation_enabled and self._spec_builder is not None:
+                    spec = self._spec_builder.build(raw, report)
+                    result.specified += 1
+                    if spec.status != "ready":
+                        result.needs_manual_spec += 1
+                        result.log.append(ResearchLogEntry(
+                            phase="validation", title=raw.title, source=raw.source,
+                            source_url=raw.source_url, verdict="skip",
+                            reason=f"Spec status: {spec.status}",
+                        ))
+                    elif self._validator is not None:
+                        vreport = self._validator.validate(spec)
+                        result.validated += 1
+                        if vreport.status == "error" or not vreport.fdr_significant or abs(vreport.rank_ic) < 0.02:
+                            result.log.append(ResearchLogEntry(
+                                phase="validation", title=raw.title, source=raw.source,
+                                source_url=raw.source_url, verdict="fail",
+                                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                                scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+                            ))
+                            result.rejected += 1
+                            evaluation_rows.append((raw, report, "fail", f"Validation failed: IC={vreport.rank_ic:.4f}"))
+                            continue
+                        else:
+                            result.validated_passed += 1
+                            result.log.append(ResearchLogEntry(
+                                phase="validation", title=raw.title, source=raw.source,
+                                source_url=raw.source_url, verdict="pass",
+                                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                                scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+                            ))
+
                 strategy_id = self.integrator.integrate(raw, report)
                 if strategy_id:
                     result.integrated += 1
@@ -132,6 +196,22 @@ class ResearchEngine:
         if self.config.auto_backtest and integrated_ids:
             self._run_backtests(integrated_ids, result)
 
+        if getattr(self.config, "ensemble_enabled", False) and self._ensemble is not None:
+            try:
+                candidate_ids = [
+                    c.get("id") for c in self.pool.list_candidates()
+                    if c.get("status") == "candidate"
+                ]
+                if len(candidate_ids) >= 2:
+                    ensemble_result = self._ensemble.build(candidate_ids)
+                    result.ensemble_built = True
+                    logger.info(
+                        f"Ensemble built: {len(ensemble_result.strategy_ids)} strategies, "
+                        f"diversification={ensemble_result.diversification_ratio:.2f}"
+                    )
+            except Exception as e:
+                logger.warning(f"Ensemble build failed: {e}")
+
         self.research_store.save_run_result(result)
         logger.info(f"Pipeline complete: {result}")
         return result
@@ -142,6 +222,18 @@ class ResearchEngine:
             return
         for sid in strategy_ids:
             try:
+                if self._rigor_hub is not None and self.config.rigor_enabled:
+                    wf_result = self._rigor_hub.run_walkforward(
+                        strategy_id=sid,
+                        symbols=self.config.default_symbols,
+                        start=self.config.default_backtest_start,
+                        end=self.config.default_backtest_end,
+                    )
+                    result.walkforward_passed += 1 if wf_result.is_viable else 0
+                    if not wf_result.is_viable:
+                        self.pool.reject(sid, reason=f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}")
+                        result.rejected += 1
+                        continue
                 self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
             except Exception as e:
                 logger.error(f"Backtest failed for {sid}: {e}")

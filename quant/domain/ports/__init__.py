@@ -6,6 +6,11 @@ from quant.domain.ports.event_publisher import EventPublisher, EventSubscriber
 from quant.domain.ports.portfolio import PortfolioLike, RiskEngineLike
 from quant.domain.ports.llm import LLMAdapterLike
 from quant.domain.ports.research_store import ResearchStore
+from quant.domain.ports.research_source import ResearchSource
+from quant.domain.ports.research_market_data import ResearchMarketData
+from quant.domain.ports.factor_data import FactorData
+from quant.domain.ports.experiment_store import ExperimentStore
+from quant.domain.ports.research_artifact_store import ResearchArtifactStore
 
 __all__ = [
     "DataFeed",
@@ -20,4 +25,9 @@ __all__ = [
     "RiskEngineLike",
     "LLMAdapterLike",
     "ResearchStore",
+    "ResearchSource",
+    "ResearchMarketData",
+    "FactorData",
+    "ExperimentStore",
+    "ResearchArtifactStore",
 ]

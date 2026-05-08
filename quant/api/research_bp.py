@@ -111,10 +111,43 @@ _research_scheduler: ResearchScheduler = None
 
 
 def _make_research_store(cfg: ResearchConfig):
+    root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
+    if getattr(cfg, "tracking_enabled", False) and cfg.tracking_db_path:
+        from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
+
+        return DuckDBResearchStore(db_path=cfg.tracking_db_path, artifact_root=root)
     from quant.infrastructure.research.repository import FileResearchStore
 
-    root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
     return FileResearchStore(root)
+
+
+def _make_experiment_stores(cfg: ResearchConfig):
+    if not getattr(cfg, "tracking_enabled", False):
+        return None, None
+    from quant.infrastructure.research.duckdb_experiment_store import DuckDBExperimentStore
+    from quant.infrastructure.research.file_artifact_store import FileArtifactStore
+    db_path = cfg.tracking_db_path or str(
+        Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research" / "experiments.duckdb"
+    )
+    artifact_root = cfg.research_dir or str(
+        Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research" / "artifacts"
+    )
+    return DuckDBExperimentStore(db_path), FileArtifactStore(artifact_root)
+
+
+def _make_experiment_store(cfg: ResearchConfig):
+    if not getattr(cfg, "tracking_enabled", False) or not cfg.tracking_db_path:
+        return None
+    from quant.infrastructure.research.duckdb_experiment_store import DuckDBExperimentStore
+    return DuckDBExperimentStore(cfg.tracking_db_path)
+
+
+def _make_rigor_hub(cfg: ResearchConfig):
+    from quant.features.research.rigor.backtest_hub import RigorHub
+    return RigorHub(
+        backtest_runner=_make_backtest_fn(),
+        config=cfg.rigor_config,
+    )
 
 
 def _create_llm_adapter(cfg: ResearchConfig):
@@ -163,7 +196,14 @@ def _get_scheduler() -> ResearchScheduler:
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn(), research_store=research_store)
+        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn(), research_store=research_store, rigor_hub=_make_rigor_hub(cfg) if cfg.rigor_enabled else None)
+        experiment_store, artifact_store = _make_experiment_stores(cfg)
+        if experiment_store:
+            engine._experiment_store = experiment_store
+            engine._artifact_store = artifact_store
+            if getattr(cfg, "ensemble_enabled", False):
+                from quant.features.research.ensemble.ensemble import StrategyEnsemble
+                engine._ensemble = StrategyEnsemble(experiment_store, cfg.ensemble_config)
         _research_scheduler = ResearchScheduler(engine, cfg)
         if cfg.auto_run:
             _research_scheduler.start()
@@ -202,11 +242,20 @@ def run_research():
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator
     evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
+    experiment_store, artifact_store = _make_experiment_stores(cfg)
+    ensemble = None
+    if getattr(cfg, "ensemble_enabled", False) and experiment_store is not None:
+        from quant.features.research.ensemble.ensemble import StrategyEnsemble
+        ensemble = StrategyEnsemble(experiment_store, cfg.ensemble_config)
     engine = ResearchEngine(
         config=cfg,
         evaluator=evaluator,
         backtest_fn=_make_backtest_fn(),
         research_store=_make_research_store(cfg),
+        experiment_store=experiment_store,
+        artifact_store=artifact_store,
+        rigor_hub=_make_rigor_hub(cfg) if cfg.rigor_enabled else None,
+        ensemble=ensemble,
     )
 
     def _run():
@@ -301,3 +350,73 @@ def trigger_scheduled():
     scheduler = _get_scheduler()
     scheduler.trigger_now()
     return jsonify({"success": True, "message": "Scheduled research triggered"})
+
+
+@research_bp.route("/api/research/experiments/<strategy_id>")
+def list_experiments(strategy_id):
+    cfg = _load_research_config()
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Experiment tracking not configured"}), 400
+    runs = store.list_runs(strategy_id=strategy_id)
+    return jsonify({"runs": runs})
+
+
+@research_bp.route("/api/research/experiments/<strategy_id>/<run_id>")
+def get_experiment(strategy_id, run_id):
+    cfg = _load_research_config()
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Experiment tracking not configured"}), 400
+    run = store.get_run(run_id)
+    if run is None:
+        return jsonify({"error": "Run not found"}), 404
+    metrics = store.list_metrics(run_id)
+    run["metrics"] = metrics
+    return jsonify(run)
+
+
+@research_bp.route("/api/research/compare")
+def compare_strategies():
+    ids_str = request.args.get("ids", "")
+    metric = request.args.get("metric", "sharpe")
+    ids = [i.strip() for i in ids_str.split(",") if i.strip()]
+    if not ids:
+        return jsonify({"error": "Provide ids parameter"}), 400
+    cfg = _load_research_config()
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Experiment tracking not configured"}), 400
+    from quant.features.research.tracking.comparison import StrategyComparator
+    comparator = StrategyComparator(store)
+    results = comparator.compare(ids, metric_name=metric)
+    return jsonify({"comparisons": results})
+
+
+@research_bp.route("/api/research/ensemble")
+def get_ensemble():
+    cfg = _load_research_config()
+    pool = CandidatePool(research_store=_make_research_store(cfg))
+    candidates = pool.list_candidates()
+    if len(candidates) < 2:
+        return jsonify({"ensemble": None, "message": "Need at least 2 candidates"})
+    store = _make_experiment_store(cfg)
+    if store is None:
+        return jsonify({"error": "Experiment tracking not configured"}), 400
+    from quant.features.research.ensemble.ensemble import StrategyEnsemble
+    ensemble = StrategyEnsemble(store, cfg.ensemble_config)
+    ids = [c["id"] for c in candidates]
+    result = ensemble.build(ids)
+    return jsonify({"ensemble": {
+        "strategy_ids": result.strategy_ids,
+        "weights": result.weights,
+        "portfolio_sharpe": result.portfolio_sharpe,
+        "diversification_ratio": result.diversification_ratio,
+        "mean_correlation": result.mean_correlation,
+        "effective_n": result.effective_n,
+    }})
+
+
+@research_bp.route("/api/research/ensemble/rebuild", methods=["POST"])
+def rebuild_ensemble():
+    return get_ensemble()

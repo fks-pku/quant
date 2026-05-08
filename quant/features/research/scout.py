@@ -62,8 +62,21 @@ class StrategyScout:
             "arxiv": ArxivAdapter(),
             "ssrn": SSRNAdapter(),
         }
+        self._source_hub = None
+        self._hub_sources = None
+
+    @classmethod
+    def from_source_hub(cls, source_hub, sources=None):
+        instance = cls()
+        instance._source_hub = source_hub
+        instance._hub_sources = sources
+        return instance
 
     def search(self, sources: List[str] = None, max_results: int = 10) -> List[RawStrategy]:
+        if self._source_hub is not None:
+            from quant.features.research.discovery.dedup import deduplicate
+            raw = self._source_hub.search(source_names=self._hub_sources or sources, max_results=max_results)
+            return deduplicate(raw)
         sources = sources or list(self._adapters.keys())
         all_results: List[RawStrategy] = []
         for source in sources:
