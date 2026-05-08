@@ -13,18 +13,26 @@ from quant.features.research.validation.cross_sectional import (
     compute_icir,
     detect_market,
 )
+from quant.features.research.validation.ff_decomposition import decompose_alpha
 
 logger = logging.getLogger(__name__)
 
 
 class FactorValidator:
-    def __init__(self, market_data_port: Any, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        market_data_port: Any,
+        config: Optional[Dict[str, Any]] = None,
+        factor_data_port: Any = None,
+    ):
         self._market_data = market_data_port
         self._config = config or {}
+        self._factor_data = factor_data_port
         self._min_obs = self._config.get("min_observations", 252)
         self._exec_lag = self._config.get("execution_lag_days", 1)
         self._min_stocks = self._config.get("min_stocks", 20)
         self._min_cs_dates = max(100, self._config.get("min_cross_sectional_dates", 100))
+        self._factor_validation_enabled = bool(self._config.get("factor_validation_enabled", False))
 
     def validate(self, spec: StrategySpec) -> ValidationReport:
         if spec.status != "ready":
@@ -137,6 +145,8 @@ class FactorValidator:
         rank_ic_ir = compute_icir(valid_ic)
         ttest = stats.ttest_1samp(valid_ic, 0.0) if len(valid_ic) > 1 else None
         rank_ic_p = float(ttest.pvalue) if ttest is not None and not pd.isna(ttest.pvalue) else 1.0
+        long_short_series = self._long_short_series(signal_matrix, forward_returns)
+        ff, factor_errors = self._decompose_against_factors(long_short_series)
 
         return ValidationReport(
             strategy_id=spec.strategy_id,
@@ -152,10 +162,10 @@ class FactorValidator:
             ),
             fdr_adjusted_p=rank_ic_p,
             fdr_significant=rank_ic_p < 0.05,
-            ff_alpha_monthly=0.0,
-            ff_alpha_tstat=0.0,
-            ff_r2=0.0,
-            long_short_spread=self._long_short_spread(signal_matrix, forward_returns),
+            ff_alpha_monthly=ff["alpha_monthly"],
+            ff_alpha_tstat=ff["tstat"],
+            ff_r2=ff["r2"],
+            long_short_spread=float(long_short_series.mean()) if not long_short_series.empty else 0.0,
             hit_rate=float((valid_ic > 0).mean()),
             data_start=str(close_prices.index[0]),
             data_end=str(close_prices.index[-1]),
@@ -165,12 +175,18 @@ class FactorValidator:
                 forward_returns,
                 min_stocks=self._min_stocks,
             ),
+            errors=factor_errors,
         )
 
     def _long_short_spread(self, signals: pd.DataFrame, forward_returns: pd.DataFrame) -> float:
+        spreads = self._long_short_series(signals, forward_returns)
+        return float(spreads.mean()) if not spreads.empty else 0.0
+
+    def _long_short_series(self, signals: pd.DataFrame, forward_returns: pd.DataFrame) -> pd.Series:
         common_index = signals.index.intersection(forward_returns.index)
         common_columns = signals.columns.intersection(forward_returns.columns)
         spreads = []
+        dates = []
         for date in common_index:
             paired = pd.concat(
                 [
@@ -188,7 +204,28 @@ class FactorValidator:
             if long_returns.empty or short_returns.empty:
                 continue
             spreads.append(float(long_returns.mean() - short_returns.mean()))
-        return float(np.mean(spreads)) if spreads else 0.0
+            dates.append(date)
+        return pd.Series(spreads, index=pd.to_datetime(dates)).sort_index() if spreads else pd.Series(dtype=float)
+
+    def _decompose_against_factors(self, strategy_returns: pd.Series) -> tuple[Dict[str, float], List[str]]:
+        zeros = {"alpha_monthly": 0.0, "tstat": 0.0, "r2": 0.0}
+        if self._factor_data is None or strategy_returns.empty:
+            errors = ["factor_data_unavailable"] if self._factor_validation_enabled else []
+            return zeros, errors
+        try:
+            factors = self._factor_data.get_factors(
+                ["MKT", "SMB", "HML", "RMW", "CMA", "Mom", "RF"],
+                str(strategy_returns.index.min().date()),
+                str(strategy_returns.index.max().date()),
+            )
+            if factors is None:
+                errors = ["factor_data_unavailable"] if self._factor_validation_enabled else []
+                return zeros, errors
+            return decompose_alpha(strategy_returns, factors), []
+        except Exception as e:
+            logger.warning(f"Factor decomposition unavailable: {e}")
+            errors = ["factor_data_unavailable"] if self._factor_validation_enabled else []
+            return zeros, errors
 
     def _error_report(self, spec, errors):
         return ValidationReport(

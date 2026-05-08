@@ -262,16 +262,18 @@ def main():
         logger.info("Using heuristic evaluator (no LLM required)")
 
     backtest_fn = None
+    walkforward_runner = None
     if args.backtest:
-        from quant.api.research_bp import _make_backtest_fn
+        from quant.api.research_bp import _make_backtest_fn, _make_walkforward_runner
         backtest_fn = _make_backtest_fn()
+        walkforward_runner = _make_walkforward_runner()
         logger.warning("Backtests enabled — requires DuckDB data")
 
     strategies_dir = str(Path(__file__).resolve().parent.parent / "features" / "strategies")
     rigor_hub = None
     if config.rigor_enabled:
         from quant.features.research.rigor.backtest_hub import RigorHub
-        rigor_hub = RigorHub(backtest_runner=backtest_fn, config=config.rigor_config) if backtest_fn else None
+        rigor_hub = RigorHub(backtest_runner=walkforward_runner, config=config.rigor_config) if walkforward_runner else None
     engine = ResearchEngine(
         config=config,
         scout=scout,

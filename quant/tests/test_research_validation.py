@@ -315,6 +315,131 @@ class TestFactorValidator:
         assert len(report.ic_decay) == 4
         assert isinstance(report.fama_macbeth_tstat, float)
 
+    def test_factor_validator_populates_ff_fields_when_factor_port_available(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2022-01-03", periods=180, freq="B")
+        symbols = [f"A{i:02d}" for i in range(30)]
+        frames = []
+        for i, symbol in enumerate(symbols):
+            growth = 0.0005 + i * 0.0001
+            close = 100.0 * (1.0 + growth) ** np.arange(len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": close,
+                        "high": close * 1.01,
+                        "low": close * 0.99,
+                        "close": close,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+
+        class FakeMarketData:
+            def get_universe_symbols(self, market):
+                return symbols
+
+            def get_daily_bars(self, symbols, start, end):
+                return bars[bars["symbol"].isin(symbols)]
+
+        class FakeFactorData:
+            def __init__(self):
+                self.calls = []
+
+            def get_factors(self, names, start, end):
+                self.calls.append((names, start, end))
+                return pd.DataFrame({"MKT": 0.0, "SMB": 0.0, "HML": 0.0, "RF": 0.0}, index=dates)
+
+        factor_data = FakeFactorData()
+        validator = FactorValidator(
+            FakeMarketData(),
+            factor_data_port=factor_data,
+            config={"min_observations": 50, "execution_lag_days": 1},
+        )
+        spec = StrategySpec(
+            strategy_id="test_ff",
+            strategy_type="momentum",
+            signal_formula_key="momentum_close_return",
+            universe=["AAPL"],
+            horizon_days=5,
+            lookback_days=20,
+            execution_lag_days=1,
+            required_fields=["close"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert report.status == "validated"
+        assert factor_data.calls
+        assert report.ff_alpha_monthly != 0.0
+        assert report.ff_alpha_tstat != 0.0
+
+    def test_factor_validator_flags_unavailable_factor_data_when_enabled(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2022-01-03", periods=180, freq="B")
+        symbols = [f"A{i:02d}" for i in range(30)]
+        frames = []
+        for i, symbol in enumerate(symbols):
+            growth = 0.0005 + i * 0.0001
+            close = 100.0 * (1.0 + growth) ** np.arange(len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": close,
+                        "high": close * 1.01,
+                        "low": close * 0.99,
+                        "close": close,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+
+        class FakeMarketData:
+            def get_universe_symbols(self, market):
+                return symbols
+
+            def get_daily_bars(self, symbols, start, end):
+                return bars[bars["symbol"].isin(symbols)]
+
+        class MissingFactorData:
+            def get_factors(self, names, start, end):
+                return None
+
+        validator = FactorValidator(
+            FakeMarketData(),
+            factor_data_port=MissingFactorData(),
+            config={
+                "min_observations": 50,
+                "execution_lag_days": 1,
+                "factor_validation_enabled": True,
+            },
+        )
+        spec = StrategySpec(
+            strategy_id="test_missing_factor_data",
+            strategy_type="momentum",
+            signal_formula_key="momentum_close_return",
+            universe=["AAPL"],
+            horizon_days=5,
+            lookback_days=20,
+            execution_lag_days=1,
+            required_fields=["close"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert report.status == "validated"
+        assert "factor_data_unavailable" in report.errors
+
     def test_cross_sectional_validation_enforces_100_date_floor(self):
         from quant.features.research.validation.factor_validator import FactorValidator
 

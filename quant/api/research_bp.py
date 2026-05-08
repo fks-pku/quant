@@ -103,6 +103,79 @@ def _make_backtest_fn():
 
     return _run_backtest
 
+
+def _make_walkforward_runner():
+    from quant.features.backtest.engine import Backtester
+    from quant.features.strategies.registry import StrategyRegistry
+    from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+    from quant.features.backtest.walkforward import DataFrameProvider
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.risk import RiskEngine
+    from quant.features.trading.sub_portfolio import SubPortfolio
+    import pandas as pd
+
+    def _run_walkforward_backtest(sid, request):
+        registry = StrategyRegistry()
+        strategy_class = registry.get(sid)
+        if strategy_class is None:
+            return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
+
+        symbols = request.get("symbols") or []
+        start = datetime.strptime(str(request["start"]), "%Y-%m-%d")
+        end = datetime.strptime(str(request["end"]), "%Y-%m-%d")
+        initial_cash = float(request.get("initial_cash", 100000))
+
+        db_provider = DuckDBProvider()
+        db_provider.connect()
+        all_data = []
+        try:
+            for sym in symbols:
+                bars = db_provider.get_bars(sym, start, end, "1d")
+                if not bars.empty:
+                    all_data.append(bars)
+        finally:
+            db_provider.disconnect()
+
+        if not all_data:
+            return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
+
+        data_df = pd.concat(all_data, ignore_index=True)
+        data_provider = DataFrameProvider(data_df)
+        strategy = strategy_class(symbols=symbols)
+        bt_config = {
+            "backtest": {"slippage_bps": 5},
+            "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+            "data": {"default_timeframe": "1d"},
+            "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
+        }
+        backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
+        bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=initial_cash, data_provider=data_provider, symbols=symbols)
+        returns = bt_result.equity_curve.pct_change().dropna() if hasattr(bt_result, "equity_curve") else pd.Series(dtype=float)
+        days = max(1, (end - start).days)
+        trades = [
+            {
+                "symbol": getattr(trade, "symbol", ""),
+                "side": getattr(trade, "side", ""),
+                "quantity": getattr(trade, "quantity", 0),
+                "price": getattr(trade, "price", getattr(trade, "fill_price", 0.0)),
+                "pnl": getattr(trade, "pnl", 0.0),
+            }
+            for trade in getattr(bt_result, "trades", [])
+        ]
+        return {
+            "metrics": {
+                "sharpe": float(getattr(bt_result, "sharpe_ratio", 0.0)),
+                "max_dd": float(getattr(bt_result, "max_drawdown_pct", 0.0)),
+                "cagr": float(getattr(bt_result, "total_return", 0.0) * 100 / max(1, days / 365.25)),
+                "win_rate": float(getattr(bt_result, "win_rate", 0.0) * 100),
+            },
+            "returns": returns,
+            "trades": trades,
+        }
+
+    return _run_walkforward_backtest
+
+
 research_bp = Blueprint("research", __name__)
 
 _research_jobs: dict = {}
@@ -142,11 +215,12 @@ def _make_experiment_store(cfg: ResearchConfig):
     return DuckDBExperimentStore(cfg.tracking_db_path)
 
 
-def _make_rigor_hub(cfg: ResearchConfig):
+def _make_rigor_hub(cfg: ResearchConfig, experiment_store=None):
     from quant.features.research.rigor.backtest_hub import RigorHub
     return RigorHub(
-        backtest_runner=_make_backtest_fn(),
+        backtest_runner=_make_walkforward_runner(),
         config=cfg.rigor_config,
+        experiment_store=experiment_store,
     )
 
 
@@ -196,8 +270,14 @@ def _get_scheduler() -> ResearchScheduler:
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
-        engine = ResearchEngine(config=cfg, evaluator=evaluator, backtest_fn=_make_backtest_fn(), research_store=research_store, rigor_hub=_make_rigor_hub(cfg) if cfg.rigor_enabled else None)
         experiment_store, artifact_store = _make_experiment_stores(cfg)
+        engine = ResearchEngine(
+            config=cfg,
+            evaluator=evaluator,
+            backtest_fn=_make_backtest_fn(),
+            research_store=research_store,
+            rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
+        )
         if experiment_store:
             engine._experiment_store = experiment_store
             engine._artifact_store = artifact_store
@@ -254,7 +334,7 @@ def run_research():
         research_store=_make_research_store(cfg),
         experiment_store=experiment_store,
         artifact_store=artifact_store,
-        rigor_hub=_make_rigor_hub(cfg) if cfg.rigor_enabled else None,
+        rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
         ensemble=ensemble,
     )
 

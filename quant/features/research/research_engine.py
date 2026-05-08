@@ -229,17 +229,46 @@ class ResearchEngine:
                         start=self.config.default_backtest_start,
                         end=self.config.default_backtest_end,
                     )
-                    result.walkforward_passed += 1 if wf_result.is_viable else 0
                     if not wf_result.is_viable:
                         self.pool.reject(sid, reason=f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}")
                         result.rejected += 1
                         continue
+                    dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
+                    if dsr is not None and dsr < 0.95:
+                        reason = f"Deflated Sharpe ratio warning: dsr={dsr:.2f} < 0.95"
+                        self._mark_needs_more_validation(sid, dsr, reason)
+                        result.log.append(ResearchLogEntry(
+                            phase="rigor", title=sid, source="", source_url="",
+                            verdict="warning", reason=reason,
+                            scores={"deflated_sharpe_ratio": dsr},
+                        ))
+                        continue
+                    result.walkforward_passed += 1
                 self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
             except Exception as e:
                 logger.error(f"Backtest failed for {sid}: {e}")
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _mark_needs_more_validation(self, strategy_id: str, dsr: float, reason: str) -> None:
+        info = self.research_store.get_candidate(strategy_id) if self.research_store is not None else None
+        if info is not None:
+            info["status"] = "needs_more_validation"
+            meta = info.setdefault("research_meta", {})
+            meta["dsr_warning"] = dsr
+            meta["needs_more_validation_reason"] = reason
+            self.research_store.upsert_candidate(info)
+        elif self.research_store is not None:
+            self.research_store.update_status(strategy_id, "needs_more_validation", reason=reason)
+
+        for entry in self.integrator.registry.values():
+            if entry.get("id") == strategy_id:
+                entry["status"] = "needs_more_validation"
+                meta = entry.setdefault("research_meta", {})
+                meta["dsr_warning"] = dsr
+                meta["needs_more_validation_reason"] = reason
+                break
 
 
 class _NullResearchStore(ResearchStore):

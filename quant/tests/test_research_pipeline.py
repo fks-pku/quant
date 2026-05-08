@@ -141,3 +141,78 @@ def test_candidate_pool_updates_persistent_status():
         assert CandidatePool(research_store=research_store).get_research_meta("daily_momentum_breakout") == {"suitability_score": 7.5}
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_pauses_low_dsr_candidate_without_backtest():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class LowDsrRigorHub:
+        def run_walkforward(self, strategy_id, symbols, start, end):
+            return type(
+                "WalkForward",
+                (),
+                {
+                    "is_viable": True,
+                    "worst_oos_sharpe": 0.7,
+                    "deflated_sharpe_ratio": 0.5,
+                },
+            )()
+
+    def fail_backtest(*args, **kwargs):
+        raise AssertionError("backtest should not run for low DSR candidate")
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=True, rigor_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+            backtest_fn=fail_backtest,
+            rigor_hub=LowDsrRigorHub(),
+        )
+
+        result = engine.run_full_pipeline()
+
+        candidate = research_store.get_candidate("daily_momentum_breakout")
+        assert result.rejected == 0
+        assert result.walkforward_passed == 0
+        assert result.errors == []
+        assert candidate["status"] == "needs_more_validation"
+        assert candidate["research_meta"]["dsr_warning"] == pytest.approx(0.5)
+        assert any(entry.phase == "rigor" and entry.verdict == "warning" for entry in result.log)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_api_make_rigor_hub_uses_two_arg_walkforward_runner_and_experiment_store(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    calls = []
+    experiment_store = object()
+
+    def walkforward_runner(strategy_id, request):
+        calls.append((strategy_id, request))
+        return {"metrics": {"sharpe": 0.0}}
+
+    def legacy_runner_factory():
+        raise AssertionError("legacy backtest runner should not wire RigorHub")
+
+    monkeypatch.setattr(research_module, "_make_walkforward_runner", lambda: walkforward_runner)
+    monkeypatch.setattr(research_module, "_make_backtest_fn", legacy_runner_factory)
+
+    hub = research_module._make_rigor_hub(ResearchConfig(), experiment_store=experiment_store)
+    response = hub._runner("test_strat", {"start": "2020-01-01", "end": "2020-02-01"})
+
+    assert response["metrics"]["sharpe"] == 0.0
+    assert calls == [("test_strat", {"start": "2020-01-01", "end": "2020-02-01"})]
+    assert hub._experiment_store is experiment_store
