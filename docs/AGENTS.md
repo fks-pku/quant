@@ -26,6 +26,10 @@
 | `2026-04-22-research-panel-design.md` | Research panel design |
 | `2026-04-22-quant-researcher-design.md` | Quant researcher design |
 | `2026-04-20-feature-slice-refactoring-design.md` | Feature slice refactoring |
+| `2026-05-08-research-statistical-engine-design.md` | Cross-sectional statistical validation engine |
+| `2026-05-08-research-multiple-testing-factors-design.md` | Multiple testing and factor attribution |
+| `2026-05-08-research-regime-rigor-design.md` | Regime, capacity, SSRN, and IC decay rigor |
+| `2026-05-08-research-production-hardening-design.md` | Sensitivity, PIT data, survival bias, and ERC hardening |
 
 ### Active Plans
 
@@ -35,6 +39,7 @@
 | `2026-04-22-tushare-provider.md` | Tushare provider implementation |
 | `2026-04-22-quant-researcher.md` | Quant researcher implementation |
 | `2026-04-20-feature-slice-implementation.md` | Feature slice implementation |
+| `2026-05-09-research-rigor-hardening.md` | Implementation plan for the 2026-05-08 research rigor specs |
 
 ## Skills (.agents/skills/)
 

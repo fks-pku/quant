@@ -48,3 +48,11 @@
 - `ResearchEngine`, `StrategyIntegrator`, and `CandidatePool` depend on `quant.domain.ports.ResearchStore`.
 - File persistence is an infrastructure adapter (`quant.infrastructure.research.FileResearchStore`) injected by the API/composition root.
 - Do not write filesystem, DuckDB, HTTP client, or other external adapter logic directly in this feature unless it is hidden behind an injected port.
+
+## Research Rigor Modules
+
+- `validation/cross_sectional.py` owns full-universe rank IC, ICIR, IC decay, and Fama-MacBeth statistics.
+- `validation/factor_validator.py` is the validation gate; sensitivity checks are opt-in through config.
+- `rigor/backtest_hub.py` owns purged walk-forward, DSR, regime breakdown, and capacity viability checks.
+- `validation/ff_decomposition.py` handles factor attribution from injected factor data.
+- `ensemble/optimizer.py` implements equal-weight, inverse-vol, and ERC weighting with graceful fallback.

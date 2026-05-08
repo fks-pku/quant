@@ -57,3 +57,5 @@ None. Domain has zero external dependencies — the most important invariant.
 ## Recent Additions
 
 - `ResearchStore` is the domain port for research persistence. Feature code depends on this port only; file-backed implementations live in infrastructure.
+- `ResearchMarketData.get_universe_symbols(market)` supports full-universe research validation while still returning dependency-free types.
+- `PITData` is the point-in-time research data port: `get_universe(as_of_date, market)` and `get_bars_pit(symbols, start, end, as_of_date)`.

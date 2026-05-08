@@ -39,4 +39,8 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 ## Research Adapters
 
 - `research/FileResearchStore` implements the `ResearchStore` domain port.
+- `research/market_data/DuckDBResearchMarketData` reads market-aware daily tables and can consume optional `PITData`.
+- `research/factors` owns FF/CN factor cache and download/build adapters.
+- `research/sources/SSRNSource` performs polite SSRN discovery and fails closed to `[]`.
+- `research/pit_duckdb.PITDuckDBData` implements point-in-time universe and bar access with read-only DuckDB.
 - Research feature code must receive it through dependency injection; infrastructure must not import from `features/`.
