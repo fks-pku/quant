@@ -317,6 +317,7 @@ class ResearchEngine:
                 logger.warning(f"Ensemble build failed: {e}")
 
         self.research_store.save_run_result(result)
+        self._write_candidate_scorecard(result.run_id)
         logger.info(f"Pipeline complete: {result}")
         return result
 
@@ -446,6 +447,50 @@ class ResearchEngine:
         research_meta["promotion_dossier_artifact"] = dict(meta)
         candidate["research_meta"] = research_meta
         self.research_store.upsert_candidate(candidate)
+
+    def _write_candidate_scorecard(self, run_id: Optional[str]) -> None:
+        if self._artifact_store is None or not hasattr(self._artifact_store, "save_table"):
+            return
+        if not hasattr(self.research_store, "list_hypotheses"):
+            return
+        try:
+            rows = [self._scorecard_row(item) for item in self.research_store.list_hypotheses()]
+            if not rows:
+                return
+            rows.sort(key=self._scorecard_sort_key)
+            self._artifact_store.save_table(run_id or "research_pipeline", "candidate_scorecard", rows)
+        except Exception as e:
+            logger.warning(f"Failed to write candidate scorecard: {e}")
+
+    @staticmethod
+    def _scorecard_row(item: Dict[str, Any]) -> Dict[str, Any]:
+        metrics = item.get("metrics") or {}
+        return {
+            "hypothesis_id": item.get("hypothesis_id", ""),
+            "strategy_id": item.get("strategy_id", ""),
+            "title": item.get("title", ""),
+            "status": item.get("status", ""),
+            "stage": item.get("stage", ""),
+            "decision_reason": item.get("decision_reason", ""),
+            "suitability_score": float(metrics.get("suitability_score", 0.0) or 0.0),
+            "estimated_edge": float(metrics.get("estimated_edge", 0.0) or 0.0),
+            "rank_ic": float(metrics.get("rank_ic", 0.0) or 0.0),
+            "hit_rate": float(metrics.get("hit_rate", 0.0) or 0.0),
+            "risk_flags": list(metrics.get("risk_flags", []) or []),
+        }
+
+    @staticmethod
+    def _scorecard_sort_key(row: Dict[str, Any]) -> tuple:
+        status_rank = {
+            "candidate": 0,
+            "validated": 1,
+            "needs_more_validation": 2,
+            "needs_manual_spec": 3,
+            "rejected": 4,
+            "error": 5,
+            "skipped": 6,
+        }.get(row.get("status", ""), 9)
+        return (status_rank, -float(row.get("suitability_score", 0.0) or 0.0), row.get("title", ""))
 
     def _run_backtests(self, strategy_ids: List[str], result: ResearchResult, benchmark_data: Any = None) -> None:
         if self._backtest_fn is None:

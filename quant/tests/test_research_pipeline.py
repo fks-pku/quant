@@ -299,6 +299,70 @@ def test_research_engine_records_lineage_manifest_without_tracking():
     assert artifact_store.saved[0][2]["data_summary"]["sources"] == ["ssrn"]
 
 
+def test_research_engine_writes_candidate_scorecard_artifact():
+    tmp_path = _test_root()
+
+    high = _raw_strategy()
+    low = RawStrategy(
+        title="Fragile Intraday Microstructure",
+        description="Requires intraday order book effects and does not adapt cleanly to daily bars.",
+        source="ssrn",
+        source_url="https://example.test/fragile",
+    )
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [high, low]
+
+    class MixedEvaluator:
+        def evaluate(self, raw):
+            report = _evaluation_report()
+            if raw.title == low.title:
+                report.suitability_score = 2.0
+                report.estimated_edge = 0.01
+                report.risk_flags = ["hf_not_daily"]
+            return report
+
+    class RecordingArtifactStore:
+        def __init__(self):
+            self.tables = []
+
+        def save_json(self, run_id, name, data):
+            return {"artifact_id": f"json-{name}", "name": name}
+
+        def save_table(self, run_id, name, table):
+            self.tables.append((run_id, name, table))
+            return {"artifact_id": "scorecard-1", "name": name}
+
+    try:
+        artifact_store = RecordingArtifactStore()
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, evaluation_threshold=6.0),
+            scout=FixedScout(),
+            evaluator=MixedEvaluator(),
+            research_store=FileResearchStore(tmp_path / "research"),
+            artifact_store=artifact_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_full_pipeline()
+
+        run_id, name, rows = next(item for item in artifact_store.tables if item[1] == "candidate_scorecard")
+        assert result.integrated == 1
+        assert result.rejected == 1
+        assert run_id == "research_pipeline"
+        assert name == "candidate_scorecard"
+        assert [row["title"] for row in rows] == ["Daily Momentum Breakout", "Fragile Intraday Microstructure"]
+        assert rows[0]["status"] == "candidate"
+        assert rows[0]["strategy_id"] == "daily_momentum_breakout"
+        assert rows[0]["suitability_score"] == pytest.approx(7.5)
+        assert rows[1]["status"] == "rejected"
+        assert rows[1]["suitability_score"] == pytest.approx(2.0)
+        assert "suitability=2.0" in rows[1]["decision_reason"]
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_research_engine_records_rejected_hypothesis_ledger():
     tmp_path = _test_root()
 

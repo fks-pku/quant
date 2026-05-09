@@ -6,7 +6,7 @@
 
 ## 对外契约
 
-- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - 研究引擎主类，backtest_fn、统计验证、严格回测、组合构建均由调用方注入，避免 feature 间交叉导入；每次运行会写入 lineage manifest，评估/验证/集成决策会通过 `ResearchStore` 写入 hypothesis ledger，成功进入候选池时会通过 `ResearchArtifactStore` 写入 promotion dossier
+- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - 研究引擎主类，backtest_fn、统计验证、严格回测、组合构建均由调用方注入，避免 feature 间交叉导入；每次运行会写入 lineage manifest 和 candidate scorecard，评估/验证/集成决策会通过 `ResearchStore` 写入 hypothesis ledger，成功进入候选池时会通过 `ResearchArtifactStore` 写入 promotion dossier
 - `StrategyScout` - 策略搜索器 (arXiv/SSRN 适配器)
 - `StrategyEvaluator` - 策略评估器 (LLM 驱动)
 - `StrategyIntegrator` - 策略集成器 (代码生成 + 注册)
@@ -26,6 +26,7 @@
 - 评估阈值 (suitability >= 6.0)、统计验证门、严格回测/普通回测阈值必须按配置通过才能保留候选
 - 每次研究运行必须记录 lineage manifest，包含代码版本、配置摘要/哈希、数据窗口/来源摘要和数据哈希；不得明文写入 API key
 - 每个进入评估流程的研究假设必须留下结构化 ledger 记录，至少包含来源、thesis、阶段、状态、决策原因、指标和证据
+- 每次运行结束时应将 hypothesis ledger 汇总成 candidate scorecard artifact，用于候选比较、人工 triage 和跨运行复盘
 - 每个成功集成的候选策略应生成 promotion dossier artifact，并把 artifact metadata 回写到 candidate `research_meta`
 - 高频策略只有在 `daily_adaptable: true` 时才会被接受
 - 线程安全: ResearchScheduler 使用 daemon thread + RLock
