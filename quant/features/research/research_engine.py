@@ -1,6 +1,6 @@
 import inspect
 import logging
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -10,6 +10,7 @@ from quant.features.research.scout import StrategyScout
 from quant.features.research.evaluator import StrategyEvaluator
 from quant.features.research.integrator import StrategyIntegrator
 from quant.features.research.pool import CandidatePool
+from quant.features.research.tracking.run_recorder import RunRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,13 @@ class ResearchEngine:
             result = ResearchResult()
         logger.info("Starting research pipeline")
 
+        lineage_manifest = self._lineage_manifest(sources)
         run_id = None
         if self._tracking_enabled():
-            run_id = self._experiment_store.start_run("research_pipeline", {})
+            run_id = self._experiment_store.start_run("research_pipeline", lineage_manifest)
             result.run_id = run_id
+        lineage_manifest["run_id"] = run_id
+        self._write_lineage_manifest(run_id, lineage_manifest)
 
         try:
             result = self._execute_pipeline(sources, result)
@@ -77,6 +81,51 @@ class ResearchEngine:
 
     def _tracking_enabled(self) -> bool:
         return getattr(self.config, "tracking_enabled", False) and self._experiment_store is not None
+
+    def _lineage_manifest(self, sources: Optional[List[str]]) -> Dict[str, Any]:
+        config_summary = self._config_summary()
+        data_summary = self._data_summary(sources)
+        return {
+            "manifest_version": 1,
+            "pipeline": "research_pipeline",
+            "run_id": None,
+            "code_version": RunRecorder.get_code_version(),
+            "config_hash": RunRecorder.hash_config(config_summary),
+            "data_hash": RunRecorder.hash_data(data_summary),
+            "config_summary": config_summary,
+            "data_summary": data_summary,
+        }
+
+    def _write_lineage_manifest(self, run_id: Optional[str], manifest: Dict[str, Any]) -> None:
+        if self._artifact_store is None or not hasattr(self._artifact_store, "save_json"):
+            return
+        try:
+            self._artifact_store.save_json(run_id or "research_pipeline", "lineage_manifest", manifest)
+        except Exception as e:
+            logger.warning(f"Failed to write research lineage manifest: {e}")
+
+    def _config_summary(self) -> Dict[str, Any]:
+        config = asdict(self.config)
+        for key in list(config):
+            if "api_key" in key.lower() and config[key]:
+                config[key] = "***"
+        return config
+
+    def _data_summary(self, sources: Optional[List[str]]) -> Dict[str, Any]:
+        return {
+            "sources": list(sources or self.config.sources),
+            "max_results_per_source": self.config.max_results_per_source,
+            "default_symbols": list(self.config.default_symbols),
+            "default_backtest_start": self.config.default_backtest_start,
+            "default_backtest_end": self.config.default_backtest_end,
+            "pit_enabled": self.config.pit_enabled,
+            "pit_universe_snapshot_dir": self.config.pit_universe_snapshot_dir,
+            "validation_enabled": self.config.validation_enabled,
+            "validation_min_obs": self.config.validation_min_obs,
+            "validation_config": dict(self.config.validation_config or {}),
+            "rigor_enabled": self.config.rigor_enabled,
+            "rigor_config": dict(self.config.rigor_config or {}),
+        }
 
     def _execute_pipeline(self, sources: Optional[List[str]], result: ResearchResult) -> ResearchResult:
         raw_strategies = self.scout.search(sources=sources, max_results=self.config.max_results_per_source)

@@ -191,8 +191,7 @@ def test_research_engine_writes_promotion_dossier_artifact():
         candidate = research_store.get_candidate("daily_momentum_breakout")
 
         assert result.integrated == 1
-        assert len(artifact_store.saved) == 1
-        run_id, name, dossier = artifact_store.saved[0]
+        run_id, name, dossier = next(item for item in artifact_store.saved if item[1] == "promotion_dossier_daily_momentum_breakout")
         assert run_id == "research_pipeline"
         assert name == "promotion_dossier_daily_momentum_breakout"
         assert dossier["strategy_id"] == "daily_momentum_breakout"
@@ -203,6 +202,101 @@ def test_research_engine_writes_promotion_dossier_artifact():
         assert candidate["research_meta"]["promotion_dossier_artifact"]["artifact_id"] == "artifact-1"
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_records_lineage_manifest_for_tracked_run():
+    tmp_path = _test_root()
+
+    class EmptyScout:
+        def search(self, sources=None, max_results=10):
+            return []
+
+    class RecordingExperimentStore:
+        def __init__(self):
+            self.started = []
+            self.completed = []
+
+        def start_run(self, strategy_id, metadata):
+            self.started.append((strategy_id, metadata))
+            return "run-lineage"
+
+        def complete_run(self, run_id, status, error=None):
+            self.completed.append((run_id, status, error))
+
+    class RecordingArtifactStore:
+        def __init__(self):
+            self.saved = []
+
+        def save_json(self, run_id, name, data):
+            self.saved.append((run_id, name, data))
+            return {"artifact_id": "lineage-1", "name": name}
+
+    experiment_store = RecordingExperimentStore()
+    artifact_store = RecordingArtifactStore()
+    engine = ResearchEngine(
+        config=ResearchConfig(
+            auto_backtest=False,
+            sources=["arxiv"],
+            default_symbols=["SPY", "QQQ"],
+            default_backtest_start="2021-01-01",
+            default_backtest_end="2024-12-31",
+            llm_api_key="secret-key",
+        ),
+        scout=EmptyScout(),
+        research_store=FileResearchStore(tmp_path / "research"),
+        experiment_store=experiment_store,
+        artifact_store=artifact_store,
+        strategies_dir=str(tmp_path / "strategies"),
+    )
+
+    result = engine.run_full_pipeline(sources=["arxiv"])
+
+    assert result.run_id == "run-lineage"
+    assert experiment_store.started[0][0] == "research_pipeline"
+    metadata = experiment_store.started[0][1]
+    assert metadata["manifest_version"] == 1
+    assert len(metadata["config_hash"]) == 16
+    assert len(metadata["data_hash"]) == 16
+    assert metadata["data_summary"]["sources"] == ["arxiv"]
+    assert metadata["data_summary"]["default_symbols"] == ["SPY", "QQQ"]
+    assert metadata["config_summary"]["llm_api_key"] == "***"
+    assert artifact_store.saved[0][0] == "run-lineage"
+    assert artifact_store.saved[0][1] == "lineage_manifest"
+    assert artifact_store.saved[0][2]["run_id"] == "run-lineage"
+    assert artifact_store.saved[0][2]["config_hash"] == metadata["config_hash"]
+
+
+def test_research_engine_records_lineage_manifest_without_tracking():
+    tmp_path = _test_root()
+
+    class EmptyScout:
+        def search(self, sources=None, max_results=10):
+            return []
+
+    class RecordingArtifactStore:
+        def __init__(self):
+            self.saved = []
+
+        def save_json(self, run_id, name, data):
+            self.saved.append((run_id, name, data))
+            return {"artifact_id": "lineage-2", "name": name}
+
+    artifact_store = RecordingArtifactStore()
+    engine = ResearchEngine(
+        config=ResearchConfig(auto_backtest=False, tracking_enabled=False, sources=["ssrn"]),
+        scout=EmptyScout(),
+        research_store=FileResearchStore(tmp_path / "research"),
+        artifact_store=artifact_store,
+        strategies_dir=str(tmp_path / "strategies"),
+    )
+
+    result = engine.run_full_pipeline()
+
+    assert result.run_id is None
+    assert artifact_store.saved[0][0] == "research_pipeline"
+    assert artifact_store.saved[0][1] == "lineage_manifest"
+    assert artifact_store.saved[0][2]["run_id"] is None
+    assert artifact_store.saved[0][2]["data_summary"]["sources"] == ["ssrn"]
 
 
 def test_research_engine_records_rejected_hypothesis_ledger():
