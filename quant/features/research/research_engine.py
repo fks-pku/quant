@@ -95,6 +95,7 @@ class ResearchEngine:
         for raw in raw_strategies:
             try:
                 strategy_hash = StrategyScout.hash_strategy(raw)
+                validation_report = None
                 if self.research_store.has_seen(strategy_hash):
                     result.log.append(ResearchLogEntry(
                         phase="scout", title=raw.title, source=raw.source,
@@ -185,6 +186,7 @@ class ResearchEngine:
                                 scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
                             ))
                             vreport = self._append_ic_decay_warning(result, raw, vreport)
+                            validation_report = vreport
                             self._record_hypothesis(
                                 raw,
                                 status="validated",
@@ -218,6 +220,7 @@ class ResearchEngine:
                         strategy_id=strategy_id,
                         report=report,
                     )
+                    self._write_promotion_dossier(strategy_id, raw, report, validation_report, result.run_id)
                 else:
                     result.errors.append(f"Integration failed for '{raw.title}'")
                     result.log.append(ResearchLogEntry(
@@ -336,6 +339,64 @@ class ResearchEngine:
             ):
                 metrics[field] = getattr(validation_report, field, 0.0)
         return metrics
+
+    def _write_promotion_dossier(
+        self,
+        strategy_id: str,
+        raw: RawStrategy,
+        report: Any,
+        validation_report: Any = None,
+        run_id: Optional[str] = None,
+    ) -> None:
+        if self._artifact_store is None or not hasattr(self._artifact_store, "save_json"):
+            return
+        try:
+            name = f"promotion_dossier_{strategy_id}"
+            meta = self._artifact_store.save_json(
+                run_id or "research_pipeline",
+                name,
+                self._promotion_dossier(strategy_id, raw, report, validation_report),
+            )
+            self._attach_promotion_dossier_artifact(strategy_id, meta)
+        except Exception as e:
+            logger.warning(f"Failed to write promotion dossier for {strategy_id}: {e}")
+
+    def _promotion_dossier(
+        self,
+        strategy_id: str,
+        raw: RawStrategy,
+        report: Any,
+        validation_report: Any = None,
+    ) -> Dict[str, Any]:
+        return {
+            "strategy_id": strategy_id,
+            "decision": "candidate_admission",
+            "next_action": "walk_forward_or_paper_review",
+            "hypothesis": {
+                "hypothesis_id": StrategyScout.hash_strategy(raw),
+                "title": raw.title,
+                "thesis": raw.description,
+                "source": raw.source,
+                "source_url": raw.source_url,
+                "authors": raw.authors or "",
+                "published_date": raw.published_date or "",
+            },
+            "evaluation": self._hypothesis_metrics(report),
+            "validation": self._hypothesis_metrics(None, validation_report) if validation_report is not None else {},
+            "risk_flags": list(getattr(report, "risk_flags", []) or []),
+            "summary": getattr(report, "summary", ""),
+        }
+
+    def _attach_promotion_dossier_artifact(self, strategy_id: str, meta: Dict[str, Any]) -> None:
+        if not meta:
+            return
+        candidate = self.research_store.get_candidate(strategy_id)
+        if candidate is None:
+            return
+        research_meta = dict(candidate.get("research_meta") or {})
+        research_meta["promotion_dossier_artifact"] = dict(meta)
+        candidate["research_meta"] = research_meta
+        self.research_store.upsert_candidate(candidate)
 
     def _run_backtests(self, strategy_ids: List[str], result: ResearchResult, benchmark_data: Any = None) -> None:
         if self._backtest_fn is None:

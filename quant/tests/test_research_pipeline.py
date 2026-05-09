@@ -156,6 +156,55 @@ def test_research_engine_records_candidate_hypothesis_ledger():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_research_engine_writes_promotion_dossier_artifact():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class RecordingArtifactStore:
+        def __init__(self):
+            self.saved = []
+
+        def save_json(self, run_id, name, data):
+            self.saved.append((run_id, name, data))
+            return {"artifact_id": "artifact-1", "name": name, "path": f"/tmp/{name}.json"}
+
+    try:
+        artifact_store = RecordingArtifactStore()
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            artifact_store=artifact_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_full_pipeline()
+        candidate = research_store.get_candidate("daily_momentum_breakout")
+
+        assert result.integrated == 1
+        assert len(artifact_store.saved) == 1
+        run_id, name, dossier = artifact_store.saved[0]
+        assert run_id == "research_pipeline"
+        assert name == "promotion_dossier_daily_momentum_breakout"
+        assert dossier["strategy_id"] == "daily_momentum_breakout"
+        assert dossier["hypothesis"]["title"] == "Daily Momentum Breakout"
+        assert dossier["evaluation"]["suitability_score"] == pytest.approx(7.5)
+        assert dossier["risk_flags"] == ["survivorship_bias"]
+        assert dossier["next_action"] == "walk_forward_or_paper_review"
+        assert candidate["research_meta"]["promotion_dossier_artifact"]["artifact_id"] == "artifact-1"
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_research_engine_records_rejected_hypothesis_ledger():
     tmp_path = _test_root()
 
