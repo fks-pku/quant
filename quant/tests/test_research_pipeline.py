@@ -120,6 +120,78 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_research_engine_records_candidate_hypothesis_ledger():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_full_pipeline()
+        hypotheses = research_store.list_hypotheses("candidate")
+
+        assert result.integrated == 1
+        assert len(hypotheses) == 1
+        assert hypotheses[0]["strategy_id"] == "daily_momentum_breakout"
+        assert hypotheses[0]["title"] == "Daily Momentum Breakout"
+        assert hypotheses[0]["stage"] == "integrate"
+        assert hypotheses[0]["metrics"]["suitability_score"] == pytest.approx(7.5)
+        assert hypotheses[0]["metrics"]["estimated_edge"] == pytest.approx(0.08)
+        assert hypotheses[0]["evidence"]["source_url"] == "https://example.test/paper"
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_records_rejected_hypothesis_ledger():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class LowScoreEvaluator:
+        def evaluate(self, raw):
+            report = _evaluation_report()
+            report.suitability_score = 3.0
+            return report
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, evaluation_threshold=6.0),
+            scout=FixedScout(),
+            evaluator=LowScoreEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_full_pipeline()
+        hypotheses = research_store.list_hypotheses("rejected")
+
+        assert result.rejected == 1
+        assert len(hypotheses) == 1
+        assert hypotheses[0]["strategy_id"] == ""
+        assert hypotheses[0]["stage"] == "evaluate"
+        assert "suitability=3.0" in hypotheses[0]["decision_reason"]
+        assert hypotheses[0]["metrics"]["suitability_score"] == pytest.approx(3.0)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_candidate_pool_updates_persistent_status():
     tmp_path = _test_root()
     research_store = FileResearchStore(tmp_path / "research")

@@ -101,6 +101,7 @@ class ResearchEngine:
                         source_url=raw.source_url, verdict="skip",
                         reason="Previously discovered",
                     ))
+                    self._record_hypothesis(raw, status="skipped", stage="scout", reason="Previously discovered")
                     continue
                 self.research_store.mark_seen(strategy_hash, raw)
 
@@ -126,6 +127,13 @@ class ResearchEngine:
                         },
                     ))
                     evaluation_rows.append((raw, report, "fail", "; ".join(reason_parts)))
+                    self._record_hypothesis(
+                        raw,
+                        status="rejected",
+                        stage="evaluate",
+                        reason="; ".join(reason_parts),
+                        report=report,
+                    )
                     logger.info(f"'{raw.title}' filtered out (suitability={report.suitability_score})")
                     result.rejected += 1
                     continue
@@ -140,6 +148,13 @@ class ResearchEngine:
                             source_url=raw.source_url, verdict="skip",
                             reason=f"Spec status: {spec.status}",
                         ))
+                        self._record_hypothesis(
+                            raw,
+                            status="needs_manual_spec",
+                            stage="validation",
+                            reason=f"Spec status: {spec.status}",
+                            report=report,
+                        )
                     elif self._validator is not None:
                         vreport = self._validator.validate(spec)
                         result.validated += 1
@@ -152,6 +167,14 @@ class ResearchEngine:
                             ))
                             result.rejected += 1
                             evaluation_rows.append((raw, report, "fail", f"Validation failed: IC={vreport.rank_ic:.4f}"))
+                            self._record_hypothesis(
+                                raw,
+                                status="rejected",
+                                stage="validation",
+                                reason=f"Validation failed: IC={vreport.rank_ic:.4f}",
+                                report=report,
+                                validation_report=vreport,
+                            )
                             continue
                         else:
                             result.validated_passed += 1
@@ -162,6 +185,14 @@ class ResearchEngine:
                                 scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
                             ))
                             vreport = self._append_ic_decay_warning(result, raw, vreport)
+                            self._record_hypothesis(
+                                raw,
+                                status="validated",
+                                stage="validation",
+                                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                                report=report,
+                                validation_report=vreport,
+                            )
 
                 strategy_id = self.integrator.integrate(raw, report)
                 if strategy_id:
@@ -179,6 +210,14 @@ class ResearchEngine:
                         },
                     ))
                     evaluation_rows.append((raw, report, "pass", f"Integrated as {strategy_id}"))
+                    self._record_hypothesis(
+                        raw,
+                        status="candidate",
+                        stage="integrate",
+                        reason=f"Integrated as {strategy_id}",
+                        strategy_id=strategy_id,
+                        report=report,
+                    )
                 else:
                     result.errors.append(f"Integration failed for '{raw.title}'")
                     result.log.append(ResearchLogEntry(
@@ -187,6 +226,13 @@ class ResearchEngine:
                         reason="Integration failed",
                     ))
                     evaluation_rows.append((raw, report, "error", "Integration failed"))
+                    self._record_hypothesis(
+                        raw,
+                        status="error",
+                        stage="integrate",
+                        reason="Integration failed",
+                        report=report,
+                    )
             except Exception as e:
                 logger.error(f"Pipeline error for '{raw.title}': {e}")
                 result.errors.append(str(e))
@@ -195,6 +241,7 @@ class ResearchEngine:
                     source_url=raw.source_url, verdict="error",
                     reason=str(e),
                 ))
+                self._record_hypothesis(raw, status="error", stage="evaluate", reason=str(e))
 
         self.research_store.write_evaluations(evaluation_rows)
 
@@ -220,6 +267,75 @@ class ResearchEngine:
         self.research_store.save_run_result(result)
         logger.info(f"Pipeline complete: {result}")
         return result
+
+    def _record_hypothesis(
+        self,
+        raw: RawStrategy,
+        status: str,
+        stage: str,
+        reason: str,
+        strategy_id: str = "",
+        report: Any = None,
+        validation_report: Any = None,
+    ) -> None:
+        try:
+            self.research_store.upsert_hypothesis(
+                {
+                    "hypothesis_id": StrategyScout.hash_strategy(raw),
+                    "strategy_id": strategy_id,
+                    "title": raw.title,
+                    "source": raw.source,
+                    "source_url": raw.source_url,
+                    "thesis": raw.description,
+                    "status": status,
+                    "stage": stage,
+                    "decision_reason": reason,
+                    "metrics": self._hypothesis_metrics(report, validation_report),
+                    "evidence": {
+                        "source": raw.source,
+                        "source_url": raw.source_url,
+                        "authors": raw.authors or "",
+                        "published_date": raw.published_date or "",
+                    },
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record research hypothesis '{raw.title}': {e}")
+
+    @staticmethod
+    def _hypothesis_metrics(report: Any = None, validation_report: Any = None) -> Dict[str, Any]:
+        metrics: Dict[str, Any] = {}
+        if report is not None:
+            for field in (
+                "suitability_score",
+                "complexity_score",
+                "estimated_edge",
+                "economic_rationale_score",
+                "factor_uniqueness_score",
+                "data_availability_score",
+                "implementation_score",
+                "overfit_risk_score",
+                "cost_capacity_score",
+                "regime_robustness_score",
+            ):
+                metrics[field] = getattr(report, field, 0.0)
+            metrics["strategy_type"] = getattr(report, "strategy_type", "")
+            metrics["risk_flags"] = list(getattr(report, "risk_flags", []) or [])
+        if validation_report is not None:
+            for field in (
+                "rank_ic",
+                "rank_ic_ir",
+                "fdr_adjusted_p",
+                "fdr_significant",
+                "hit_rate",
+                "long_short_spread",
+                "n_observations",
+                "ff_alpha_monthly",
+                "ff_alpha_tstat",
+                "ff_r2",
+            ):
+                metrics[field] = getattr(validation_report, field, 0.0)
+        return metrics
 
     def _run_backtests(self, strategy_ids: List[str], result: ResearchResult, benchmark_data: Any = None) -> None:
         if self._backtest_fn is None:
@@ -366,6 +482,15 @@ class _NullResearchStore(ResearchStore):
 
     def update_status(self, strategy_id: str, status: str, reason: str = "") -> bool:
         return False
+
+    def upsert_hypothesis(self, info: Dict[str, Any]) -> None:
+        pass
+
+    def get_hypothesis(self, hypothesis_id: str) -> Optional[Dict[str, Any]]:
+        return None
+
+    def list_hypotheses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        return []
 
     def has_seen(self, strategy_hash: str) -> bool:
         return False

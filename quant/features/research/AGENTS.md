@@ -6,7 +6,7 @@
 
 ## 对外契约
 
-- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - 研究引擎主类，backtest_fn、统计验证、严格回测、组合构建均由调用方注入，避免 feature 间交叉导入
+- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - 研究引擎主类，backtest_fn、统计验证、严格回测、组合构建均由调用方注入，避免 feature 间交叉导入；评估/验证/集成决策会通过 `ResearchStore` 写入 hypothesis ledger
 - `StrategyScout` - 策略搜索器 (arXiv/SSRN 适配器)
 - `StrategyEvaluator` - 策略评估器 (LLM 驱动)
 - `StrategyIntegrator` - 策略集成器 (代码生成 + 注册)
@@ -24,6 +24,7 @@
 
 - 所有新策略以 `status: candidate` 注册，不会自动进入 active
 - 评估阈值 (suitability >= 6.0)、统计验证门、严格回测/普通回测阈值必须按配置通过才能保留候选
+- 每个进入评估流程的研究假设必须留下结构化 ledger 记录，至少包含来源、thesis、阶段、状态、决策原因、指标和证据
 - 高频策略只有在 `daily_adaptable: true` 时才会被接受
 - 线程安全: ResearchScheduler 使用 daemon thread + RLock
 
@@ -47,6 +48,7 @@
 
 - `ResearchEngine`, `StrategyIntegrator`, and `CandidatePool` depend on `quant.domain.ports.ResearchStore`.
 - File persistence is an infrastructure adapter (`quant.infrastructure.research.FileResearchStore`) injected by the API/composition root.
+- Hypothesis ledger persistence is part of the `ResearchStore` port; research feature code must call the port and never write ledger files or DuckDB tables directly.
 - Do not write filesystem, DuckDB, HTTP client, or other external adapter logic directly in this feature unless it is hidden behind an injected port.
 
 ## Research Rigor Modules

@@ -38,7 +38,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 ## Research Adapters
 
-- `research/FileResearchStore` implements the `ResearchStore` domain port.
+- `research/FileResearchStore` and `research/DuckDBResearchStore` implement the `ResearchStore` domain port, including hypothesis ledger upsert/list/get APIs.
 - `research/market_data/DuckDBResearchMarketData` reads market-aware daily tables and can consume optional `PITData`.
 - `research/factors` owns FF/CN factor cache and download/build adapters.
 - `research/sources/SSRNSource` performs polite SSRN discovery and fails closed to `[]`.

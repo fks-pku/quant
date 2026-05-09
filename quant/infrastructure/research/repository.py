@@ -43,6 +43,33 @@ class FileResearchStore(ResearchStore):
         self._save_state(state)
         return True
 
+    def upsert_hypothesis(self, info: Dict[str, Any]) -> None:
+        state = self._load_state()
+        hypotheses = state.setdefault("hypotheses", {})
+        hid = str(info["hypothesis_id"])
+        existing = hypotheses.get(hid, {})
+        now = self._now()
+        merged = {**existing, **info}
+        merged["hypothesis_id"] = hid
+        merged["strategy_id"] = merged.get("strategy_id", "")
+        merged["metrics"] = {**(existing.get("metrics") or {}), **(info.get("metrics") or {})}
+        merged["evidence"] = {**(existing.get("evidence") or {}), **(info.get("evidence") or {})}
+        merged["created_at"] = existing.get("created_at") or info.get("created_at") or now
+        merged["updated_at"] = now
+        hypotheses[hid] = merged
+        self._save_state(state)
+
+    def get_hypothesis(self, hypothesis_id: str) -> Optional[Dict[str, Any]]:
+        info = self._load_state().get("hypotheses", {}).get(hypothesis_id)
+        return dict(info) if info is not None else None
+
+    def list_hypotheses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        hypotheses = self._load_state().get("hypotheses", {}).values()
+        rows = [dict(info) for info in hypotheses]
+        if status is None:
+            return rows
+        return [info for info in rows if info.get("status") == status]
+
     def has_seen(self, strategy_hash: str) -> bool:
         return strategy_hash in self._load_state().get("seen_hashes", {})
 
@@ -110,14 +137,15 @@ class FileResearchStore(ResearchStore):
 
     def _load_state(self) -> Dict[str, Any]:
         if not self.state_path.exists():
-            return {"candidates": {}, "seen_hashes": {}}
+            return {"candidates": {}, "seen_hashes": {}, "hypotheses": {}}
         try:
             with self.state_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
-            return {"candidates": {}, "seen_hashes": {}}
+            return {"candidates": {}, "seen_hashes": {}, "hypotheses": {}}
         data.setdefault("candidates", {})
         data.setdefault("seen_hashes", {})
+        data.setdefault("hypotheses", {})
         return data
 
     def _save_state(self, state: Dict[str, Any]) -> None:

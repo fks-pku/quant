@@ -22,6 +22,18 @@ class ResearchStore(ABC):
         ...
 
     @abstractmethod
+    def upsert_hypothesis(self, info: Dict[str, Any]) -> None:
+        ...
+
+    @abstractmethod
+    def get_hypothesis(self, hypothesis_id: str) -> Optional[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    def list_hypotheses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
     def has_seen(self, strategy_hash: str) -> bool:
         ...
 

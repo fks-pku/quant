@@ -211,6 +211,44 @@ class TestSaveRunResult:
             store.save_run_result(result)
 
 
+class TestHypothesisLedger:
+    def test_upserts_and_lists_hypotheses(self, tmp_path):
+        for name, store in _store_factories(tmp_path):
+            store.upsert_hypothesis(
+                {
+                    "hypothesis_id": "hyp-001",
+                    "title": "Momentum Hypothesis",
+                    "source": "arxiv",
+                    "source_url": "https://example.com/paper",
+                    "thesis": "Winners keep winning over short horizons.",
+                    "status": "evaluating",
+                    "stage": "evaluate",
+                    "decision_reason": "queued",
+                    "metrics": {"suitability_score": 7.2},
+                    "evidence": {"published_date": "2026-01-01"},
+                }
+            )
+            store.upsert_hypothesis(
+                {
+                    "hypothesis_id": "hyp-001",
+                    "strategy_id": "momentum_hypothesis",
+                    "status": "candidate",
+                    "stage": "integrate",
+                    "decision_reason": "Integrated as momentum_hypothesis",
+                }
+            )
+
+            got = store.get_hypothesis("hyp-001")
+            assert got["title"] == "Momentum Hypothesis", f"{name}: title should be preserved"
+            assert got["strategy_id"] == "momentum_hypothesis", f"{name}: strategy id should merge"
+            assert got["status"] == "candidate", f"{name}: status should update"
+            assert got["stage"] == "integrate", f"{name}: stage should update"
+            assert got["metrics"]["suitability_score"] == pytest.approx(7.2)
+            assert got["evidence"]["published_date"] == "2026-01-01"
+            assert store.list_hypotheses("candidate")[0]["hypothesis_id"] == "hyp-001"
+            assert store.list_hypotheses("rejected") == []
+
+
 class TestDuckDBSpecific:
     def test_creates_tables_on_init(self, tmp_path):
         import duckdb
@@ -221,6 +259,7 @@ class TestDuckDBSpecific:
         conn.close()
         assert "candidates" in tables
         assert "seen_hashes" in tables
+        assert "hypotheses" in tables
 
     def test_writes_artifact_files(self, tmp_path):
         store = _make_duckdb_store(tmp_path)

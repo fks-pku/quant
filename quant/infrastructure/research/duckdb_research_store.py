@@ -42,6 +42,23 @@ class DuckDBResearchStore(ResearchStore):
                     seen_at TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS hypotheses (
+                    hypothesis_id TEXT PRIMARY KEY,
+                    strategy_id TEXT,
+                    title TEXT,
+                    status TEXT,
+                    stage TEXT,
+                    source TEXT,
+                    source_url TEXT,
+                    thesis TEXT,
+                    decision_reason TEXT,
+                    metrics JSON,
+                    evidence JSON,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
 
     def upsert_candidate(self, info: Dict[str, Any]) -> None:
         sid = str(info["id"])
@@ -83,6 +100,48 @@ class DuckDBResearchStore(ResearchStore):
             existing["research_meta"] = meta
         self._upsert_row(strategy_id, existing)
         return True
+
+    def upsert_hypothesis(self, info: Dict[str, Any]) -> None:
+        hid = str(info["hypothesis_id"])
+        existing = self.get_hypothesis(hid) or {}
+        now = self._now()
+        merged = {**existing, **info}
+        merged["hypothesis_id"] = hid
+        merged["strategy_id"] = merged.get("strategy_id", "")
+        merged["metrics"] = {**(existing.get("metrics") or {}), **(info.get("metrics") or {})}
+        merged["evidence"] = {**(existing.get("evidence") or {}), **(info.get("evidence") or {})}
+        merged["created_at"] = existing.get("created_at") or info.get("created_at") or now
+        merged["updated_at"] = now
+        self._upsert_hypothesis_row(hid, merged)
+
+    def get_hypothesis(self, hypothesis_id: str) -> Optional[Dict[str, Any]]:
+        with duckdb.connect(self._db_path) as conn:
+            row = conn.execute(
+                """SELECT hypothesis_id, strategy_id, title, status, stage, source, source_url,
+                          thesis, decision_reason, metrics, evidence, created_at, updated_at
+                   FROM hypotheses WHERE hypothesis_id = ?""",
+                [hypothesis_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._hypothesis_row_to_dict(row)
+
+    def list_hypotheses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        with duckdb.connect(self._db_path) as conn:
+            if status is None:
+                rows = conn.execute(
+                    """SELECT hypothesis_id, strategy_id, title, status, stage, source, source_url,
+                              thesis, decision_reason, metrics, evidence, created_at, updated_at
+                       FROM hypotheses ORDER BY updated_at, hypothesis_id"""
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT hypothesis_id, strategy_id, title, status, stage, source, source_url,
+                              thesis, decision_reason, metrics, evidence, created_at, updated_at
+                       FROM hypotheses WHERE status = ? ORDER BY updated_at, hypothesis_id""",
+                    [status],
+                ).fetchall()
+        return [self._hypothesis_row_to_dict(row) for row in rows]
 
     def has_seen(self, strategy_hash: str) -> bool:
         with duckdb.connect(self._db_path) as conn:
@@ -190,6 +249,23 @@ class DuckDBResearchStore(ResearchStore):
             d["created_at"] = row[8]
         return d
 
+    def _hypothesis_row_to_dict(self, row: tuple) -> Dict[str, Any]:
+        return {
+            "hypothesis_id": row[0],
+            "strategy_id": row[1] or "",
+            "title": row[2] or "",
+            "status": row[3] or "",
+            "stage": row[4] or "",
+            "source": row[5] or "",
+            "source_url": row[6] or "",
+            "thesis": row[7] or "",
+            "decision_reason": row[8] or "",
+            "metrics": self._json_value(row[9]),
+            "evidence": self._json_value(row[10]),
+            "created_at": row[11],
+            "updated_at": row[12],
+        }
+
     def _upsert_row(self, sid: str, merged: Dict[str, Any]) -> None:
         now = self._now()
         created = merged.get("created_at") or now
@@ -214,6 +290,32 @@ class DuckDBResearchStore(ResearchStore):
                     meta_json,
                     created,
                     now,
+                ],
+            )
+
+    def _upsert_hypothesis_row(self, hid: str, merged: Dict[str, Any]) -> None:
+        metrics_json = json.dumps(merged.get("metrics", {}), default=str, ensure_ascii=False)
+        evidence_json = json.dumps(merged.get("evidence", {}), default=str, ensure_ascii=False)
+        with duckdb.connect(self._db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO hypotheses
+                   (hypothesis_id, strategy_id, title, status, stage, source, source_url, thesis,
+                    decision_reason, metrics, evidence, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON, ?::JSON, ?, ?)""",
+                [
+                    hid,
+                    merged.get("strategy_id", ""),
+                    merged.get("title", ""),
+                    merged.get("status", ""),
+                    merged.get("stage", ""),
+                    merged.get("source", ""),
+                    merged.get("source_url", ""),
+                    merged.get("thesis", ""),
+                    merged.get("decision_reason", ""),
+                    metrics_json,
+                    evidence_json,
+                    merged.get("created_at"),
+                    merged.get("updated_at"),
                 ],
             )
 
@@ -242,3 +344,13 @@ class DuckDBResearchStore(ResearchStore):
     def _risk_flags(report: Any) -> str:
         flags = getattr(report, "risk_flags", [])
         return ", ".join(flags) if flags else "None"
+
+    @staticmethod
+    def _json_value(value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            return json.loads(value) if value else {}
+        return {}
