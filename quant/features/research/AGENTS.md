@@ -6,7 +6,7 @@
 
 ## 对外契约
 
-- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir)` - 研究引擎主类，backtest_fn 由调用方注入（API 层）避免 feature 间交叉导入
+- `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - 研究引擎主类，backtest_fn、统计验证、严格回测、组合构建均由调用方注入，避免 feature 间交叉导入
 - `StrategyScout` - 策略搜索器 (arXiv/SSRN 适配器)
 - `StrategyEvaluator` - 策略评估器 (LLM 驱动)
 - `StrategyIntegrator` - 策略集成器 (代码生成 + 注册)
@@ -23,7 +23,7 @@
 ## 不变量
 
 - 所有新策略以 `status: candidate` 注册，不会自动进入 active
-- 评估阈值 (suitability >= 6.0) 和回测 Sharpe 阈值 (>= 0.5) 必须同时通过才能保留候选
+- 评估阈值 (suitability >= 6.0)、统计验证门、严格回测/普通回测阈值必须按配置通过才能保留候选
 - 高频策略只有在 `daily_adaptable: true` 时才会被接受
 - 线程安全: ResearchScheduler 使用 daemon thread + RLock
 
@@ -53,6 +53,7 @@
 
 - `validation/cross_sectional.py` owns full-universe rank IC, ICIR, IC decay, and Fama-MacBeth statistics.
 - `validation/factor_validator.py` is the validation gate; sensitivity checks are opt-in through config.
+- API/CLI composition roots inject `StrategySpecBuilder` and `FactorValidator` by default when `validation_enabled=True`.
 - `rigor/backtest_hub.py` owns purged walk-forward, DSR, regime breakdown, and capacity viability checks.
 - `validation/ff_decomposition.py` handles factor attribution from injected factor data.
 - `ensemble/optimizer.py` implements equal-weight, inverse-vol, and ERC weighting with graceful fallback.

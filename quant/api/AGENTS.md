@@ -15,10 +15,12 @@ Blueprints:
 - `cio_bp` — CIO assessment endpoints
 - `research_bp` — research pipeline control
 - `futu_bp` — Futu broker integration
+- `research_bp._make_validation_components(cfg)` — composition-root wiring for research statistical validation
 
 ## 依赖
 
 - `features/` — only calls feature orchestrators
+- `infrastructure/research` — research_bp composes market data, factor data, PIT data, stores, and sources behind domain ports
 - `shared/utils` — logger, config_loader
 - `shared/models` — re-exports from domain
 
@@ -27,6 +29,7 @@ Blueprints:
 - API endpoints use `DuckDBStorage(read_only=True)` — never write to storage
 - All state is in `api/state/runtime.py` — not in global variables
 - Blueprints do not contain business logic — they only serialize/deserialize
+- Research validation is injected into `ResearchEngine`; do not import infrastructure from `features/research`
 
 ## 修改守则
 

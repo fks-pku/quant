@@ -675,8 +675,8 @@ def cn_dividend_tier_input(draw):
         "stock_dividend": [0.0],
     })
 
-    # SELL on random day 35-55 (>30 days after buy for 10% tax tier)
-    sell_day = draw(st.integers(35, 55))
+    # SELL signal must leave one following bar for the T+1 execution.
+    sell_day = draw(st.integers(35, min(55, n_days - 2)))
     signals = [
         (5, symbol, "BUY", 500),
         (sell_day, symbol, "SELL", 500),

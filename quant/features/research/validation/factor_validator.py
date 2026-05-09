@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from quant.features.research.models import StrategySpec, ValidationReport
 from quant.features.research.validation.cross_sectional import (
@@ -18,6 +17,54 @@ from quant.features.research.validation.ff_decomposition import decompose_alpha
 from quant.features.research.validation.sensitivity import run_sensitivity_sweep
 
 logger = logging.getLogger(__name__)
+
+try:
+    from scipy import stats as _scipy_stats
+except Exception:
+    _scipy_stats = None
+
+
+def _normal_cdf(value: float) -> float:
+    import math
+
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _two_sided_p_from_stat(value: float) -> float:
+    if not np.isfinite(value):
+        return 1.0
+    return float(max(0.0, min(1.0, 2.0 * (1.0 - _normal_cdf(abs(value))))))
+
+
+def _spearmanr(left: Any, right: Any) -> tuple[float, float]:
+    if _scipy_stats is not None:
+        corr, p_value = _scipy_stats.spearmanr(left, right)
+        return float(corr), float(p_value)
+    frame = pd.DataFrame({"left": left, "right": right}).dropna()
+    if len(frame) < 3:
+        return 0.0, 1.0
+    corr = frame["left"].rank(method="average").corr(frame["right"].rank(method="average"))
+    if pd.isna(corr):
+        return 0.0, 1.0
+    if abs(float(corr)) >= 1.0:
+        return float(corr), 0.0
+    denom = max(1e-12, 1.0 - float(corr) ** 2)
+    stat = float(corr) * np.sqrt((len(frame) - 2) / denom)
+    return float(corr), _two_sided_p_from_stat(stat)
+
+
+def _ttest_1samp_pvalue(values: pd.Series, target: float = 0.0) -> float:
+    clean = pd.Series(values).dropna()
+    if len(clean) < 2:
+        return 1.0
+    if _scipy_stats is not None:
+        result = _scipy_stats.ttest_1samp(clean, target)
+        return float(result.pvalue) if not pd.isna(result.pvalue) else 1.0
+    std = clean.std()
+    if pd.isna(std) or std == 0:
+        return 0.0 if float(clean.mean()) != target else 1.0
+    stat = (float(clean.mean()) - target) / (float(std) / np.sqrt(len(clean)))
+    return _two_sided_p_from_stat(stat)
 
 
 class FactorValidator:
@@ -100,7 +147,7 @@ class FactorValidator:
         sig = signal.loc[common_idx]
         fwd = forward_return.loc[common_idx]
 
-        rank_ic, rank_ic_p = stats.spearmanr(sig, fwd)
+        rank_ic, rank_ic_p = _spearmanr(sig, fwd)
         rank_ic_ir = rank_ic * np.sqrt(len(common_idx)) if rank_ic != 0 else 0.0
         hit_rate = (sig * fwd > 0).mean()
 
@@ -148,8 +195,7 @@ class FactorValidator:
 
         rank_ic = float(valid_ic.mean())
         rank_ic_ir = compute_icir(valid_ic)
-        ttest = stats.ttest_1samp(valid_ic, 0.0) if len(valid_ic) > 1 else None
-        rank_ic_p = float(ttest.pvalue) if ttest is not None and not pd.isna(ttest.pvalue) else 1.0
+        rank_ic_p = _ttest_1samp_pvalue(valid_ic, 0.0)
         long_short_series = self._long_short_series(signal_matrix, forward_returns)
         ff, factor_errors = self._decompose_against_factors(long_short_series)
 

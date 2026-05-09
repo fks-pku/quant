@@ -213,6 +213,37 @@ def _create_keyword_scout():
     return KeywordScout()
 
 
+def _create_research_market_data(config):
+    from quant.infrastructure.research.market_data import DuckDBResearchMarketData
+
+    return DuckDBResearchMarketData(pit_as_of_date=getattr(config, "default_backtest_end", None))
+
+
+def _create_factor_data(config):
+    from quant.infrastructure.research.factors.ff_factor_store import FFFactorStore
+
+    validation_cfg = getattr(config, "validation_config", {}) or {}
+    return FFFactorStore(cache_dir=validation_cfg.get("factor_cache_dir"))
+
+
+def _create_validation_components(config):
+    if not getattr(config, "validation_enabled", True):
+        return None, None
+
+    from quant.features.research.validation import FactorValidator, StrategySpecBuilder
+
+    validation_cfg = dict(getattr(config, "validation_config", {}) or {})
+    validation_cfg.setdefault("min_observations", getattr(config, "validation_min_obs", 252))
+    return (
+        StrategySpecBuilder(validation_cfg),
+        FactorValidator(
+            _create_research_market_data(config),
+            config=validation_cfg,
+            factor_data_port=_create_factor_data(config),
+        ),
+    )
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -223,6 +254,7 @@ def main():
     parser.add_argument("--max", type=int, default=5, dest="max_results", help="Max results per source")
     parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
     parser.add_argument("--backtest", action="store_true", help="Run backtests (requires DuckDB data)")
+    parser.add_argument("--no-validation", action="store_true", help="Disable statistical validation gate")
     parser.add_argument("--no-heuristic", action="store_true", help="Use LLM evaluator instead of heuristic")
     parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama", "deepseek", "glm"],
                         help="LLM provider (only with --no-heuristic)")
@@ -241,6 +273,7 @@ def main():
         max_results_per_source=args.max_results,
         evaluation_threshold=args.threshold,
         auto_backtest=args.backtest,
+        validation_enabled=not args.no_validation,
         backtest_sharpe_threshold=0.5,
         default_symbols=["AAPL", "MSFT", "GOOGL", "SPY", "QQQ"],
         default_backtest_start="2020-01-01",
@@ -274,6 +307,7 @@ def main():
     if config.rigor_enabled:
         from quant.features.research.rigor.backtest_hub import RigorHub
         rigor_hub = RigorHub(backtest_runner=walkforward_runner, config=config.rigor_config) if walkforward_runner else None
+    spec_builder, validator = _create_validation_components(config)
     engine = ResearchEngine(
         config=config,
         scout=scout,
@@ -282,6 +316,8 @@ def main():
         backtest_fn=backtest_fn,
         strategies_dir=strategies_dir,
         rigor_hub=rigor_hub,
+        spec_builder=spec_builder,
+        validator=validator,
     )
 
     print("=" * 70)

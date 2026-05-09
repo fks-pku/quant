@@ -319,3 +319,88 @@ def test_api_make_rigor_hub_uses_two_arg_walkforward_runner_and_experiment_store
     assert response["metrics"]["sharpe"] == 0.0
     assert calls == [("test_strat", {"start": "2020-01-01", "end": "2020-02-01"})]
     assert hub._experiment_store is experiment_store
+
+
+def test_api_make_validation_components_wires_market_and_factor_ports(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    market_data = object()
+    factor_data = object()
+
+    monkeypatch.setattr(research_module, "_make_research_market_data", lambda cfg: market_data)
+    monkeypatch.setattr(research_module, "_make_factor_data", lambda cfg: factor_data)
+
+    spec_builder, validator = research_module._make_validation_components(
+        ResearchConfig(
+            validation_enabled=True,
+            validation_min_obs=123,
+            validation_config={"min_stocks": 17, "factor_validation_enabled": True},
+        )
+    )
+
+    assert spec_builder.__class__.__name__ == "StrategySpecBuilder"
+    assert validator.__class__.__name__ == "FactorValidator"
+    assert validator._market_data is market_data
+    assert validator._factor_data is factor_data
+    assert validator._config["min_observations"] == 123
+    assert validator._config["min_stocks"] == 17
+    assert validator._config["factor_validation_enabled"] is True
+
+
+def test_api_make_validation_components_respects_disabled_flag():
+    from quant.api import research_bp as research_module
+
+    assert research_module._make_validation_components(ResearchConfig(validation_enabled=False)) == (None, None)
+
+
+def test_api_scheduler_injects_validation_components(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    captured = {}
+
+    class FakeEngine:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(research_module, "_research_scheduler", None)
+    monkeypatch.setattr(research_module, "_load_research_config", lambda: ResearchConfig(auto_run=False))
+    monkeypatch.setattr(research_module, "_make_research_store", lambda cfg: object())
+    monkeypatch.setattr(research_module, "_create_llm_adapter", lambda cfg: None)
+    monkeypatch.setattr(research_module, "_make_strategy_scout", lambda cfg: object())
+    monkeypatch.setattr(research_module, "_make_backtest_fn", lambda: object())
+    monkeypatch.setattr(research_module, "_make_rigor_hub", lambda cfg, experiment_store=None: None)
+    monkeypatch.setattr(research_module, "_make_benchmark_data_loader", lambda cfg: None)
+    monkeypatch.setattr(research_module, "_make_experiment_stores", lambda cfg: (None, None))
+    monkeypatch.setattr(research_module, "_make_validation_components", lambda cfg: ("spec", "validator"))
+    monkeypatch.setattr(research_module, "ResearchEngine", FakeEngine)
+
+    scheduler = research_module._get_scheduler()
+
+    assert scheduler.engine is not None
+    assert captured["spec_builder"] == "spec"
+    assert captured["validator"] == "validator"
+
+
+def test_cli_make_validation_components_wires_market_and_factor_ports(monkeypatch):
+    from quant.scripts import run_research as cli
+
+    market_data = object()
+    factor_data = object()
+
+    monkeypatch.setattr(cli, "_create_research_market_data", lambda cfg: market_data)
+    monkeypatch.setattr(cli, "_create_factor_data", lambda cfg: factor_data)
+
+    spec_builder, validator = cli._create_validation_components(
+        ResearchConfig(
+            validation_enabled=True,
+            validation_min_obs=88,
+            validation_config={"sensitivity_enabled": True},
+        )
+    )
+
+    assert spec_builder.__class__.__name__ == "StrategySpecBuilder"
+    assert validator.__class__.__name__ == "FactorValidator"
+    assert validator._market_data is market_data
+    assert validator._factor_data is factor_data
+    assert validator._config["min_observations"] == 88
+    assert validator._config["sensitivity_enabled"] is True

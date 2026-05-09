@@ -321,6 +321,36 @@ def _make_pit_data(cfg: ResearchConfig):
     return PITDuckDBData()
 
 
+def _make_factor_data(cfg: ResearchConfig):
+    from quant.infrastructure.research.factors.ff_factor_store import FFFactorStore
+
+    validation_cfg = getattr(cfg, "validation_config", {}) or {}
+    return FFFactorStore(cache_dir=validation_cfg.get("factor_cache_dir"))
+
+
+def _validation_config(cfg: ResearchConfig) -> dict:
+    validation_cfg = dict(getattr(cfg, "validation_config", {}) or {})
+    validation_cfg.setdefault("min_observations", getattr(cfg, "validation_min_obs", 252))
+    return validation_cfg
+
+
+def _make_validation_components(cfg: ResearchConfig):
+    if not getattr(cfg, "validation_enabled", True):
+        return None, None
+
+    from quant.features.research.validation import FactorValidator, StrategySpecBuilder
+
+    validation_cfg = _validation_config(cfg)
+    return (
+        StrategySpecBuilder(validation_cfg),
+        FactorValidator(
+            _make_research_market_data(cfg),
+            config=validation_cfg,
+            factor_data_port=_make_factor_data(cfg),
+        ),
+    )
+
+
 def _make_research_market_data(cfg: ResearchConfig, as_of_date: str = None):
     from quant.infrastructure.research.market_data import DuckDBResearchMarketData
 
@@ -394,6 +424,7 @@ def _get_scheduler() -> ResearchScheduler:
         from quant.features.research.evaluator import StrategyEvaluator
         evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
         experiment_store, artifact_store = _make_experiment_stores(cfg)
+        spec_builder, validator = _make_validation_components(cfg)
         engine = ResearchEngine(
             config=cfg,
             scout=_make_strategy_scout(cfg),
@@ -402,6 +433,8 @@ def _get_scheduler() -> ResearchScheduler:
             research_store=research_store,
             rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
             benchmark_data_loader=_make_benchmark_data_loader(cfg) if cfg.rigor_enabled else None,
+            spec_builder=spec_builder,
+            validator=validator,
         )
         if experiment_store:
             engine._experiment_store = experiment_store
@@ -420,7 +453,16 @@ def _load_research_config() -> ResearchConfig:
     try:
         data = ConfigLoader.load("research")
         research_cfg = data.get("research", {})
+        validation_cfg = data.get("validation", {})
+        pit_cfg = data.get("pit", {})
         llm_cfg = data.get("llm", {})
+        merged_validation = dict(research_cfg.get("validation_config", {}) or {})
+        merged_validation.update(validation_cfg or {})
+        research_cfg["validation_config"] = merged_validation
+        if "enabled" in pit_cfg:
+            research_cfg["pit_enabled"] = bool(pit_cfg.get("enabled"))
+        if "universe_snapshot_dir" in pit_cfg:
+            research_cfg["pit_universe_snapshot_dir"] = pit_cfg.get("universe_snapshot_dir")
         research_cfg.setdefault("llm_provider", llm_cfg.get("provider", "minimax"))
         research_cfg.setdefault("llm_model", llm_cfg.get("model", "MiniMax-M2.7"))
         research_cfg.setdefault("llm_api_key", llm_cfg.get("api_key"))
@@ -452,6 +494,7 @@ def run_research():
     if getattr(cfg, "ensemble_enabled", False) and experiment_store is not None:
         from quant.features.research.ensemble.ensemble import StrategyEnsemble
         ensemble = StrategyEnsemble(experiment_store, cfg.ensemble_config)
+    spec_builder, validator = _make_validation_components(cfg)
     engine = ResearchEngine(
         config=cfg,
         scout=_make_strategy_scout(cfg),
@@ -463,6 +506,8 @@ def run_research():
         rigor_hub=_make_rigor_hub(cfg, experiment_store=experiment_store) if cfg.rigor_enabled else None,
         ensemble=ensemble,
         benchmark_data_loader=_make_benchmark_data_loader(cfg) if cfg.rigor_enabled else None,
+        spec_builder=spec_builder,
+        validator=validator,
     )
 
     def _run():

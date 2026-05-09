@@ -4,6 +4,13 @@ import numpy as np
 import pandas as pd
 
 
+def _spearman_corr(left: pd.Series, right: pd.Series) -> float:
+    left_rank = left.rank(method="average")
+    right_rank = right.rank(method="average")
+    corr = left_rank.corr(right_rank)
+    return float(corr) if not pd.isna(corr) else 0.0
+
+
 def detect_market(symbol: str) -> str:
     value = str(symbol).strip().upper()
     if value.endswith((".SS", ".SZ")):
@@ -40,7 +47,7 @@ def compute_cross_sectional_ic(
         if len(paired) < min_stocks:
             continue
         dates.append(date)
-        values.append(float(paired["signal"].corr(paired["return"], method="spearman")))
+        values.append(_spearman_corr(paired["signal"], paired["return"]))
     return pd.Series(values, index=pd.Index(dates, name=signals.index.name), dtype=float)
 
 
