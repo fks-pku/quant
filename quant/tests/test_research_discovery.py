@@ -7,6 +7,7 @@ import pytest
 from quant.features.research.discovery.source_hub import SourceHub
 from quant.features.research.discovery.dedup import deduplicate
 from quant.features.research.models import RawStrategy
+from quant.features.research.scout import StrategyScout
 
 
 def _make_raw(**overrides):
@@ -105,6 +106,151 @@ class TestSourceHubDefaultSources:
         hub = SourceHub({"s1": s1, "s2": s2})
         results = hub.search()
         assert len(results) == 2
+
+
+class TestDiscoveryQuality:
+    def test_rich_daily_research_scores_as_high_quality(self):
+        from datetime import date
+        from quant.features.research.discovery.quality import score_discovery
+
+        raw = _make_raw(
+            title="Cross-Sectional Momentum Alpha for Daily Equity Portfolios",
+            description=(
+                "Tests a daily OHLCV cross-sectional momentum signal on liquid "
+                "equities with rank IC, transaction costs, turnover, and "
+                "out-of-sample backtest evidence."
+            ),
+            source="arxiv",
+            source_url="https://arxiv.org/abs/2601.00001",
+            authors="Jane Researcher",
+            published_date="2026-04-01",
+        )
+
+        report = score_discovery(raw, as_of=date(2026, 5, 9))
+
+        assert report.score >= 8.0
+        assert report.source_type == "academic"
+        assert "daily_ohlcv" in report.matched_terms
+        assert "missing_source_url" not in report.risk_flags
+
+    def test_fragile_hf_idea_gets_quality_haircut(self):
+        from datetime import date
+        from quant.features.research.discovery.quality import score_discovery
+
+        raw = _make_raw(
+            title="Deep Reinforcement Learning on Limit Order Book Microstructure",
+            description="Uses tick-level order book imbalance, GPU training, and high-frequency execution.",
+            source="blog",
+            source_url="",
+            published_date="2021-01-01",
+        )
+
+        report = score_discovery(raw, as_of=date(2026, 5, 9))
+
+        assert report.score < 5.0
+        assert "high_frequency_not_daily" in report.risk_flags
+        assert "missing_source_url" in report.risk_flags
+
+
+class TestSourceHubQueryPlan:
+    def test_query_plan_runs_multiple_queries_and_attaches_quality_metadata(self):
+        source = MagicMock()
+        source.search.side_effect = [
+            [{
+                "title": "Momentum Daily Alpha",
+                "description": "Daily OHLCV momentum rank IC backtest on liquid equities.",
+                "source_url": "https://example.test/mom",
+                "authors": "A",
+                "published_date": "2026-04-01",
+            }],
+            [{
+                "title": "Mean Reversion Daily Alpha",
+                "description": "Daily OHLCV mean reversion signal with transaction costs.",
+                "source_url": "https://example.test/mr",
+                "authors": "B",
+                "published_date": "2026-03-01",
+            }],
+        ]
+        hub = SourceHub({"arxiv": source}, query_plan={"arxiv": [{"query": "momentum"}, {"query": "mean reversion"}]})
+
+        results = hub.search(source_names=["arxiv"], max_results=5)
+
+        assert [call.kwargs["query"]["query"] for call in source.search.call_args_list] == ["momentum", "mean reversion"]
+        assert len(results) == 2
+        assert results[0].metadata["query"]["query"] == "momentum"
+        assert results[0].metadata["discovery_quality"]["score"] >= 7.0
+
+
+class TestStrategyScoutQualityControls:
+    def test_scout_ranks_and_filters_by_discovery_score(self):
+        high = _make_raw(
+            title="Daily Momentum Alpha",
+            description="Daily OHLCV momentum rank IC transaction cost backtest on liquid equities.",
+            source="arxiv",
+            source_url="https://example.test/high",
+            authors="A",
+            published_date="2026-04-01",
+        )
+        low = _make_raw(
+            title="Tick Crypto Bot",
+            description="High-frequency limit order book neural network crypto scalping.",
+            source="blog",
+            source_url="",
+            published_date="2020-01-01",
+        )
+
+        class FakeHub:
+            def search(self, source_names=None, max_results=10):
+                return [low, high]
+
+        scout = StrategyScout.from_source_hub(
+            FakeHub(),
+            sources=["arxiv", "blog"],
+            config={"min_discovery_score": 5.5, "rank_results": True},
+        )
+
+        results = scout.search(max_results=10)
+
+        assert [r.title for r in results] == ["Daily Momentum Alpha"]
+        assert results[0].metadata["discovery_quality"]["score"] >= 7.0
+
+    def test_scout_applies_daily_equity_hard_filters(self):
+        good = _make_raw(
+            title="Daily Equity Reversal Factor",
+            description="Daily OHLCV mean reversion factor with rank IC and transaction cost tests on liquid equities.",
+            source="ssrn",
+            source_url="https://example.test/good",
+            authors="A",
+            published_date="2026-04-01",
+        )
+        off_topic = _make_raw(
+            title="ForesightFlow Prediction Market Leakage",
+            description="Prediction market microstructure signal using LLM agents and documented Polymarket flows.",
+            source="arxiv",
+            source_url="https://example.test/bad",
+            authors="B",
+            published_date="2026-04-01",
+        )
+
+        class FakeHub:
+            def search(self, source_names=None, max_results=10):
+                return [off_topic, good]
+
+        scout = StrategyScout.from_source_hub(
+            FakeHub(),
+            sources=["arxiv", "ssrn"],
+            config={
+                "rank_results": True,
+                "min_discovery_score": 5.0,
+                "required_match_terms": ["daily_ohlcv"],
+                "required_any_match_terms": ["liquid_equity", "factor", "mean_reversion", "rank_ic"],
+                "blocked_risk_flags": ["non_equity_market", "non_price_signal"],
+            },
+        )
+
+        results = scout.search(max_results=10)
+
+        assert [r.title for r in results] == ["Daily Equity Reversal Factor"]
 
 
 class _FakeResponse:

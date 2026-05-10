@@ -1,8 +1,11 @@
-import uuid
+import os
 import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
-from flask import Blueprint, jsonify, request
+
+import yaml
+from flask import Blueprint, jsonify, request, send_file
 
 from quant.features.research.models import ResearchConfig, ResearchResult
 from quant.features.research.research_engine import ResearchEngine
@@ -33,7 +36,8 @@ def _make_backtest_fn():
             result.errors.append(f"Strategy {sid} not in registry for backtest")
             return
 
-        symbols = config.default_symbols
+        info = integrator.get_registry_entry(sid)
+        symbols = _candidate_symbols(info, config.default_symbols)
         start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
         end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
 
@@ -64,7 +68,6 @@ def _make_backtest_fn():
         backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
         bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=100000, data_provider=data_provider, symbols=symbols)
 
-        info = integrator.get_registry_entry(sid)
         if info is not None:
             info["backtest"] = {
                 "sharpe": round(bt_result.sharpe_ratio, 2),
@@ -258,6 +261,14 @@ _research_lock = threading.Lock()
 _research_scheduler: ResearchScheduler = None
 
 
+def _candidate_symbols(info, fallback):
+    meta = dict((info or {}).get("research_meta") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    universe = spec.get("universe") or []
+    symbols = [str(symbol) for symbol in universe if str(symbol)]
+    return symbols or list(fallback or [])
+
+
 def _make_research_store(cfg: ResearchConfig):
     root = cfg.research_dir or str(Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
     if getattr(cfg, "tracking_enabled", False) and cfg.tracking_db_path:
@@ -267,6 +278,26 @@ def _make_research_store(cfg: ResearchConfig):
     from quant.infrastructure.research.repository import FileResearchStore
 
     return FileResearchStore(root)
+
+
+def _research_artifact_root(cfg: ResearchConfig) -> Path:
+    return Path(cfg.research_dir or Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
+
+
+def _latest_report_path(cfg: ResearchConfig) -> Path:
+    return _research_artifact_root(cfg) / "full_research_report.html"
+
+
+def _latest_report_payload(cfg: ResearchConfig) -> dict:
+    path = _latest_report_path(cfg)
+    payload = {
+        "available": path.exists(),
+        "url": "/api/research/report/latest",
+        "path": str(path),
+    }
+    if path.exists():
+        payload["updated_at"] = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    return payload
 
 
 def _make_experiment_stores(cfg: ResearchConfig):
@@ -304,13 +335,14 @@ def _make_strategy_scout(cfg: ResearchConfig):
     from quant.features.research.scout import StrategyScout
     from quant.infrastructure.research.sources import ArxivSource, BlogSource, NBERSource, SSRNSource
 
+    scout_cfg = getattr(cfg, "scout_config", {}) or {}
     source_hub = SourceHub({
         "arxiv": ArxivSource(),
         "ssrn": SSRNSource(),
         "nber": NBERSource(),
         "blog": BlogSource(),
-    })
-    return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None))
+    }, query_plan=scout_cfg.get("query_plan"), quality_config=scout_cfg)
+    return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None), config=scout_cfg)
 
 
 def _make_pit_data(cfg: ResearchConfig):
@@ -379,15 +411,21 @@ def _make_benchmark_data_loader(cfg: ResearchConfig):
 
 def _create_llm_adapter(cfg: ResearchConfig):
     if cfg.llm_provider == "openai":
+        if not (cfg.llm_api_key or os.environ.get("OPENAI_API_KEY")):
+            return None
         from quant.features.cio.llm_adapters.openai_adapter import OpenAIAdapter
         return OpenAIAdapter(model=cfg.llm_model, api_key=cfg.llm_api_key or "", temperature=cfg.llm_temperature)
     elif cfg.llm_provider == "claude":
+        if not (cfg.llm_api_key or os.environ.get("ANTHROPIC_API_KEY")):
+            return None
         from quant.features.cio.llm_adapters.claude_adapter import ClaudeAdapter
         return ClaudeAdapter(model=cfg.llm_model, api_key=cfg.llm_api_key or "", temperature=cfg.llm_temperature)
     elif cfg.llm_provider == "ollama":
         from quant.features.cio.llm_adapters.ollama_adapter import OllamaAdapter
         return OllamaAdapter(model=cfg.llm_model)
     elif cfg.llm_provider == "minimax":
+        if not (cfg.llm_api_key or os.environ.get("MINIMAX_API_KEY")):
+            return None
         from quant.features.cio.llm_adapters.minimax_adapter import MiniMaxAdapter
         return MiniMaxAdapter(
             model=cfg.llm_model,
@@ -397,6 +435,8 @@ def _create_llm_adapter(cfg: ResearchConfig):
             group_id=cfg.llm_group_id or "",
         )
     elif cfg.llm_provider == "deepseek":
+        if not (cfg.llm_api_key or os.environ.get("DEEPSEEK_API_KEY")):
+            return None
         from quant.features.cio.llm_adapters.deepseek_adapter import DeepSeekAdapter
         return DeepSeekAdapter(
             model=cfg.llm_model or "deepseek-chat",
@@ -405,6 +445,8 @@ def _create_llm_adapter(cfg: ResearchConfig):
             base_url=cfg.llm_base_url or "https://api.deepseek.com/v1",
         )
     elif cfg.llm_provider == "glm":
+        if not (cfg.llm_api_key or os.environ.get("GLM_API_KEY")):
+            return None
         from quant.features.cio.llm_adapters.glm_adapter import GLMAdapter
         return GLMAdapter(
             model=cfg.llm_model or "glm-5.1",
@@ -422,7 +464,7 @@ def _get_scheduler() -> ResearchScheduler:
         research_store = _make_research_store(cfg)
         llm_adapter = _create_llm_adapter(cfg)
         from quant.features.research.evaluator import StrategyEvaluator
-        evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
+        evaluator = StrategyEvaluator(llm_adapter=llm_adapter, rubric_config=getattr(cfg, "evaluation_config", {}) or {})
         experiment_store, artifact_store = _make_experiment_stores(cfg)
         spec_builder, validator = _make_validation_components(cfg)
         engine = ResearchEngine(
@@ -451,14 +493,18 @@ def _get_scheduler() -> ResearchScheduler:
 def _load_research_config() -> ResearchConfig:
     from quant.shared.utils.config_loader import ConfigLoader
     try:
-        data = ConfigLoader.load("research")
+        data = _load_research_config_data(ConfigLoader)
         research_cfg = data.get("research", {})
         validation_cfg = data.get("validation", {})
+        evaluation_cfg = data.get("evaluation", {})
         pit_cfg = data.get("pit", {})
         llm_cfg = data.get("llm", {})
         merged_validation = dict(research_cfg.get("validation_config", {}) or {})
         merged_validation.update(validation_cfg or {})
         research_cfg["validation_config"] = merged_validation
+        merged_evaluation = dict(research_cfg.get("evaluation_config", {}) or {})
+        merged_evaluation.update(evaluation_cfg or {})
+        research_cfg["evaluation_config"] = merged_evaluation
         if "enabled" in pit_cfg:
             research_cfg["pit_enabled"] = bool(pit_cfg.get("enabled"))
         if "universe_snapshot_dir" in pit_cfg:
@@ -474,21 +520,36 @@ def _load_research_config() -> ResearchConfig:
         return ResearchConfig()
 
 
+def _load_research_config_data(loader_cls=None) -> dict:
+    if loader_cls is None:
+        from quant.shared.utils.config_loader import ConfigLoader as loader_cls
+    config_dir = Path(__file__).resolve().parent.parent / "features" / "research" / "config"
+    try:
+        return loader_cls(config_dir=str(config_dir)).load("research.yaml")
+    except Exception:
+        path = config_dir / "research.yaml"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        raise
+
+
 @research_bp.route("/api/research/run", methods=["POST"])
 def run_research():
     data = request.get_json() or {}
     sources = data.get("sources")
-    max_results = data.get("max_results", 10)
+    max_results = data.get("max_results")
     job_id = str(uuid.uuid4())[:8]
 
     cfg = _load_research_config()
     if sources:
         cfg.sources = sources
-    cfg.max_results_per_source = max_results
+    if max_results is not None:
+        cfg.max_results_per_source = int(max_results)
 
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator
-    evaluator = StrategyEvaluator(llm_adapter=llm_adapter)
+    evaluator = StrategyEvaluator(llm_adapter=llm_adapter, rubric_config=getattr(cfg, "evaluation_config", {}) or {})
     experiment_store, artifact_store = _make_experiment_stores(cfg)
     ensemble = None
     if getattr(cfg, "ensemble_enabled", False) and experiment_store is not None:
@@ -538,6 +599,8 @@ def get_research_status(research_id):
     result = job.get("result")
     if result is not None:
         response["result"] = result.to_dict()
+    if job["status"] == "completed":
+        response["report"] = _latest_report_payload(_load_research_config())
     elif job["status"] == "error":
         response["error"] = job.get("error", "Unknown error")
     return jsonify(response)
@@ -547,6 +610,19 @@ def get_research_status(research_id):
 def list_candidates():
     pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
     return jsonify({"candidates": pool.list_candidates()})
+
+
+@research_bp.route("/api/research/report")
+def get_latest_report_info():
+    return jsonify({"report": _latest_report_payload(_load_research_config())})
+
+
+@research_bp.route("/api/research/report/latest")
+def get_latest_report():
+    path = _latest_report_path(_load_research_config())
+    if not path.exists():
+        return jsonify({"error": "Full research report not found"}), 404
+    return send_file(str(path), mimetype="text/html")
 
 
 @research_bp.route("/api/research/promote/<strategy_id>", methods=["POST"])
@@ -578,6 +654,8 @@ def get_schedule():
         "sources": cfg.sources,
         "max_results_per_source": cfg.max_results_per_source,
         "evaluation_threshold": cfg.evaluation_threshold,
+        "scout_config": cfg.scout_config,
+        "evaluation_config": cfg.evaluation_config,
         "backtest_sharpe_threshold": cfg.backtest_sharpe_threshold,
         "auto_backtest": cfg.auto_backtest,
         "llm_provider": cfg.llm_provider,

@@ -35,9 +35,15 @@ Blueprints:
 
 - Add route: add to appropriate `*_bp.py`
 - Change state management: edit `api/state/runtime.py`
+- Change research report access: edit `api/research_bp.py` helpers around `full_research_report.html`
 
 ## Known Pitfalls
 
 - `runtime.py` uses threading.RLock for thread-safe state access
 - Blueprint functions must not raise — return error dicts with appropriate HTTP status codes
 - Do not cache DuckDB connections across requests
+
+## Research Report Endpoints
+
+- `/api/research/report` returns latest full-report metadata.
+- `/api/research/report/latest` serves `full_research_report.html`.

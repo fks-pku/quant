@@ -3,6 +3,7 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 
 const API_BASE = 'http://localhost:5000/api';
+const API_ORIGIN = API_BASE.replace(/\/api$/, '');
 
 const SOURCE_COLORS = {
   arxiv: '#ff6b6b',
@@ -28,6 +29,8 @@ export default function ResearchPanel() {
   const [selectedId, setSelectedId] = useState(null);
   const [readme, setReadme] = useState(null);
   const [readmeLoading, setReadmeLoading] = useState(false);
+  const [schedule, setSchedule] = useState(null);
+  const [latestReport, setLatestReport] = useState(null);
   const [runningResearch, setRunningResearch] = useState(false);
   const [researchJobId, setResearchJobId] = useState(null);
   const [researchStatus, setResearchStatus] = useState(null);
@@ -44,11 +47,30 @@ export default function ResearchPanel() {
     }
   }, []);
 
+  const reportHref = useCallback((report) => {
+    if (!report?.url) return null;
+    return report.url.startsWith('http') ? report.url : `${API_ORIGIN}${report.url}`;
+  }, []);
+
+  const fetchResearchMeta = useCallback(async () => {
+    try {
+      const [scheduleRes, reportRes] = await Promise.all([
+        axios.get(`${API_BASE}/research/schedule`),
+        axios.get(`${API_BASE}/research/report`),
+      ]);
+      setSchedule(scheduleRes.data || null);
+      setLatestReport(reportRes.data.report || null);
+    } catch (e) {
+      console.error('Fetch research metadata error', e);
+    }
+  }, []);
+
   useEffect(() => {
     fetchCandidates();
+    fetchResearchMeta();
     const interval = setInterval(fetchCandidates, 10000);
     return () => clearInterval(interval);
-  }, [fetchCandidates]);
+  }, [fetchCandidates, fetchResearchMeta]);
 
   const selected = candidates.find(c => c.id === selectedId);
 
@@ -75,6 +97,11 @@ export default function ResearchPanel() {
           clearInterval(poll);
           setRunningResearch(false);
           if (res.data.status === 'completed') {
+            if (res.data.report) {
+              setLatestReport(res.data.report);
+            } else {
+              fetchResearchMeta();
+            }
             fetchCandidates();
           }
         }
@@ -84,7 +111,7 @@ export default function ResearchPanel() {
       }
     }, 2000);
     return () => clearInterval(poll);
-  }, [researchJobId, fetchCandidates]);
+  }, [researchJobId, fetchCandidates, fetchResearchMeta]);
 
   const handleRunResearch = async () => {
     setRunningResearch(true);
@@ -96,6 +123,13 @@ export default function ResearchPanel() {
     } catch (e) {
       console.error('Run research error', e);
       setRunningResearch(false);
+    }
+  };
+
+  const handleOpenReport = () => {
+    const href = reportHref(latestReport);
+    if (href) {
+      window.open(href, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -129,30 +163,64 @@ export default function ResearchPanel() {
 
   const meta = selected?.research_meta || {};
   const sourceColor = SOURCE_COLORS[meta.source] || SOURCE_COLORS.default;
+  const latestReportHref = reportHref(latestReport);
 
   return (
     <div className="rs-panel">
       <div className="rs-header">
         <div>
-          <div className="rs-title">Research Candidates</div>
+          <div className="rs-title">Research Pipeline</div>
           <div className="rs-subtitle">
-            {candidates.length} candidate{candidates.length !== 1 ? 's' : ''} discovered
+            {candidates.length} candidate{candidates.length !== 1 ? 's' : ''} tracked
           </div>
         </div>
-        <button
-          className="rs-run-btn"
-          onClick={handleRunResearch}
-          disabled={runningResearch}
-        >
-          {runningResearch ? (
-            <>
-              <span className="rs-spinner" />
-              Researching...
-            </>
+        <div className="rs-header-actions">
+          <div className={`rs-schedule-pill ${schedule?.auto_run ? 'rs-schedule-on' : ''}`}>
+            <span>Schedule</span>
+            <b>{schedule?.auto_run ? `Every ${schedule.interval_days}d` : 'Paused'}</b>
+          </div>
+          <button
+            className="rs-run-btn"
+            onClick={handleRunResearch}
+            disabled={runningResearch}
+          >
+            {runningResearch ? (
+              <>
+                <span className="rs-spinner" />
+                Researching...
+              </>
+            ) : (
+              'Run End-to-End'
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="rs-pipeline-strip">
+        <div className="rs-pipeline-step">
+          <span>01</span>
+          <b>Idea Scout</b>
+          <em>{(schedule?.sources || []).join(' / ') || 'arxiv / ssrn / nber / blog'}</em>
+        </div>
+        <div className="rs-pipeline-step">
+          <span>02</span>
+          <b>Signal Gate</b>
+          <em>admission, HFQ, IC/FDR</em>
+        </div>
+        <div className="rs-pipeline-step">
+          <span>03</span>
+          <b>Framework Test</b>
+          <em>costs, limits, significance</em>
+        </div>
+        <div className={`rs-pipeline-step ${latestReport?.available ? 'rs-pipeline-ready' : ''}`}>
+          <span>04</span>
+          <b>HTML Report</b>
+          {latestReport?.available ? (
+            <button className="rs-inline-link" onClick={handleOpenReport}>Open latest</button>
           ) : (
-            'Run Research'
+            <em>waiting for first run</em>
           )}
-        </button>
+        </div>
       </div>
 
       {researchStatus && (
@@ -163,9 +231,16 @@ export default function ResearchPanel() {
             </div>
           )}
           {researchStatus.status === 'completed' && researchStatus.result && (
-            <div className="rs-progress-header">
-              Done: {researchStatus.result.discovered} discovered, {researchStatus.result.evaluated} evaluated, {researchStatus.result.integrated} integrated
-              {researchStatus.result.errors.length > 0 && ` (${researchStatus.result.errors.length} errors)`}
+            <div className="rs-progress-header rs-progress-complete">
+              <span>
+                Done: {researchStatus.result.discovered} discovered, {researchStatus.result.evaluated} evaluated, {researchStatus.result.integrated} integrated
+                {researchStatus.result.errors.length > 0 && ` (${researchStatus.result.errors.length} errors)`}
+              </span>
+              {latestReportHref && (
+                <a className="rs-report-link" href={latestReportHref} target="_blank" rel="noopener noreferrer">
+                  Open HTML report
+                </a>
+              )}
             </div>
           )}
           {researchStatus.status === 'error' && `Error: ${researchStatus.error}`}

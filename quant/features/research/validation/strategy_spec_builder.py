@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List, Optional
 
 from quant.features.research.models import StrategySpec, EvaluationReport, RawStrategy
@@ -38,7 +39,7 @@ class StrategySpecBuilder:
 
     def build(self, raw: RawStrategy, report: EvaluationReport, universe: Optional[List[str]] = None) -> StrategySpec:
         strategy_type = report.strategy_type
-        strategy_id = raw.title.lower().replace(" ", "_")[:50]
+        strategy_id = _strategy_id(raw.title)
 
         if strategy_type not in _SUPPORTED_TYPES:
             return StrategySpec(
@@ -80,3 +81,10 @@ class StrategySpecBuilder:
             required_fields=formula["required_fields"],
             status="ready",
         )
+
+
+def _strategy_id(title: str) -> str:
+    hyphen_replaced = title.replace("-", " ")
+    cleaned = re.sub(r"[^a-zA-Z0-9_\s]", "", hyphen_replaced)
+    underscored = re.sub(r"\s+", "_", cleaned.strip()).lower()
+    return re.sub(r"_+", "_", underscored).strip("_")[:50] or "strategy_candidate"

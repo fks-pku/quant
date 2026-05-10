@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import duckdb
 
 from quant.domain.ports.research_store import ResearchStore
+from quant.infrastructure.research.reporting import build_full_research_report_html, build_full_research_report_index
 
 
 class DuckDBResearchStore(ResearchStore):
@@ -170,12 +171,15 @@ class DuckDBResearchStore(ResearchStore):
             source_url = getattr(raw, "source_url", "")
             published_date = getattr(raw, "published_date", None)
             authors = getattr(raw, "authors", None)
+            quality = (getattr(raw, "metadata", {}) or {}).get("discovery_quality", {})
             lines.extend(
                 [
                     f"## {title}",
                     f"- **Source**: [{source}]({source_url})",
                     f"- **Published**: {published_date or 'Unknown'}",
                     f"- **Authors**: {authors or 'Unknown'}",
+                    f"- **Discovery Quality**: {float(quality.get('score', 0.0) or 0.0):.2f}",
+                    f"- **Discovery Flags**: {', '.join(quality.get('risk_flags', []) or []) or 'None'}",
                     f"- **Core Idea**: {description[:300]}",
                     "",
                 ]
@@ -191,6 +195,9 @@ class DuckDBResearchStore(ResearchStore):
                     f"- **Verdict**: {verdict}",
                     f"- **Reason**: {reason}",
                     f"- **Suitability**: {self._fmt(report, 'suitability_score')}",
+                    f"- **Admission**: {self._fmt(report, 'admission_score')}",
+                    f"- **Signal Quality**: {self._fmt(report, 'signal_quality_score')}",
+                    f"- **Research Confidence**: {self._fmt(report, 'research_confidence_score')}",
                     f"- **Complexity**: {self._fmt(report, 'complexity_score')}",
                     f"- **economic_rationale**: {self._fmt(report, 'economic_rationale_score')}",
                     f"- **factor_uniqueness**: {self._fmt(report, 'factor_uniqueness_score')}",
@@ -199,6 +206,8 @@ class DuckDBResearchStore(ResearchStore):
                     f"- **overfit_risk**: {self._fmt(report, 'overfit_risk_score')}",
                     f"- **cost_capacity**: {self._fmt(report, 'cost_capacity_score')}",
                     f"- **regime_robustness**: {self._fmt(report, 'regime_robustness_score')}",
+                    f"- **Validation Tests**: {self._list_field(report, 'validation_tests')}",
+                    f"- **Required Data Fields**: {self._list_field(report, 'required_data_fields')}",
                     f"- **Risk Flags**: {self._risk_flags(report)}",
                     f"- **Summary**: {getattr(report, 'summary', '')}",
                     "",
@@ -212,6 +221,11 @@ class DuckDBResearchStore(ResearchStore):
         self._write_json("last_result.json", data)
         run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._write_json(Path("runs") / f"{run_name}_result.json", data)
+        report = build_full_research_report_html(data, self.list_hypotheses(), generated_at=data["saved_at"])
+        self._write_text("full_research_report.html", report)
+        self._write_text(Path("runs") / f"{run_name}_full_research_report.html", report)
+        index = build_full_research_report_index(data, "full_research_report.html", generated_at=data["saved_at"])
+        self._write_text("full_research_report.md", index)
 
     def _get_candidate_row(self, strategy_id: str) -> Optional[Dict[str, Any]]:
         with duckdb.connect(self._db_path) as conn:
@@ -344,6 +358,11 @@ class DuckDBResearchStore(ResearchStore):
     def _risk_flags(report: Any) -> str:
         flags = getattr(report, "risk_flags", [])
         return ", ".join(flags) if flags else "None"
+
+    @staticmethod
+    def _list_field(report: Any, field: str) -> str:
+        values = getattr(report, field, [])
+        return ", ".join(values) if values else "None"
 
     @staticmethod
     def _json_value(value: Any) -> Dict[str, Any]:

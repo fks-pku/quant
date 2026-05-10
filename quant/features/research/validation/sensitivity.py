@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from quant.features.research.validation.cross_sectional import compute_cross_sectional_ic, detect_market
-from quant.features.research.validation.signal_library import compute_signal
+from quant.features.research.validation.signal_library import adjusted_price_matrix, compute_signal
 
 
 @dataclass(frozen=True)
@@ -129,7 +129,7 @@ def _compute_ic(spec: Any, data: pd.DataFrame, params: Dict[str, Any], config: D
         if signals is None:
             return 0.0
         signals = signals.shift(execution_lag)
-        prices = frame.pivot_table(index="date", columns="symbol", values="close", aggfunc="last").sort_index()
+        prices = adjusted_price_matrix(frame, "close")
         forward_returns = prices.pct_change(horizon).shift(-horizon - execution_lag)
         daily_ic = compute_cross_sectional_ic(signals, forward_returns, min_stocks=min_stocks)
         valid = daily_ic.dropna()

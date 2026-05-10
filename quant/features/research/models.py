@@ -10,6 +10,39 @@ class RawStrategy:
     source_url: str
     authors: Optional[str] = None
     published_date: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DiscoveryQualityReport:
+    score: float
+    source_quality_score: float
+    recency_score: float
+    provenance_score: float
+    detail_score: float
+    implementability_score: float
+    daily_data_score: float
+    novelty_score: float
+    source_type: str
+    matched_terms: List[str] = field(default_factory=list)
+    risk_flags: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "score": self.score,
+            "source_quality_score": self.source_quality_score,
+            "recency_score": self.recency_score,
+            "provenance_score": self.provenance_score,
+            "detail_score": self.detail_score,
+            "implementability_score": self.implementability_score,
+            "daily_data_score": self.daily_data_score,
+            "novelty_score": self.novelty_score,
+            "source_type": self.source_type,
+            "matched_terms": list(self.matched_terms),
+            "risk_flags": list(self.risk_flags),
+            "warnings": list(self.warnings),
+        }
 
 
 @dataclass
@@ -29,6 +62,15 @@ class EvaluationReport:
     overfit_risk_score: float = 0.0
     cost_capacity_score: float = 0.0
     regime_robustness_score: float = 0.0
+    admission_score: float = 0.0
+    signal_quality_score: float = 0.0
+    research_confidence_score: float = 0.0
+    data_risk_score: float = 0.0
+    bias_risk_score: float = 0.0
+    required_data_fields: List[str] = field(default_factory=list)
+    validation_tests: List[str] = field(default_factory=list)
+    evidence_notes: List[str] = field(default_factory=list)
+    score_breakdown: Dict[str, float] = field(default_factory=dict)
     risk_flags: List[str] = field(default_factory=list)
     rejection_reason: str = ""
 
@@ -77,6 +119,7 @@ class ResearchConfig:
     validation_enabled: bool = True
     validation_min_obs: int = 252
     validation_config: dict = field(default_factory=dict)
+    evaluation_config: dict = field(default_factory=dict)
     pit_enabled: bool = False
     pit_universe_snapshot_dir: str = "quant/infrastructure/var/research/universe_snapshots"
     scout_config: dict = field(default_factory=dict)

@@ -61,8 +61,12 @@ class DuckDBResearchMarketData(ResearchMarketData):
                     continue
                 placeholders = ",".join(["?"] * len(table_symbols))
                 date_select, start_filter, end_filter = self._date_expressions(conn, table)
+                price_select = self._price_select_columns(conn, table)
+                if not price_select:
+                    logger.warning(f"Market data table has no price columns: {table}")
+                    continue
                 query = f"""
-                    SELECT symbol, {date_select}, open, high, low, close, volume
+                    SELECT symbol, {date_select}, {price_select}
                     FROM {table}
                     WHERE symbol IN ({placeholders})
                       AND {start_filter}
@@ -129,3 +133,16 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 "date <= CAST(? AS DATE)",
             )
         raise ValueError(f"{table} has neither timestamp nor date column")
+
+    def _price_select_columns(self, conn: Any, table: str) -> str:
+        columns = {str(row[1]).lower(): str(row[1]) for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+        selects = []
+        for column in ("open", "high", "low", "close", "volume"):
+            if column in columns:
+                selects.append(columns[column])
+            elif column == "close" and "adj_close" in columns:
+                selects.append(f"{columns['adj_close']} AS close")
+        for column in ("adj_open", "adj_high", "adj_low", "adj_close", "adj_factor"):
+            if column in columns:
+                selects.append(columns[column])
+        return ", ".join(selects)

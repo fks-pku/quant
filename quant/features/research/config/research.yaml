@@ -4,6 +4,8 @@ research:
   sources:
     - arxiv
     - ssrn
+    - nber
+    - blog
   max_results_per_source: 10
   evaluation_threshold: 6.0
   backtest_sharpe_threshold: 0.5
@@ -23,6 +25,43 @@ research:
     sensitivity_max_degradation_pct: 30
   pit_enabled: false
   pit_universe_snapshot_dir: quant/infrastructure/var/research/universe_snapshots
+  scout_config:
+    rank_results: true
+    min_discovery_score: 5.0
+    required_match_terms: [daily_ohlcv]
+    required_any_match_terms: [liquid_equity, factor, momentum, mean_reversion, breakout, regime, rank_ic, cost_aware]
+    blocked_risk_flags: [high_frequency_not_daily, intraday_dependency, crypto_capacity_risk, non_equity_market, non_price_signal, alternative_data_required]
+    source_quality:
+      arxiv: 1.75
+      ssrn: 1.65
+      nber: 1.55
+      blog: 0.95
+    query_plan:
+      arxiv:
+        - query: "daily trading strategy"
+        - query: "cross sectional equity factor alpha"
+        - query: "mean reversion daily equity"
+        - query: "momentum anomaly transaction costs"
+      ssrn:
+        - query: "daily trading strategy equity factor"
+        - query: "cross sectional momentum anomaly"
+        - query: "mean reversion equity strategy"
+      nber:
+        - query: "asset pricing anomaly"
+        - query: "factor momentum equity"
+      blog:
+        - query: "daily momentum factor"
+        - query: "mean reversion trading"
+  evaluation_config:
+    min_admission_score: 6.0
+    source_quality:
+      arxiv: 1.75
+      ssrn: 1.65
+      nber: 1.55
+      blog: 0.95
+
+evaluation:
+  min_admission_score: 6.0
 
 validation:
   sensitivity_enabled: false

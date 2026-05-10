@@ -21,15 +21,19 @@ class NBERSource(ResearchSource):
             resp.raise_for_status()
             ct = resp.headers.get("content-type", "")
             data = resp.json() if "json" in ct else []
-            return self._parse_response(data, max_results)
+            return self._parse_response(data, max_results, query)
         except Exception as e:
             logger.warning(f"NBER search failed: {e}")
             return []
 
-    def _parse_response(self, data, max_results) -> List[Dict[str, Any]]:
+    def _parse_response(self, data, max_results, query=None) -> List[Dict[str, Any]]:
         results = []
+        query_text = self._query_text(query)
         if isinstance(data, list):
-            for item in data[:max_results]:
+            for item in data:
+                haystack = f"{item.get('title', '')} {item.get('abstract', '')}".lower()
+                if query_text and not all(token in haystack for token in query_text.split()):
+                    continue
                 results.append({
                     "title": item.get("title", ""),
                     "description": item.get("abstract", ""),
@@ -38,4 +42,16 @@ class NBERSource(ResearchSource):
                     "authors": item.get("authors", ""),
                     "published_date": item.get("release_date", ""),
                 })
+                if len(results) >= max_results:
+                    break
         return results
+
+    def _query_text(self, query) -> str:
+        if not isinstance(query, dict):
+            return ""
+        for key in ("query", "q", "keywords", "text"):
+            value = query.get(key)
+            if value:
+                text = " ".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
+                return " ".join(text.lower().split())
+        return ""
