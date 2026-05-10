@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
@@ -85,21 +85,62 @@ def _round_trip_trades(trades: List[Trade]) -> List[Trade]:
     return [t for t in trades if t.side == "SELL"]
 
 
+def _round_trip_pnls(trades: List[Trade]) -> List[float]:
+    entry_commission_lots: Dict[Tuple[Optional[str], str], List[List[float]]] = {}
+    pnls: List[float] = []
+
+    ordered = sorted(
+        trades,
+        key=lambda t: (
+            t.fill_date or t.exit_time or t.entry_time,
+            0 if t.side == "BUY" else 1,
+        ),
+    )
+    for trade in ordered:
+        key = (trade.strategy_name, trade.symbol)
+        if trade.side == "BUY":
+            if trade.quantity > 0 and trade.commission > 0:
+                entry_commission_lots.setdefault(key, []).append([
+                    float(trade.quantity),
+                    float(trade.commission) / float(trade.quantity),
+                ])
+            continue
+        if trade.side != "SELL":
+            continue
+
+        remaining = float(trade.quantity)
+        entry_commission = 0.0
+        lots = entry_commission_lots.get(key, [])
+        while remaining > 1e-12 and lots:
+            lot_qty, commission_per_share = lots[0]
+            take = min(lot_qty, remaining)
+            entry_commission += take * commission_per_share
+            lot_qty -= take
+            remaining -= take
+            if lot_qty <= 1e-12:
+                lots.pop(0)
+            else:
+                lots[0][0] = lot_qty
+        pnls.append(float(trade.pnl) - entry_commission)
+
+    return pnls
+
+
 def calculate_win_rate(trades: List[Trade]) -> float:
     """Percentage of profitable round-trip trades."""
-    rt = _round_trip_trades(trades)
-    if not rt:
+    pnls = _round_trip_pnls(trades)
+    if not pnls:
         return 0.0
-    winning_trades = sum(1 for t in rt if t.pnl > 0)
-    return winning_trades / len(rt)
+    winning_trades = sum(1 for pnl in pnls if pnl > 0)
+    return winning_trades / len(pnls)
 
 
 def _gross_profit_loss(trades: List[Trade]) -> Tuple[float, float]:
-    rt = _round_trip_trades(trades)
-    if not rt:
+    pnls = _round_trip_pnls(trades)
+    if not pnls:
         return 0.0, 0.0
-    gross_profit = sum(t.pnl for t in rt if t.pnl > 0)
-    gross_loss = abs(sum(t.pnl for t in rt if t.pnl < 0))
+    gross_profit = sum(pnl for pnl in pnls if pnl > 0)
+    gross_loss = abs(sum(pnl for pnl in pnls if pnl < 0))
     return gross_profit, gross_loss
 
 
@@ -168,10 +209,10 @@ def calculate_tail_ratio(returns: pd.Series) -> float:
 
 def calculate_recovery_factor(trades: List[Trade], max_dd: float) -> float:
     """Total profit / max drawdown (round-trip trades only)."""
-    rt = _round_trip_trades(trades)
-    if not rt:
+    pnls = _round_trip_pnls(trades)
+    if not pnls:
         return 0.0
-    total_profit = sum(t.pnl for t in rt)
+    total_profit = sum(pnls)
     if max_dd == 0:
         return 0.0
     return total_profit / abs(max_dd)
@@ -179,9 +220,9 @@ def calculate_recovery_factor(trades: List[Trade], max_dd: float) -> float:
 
 def calculate_payoff_ratio(trades: List[Trade]) -> float:
     """Average win / average loss (round-trip only)."""
-    rt = _round_trip_trades(trades)
-    winning_trades = [t.pnl for t in rt if t.pnl > 0]
-    losing_trades = [t.pnl for t in rt if t.pnl < 0]
+    pnls = _round_trip_pnls(trades)
+    winning_trades = [pnl for pnl in pnls if pnl > 0]
+    losing_trades = [pnl for pnl in pnls if pnl < 0]
 
     if not winning_trades or not losing_trades:
         return 0.0
@@ -196,15 +237,15 @@ def calculate_payoff_ratio(trades: List[Trade]) -> float:
 
 def calculate_expectancy(trades: List[Trade]) -> float:
     """Expected value per round-trip trade = win_rate * avg_win - loss_rate * avg_loss."""
-    rt = _round_trip_trades(trades)
-    if not rt:
+    pnls = _round_trip_pnls(trades)
+    if not pnls:
         return 0.0
 
-    winning_trades = [t.pnl for t in rt if t.pnl > 0]
-    losing_trades = [t.pnl for t in rt if t.pnl < 0]
+    winning_trades = [pnl for pnl in pnls if pnl > 0]
+    losing_trades = [pnl for pnl in pnls if pnl < 0]
 
-    win_rate = len(winning_trades) / len(rt)
-    loss_rate = len(losing_trades) / len(rt)
+    win_rate = len(winning_trades) / len(pnls)
+    loss_rate = len(losing_trades) / len(pnls)
 
     avg_win = sum(winning_trades) / len(winning_trades) if winning_trades else 0
     avg_loss = abs(sum(losing_trades) / len(losing_trades)) if losing_trades else 0
@@ -433,8 +474,9 @@ def calculate_performance_metrics(
     expectancy = calculate_expectancy(trades)
     avg_duration = calculate_avg_trade_duration(trades)
 
-    winning_trades = len([t for t in trades if t.pnl > 0 and t.side == "SELL"])
-    losing_trades = len([t for t in trades if t.pnl <= 0 and t.side == "SELL"])
+    round_trip_pnls = _round_trip_pnls(trades)
+    winning_trades = len([pnl for pnl in round_trip_pnls if pnl > 0])
+    losing_trades = len([pnl for pnl in round_trip_pnls if pnl <= 0])
 
     rolling_sharpe = calculate_rolling_sharpe(returns)
     ulcer_idx = calculate_ulcer_index(equity_curve)

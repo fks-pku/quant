@@ -65,12 +65,16 @@ def _signal_strategy(name, symbol, buy_on, sell_on, qty=100):
     def on_stop(self, ctx):
         pass
 
+    def get_position(self, symbol):
+        return self._positions.get(symbol, 0)
+
     S.on_start = on_start
     S.on_before_trading = on_before_trading
     S.on_data = on_data
     S.on_after_trading = on_after_trading
     S.on_fill = on_fill
     S.on_stop = on_stop
+    S.get_position = get_position
     return S()
 
 
@@ -2106,6 +2110,113 @@ class TestCase33MultiStrategyDefaultIsolation:
         positions = [p for p in case33_result.open_positions if p["symbol"] == "AAPL"]
         assert len(positions) == 1
         assert positions[0]["strategy"] == "IsoA"
+
+
+# ============================================================================
+# CASE-34: Multi-strategy stock dividend position sync
+# ============================================================================
+
+CASE34_BARS = [
+    (datetime(2024, 6, 3), 100.00, 100.00, 5_000_000),
+    (datetime(2024, 6, 4), 101.00, 101.00, 5_000_000),
+    (datetime(2024, 6, 5), 102.00, 102.00, 5_000_000),
+    (datetime(2024, 6, 6), 103.00, 103.00, 5_000_000),
+]
+
+CASE34_CONFIG = {
+    "backtest": {"slippage_bps": 0, "force_close_on_stop": False},
+    "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+@pytest.fixture
+def case34_result():
+    data = _make_bars("600519", CASE34_BARS)
+    dividends = pd.DataFrame({
+        "symbol": ["600519"],
+        "ex_date": [datetime(2024, 6, 5)],
+        "cash_dividend": [0.0],
+        "stock_dividend": [0.5],
+    })
+    bt = make_backtester(CASE34_CONFIG)
+    provider = DataFrameProvider(data, dividends=dividends)
+    strat_a = _signal_strategy("StockDivA", "600519", buy_on={0}, sell_on=set(), qty=100)
+    strat_b = _signal_strategy("StockDivB", "600519", buy_on={0}, sell_on=set(), qty=100)
+    result = bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat_a, strat_b], initial_cash=1_000_000,
+        data_provider=provider, symbols=["600519"],
+    )
+    result._strategy_positions = {
+        "StockDivA": strat_a._positions.copy(),
+        "StockDivB": strat_b._positions.copy(),
+    }
+    return result
+
+
+class TestCase34MultiStrategyStockDividendSync:
+    def test_c34_01_each_strategy_gets_one_stock_dividend_fill(self, case34_result):
+        assert case34_result._strategy_positions["StockDivA"]["600519"] == pytest.approx(150)
+        assert case34_result._strategy_positions["StockDivB"]["600519"] == pytest.approx(150)
+
+    def test_c34_02_strategy_positions_match_sub_portfolios(self, case34_result):
+        open_by_strategy = {
+            p["strategy"]: p["quantity"]
+            for p in case34_result.open_positions
+            if p["symbol"] == "600519"
+        }
+        assert open_by_strategy == {
+            "StockDivA": pytest.approx(150),
+            "StockDivB": pytest.approx(150),
+        }
+
+
+# ============================================================================
+# CASE-35: Round-trip analytics include entry commission
+# ============================================================================
+
+CASE35_BARS = [
+    (datetime(2024, 6, 3), 100.00, 100.00, 5_000_000),
+    (datetime(2024, 6, 4), 100.00, 100.00, 5_000_000),
+    (datetime(2024, 6, 5), 103.00, 103.00, 5_000_000),
+    (datetime(2024, 6, 6), 103.00, 103.00, 5_000_000),
+]
+
+CASE35_CONFIG = {
+    "backtest": {"slippage_bps": 0},
+    "execution": {"commission": {"US": {"type": "per_share", "per_share": 2.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+@pytest.fixture
+def case35_result():
+    data = _make_bars("AAPL", CASE35_BARS)
+    bt = make_backtester(CASE35_CONFIG)
+    provider = DataFrameProvider(data)
+    strat = _signal_strategy("EntryCostStats", "AAPL", buy_on={0}, sell_on={1}, qty=100)
+    return bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat], initial_cash=100_000,
+        data_provider=provider, symbols=["AAPL"],
+    )
+
+
+class TestCase35RoundTripEntryCommission:
+    def test_c35_01_trade_cash_flows_are_net_negative(self, case35_result):
+        sell = [t for t in case35_result.trades if t.side == "SELL"][0]
+        assert sell.pnl > 0
+        assert sum(t.pnl for t in case35_result.trades) < 0
+
+    def test_c35_02_win_rate_uses_full_round_trip_cost(self, case35_result):
+        assert case35_result.win_rate == pytest.approx(0.0)
+
+    def test_c35_03_profit_factor_uses_full_round_trip_cost(self, case35_result):
+        assert case35_result.profit_factor == pytest.approx(0.0)
+
+    def test_c35_04_expectancy_uses_full_round_trip_cost(self, case35_result):
+        assert case35_result.metrics.expectancy == pytest.approx(sum(t.pnl for t in case35_result.trades))
 
 
 # ============================================================================

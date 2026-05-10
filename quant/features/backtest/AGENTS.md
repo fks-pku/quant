@@ -129,6 +129,8 @@ while current_date ≤ end:
 - `on_stop` 订单不是普通 T+1 deferred order；默认 `backtest.force_close_on_stop=True` 时按最后有效 close 做强制清算，并写入 `forced_closeout_orders/forced_closeout_trades`，设为 `False` 时订单过期丢弃
 - `DataFrameProvider.get_bars()` 基于 `_bar_map` 去重索引返回数据，与 `get_bar_for_date()` 一致
 - `process_dividends()` 记录 `total_cash_dividends/total_dividend_tax/total_net_dividends`，并返回送股记录列表；engine 在 Step ③ 后分发 synthetic fill 给策略以保持 `strategy._positions` 同步
+- SubPortfolio 模式下送股 synthetic fill 必须只分发给对应策略，不能广播给所有持有同一 symbol 的策略
+- 交易级统计的 round-trip PnL 必须包含按 FIFO 分摊的 BUY 佣金；SELL trade 的 `pnl` 只覆盖卖出侧佣金
 - `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询
 - Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）
 - `risk_price_deviation_limit` 从 config 读取（键名 `risk_price_deviation_limit`），而非硬编码 0.15

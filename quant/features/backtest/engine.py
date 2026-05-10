@@ -160,8 +160,10 @@ class Backtester:
             # --- Step 3: Process dividends ---
             all_stock_divs: List[Dict[str, Any]] = []
             if use_subs:
-                for pf in portfolio_map.values():
+                for sname, pf in portfolio_map.items():
                     divs = process_dividends(data_provider, pf, symbols, current_date, last_prices, entry_times, diag)
+                    for div_info in divs:
+                        div_info['strategy'] = sname
                     all_stock_divs.extend(divs)
             else:
                 divs = process_dividends(data_provider, primary_portfolio, symbols, current_date, last_prices, entry_times, diag)
@@ -169,10 +171,13 @@ class Backtester:
 
             for div_info in all_stock_divs:
                 sym = div_info['symbol']
+                target_sname = div_info.get('strategy')
                 for strategy in strategies:
+                    if target_sname is not None and _strategy_name(strategy) != target_sname:
+                        continue
                     current_pos = strategy.get_position(sym)
                     if current_pos > 0:
-                        additional = current_pos * div_info['ratio']
+                        additional = div_info.get('additional_shares', current_pos * div_info['ratio'])
                         strategy.on_fill(strategy.context, SimpleNamespace(
                             symbol=sym, quantity=additional, side="BUY",
                             price=0.0, fill_price=0.0, pnl=0.0, commission=0.0,
