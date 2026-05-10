@@ -29,6 +29,8 @@
 - I13 CN 涨跌停按买卖方向约束：涨停拒绝 BUY、跌停拒绝 SELL；反方向不因涨跌停规则拒绝
 - I14 停牌 bar 不更新 `last_prices`/`prev_bars`；无成交、无除权时持仓估值沿用最后有效价
 - I15 `on_stop` 清仓是显式 forced close-out 语义：默认按最后有效 close 清算并记录 diagnostics；禁用时订单必须过期丢弃
+- I16 SubPortfolio 模式下，送股 synthetic fill 必须只分发给对应策略；策略内部仓位必须与对应 sub-portfolio 持仓一致
+- I17 交易级 round-trip 指标必须包含按 FIFO 分摊的 BUY 佣金，不能只用 SELL trade 的 `pnl` 判断输赢
 
 ### 市场参数
 
@@ -1254,6 +1256,127 @@ C28-03  final_nav == initial_cash
 
 ---
 
+## CASE-34: 多策略送股同步
+
+验证两个策略在 SubPortfolio 模式下各自持有同一 CN 标的时，送股 synthetic fill 只回调对应策略，不能广播给所有持有同一 symbol 的策略。
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 0, "force_close_on_stop": False},
+    "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+### 行情
+
+| Date       | Day | Open   | Close  | Volume | Event            |
+| ---------- | --- | ------ | ------ | ------ | ---------------- |
+| 2024-06-03 | D0  | 100.00 | 100.00 | 5M     | signal BUY       |
+| 2024-06-04 | D1  | 101.00 | 101.00 | 5M     | exec BUY         |
+| 2024-06-05 | D2  | 102.00 | 102.00 | 5M     | ex-div stock 0.5 |
+| 2024-06-06 | D3  | 103.00 | 103.00 | 5M     | hold             |
+
+### 策略
+
+```text
+StockDivA: D0 BUY 100 600519 -> D1
+StockDivB: D0 BUY 100 600519 -> D1
+D2 stock_dividend=0.5
+```
+
+### 推导
+
+```text
+D1:
+  StockDivA sub-portfolio: qty=100
+  StockDivB sub-portfolio: qty=100
+
+D2 Step3:
+  对 StockDivA 的 sub-portfolio process_dividends -> additional_shares=50, strategy=StockDivA
+  对 StockDivB 的 sub-portfolio process_dividends -> additional_shares=50, strategy=StockDivB
+  synthetic fill 只分发给对应 strategy
+
+正确结果:
+  StockDivA._positions["600519"] = 150
+  StockDivB._positions["600519"] = 150
+  open_positions: StockDivA qty=150, StockDivB qty=150
+
+错误广播会导致:
+  每个策略收到两次 50 股 synthetic fill -> 100 + 50 + 75 = 225
+```
+
+### 断言
+
+```text
+C34-01  每个策略的内部 position == 150
+C34-02  每个 open_position 的 quantity == 对应策略内部 position
+C34-03  synthetic fill 不跨策略广播
+```
+
+---
+
+## CASE-35: Round-trip 交易统计包含买入佣金
+
+验证交易级指标用完整 round-trip PnL 计算。BUY 佣金记录在 BUY trade 的 `pnl=-commission`；SELL trade 的 `pnl` 只扣卖出侧佣金，因此 `win_rate/profit_factor/expectancy/payoff` 必须把对应 BUY 佣金按 FIFO 分摊后再判断输赢。
+
+### 配置
+
+```python
+{
+    "backtest": {"slippage_bps": 0},
+    "execution": {"commission": {"US": {"type": "per_share", "per_share": 2.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+```
+
+### 行情
+
+| Date       | Day | Open   | Close  | Volume |
+| ---------- | --- | ------ | ------ | ------ |
+| 2024-06-03 | D0  | 100.00 | 100.00 | 5M     |
+| 2024-06-04 | D1  | 100.00 | 100.00 | 5M     |
+| 2024-06-05 | D2  | 103.00 | 103.00 | 5M     |
+| 2024-06-06 | D3  | 103.00 | 103.00 | 5M     |
+
+### 信号
+
+```text
+D0 after close -> BUY  100 AAPL -> D1 open=100
+D1 after close -> SELL 100 AAPL -> D2 open=103
+```
+
+### 推导
+
+```text
+D1 BUY:
+  buy_commission = 100 * 2.0 = 200
+  buy_trade.pnl = -200
+
+D2 SELL:
+  gross = (103 - 100) * 100 = 300
+  sell_commission = 100 * 2.0 + SEC/FINRA
+  sell_trade.pnl > 0
+
+完整 round-trip:
+  round_trip_pnl = sell_trade.pnl - 分摊的 buy_commission
+  round_trip_pnl < 0
+```
+
+### 断言
+
+```text
+C35-01  sell_trade.pnl > 0 但 sum(trade.pnl) < 0
+C35-02  win_rate == 0.0
+C35-03  profit_factor == 0.0
+C35-04  expectancy == sum(trade.pnl)
+C35-05  winning_trades/losing_trades 使用完整 round-trip PnL 分类
+```
+
+---
+
 ## Regression B1: 结束日 deferred order 过期
 
 验证最后一个真实交易日 after-close 产生的订单没有下一交易日时不会用 synthetic bar 成交。
@@ -1299,4 +1422,6 @@ C28-03  final_nav == initial_cash
 |31|Mixed|拒绝混合币种|
 |32|US|停牌 bar 不刷新有效价格|
 |33|US|多策略无 allocation 时默认隔离|
+|34|CN|多策略同标的送股 synthetic fill 只同步对应策略|
+|35|US|round-trip 交易统计包含买入佣金|
 |B1|US|结束日 deferred order 过期|
