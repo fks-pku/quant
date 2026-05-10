@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, List
+from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
 from quant.domain.ports.research_source import ResearchSource
@@ -17,7 +18,8 @@ class ArxivSource(ResearchSource):
         return "arxiv"
 
     def search(self, query: Dict[str, Any], max_results: int = 10) -> List[Dict[str, Any]]:
-        url = f"{self._base_url}?search_query=cat:{self._category}&start=0&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"
+        search_query = self._search_query(query)
+        url = f"{self._base_url}?search_query={quote(search_query)}&start=0&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"
         try:
             import requests
             resp = requests.get(url, timeout=30)
@@ -48,3 +50,15 @@ class ArxivSource(ResearchSource):
                     "published_date": published,
                 })
         return results
+
+    def _search_query(self, query: Dict[str, Any]) -> str:
+        text = ""
+        if isinstance(query, dict):
+            for key in ("query", "q", "keywords", "text"):
+                value = query.get(key)
+                if value:
+                    text = " ".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
+                    break
+        if not text:
+            return f"cat:{self._category}"
+        return f'all:"{text}" AND cat:{self._category}'

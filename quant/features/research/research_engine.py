@@ -11,6 +11,7 @@ from quant.features.research.evaluator import StrategyEvaluator
 from quant.features.research.integrator import StrategyIntegrator
 from quant.features.research.pool import CandidatePool
 from quant.features.research.tracking.run_recorder import RunRecorder
+from quant.features.research.discovery.quality import discovery_quality, discovery_score
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,8 @@ class ResearchEngine:
             "validation_enabled": self.config.validation_enabled,
             "validation_min_obs": self.config.validation_min_obs,
             "validation_config": dict(self.config.validation_config or {}),
+            "evaluation_config": dict(self.config.evaluation_config or {}),
+            "scout_config": dict(self.config.scout_config or {}),
             "rigor_enabled": self.config.rigor_enabled,
             "rigor_config": dict(self.config.rigor_config or {}),
         }
@@ -137,6 +140,7 @@ class ResearchEngine:
             phase="scout", title=f"Scanned {result.discovered} strategies",
             source="", source_url="", verdict="info",
             reason=f"Sources: {sources or self.config.sources}",
+            scores=self._discovery_summary(raw_strategies),
         ))
 
         integrated_ids = []
@@ -145,6 +149,7 @@ class ResearchEngine:
             try:
                 strategy_hash = StrategyScout.hash_strategy(raw)
                 validation_report = None
+                strategy_spec = None
                 if self.research_store.has_seen(strategy_hash):
                     result.log.append(ResearchLogEntry(
                         phase="scout", title=raw.title, source=raw.source,
@@ -158,20 +163,28 @@ class ResearchEngine:
                 report = self.evaluator.evaluate(raw)
                 result.evaluated += 1
 
-                passes_filter = report.suitability_score >= self.config.evaluation_threshold
+                evaluation_score = self._evaluation_score(report)
+                passes_filter = evaluation_score >= self.config.evaluation_threshold
                 if report.data_requirement == "high-frequency":
                     passes_filter = passes_filter and report.daily_adaptable
 
                 if not passes_filter:
-                    reason_parts = [f"suitability={report.suitability_score:.1f} < {self.config.evaluation_threshold}"]
+                    reason_parts = [
+                        f"admission={evaluation_score:.1f} < {self.config.evaluation_threshold}",
+                        f"suitability={report.suitability_score:.1f}",
+                    ]
                     if report.data_requirement == "high-frequency" and not report.daily_adaptable:
                         reason_parts.append("high-frequency, not daily-adaptable")
+                    if getattr(report, "rejection_reason", ""):
+                        reason_parts.append(report.rejection_reason)
                     result.log.append(ResearchLogEntry(
                         phase="evaluate", title=raw.title, source=raw.source,
                         source_url=raw.source_url, verdict="fail",
                         reason="; ".join(reason_parts),
                         scores={
                             "suitability": report.suitability_score,
+                            "admission": evaluation_score,
+                            "signal_quality": getattr(report, "signal_quality_score", 0.0),
                             "complexity": report.complexity_score,
                             "edge": report.estimated_edge,
                         },
@@ -190,6 +203,7 @@ class ResearchEngine:
 
                 if self.config.validation_enabled and self._spec_builder is not None:
                     spec = self._spec_builder.build(raw, report)
+                    strategy_spec = spec
                     result.specified += 1
                     if spec.status != "ready":
                         result.needs_manual_spec += 1
@@ -208,7 +222,7 @@ class ResearchEngine:
                     elif self._validator is not None:
                         vreport = self._validator.validate(spec)
                         result.validated += 1
-                        if vreport.status == "error" or not vreport.fdr_significant or abs(vreport.rank_ic) < 0.02:
+                        if vreport.status == "error" or not vreport.fdr_significant or vreport.rank_ic < 0.02:
                             result.log.append(ResearchLogEntry(
                                 phase="validation", title=raw.title, source=raw.source,
                                 source_url=raw.source_url, verdict="fail",
@@ -245,7 +259,7 @@ class ResearchEngine:
                                 validation_report=vreport,
                             )
 
-                strategy_id = self.integrator.integrate(raw, report)
+                strategy_id = self.integrator.integrate(raw, report, spec=strategy_spec)
                 if strategy_id:
                     result.integrated += 1
                     integrated_ids.append(strategy_id)
@@ -255,6 +269,8 @@ class ResearchEngine:
                         reason=f"Integrated as {strategy_id}",
                         scores={
                             "suitability": report.suitability_score,
+                            "admission": self._evaluation_score(report),
+                            "signal_quality": getattr(report, "signal_quality_score", 0.0),
                             "complexity": report.complexity_score,
                             "edge": report.estimated_edge,
                             "type": report.strategy_type,
@@ -269,7 +285,7 @@ class ResearchEngine:
                         strategy_id=strategy_id,
                         report=report,
                     )
-                    self._write_promotion_dossier(strategy_id, raw, report, validation_report, result.run_id)
+                    self._write_promotion_dossier(strategy_id, raw, report, validation_report, result.run_id, strategy_spec)
                 else:
                     result.errors.append(f"Integration failed for '{raw.title}'")
                     result.log.append(ResearchLogEntry(
@@ -349,6 +365,8 @@ class ResearchEngine:
                         "source_url": raw.source_url,
                         "authors": raw.authors or "",
                         "published_date": raw.published_date or "",
+                        "metadata": dict(raw.metadata or {}),
+                        "discovery_quality": discovery_quality(raw),
                     },
                 }
             )
@@ -370,10 +388,18 @@ class ResearchEngine:
                 "overfit_risk_score",
                 "cost_capacity_score",
                 "regime_robustness_score",
+                "admission_score",
+                "signal_quality_score",
+                "research_confidence_score",
+                "data_risk_score",
+                "bias_risk_score",
             ):
                 metrics[field] = getattr(report, field, 0.0)
             metrics["strategy_type"] = getattr(report, "strategy_type", "")
             metrics["risk_flags"] = list(getattr(report, "risk_flags", []) or [])
+            metrics["required_data_fields"] = list(getattr(report, "required_data_fields", []) or [])
+            metrics["validation_tests"] = list(getattr(report, "validation_tests", []) or [])
+            metrics["score_breakdown"] = dict(getattr(report, "score_breakdown", {}) or {})
         if validation_report is not None:
             for field in (
                 "rank_ic",
@@ -397,6 +423,7 @@ class ResearchEngine:
         report: Any,
         validation_report: Any = None,
         run_id: Optional[str] = None,
+        strategy_spec: Any = None,
     ) -> None:
         if self._artifact_store is None or not hasattr(self._artifact_store, "save_json"):
             return
@@ -405,7 +432,7 @@ class ResearchEngine:
             meta = self._artifact_store.save_json(
                 run_id or "research_pipeline",
                 name,
-                self._promotion_dossier(strategy_id, raw, report, validation_report),
+                self._promotion_dossier(strategy_id, raw, report, validation_report, strategy_spec),
             )
             self._attach_promotion_dossier_artifact(strategy_id, meta)
         except Exception as e:
@@ -417,6 +444,7 @@ class ResearchEngine:
         raw: RawStrategy,
         report: Any,
         validation_report: Any = None,
+        strategy_spec: Any = None,
     ) -> Dict[str, Any]:
         return {
             "strategy_id": strategy_id,
@@ -434,7 +462,29 @@ class ResearchEngine:
             "evaluation": self._hypothesis_metrics(report),
             "validation": self._hypothesis_metrics(None, validation_report) if validation_report is not None else {},
             "risk_flags": list(getattr(report, "risk_flags", []) or []),
+            "discovery_quality": discovery_quality(raw),
+            "required_data_fields": list(getattr(report, "required_data_fields", []) or []),
+            "validation_tests": list(getattr(report, "validation_tests", []) or []),
+            "strategy_spec": self._strategy_spec_dict(strategy_spec),
+            "score_breakdown": dict(getattr(report, "score_breakdown", {}) or {}),
             "summary": getattr(report, "summary", ""),
+        }
+
+    @staticmethod
+    def _strategy_spec_dict(strategy_spec: Any = None) -> Dict[str, Any]:
+        if strategy_spec is None:
+            return {}
+        return {
+            "strategy_id": getattr(strategy_spec, "strategy_id", ""),
+            "strategy_type": getattr(strategy_spec, "strategy_type", ""),
+            "signal_formula_key": getattr(strategy_spec, "signal_formula_key", ""),
+            "universe": list(getattr(strategy_spec, "universe", []) or []),
+            "horizon_days": getattr(strategy_spec, "horizon_days", 0),
+            "lookback_days": getattr(strategy_spec, "lookback_days", 0),
+            "execution_lag_days": getattr(strategy_spec, "execution_lag_days", 0),
+            "required_fields": list(getattr(strategy_spec, "required_fields", []) or []),
+            "status": getattr(strategy_spec, "status", ""),
+            "reason": getattr(strategy_spec, "reason", ""),
         }
 
     def _attach_promotion_dossier_artifact(self, strategy_id: str, meta: Dict[str, Any]) -> None:
@@ -473,9 +523,13 @@ class ResearchEngine:
             "stage": item.get("stage", ""),
             "decision_reason": item.get("decision_reason", ""),
             "suitability_score": float(metrics.get("suitability_score", 0.0) or 0.0),
+            "admission_score": float(metrics.get("admission_score", 0.0) or 0.0),
+            "signal_quality_score": float(metrics.get("signal_quality_score", 0.0) or 0.0),
+            "research_confidence_score": float(metrics.get("research_confidence_score", 0.0) or 0.0),
             "estimated_edge": float(metrics.get("estimated_edge", 0.0) or 0.0),
             "rank_ic": float(metrics.get("rank_ic", 0.0) or 0.0),
             "hit_rate": float(metrics.get("hit_rate", 0.0) or 0.0),
+            "validation_tests": list(metrics.get("validation_tests", []) or []),
             "risk_flags": list(metrics.get("risk_flags", []) or []),
         }
 
@@ -490,7 +544,33 @@ class ResearchEngine:
             "error": 5,
             "skipped": 6,
         }.get(row.get("status", ""), 9)
-        return (status_rank, -float(row.get("suitability_score", 0.0) or 0.0), row.get("title", ""))
+        score = float(row.get("admission_score", 0.0) or row.get("suitability_score", 0.0) or 0.0)
+        return (status_rank, -score, row.get("title", ""))
+
+    @staticmethod
+    def _evaluation_score(report: Any) -> float:
+        score = getattr(report, "admission_score", 0.0)
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            score = 0.0
+        if score > 0.0:
+            return score
+        return float(getattr(report, "suitability_score", 0.0) or 0.0)
+
+    @staticmethod
+    def _discovery_summary(raw_strategies: List[RawStrategy]) -> Dict[str, Any]:
+        if not raw_strategies:
+            return {"source_count": 0, "avg_discovery_score": 0.0}
+        sources = sorted(set(raw.source for raw in raw_strategies if raw.source))
+        scores = [discovery_score(raw) for raw in raw_strategies if discovery_score(raw) > 0]
+        return {
+            "source_count": len(sources),
+            "sources": sources,
+            "avg_discovery_score": round(sum(scores) / len(scores), 2) if scores else 0.0,
+            "min_discovery_score": round(min(scores), 2) if scores else 0.0,
+            "max_discovery_score": round(max(scores), 2) if scores else 0.0,
+        }
 
     def _run_backtests(self, strategy_ids: List[str], result: ResearchResult, benchmark_data: Any = None) -> None:
         if self._backtest_fn is None:
@@ -498,17 +578,18 @@ class ResearchEngine:
             return
         for sid in strategy_ids:
             try:
+                symbols = self._strategy_symbols(sid)
                 if self._rigor_hub is not None and self.config.rigor_enabled:
                     split_benchmark_data = benchmark_data
                     if split_benchmark_data is None:
                         split_benchmark_data = self._load_benchmark_data(
-                            self.config.default_symbols,
+                            symbols,
                             self.config.default_backtest_start,
                             self.config.default_backtest_end,
                         )
                     wf_result = self._run_walkforward(
                         sid,
-                        self.config.default_symbols,
+                        symbols,
                         self.config.default_backtest_start,
                         self.config.default_backtest_end,
                         split_benchmark_data,
@@ -534,6 +615,14 @@ class ResearchEngine:
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _strategy_symbols(self, strategy_id: str) -> List[str]:
+        entry = self.integrator.get_registry_entry(strategy_id) if hasattr(self.integrator, "get_registry_entry") else None
+        meta = dict((entry or {}).get("research_meta") or {})
+        spec = dict(meta.get("strategy_spec") or {})
+        universe = spec.get("universe") or []
+        symbols = [str(symbol) for symbol in universe if str(symbol)]
+        return symbols or list(self.config.default_symbols)
 
     def _append_ic_decay_warning(self, result: ResearchResult, raw: RawStrategy, vreport: Any) -> Any:
         decay_values = self._ic_decay_values(getattr(vreport, "ic_decay", []))

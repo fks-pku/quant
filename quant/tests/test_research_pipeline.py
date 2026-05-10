@@ -84,6 +84,57 @@ def test_evaluator_parses_extended_json_report():
     assert report.factor_uniqueness_score == pytest.approx(1.0)
     assert report.data_availability_score == pytest.approx(2.0)
     assert report.risk_flags == ["survivorship_bias"]
+    assert report.admission_score > 0
+    assert "rank_ic" in report.validation_tests
+
+
+def test_evaluator_uses_professional_heuristic_when_llm_unavailable():
+    report = StrategyEvaluator().evaluate(_raw_strategy())
+
+    assert report.admission_score >= 6.0
+    assert report.signal_quality_score >= 6.0
+    assert report.data_requirement == "low"
+    assert "rank_ic" in report.validation_tests
+    assert "fdr_control" in report.validation_tests
+    assert report.rejection_reason == ""
+
+
+def test_evaluator_haircuts_hf_signals_even_when_llm_is_optimistic():
+    class OptimisticLLM:
+        def analyze(self, prompt, context):
+            return {
+                "suitability_score": 9.5,
+                "complexity_score": 8.0,
+                "data_requirement": "high-frequency",
+                "daily_adaptable": False,
+                "estimated_edge": 0.45,
+                "recommended_symbols": ["BTC"],
+                "strategy_type": "stat_arb",
+                "summary": "High-frequency order book signal.",
+                "economic_rationale_score": 1.0,
+                "factor_uniqueness_score": 1.0,
+                "data_availability_score": 0.2,
+                "implementation_score": 0.2,
+                "overfit_risk_score": 0.1,
+                "cost_capacity_score": 0.1,
+                "regime_robustness_score": 0.1,
+                "risk_flags": [],
+                "rejection_reason": "",
+            }
+
+    raw = RawStrategy(
+        title="High-Frequency Crypto Order Book Alpha",
+        description="Tick-level order book imbalance with deep learning and very high turnover.",
+        source="blog",
+        source_url="",
+    )
+
+    report = StrategyEvaluator(OptimisticLLM()).evaluate(raw)
+
+    assert report.admission_score < 6.0
+    assert "high_frequency_not_daily" in report.risk_flags
+    assert "unrealistic_edge" in report.risk_flags
+    assert report.rejection_reason
 
 
 def test_research_engine_persists_candidates_and_markdown_artifacts():
@@ -116,6 +167,14 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         assert (tmp_path / "research" / "last_result.json").exists()
         assert "Daily Momentum Breakout" in (tmp_path / "research" / "discovered_strategies.md").read_text(encoding="utf-8")
         assert "economic_rationale" in (tmp_path / "research" / "strategy_evaluation.md").read_text(encoding="utf-8")
+        report = (tmp_path / "research" / "full_research_report.html").read_text(encoding="utf-8")
+        assert "Full Research Report" in report
+        assert "Daily Momentum Breakout" in report
+        assert "Strict framework backtest report" in report
+        assert "000300 CSI 300 index" in report
+        index = (tmp_path / "research" / "full_research_report.md").read_text(encoding="utf-8")
+        assert "[full_research_report.html](full_research_report.html)" in index
+        assert "Complex research reports are rendered as HTML" in index
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -151,6 +210,8 @@ def test_research_engine_records_candidate_hypothesis_ledger():
         assert hypotheses[0]["stage"] == "integrate"
         assert hypotheses[0]["metrics"]["suitability_score"] == pytest.approx(7.5)
         assert hypotheses[0]["metrics"]["estimated_edge"] == pytest.approx(0.08)
+        assert "admission_score" in hypotheses[0]["metrics"]
+        assert "signal_quality_score" in hypotheses[0]["metrics"]
         assert hypotheses[0]["evidence"]["source_url"] == "https://example.test/paper"
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -197,6 +258,8 @@ def test_research_engine_writes_promotion_dossier_artifact():
         assert dossier["strategy_id"] == "daily_momentum_breakout"
         assert dossier["hypothesis"]["title"] == "Daily Momentum Breakout"
         assert dossier["evaluation"]["suitability_score"] == pytest.approx(7.5)
+        assert "admission_score" in dossier["evaluation"]
+        assert "validation_tests" in dossier
         assert dossier["risk_flags"] == ["survivorship_bias"]
         assert dossier["next_action"] == "walk_forward_or_paper_review"
         assert candidate["research_meta"]["promotion_dossier_artifact"]["artifact_id"] == "artifact-1"
@@ -356,6 +419,8 @@ def test_research_engine_writes_candidate_scorecard_artifact():
         assert rows[0]["status"] == "candidate"
         assert rows[0]["strategy_id"] == "daily_momentum_breakout"
         assert rows[0]["suitability_score"] == pytest.approx(7.5)
+        assert "admission_score" in rows[0]
+        assert "signal_quality_score" in rows[0]
         assert rows[1]["status"] == "rejected"
         assert rows[1]["suitability_score"] == pytest.approx(2.0)
         assert "suitability=2.0" in rows[1]["decision_reason"]
@@ -542,6 +607,234 @@ def test_ic_decay_warning_is_logged_without_rejecting():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_research_engine_passes_ready_strategy_spec_to_integrator():
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["SPY"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class FixedValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=0.05,
+                rank_ic_ir=1.0,
+                ic_decay=[(1, 0.05), (5, 0.04), (10, 0.03), (21, 0.025)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=0.0,
+                hit_rate=0.55,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+            )
+
+    class RecordingIntegrator:
+        registry = {}
+
+        def __init__(self):
+            self.received_spec = None
+
+        def integrate(self, raw, report, spec=None):
+            self.received_spec = spec
+            return "daily_momentum_breakout"
+
+    integrator = RecordingIntegrator()
+    engine = ResearchEngine(
+        config=ResearchConfig(auto_backtest=False, validation_enabled=True),
+        scout=FixedScout(),
+        evaluator=FixedEvaluator(),
+        integrator=integrator,
+        spec_builder=FixedSpecBuilder(),
+        validator=FixedValidator(),
+    )
+
+    result = engine.run_full_pipeline()
+
+    assert result.integrated == 1
+    assert integrator.received_spec is not None
+    assert integrator.received_spec.signal_formula_key == "momentum_close_return"
+
+
+def test_research_engine_rejects_negative_rank_ic_direction():
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["SPY"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class NegativeValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=-0.05,
+                rank_ic_ir=-1.0,
+                ic_decay=[(1, -0.04), (5, -0.05), (10, -0.03), (21, -0.02)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=-0.001,
+                hit_rate=0.45,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+            )
+
+    class RecordingIntegrator:
+        registry = {}
+
+        def __init__(self):
+            self.called = False
+
+        def integrate(self, raw, report, spec=None):
+            self.called = True
+            return "daily_momentum_breakout"
+
+    integrator = RecordingIntegrator()
+    engine = ResearchEngine(
+        config=ResearchConfig(auto_backtest=False, validation_enabled=True),
+        scout=FixedScout(),
+        evaluator=FixedEvaluator(),
+        integrator=integrator,
+        spec_builder=FixedSpecBuilder(),
+        validator=NegativeValidator(),
+    )
+
+    result = engine.run_full_pipeline()
+
+    assert result.integrated == 0
+    assert result.rejected == 1
+    assert integrator.called is False
+    assert any(entry.phase == "validation" and entry.verdict == "fail" for entry in result.log)
+
+
+def test_research_engine_uses_strategy_spec_universe_for_walkforward():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["AAPL"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class FixedValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=0.05,
+                rank_ic_ir=1.0,
+                ic_decay=[(1, 0.05), (5, 0.04), (10, 0.03), (21, 0.025)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=0.0,
+                hit_rate=0.55,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+            )
+
+    class RecordingRigorHub:
+        def __init__(self):
+            self.symbols = None
+
+        def run_walkforward(self, strategy_id, symbols, start, end):
+            self.symbols = symbols
+            return type(
+                "WalkForward",
+                (),
+                {
+                    "is_viable": True,
+                    "worst_oos_sharpe": 1.0,
+                    "deflated_sharpe_ratio": 0.99,
+                },
+            )()
+
+    try:
+        rigor_hub = RecordingRigorHub()
+        engine = ResearchEngine(
+            config=ResearchConfig(
+                auto_backtest=True,
+                rigor_enabled=True,
+                default_symbols=["SPY", "QQQ"],
+            ),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=FileResearchStore(tmp_path / "research"),
+            strategies_dir=str(tmp_path / "strategies"),
+            spec_builder=FixedSpecBuilder(),
+            validator=FixedValidator(),
+            rigor_hub=rigor_hub,
+            backtest_fn=lambda *args, **kwargs: None,
+        )
+
+        result = engine.run_full_pipeline()
+
+        assert result.integrated == 1
+        assert rigor_hub.symbols == ["AAPL"]
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_walkforward_trade_enrichment_adds_capacity_fields():
     from quant.api.research_bp import _serialize_walkforward_trade
 
@@ -569,11 +862,31 @@ def test_walkforward_trade_enrichment_adds_capacity_fields():
 def test_api_make_strategy_scout_uses_infrastructure_sources():
     from quant.api import research_bp as research_module
 
-    scout = research_module._make_strategy_scout(ResearchConfig(sources=["ssrn"]))
+    scout = research_module._make_strategy_scout(ResearchConfig(sources=["ssrn"], scout_config={"rank_results": True}))
 
     assert scout._source_hub is not None
     assert scout._hub_sources == ["ssrn"]
     assert scout._source_hub._sources["ssrn"].__class__.__name__ == "SSRNSource"
+
+
+def test_api_load_research_config_reads_feature_yaml():
+    from quant.api import research_bp as research_module
+
+    cfg = research_module._load_research_config()
+
+    assert cfg.sources == ["arxiv", "ssrn", "nber", "blog"]
+    assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
+    assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
+
+
+def test_api_remote_llm_without_key_uses_heuristic(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    adapter = research_module._create_llm_adapter(ResearchConfig(llm_provider="deepseek", llm_api_key=None))
+
+    assert adapter is None
 
 
 def test_api_make_rigor_hub_uses_two_arg_walkforward_runner_and_experiment_store(monkeypatch):
@@ -630,6 +943,31 @@ def test_api_make_validation_components_respects_disabled_flag():
     from quant.api import research_bp as research_module
 
     assert research_module._make_validation_components(ResearchConfig(validation_enabled=False)) == (None, None)
+
+
+def test_api_candidate_symbols_prefer_strategy_spec_universe():
+    from quant.api import research_bp as research_module
+
+    info = {"research_meta": {"strategy_spec": {"universe": ["AAPL", "MSFT"]}}}
+
+    assert research_module._candidate_symbols(info, ["SPY"]) == ["AAPL", "MSFT"]
+    assert research_module._candidate_symbols({}, ["SPY"]) == ["SPY"]
+
+
+def test_api_latest_report_payload_points_to_full_html_report(tmp_path):
+    from quant.api import research_bp as research_module
+
+    report_dir = tmp_path / "research"
+    report_dir.mkdir()
+    report_path = report_dir / "full_research_report.html"
+    report_path.write_text("<html><body>report</body></html>", encoding="utf-8")
+
+    payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
+
+    assert payload["available"] is True
+    assert payload["url"] == "/api/research/report/latest"
+    assert payload["path"] == str(report_path)
+    assert "updated_at" in payload
 
 
 def test_api_scheduler_injects_validation_components(monkeypatch):

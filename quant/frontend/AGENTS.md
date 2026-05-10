@@ -34,6 +34,7 @@ State:
 
 - Change UI: edit files in `quant/frontend/src/`
 - Change API integration: edit `App.js` API calls
+- Change research pipeline UI/report links: edit `ResearchPanel.js`
 - Change strategy display: edit `StrategyManagement.js`
 
 ## Known Pitfalls

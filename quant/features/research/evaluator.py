@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 
 from quant.features.research.models import RawStrategy, EvaluationReport
+from quant.features.research.evaluation_rubric import apply_professional_rubric, heuristic_evaluation
 from quant.domain.ports.llm import LLMAdapterLike as LLMAdapter
 
 logger = logging.getLogger(__name__)
@@ -29,27 +30,33 @@ class StrategyEvaluator:
         '- "overfit_risk_score": float (0-2, lower parameter/data-snooping risk scores higher)\n'
         '- "cost_capacity_score": float (0-1, liquidity and transaction-cost robustness)\n'
         '- "regime_robustness_score": float (0-1, plausible across regimes)\n'
+        '- "required_data_fields": list of strings required to test the signal without look-ahead bias\n'
+        '- "validation_tests": list of strings required before implementation (rank_ic, fdr_control, etc.)\n'
+        '- "evidence_notes": list of concise evidence notes or caveats\n'
         '- "risk_flags": list of strings (e.g. ["survivorship_bias"])\n'
         '- "rejection_reason": string (empty when suitable)\n'
     )
 
-    def __init__(self, llm_adapter: Optional[LLMAdapter] = None):
+    def __init__(self, llm_adapter: Optional[LLMAdapter] = None, rubric_config: Optional[dict] = None):
         self.llm_adapter = llm_adapter
+        self.rubric_config = rubric_config or {}
 
     def evaluate(self, raw: RawStrategy) -> EvaluationReport:
         if self.llm_adapter is None:
-            logger.warning("No LLM adapter configured, returning neutral evaluation")
-            return self._neutral_report()
+            logger.info("No LLM adapter configured, using professional heuristic evaluation")
+            return heuristic_evaluation(raw, self.rubric_config)
 
         prompt = self._PROMPT_TEMPLATE.format(title=raw.title, description=raw.description[:2000])
         context = {"source": raw.source, "source_url": raw.source_url}
 
         try:
             result = self.llm_adapter.analyze(prompt, context)
-            return self._parse_result(result)
+            return apply_professional_rubric(raw, self._parse_result(result), self.rubric_config)
         except Exception as e:
             logger.warning(f"LLM evaluation failed for '{raw.title}': {e}")
-            return self._neutral_report()
+            report = heuristic_evaluation(raw, self.rubric_config)
+            report.risk_flags = sorted(set(list(report.risk_flags or []) + ["llm_evaluation_failed"]))
+            return report
 
     def _parse_result(self, result: dict) -> EvaluationReport:
         if isinstance(result, str):
@@ -75,6 +82,15 @@ class StrategyEvaluator:
             overfit_risk_score=self._float(result.get("overfit_risk_score"), 0),
             cost_capacity_score=self._float(result.get("cost_capacity_score"), 0),
             regime_robustness_score=self._float(result.get("regime_robustness_score"), 0),
+            admission_score=self._float(result.get("admission_score"), 0),
+            signal_quality_score=self._float(result.get("signal_quality_score"), 0),
+            research_confidence_score=self._float(result.get("research_confidence_score"), 0),
+            data_risk_score=self._float(result.get("data_risk_score"), 0),
+            bias_risk_score=self._float(result.get("bias_risk_score"), 0),
+            required_data_fields=self._list(result.get("required_data_fields", [])),
+            validation_tests=self._list(result.get("validation_tests", [])),
+            evidence_notes=self._list(result.get("evidence_notes", [])),
+            score_breakdown=self._dict(result.get("score_breakdown", {})),
             risk_flags=self._list(result.get("risk_flags", [])),
             rejection_reason=str(result.get("rejection_reason", "")),
         )
@@ -116,3 +132,7 @@ class StrategyEvaluator:
         if value in (None, ""):
             return []
         return [value]
+
+    @staticmethod
+    def _dict(value) -> dict:
+        return value if isinstance(value, dict) else {}

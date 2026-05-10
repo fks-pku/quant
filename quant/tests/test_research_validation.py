@@ -43,6 +43,15 @@ class TestStrategySpecBuilder:
         assert spec.signal_formula_key == "momentum_close_return"
         assert spec.status == "ready"
 
+    def test_strategy_id_is_filesystem_and_registry_safe(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        builder = StrategySpecBuilder()
+        spec = builder.build(_raw("Momentum: Test-v2!"), _report("momentum"))
+        assert spec.strategy_id == "momentum_test_v2"
+
     def test_mean_reversion_maps_to_close_to_ma(self):
         from quant.features.research.validation.strategy_spec_builder import (
             StrategySpecBuilder,
@@ -158,6 +167,122 @@ class TestCrossSectionalValidation:
         )
 
         assert compute_fama_macbeth_tstat(signals, forward_returns) > 0
+
+
+class TestResearchAdjustedPrices:
+    def test_signal_library_prefers_adjusted_close_for_momentum(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        frame = pd.DataFrame(
+            {
+                "close": [100.0, 50.0, 25.0],
+                "adj_close": [100.0, 100.0, 100.0],
+            }
+        )
+
+        signal = compute_signal("momentum_close_return", frame, lookback=1)
+
+        assert signal.dropna().abs().max() == pytest.approx(0.0)
+
+    def test_signal_library_builds_adjusted_close_from_adj_factor(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        frame = pd.DataFrame(
+            {
+                "close": [100.0, 50.0, 25.0],
+                "adj_factor": [1.0, 2.0, 4.0],
+            }
+        )
+
+        signal = compute_signal("momentum_close_return", frame, lookback=1)
+
+        assert signal.dropna().abs().max() == pytest.approx(0.0)
+
+    def test_mean_reversion_signal_is_positive_when_adjusted_close_is_below_ma(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        frame = pd.DataFrame(
+            {
+                "close": [100.0, 100.0, 50.0],
+                "adj_close": [100.0, 100.0, 90.0],
+            }
+        )
+
+        signal = compute_signal("mean_reversion_close_to_ma", frame, lookback=2)
+
+        assert signal.iloc[-1] > 0
+
+    def test_breakout_signal_uses_adjusted_breakout_orientation(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        frame = pd.DataFrame(
+            {
+                "high": [100.0, 100.0, 100.0, 100.0],
+                "low": [90.0, 90.0, 90.0, 90.0],
+                "close": [95.0, 95.0, 95.0, 90.0],
+                "adj_high": [10.0, 10.0, 10.0, 12.0],
+                "adj_low": [9.0, 9.0, 9.0, 11.0],
+                "adj_close": [9.5, 9.5, 9.5, 12.0],
+            }
+        )
+
+        signal = compute_signal("volatility_breakout_atr", frame, lookback=2)
+
+        assert signal.iloc[-1] > 0
+
+    def test_factor_validator_uses_adjusted_close_for_forward_returns(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2022-01-03", periods=140, freq="B")
+        symbols = [f"A{i:02d}" for i in range(30)]
+        frames = []
+        for i, symbol in enumerate(symbols):
+            growth = 0.0002 + i * 0.00005
+            adjusted = 100.0 * (1.0 + growth) ** np.arange(len(dates))
+            raw = 100.0 * (1.0 - growth) ** np.arange(len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": raw,
+                        "high": raw * 1.01,
+                        "low": raw * 0.99,
+                        "close": raw,
+                        "adj_open": adjusted,
+                        "adj_high": adjusted * 1.01,
+                        "adj_low": adjusted * 0.99,
+                        "adj_close": adjusted,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+
+        class FakeMarketData:
+            def get_universe_symbols(self, market):
+                return symbols
+
+            def get_daily_bars(self, symbols, start, end):
+                return bars[bars["symbol"].isin(symbols)]
+
+        validator = FactorValidator(FakeMarketData(), config={"min_observations": 50, "min_stocks": 20})
+        spec = StrategySpec(
+            strategy_id="adjusted_forward_returns",
+            strategy_type="momentum",
+            signal_formula_key="momentum_close_return",
+            universe=["AAPL"],
+            horizon_days=1,
+            lookback_days=1,
+            execution_lag_days=1,
+            required_fields=["close"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert report.status == "validated"
+        assert report.rank_ic > 0.95
 
 
 class TestFactorValidator:
@@ -544,3 +669,31 @@ class TestFactorValidator:
 
         assert list(bars["symbol"]) == ["AAPL"]
         assert "date" in bars.columns
+
+    def test_duckdb_market_data_returns_adjusted_price_columns_when_available(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        from quant.infrastructure.research.market_data.duckdb_research_market_data import (
+            DuckDBResearchMarketData,
+        )
+
+        db_path = tmp_path / "research_market_adjusted.duckdb"
+        conn = duckdb.connect(str(db_path))
+        schema = (
+            "(symbol VARCHAR, date DATE, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
+            "volume BIGINT, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE)"
+        )
+        for table in ("daily_cn", "daily_hk", "daily_us"):
+            conn.execute(f"CREATE TABLE {table} {schema}")
+        conn.execute(
+            "INSERT INTO daily_us VALUES ('AAPL', '2024-01-02', 3, 4, 2.5, 3.5, 300, 6, 8, 5, 7, 2)"
+        )
+        conn.close()
+
+        market_data = DuckDBResearchMarketData(str(db_path))
+        bars = market_data.get_daily_bars(["AAPL"], "2024-01-01", "2024-01-31")
+
+        assert bars["adj_open"].iloc[0] == pytest.approx(6.0)
+        assert bars["adj_high"].iloc[0] == pytest.approx(8.0)
+        assert bars["adj_low"].iloc[0] == pytest.approx(5.0)
+        assert bars["adj_close"].iloc[0] == pytest.approx(7.0)
+        assert bars["adj_factor"].iloc[0] == pytest.approx(2.0)

@@ -133,11 +133,14 @@ class FactorValidator:
             return fallback
 
     def _validate_single_symbol(self, spec: StrategySpec, data: pd.DataFrame, compute_signal: Any) -> ValidationReport:
+        from quant.features.research.validation.signal_library import adjusted_price_series
+
         signal = compute_signal(spec.signal_formula_key, data, spec.lookback_days)
         if signal is None:
             return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"])
 
-        forward_return = data["close"].pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
+        close = adjusted_price_series(data, "close")
+        forward_return = close.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
         signal = signal.shift(self._exec_lag)
 
         common_idx = signal.dropna().index.intersection(forward_return.dropna().index)
@@ -170,6 +173,8 @@ class FactorValidator:
         )
 
     def _validate_cross_sectional(self, spec: StrategySpec, data: pd.DataFrame, compute_signal: Any) -> ValidationReport:
+        from quant.features.research.validation.signal_library import adjusted_price_matrix
+
         frame = data.copy()
         frame["date"] = pd.to_datetime(frame["date"])
         frame = frame.sort_values(["date", "symbol"])
@@ -178,7 +183,7 @@ class FactorValidator:
         if signal_matrix is None:
             return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"])
 
-        close_prices = frame.pivot_table(index="date", columns="symbol", values="close", aggfunc="last").sort_index()
+        close_prices = adjusted_price_matrix(frame, "close")
         signal_matrix = signal_matrix.shift(self._exec_lag)
         forward_returns = close_prices.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
         daily_ic = compute_cross_sectional_ic(
