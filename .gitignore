@@ -35,3 +35,6 @@ build/
 !quant/frontend/build/
 backtest_output/
 tmp/pytest-*/
+
+# Hypothesis fuzz test cache
+.hypothesis/
