@@ -21,7 +21,7 @@ class StrategySignalEvent(Event):
         object.__setattr__(self, 'symbol', symbol)
         object.__setattr__(self, 'signal', signal)
         object.__setattr__(self, 'confidence', confidence)
-        object.__setattr__(self, 'metadata', metadata or {})
+        object.__setattr__(self, 'metadata', metadata)
 
     def to_dict(self) -> dict:
         d = super().to_dict()
@@ -45,7 +45,7 @@ class SystemStartEvent(Event):
         super().__init__(event_type=EventType.SYSTEM_START, source=source, timestamp=timestamp or datetime.now())
         object.__setattr__(self, 'mode', mode)
         object.__setattr__(self, 'start_time', start_time)
-        object.__setattr__(self, 'config', config or {})
+        object.__setattr__(self, 'config', config)
 
     def to_dict(self) -> dict:
         d = super().to_dict()

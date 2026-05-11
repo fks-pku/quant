@@ -1,6 +1,6 @@
 from quant.domain.ports.data_feed import DataFeed, DataFeedCallback
 from quant.domain.ports.broker import BrokerAdapter
-from quant.domain.ports.strategy import Strategy, StrategyContext
+from quant.domain.ports.strategy import Strategy, StrategyPortContext
 from quant.domain.ports.storage import Storage
 from quant.domain.ports.event_publisher import EventPublisher, EventSubscriber
 from quant.domain.ports.portfolio import PortfolioLike, RiskEngineLike
@@ -18,7 +18,7 @@ __all__ = [
     "DataFeedCallback",
     "BrokerAdapter",
     "Strategy",
-    "StrategyContext",
+    "StrategyPortContext",
     "Storage",
     "EventPublisher",
     "EventSubscriber",

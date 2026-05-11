@@ -315,7 +315,7 @@ def _maybe_snapshot(tracker, total_nav):
         return
     try:
         from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage()
+        db = DuckDBStorage(read_only=False)  # TODO: move snapshot writes to features/trading, then use read_only=True
         snapshots = tracker.snapshot_all(total_nav)
         for snap in snapshots:
             d = {"date": snap.date, "strategy_name": snap.strategy_name,

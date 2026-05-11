@@ -7,6 +7,8 @@ import importlib.util
 from pathlib import Path
 from typing import Any, Dict, List, Type
 
+from quant.shared.utils.logger import setup_logger
+
 _registry: Dict[str, Type] = {}
 
 
@@ -38,7 +40,8 @@ def _discover_strategies() -> None:
                     if isinstance(cls, type) and hasattr(cls, "_registry_name"):
                         _registry[_key(cls._registry_name)] = cls
         except Exception:
-            pass
+            _log = setup_logger("strategy.registry")
+            _log.warning("Failed to load strategy from %s", strategy_file, exc_info=True)
 
 
 def strategy(name: str):

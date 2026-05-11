@@ -48,7 +48,7 @@ class NewsAnalyzer:
             return {"sentiment": "neutral", "confidence": 0.5, "summary": ""}
         prompt = self.prompt_template.format(news_text=news_text)
         context = market_context or {}
-        result = self._adapter.analyze(prompt, context)
+        result = self.adapter.analyze(prompt, context)
         return {
             "sentiment": result.get("sentiment", "neutral"),
             "confidence": float(result.get("confidence", 0.5)) if result.get("confidence") is not None else 0.5,

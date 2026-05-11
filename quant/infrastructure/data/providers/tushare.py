@@ -81,7 +81,7 @@ class TushareProvider(DataFeed):
 
         if self._storage is None:
             from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-            self._storage = DuckDBStorage()
+            self._storage = DuckDBStorage(read_only=False)
         self._connected = True
         self.logger.info("TushareProvider connected")
 

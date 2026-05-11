@@ -23,7 +23,12 @@ class DataProvider(Protocol):
     def get_bars(self, symbol: str, lookback: int = 100) -> Any: ...
 
 
-class StrategyContext:
+class StrategyPortContext:
+    """Port-internal context passed to the Strategy ABC.
+
+    Distinct from quant.domain.context.StrategyContext which is the
+    feature-facing context injected by trading/backtest engines.
+    """
     def __init__(
         self,
         strategy_name: str,
@@ -55,7 +60,7 @@ class Strategy(ABC):
 
     def __init__(self, name: str):
         self._name = name
-        self._context: Optional[StrategyContext] = None
+        self._context: Optional[StrategyPortContext] = None
         self._positions: Dict[str, Position] = {}
         self._data: Dict[str, Any] = {}
 
@@ -64,11 +69,11 @@ class Strategy(ABC):
         return self._name
 
     @property
-    def context(self) -> Optional[StrategyContext]:
+    def context(self) -> Optional[StrategyPortContext]:
         return self._context
 
     @context.setter
-    def context(self, ctx: StrategyContext) -> None:
+    def context(self, ctx: StrategyPortContext) -> None:
         self._context = ctx
 
     @property
@@ -77,22 +82,22 @@ class Strategy(ABC):
             return self._context.symbols
         return []
 
-    def on_start(self, context: "StrategyContext" = None) -> None:
+    def on_start(self, context: "StrategyPortContext" = None) -> None:
         pass
 
-    def on_stop(self, context: "StrategyContext" = None) -> None:
+    def on_stop(self, context: "StrategyPortContext" = None) -> None:
         pass
 
-    def on_before_trading(self, context: "StrategyContext" = None, trading_date: date = None) -> None:
+    def on_before_trading(self, context: "StrategyPortContext" = None, trading_date: date = None) -> None:
         pass
 
-    def on_after_trading(self, context: "StrategyContext" = None, trading_date: date = None) -> None:
+    def on_after_trading(self, context: "StrategyPortContext" = None, trading_date: date = None) -> None:
         pass
 
-    def on_fill(self, context: "StrategyContext" = None, fill: Optional[Fill] = None) -> None:
+    def on_fill(self, context: "StrategyPortContext" = None, fill: Optional[Fill] = None) -> None:
         pass
 
-    def on_data(self, context: "StrategyContext" = None, data: Any = None) -> None:
+    def on_data(self, context: "StrategyPortContext" = None, data: Any = None) -> None:
         """Called on each bar of data — the primary dispatch used by engines.
 
         Default implementation delegates to :meth:`on_bar`.
@@ -104,7 +109,7 @@ class Strategy(ABC):
         pass
 
     @abstractmethod
-    def on_bar(self, context: StrategyContext, bar: Bar) -> None:
+    def on_bar(self, context: StrategyPortContext, bar: Bar) -> None:
         """Process a single bar. Called by :meth:`on_data` by default.
 
         Implementations may override ``on_data`` directly for finer control.

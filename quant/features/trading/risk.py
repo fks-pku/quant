@@ -57,6 +57,10 @@ class RiskEngine(RiskEngineLike):
             if not results[-1].passed:
                 approved = False
 
+        results.append(self._check_daily_loss())
+        if not results[-1].passed:
+            approved = False
+
         if side != 'SELL':
             results.append(self._check_position_size(symbol, order_value))
             if not results[-1].passed:
@@ -66,10 +70,6 @@ class RiskEngine(RiskEngineLike):
                 results.append(self._check_sector_exposure(sector, order_value))
                 if not results[-1].passed:
                     approved = False
-
-            results.append(self._check_daily_loss())
-            if not results[-1].passed:
-                approved = False
 
             results.append(self._check_leverage())
             if not results[-1].passed:
