@@ -8,6 +8,7 @@ import pandas as pd
 
 
 REQUIRED_COLUMNS = {"timestamp", "symbol", "open", "high", "low", "close", "volume"}
+NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume")
 MAX_DAILY_PRICE_CHANGE_PCT = 0.50
 CONSECUTIVE_SAME_CLOSE_WINDOW = 20
 
@@ -68,15 +69,23 @@ class DataValidator:
             DataValidator._collect_stats(data, report)
             return report
         DataValidator._check_timestamp(data, report)
+        if report.errors:
+            DataValidator._collect_stats(data, report)
+            return report
         DataValidator._check_duplicates(data, report)
-        DataValidator._check_negative_prices(data, report)
-        DataValidator._check_ohlc_logic(data, report)
-        DataValidator._check_zero_close(data, report)
-        DataValidator._check_volume_sanity(data, report)
-        DataValidator._check_date_gaps(data, report)
-        DataValidator._check_price_jumps(data, report)
-        DataValidator._check_consecutive_same_close(data, report)
-        DataValidator._collect_stats(data, report)
+        DataValidator._check_numeric_values(data, report)
+        if report.errors:
+            DataValidator._collect_stats(data, report)
+            return report
+        checked_data = DataValidator._coerce_numeric_columns(data)
+        DataValidator._check_negative_prices(checked_data, report)
+        DataValidator._check_ohlc_logic(checked_data, report)
+        DataValidator._check_zero_close(checked_data, report)
+        DataValidator._check_volume_sanity(checked_data, report)
+        DataValidator._check_date_gaps(checked_data, report)
+        DataValidator._check_price_jumps(checked_data, report)
+        DataValidator._check_consecutive_same_close(checked_data, report)
+        DataValidator._collect_stats(checked_data, report)
         return report
 
     @staticmethod
@@ -111,10 +120,39 @@ class DataValidator:
             report.errors.append(f"Timestamp has {null_count} null values")
 
         if not pd.api.types.is_datetime64_any_dtype(ts):
-            try:
-                pd.to_datetime(ts)
-            except Exception:
+            parsed = pd.to_datetime(ts, errors="coerce")
+            invalid_count = (parsed.isna() & ts.notna()).sum()
+            if invalid_count > 0:
                 report.errors.append("Timestamp column cannot be parsed as datetime")
+
+    @staticmethod
+    def _check_numeric_values(data: pd.DataFrame, report: ValidationReport) -> None:
+        for col in NUMERIC_COLUMNS:
+            if col not in data.columns:
+                continue
+            original = data[col]
+            numeric = pd.to_numeric(original, errors="coerce")
+            null_count = original.isna().sum()
+            if null_count > 0:
+                report.errors.append(f"{col} has {null_count} NaN/null value(s)")
+            non_numeric_count = (numeric.isna() & original.notna()).sum()
+            if non_numeric_count > 0:
+                report.errors.append(f"{col} has {non_numeric_count} non-numeric value(s)")
+            finite_mask = pd.Series(
+                np.isfinite(numeric.to_numpy(dtype=float)),
+                index=numeric.index,
+            )
+            infinite_count = ((~numeric.isna()) & (~finite_mask)).sum()
+            if infinite_count > 0:
+                report.errors.append(f"{col} has {infinite_count} infinite value(s)")
+
+    @staticmethod
+    def _coerce_numeric_columns(data: pd.DataFrame) -> pd.DataFrame:
+        checked = data.copy()
+        for col in NUMERIC_COLUMNS:
+            if col in checked.columns:
+                checked[col] = pd.to_numeric(checked[col], errors="coerce")
+        return checked
 
     @staticmethod
     def _check_duplicates(data: pd.DataFrame, report: ValidationReport) -> None:

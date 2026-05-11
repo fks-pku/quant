@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>完整研究报告</title>
+<style>
+:root{color-scheme:light;--ink:#172026;--muted:#66737f;--line:#d7dde2;--paper:#f7f4ed;--panel:#fffdfa;--accent:#0f766e;--warn:#b45309;--bad:#991b1b;--good:#166534;}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 64px}.hero{border-bottom:2px solid var(--ink);padding:28px 0 32px;margin-bottom:28px}.eyebrow{font:700 12px/1.2 'Segoe UI',system-ui,sans-serif;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin:0 0 16px}.hero h1{font-size:42px;line-height:1.12;margin:0 0 14px;font-weight:750;letter-spacing:0}.hero p{max-width:860px;color:var(--muted);font-size:17px}.panel{background:var(--panel);border:1px solid var(--line);padding:24px;margin:18px 0}.panel h2{font-size:25px;line-height:1.25;margin:0 0 18px;border-bottom:1px solid var(--line);padding-bottom:10px;font-weight:720}.panel h3{font-size:18px;line-height:1.35;margin:22px 0 10px;font-weight:720}.panel h3:first-child{margin-top:0}.standard p{max-width:920px}.table-wrap{overflow-x:auto;margin-bottom:14px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}th{font:700 12px/1.2 'Segoe UI',system-ui,sans-serif;text-transform:uppercase;letter-spacing:.04em;color:#34414c;background:#f0ece3}code{font-family:'Cascadia Mono','Consolas','SFMono-Regular',monospace;background:#eee7da;padding:2px 5px;border-radius:4px}.ledger{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}.card{border:1px solid var(--line);background:#fff;padding:18px}.card h3{margin:0 0 12px;font-size:19px;line-height:1.3}.meta{display:grid;grid-template-columns:145px 1fr;gap:7px 12px;font-size:14px}.label{color:var(--muted);font-family:'Segoe UI',system-ui,sans-serif;font-size:12px;text-transform:uppercase;letter-spacing:.04em}.badge{display:inline-block;border:1px solid var(--line);padding:2px 8px;border-radius:999px;font:700 12px/1.4 'Segoe UI',system-ui,sans-serif}.badge.candidate,.badge.validated{color:var(--good);border-color:#86efac;background:#ecfdf5}.badge.idea_candidate{color:#155e75;border-color:#67e8f9;background:#ecfeff}.badge.rejected,.badge.error{color:var(--bad);border-color:#fecaca;background:#fef2f2}.badge.needs_more_validation,.badge.needs_manual_spec{color:var(--warn);border-color:#fed7aa;background:#fff7ed}ul{margin:0;padding-left:22px}a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:3px}@media(max-width:720px){main{width:min(100% - 24px,1180px);padding-top:24px}.hero h1{font-size:32px}.panel{padding:18px}.meta{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<section class="hero">
+<p class="eyebrow">Two-Stage Quant Research Pipeline</p>
+<h1>完整研究报告</h1>
+<p>生成时间 2026-05-10T06:45:09.737887+00:00，Run ID <code>cn_a_share_drif_daily_return_information_2026</code>。本报告固定采用 8 章中文格式：结论、来源、信号、数据与 benchmark、信号验证、策略回测、purged walk-forward、最终推荐。</p>
+</section>
+<section class="panel">
+<h2>1. 结论汇总</h2>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>结论</th></tr></thead><tbody><tr><td>结论</td><td>本次没有策略可以直接进入实盘或 paper trading。</td></tr><tr><td>候选策略</td><td>0</td></tr><tr><td>Paper trading 候选</td><td>0</td></tr><tr><td>需要更多验证</td><td>0</td></tr><tr><td>已拒绝</td><td>1</td></tr><tr><td>严格回测完成</td><td>1</td></tr><tr><td>Purged walk-forward 通过</td><td>0</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>指标</th><th>数值</th></tr></thead><tbody><tr><td>已搜集 idea</td><td>1</td></tr><tr><td>已评估 idea</td><td>1</td></tr><tr><td>已生成 StrategySpec</td><td>1</td></tr><tr><td>已验证信号</td><td>1</td></tr><tr><td>信号验证通过</td><td>0</td></tr><tr><td>已实现/集成策略</td><td>1</td></tr><tr><td>已严格回测</td><td>1</td></tr><tr><td>Walk-forward 通过</td><td>0</td></tr><tr><td>已拒绝</td><td>1</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>2. idea 来源与初筛</h2>
+<p>本章对应 Stage 1：从 arXiv / SSRN / NBER / blog 等来源搜集多个 idea，先做来源质量评分，再以 admission_score 为准判断是否进入正式研究队列。</p>
+<div class="table-wrap"><table><thead><tr><th>来源</th><th>Idea</th><th>发布时间</th><th>来源质量</th><th>命中标签</th><th>风险旗标</th></tr></thead><tbody><tr><td><a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6005614">SSRN</a></td><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2026-01-07</td><td>8.5000</td><td>daily, factor, anomaly</td><td>model_complexity, weak_signal_significance</td></tr></tbody></table></div>
+<h3>初筛与准入评估</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>阶段</th><th>状态</th><th>Admission</th><th>Signal</th><th>Confidence</th><th>字段</th><th>决策</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>go_no_go</td><td>rejected</td><td>8.5000</td><td>5.0000</td><td>6.0000</td><td>date, symbol, adj_close, adj_factor, volume</td><td>信号 FDR 不显著，严格回测结果不能单独支持进入实盘；保留为研究组件。</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>3. 信号定义</h2>
+<p>通过初筛的 idea 必须被翻译成可执行 StrategySpec：信号公式、方向、lookback、holding horizon、调仓频率、universe、字段需求和验证清单必须明确。</p>
+<div class="table-wrap"><table><thead><tr><th>Strategy ID</th><th>信号公式</th><th>Universe</th><th>Lookback</th><th>Horizon</th><th>执行延迟</th><th>字段</th><th>A股约束</th></tr></thead><tbody><tr><td><code>cn_a_share_drif_daily_return_information_2026</code></td><td>rolling ridge forecast of 5d HFQ return from last 21 daily HFQ returns and distribution statistics</td><td>CN A-share liquid universe</td><td>21</td><td>5</td><td>1</td><td>date, symbol, adj_close, adj_factor, volume</td><td>A 股可部署组合仅 long-only；long-short 仅作 alpha 诊断</td></tr></tbody></table></div>
+<h3>信号构造细节</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>经济学假设</th><th>公式/模型</th><th>构造步骤</th><th>预测方向</th><th>时间结构</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>Daily Return Information Factor (DRIF): use last month&#x27;s daily return sequence/distribution to forecast future cross-sectional stock performance.</td><td>rolling ridge forecast of 5d HFQ return from last 21 daily HFQ returns and distribution statistics</td><td>1. 用后复权收盘价计算过去 21 个交易日的日收益序列；2. 提取日收益序列及分布统计特征；3. 用滚动 ridge 模型预测未来 5 日后复权收益；4. 每个截面按预测值排序；5. 只允许买入 top bucket，禁止 A 股 long-short 部署。</td><td>信号值越高，预期未来收益越高；组合只允许选 top bucket long-only。</td><td>lookback=21; horizon=5; lag=1</td></tr></tbody></table></div>
+<h3>可实现性与风控约束</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>价格口径</th><th>交易约束</th><th>字段需求</th><th>验证清单</th><th>风险旗标</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>后复权 adj_*；缺失时 raw price × adj_factor</td><td>A 股 long-only；long-short 只作 alpha 诊断</td><td>date, symbol, adj_close, adj_factor, volume</td><td>rank_ic, fdr_control, ic_decay, purged_walk_forward, transaction_cost_capacity</td><td>FDR not significant, cost sensitive, model complexity</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>4. 数据来源及benchmark定义</h2>
+<p>研究判断逻辑统一使用 DuckDB <code>daily_cn</code> 中的后复权价格：优先 <code>adj_*</code>，缺失时才使用 raw price × <code>adj_factor</code>。A 股默认 benchmark 是 <code>000300</code> 沪深 300（000300 CSI 300 index）；只有 DB 缺失 000300 时才 fallback 到 <code>510300</code>。</p>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>数据源</th><th>价格口径</th><th>数据起点</th><th>数据终点</th><th>样本数</th><th>Benchmark</th><th>Benchmark覆盖</th><th>Fallback</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>DuckDB daily_cn</td><td>后复权 adj_*；缺失时 raw price × adj_factor</td><td>2017-01-03</td><td>2025-12-31</td><td>280</td><td><code>000300</code></td><td>2017-01-03 / 2025-12-31</td><td>False</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>Benchmark</th><th>起点</th><th>终点</th><th>行数</th><th>价格列</th><th>Fallback</th><th>Alpha</th><th>IR</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td><code>000300</code></td><td>2017-01-03</td><td>2025-12-31</td><td>2186</td><td>adj_close</td><td>False</td><td>7.49%</td><td>0.5099</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>5. 信号验证</h2>
+<p>本章只回答信号本身是否有研究价值，重点看 rank IC、ICIR、FDR、hit rate、IC decay、OOS 稳定性。这里的 long-short 只允许作为 alpha 诊断，不允许作为 A 股可部署组合。</p>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>数据起点</th><th>数据终点</th><th>样本数</th><th>Rank IC</th><th>ICIR</th><th>FM t-stat</th><th>FDR p</th><th>Hit Rate</th><th>LS诊断</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2017-01-03</td><td>2025-12-31</td><td>280</td><td>0.0085</td><td>0.0489</td><td>0.8188</td><td>0.4129</td><td>54.29%</td><td>0.0009</td></tr></tbody></table></div>
+<h3>信号验证判读</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>IC/ICIR 判读</th><th>统计显著性</th><th>Hit Rate 判读</th><th>组合诊断判读</th><th>研究结论</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>Rank IC=0.0085 偏弱；即使组合表现为正，也需要警惕噪声和样本选择。</td><td>FDR p=0.4129，不显著；不能作为候选池准入的强证据。</td><td>Hit rate=54.29%，略高于随机水平，需要结合 IC 和成本。</td><td>top bucket 近似年化 28.64%；成本后相对 000300 单期超额 0.3420%；该诊断不能替代正式 Backtester。</td><td>信号 FDR 不显著，严格回测结果不能单独支持进入实盘；保留为研究组件。</td></tr></tbody></table></div>
+<h3>专业指标解释</h3>
+<div class="table-wrap"><table><thead><tr><th>指标</th><th>解释与使用方式</th></tr></thead><tbody><tr><td>Rank IC</td><td>截面信号排名与未来收益排名的 Spearman 相关。日线 A 股信号通常不要求单期很高，但需要方向稳定、样本足够、分期不崩。</td></tr><tr><td>ICIR</td><td>Rank IC 的均值除以波动，衡量 IC 稳定性。ICIR 越高，越像可重复的截面预测而不是偶然噪声。</td></tr><tr><td>FM t-stat</td><td>Fama-MacBeth 风格的截面回归统计量，用来辅助判断信号收益斜率是否稳定大于 0。</td></tr><tr><td>FDR p</td><td>多重检验校正后的 p 值。大量 idea 扫描时必须用 FDR 控制 data snooping，p 值不显著时不能因组合回测好看就推荐上线。</td></tr><tr><td>Hit Rate</td><td>top bucket 或信号方向预测为正的比例。它不等于胜率，但能辅助判断信号方向是否一致。</td></tr><tr><td>LS诊断</td><td>long-short spread 只用于 alpha 诊断。A 股策略报告不能把它当可部署组合，最终组合必须 long-only。</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>6. 策略回测报告</h2>
+<p>Strict framework backtest report：正式结论必须来自项目 Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio，并纳入 T+1、手续费、滑点、A 股 100 股手数、涨跌停拒单、成交量限制、风险约束和交易产物。</p>
+<h3>核心指标摘要</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>区间</th><th>Sharpe</th><th>Sortino</th><th>CAGR</th><th>累计</th><th>MaxDD</th><th>胜率</th><th>PF</th><th>成交数</th><th>手续费</th><th>涨跌停/T+1拒单</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2020-03-23 to 2025-12-31</td><td>0.5729</td><td>0.8449</td><td>11.64%</td><td>84.79%</td><td>-43.43%</td><td>48.88%</td><td>1.1160</td><td>29396</td><td>1937472.4392</td><td>21/0</td></tr></tbody></table></div>
+<h3>收益与风险拆解</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>CAGR</th><th>累计收益</th><th>年化波动</th><th>Sharpe</th><th>Sortino</th><th>MaxDD</th><th>Calmar</th><th>Tail Ratio</th><th>Ulcer Index</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>11.64%</td><td>84.79%</td><td>n/a</td><td>0.5729</td><td>0.8449</td><td>-43.43%</td><td>0.3225</td><td>1.1055</td><td>12.4429</td></tr></tbody></table></div>
+<h3>交易、成本与执行约束</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>成交/Fill数</th><th>Round Trips</th><th>胜率</th><th>Profit Factor</th><th>Payoff</th><th>Expectancy</th><th>总佣金</th><th>成本拖累</th><th>成交量限制</th><th>涨跌停拒单</th><th>T+1拒单</th><th>手数</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>29396</td><td>15688</td><td>48.88%</td><td>1.1160</td><td>1.1670</td><td>295.5545</td><td>1937472.4392</td><td>31.37%</td><td>1731</td><td>21</td><td>0</td><td>100</td></tr></tbody></table></div>
+<h3>统计显著性与基准归因</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>Benchmark</th><th>Benchmark收益</th><th>Alpha</th><th>Beta</th><th>IR</th><th>Tracking Error</th><th>t-stat</th><th>p-value</th><th>置信区间</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td><code>000300</code></td><td>5.94%</td><td>7.49%</td><td>1.0694</td><td>0.5099</td><td>14.69%</td><td>1.2032</td><td>0.1144</td><td>-0.0002 / 0.0008</td></tr></tbody></table></div>
+<h3>年度表现</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>年份</th><th>收益</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2021-12-31</td><td>19.47%</td></tr><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2022-12-31</td><td>-24.81%</td></tr><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2023-12-31</td><td>0.75%</td></tr><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2024-12-31</td><td>11.86%</td></tr><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>2025-12-31</td><td>16.99%</td></tr></tbody></table></div>
+<h3>轻量组合诊断</h3>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>诊断类型</th><th>Top 年化</th><th>Top Hit</th><th>成本后均值</th><th>Benchmark</th><th>成本后超额</th><th>Rolling OOS</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>top_bucket_long_only</td><td>28.64%</td><td>54.29%</td><td>0.34%</td><td>000300</td><td>0.34%</td><td>n/a</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>模块</th><th>专业回测要求</th></tr></thead><tbody><tr><td>收益</td><td>CAGR、累计收益、benchmark alpha、information ratio</td></tr><tr><td>风险</td><td>MaxDD、年化波动、Sortino、尾部损失和回撤恢复</td></tr><tr><td>交易</td><td>成交数、换手、胜率、Profit Factor、订单拒绝原因</td></tr><tr><td>成本</td><td>佣金、滑点、印花税、成本后收益和成本拖累</td></tr><tr><td>A股约束</td><td>T+1、100 股手数、涨跌停、成交量限制、long-only</td></tr><tr><td>审计产物</td><td>equity curve、trades、diagnostics、benchmark 覆盖和配置快照</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>7. purged walk-forward</h2>
+<p>本章用于检查样本外稳定性、Sharpe 衰减、最差 OOS split、盈利 split 占比和 deflated Sharpe ratio。通过信号验证并不等于通过 purged walk-forward。</p>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>说明</th></tr></thead><tbody><tr><td>目的</td><td>用时间顺序切分训练/验证区间，检验策略是否只在某一段历史样本内有效。</td></tr><tr><td>Purged</td><td>训练集和测试集之间留出 embargo / purge gap，避免持仓 horizon、标签重叠或信息泄漏。</td></tr><tr><td>Walk-forward</td><td>按时间向前滚动多段 OOS split，每段只使用过去信息决定参数或信号状态。</td></tr><tr><td>通过标准</td><td>不能只看平均值，还要看最差 split、盈利 split 占比、Sharpe 衰减、DSR 和 regime breakdown。</td></tr><tr><td>报告口径</td><td>A 股可部署结果仍以 long-only 为准；long-short split 只作为诊断。</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>策略</th><th>结论</th><th>Aggregate OOS Sharpe</th><th>Worst OOS Sharpe</th><th>盈利Split占比</th><th>DSR</th><th>原因</th></tr></thead><tbody><tr><td>cn_a_share_drif_daily_return_information_2026</td><td>warn</td><td>1.1482</td><td>n/a</td><td>66.67%</td><td>n/a</td><td>rolling OOS diagnostic only; missing worst_oos_sharpe and DSR; positive split pct=66.67%</td></tr></tbody></table></div>
+<h3>Walk-forward 细节</h3>
+<div class="table-wrap"><table><thead><tr><th>指标</th><th>数值</th><th>解释</th></tr></thead><tbody><tr><td>Split 数量</td><td>24</td><td>OOS 分段数量，越少越容易受偶然区间影响。</td></tr><tr><td>Top excess avg Sharpe</td><td>1.1482</td><td>long-only top bucket 相对 benchmark 的 OOS 平均 Sharpe。</td></tr><tr><td>Top excess positive split</td><td>66.67%</td><td>OOS split 中超额收益为正的比例。</td></tr><tr><td>Long-short avg Sharpe diagnostic</td><td>-1.4505</td><td>仅用于 alpha 诊断，不作为 A 股可部署组合。</td></tr><tr><td>Long-short positive split diagnostic</td><td>58.33%</td><td>long-short 诊断在 OOS split 中为正的比例。</td></tr></tbody></table></div>
+<h3>指标解释</h3>
+<div class="table-wrap"><table><thead><tr><th>指标</th><th>解释</th></tr></thead><tbody><tr><td>Aggregate OOS Sharpe</td><td>所有 OOS split 合并后的风险调整收益，反映整体样本外表现。</td></tr><tr><td>Worst OOS Sharpe</td><td>最差样本外 split 的 Sharpe。专业研究不能只看平均，最差区间决定策略抗压能力。</td></tr><tr><td>盈利Split占比</td><td>OOS split 中收益或超额收益为正的比例，用来衡量跨时间稳定性。</td></tr><tr><td>DSR</td><td>Deflated Sharpe Ratio，用来校正多次试验、非正态和样本长度带来的 Sharpe 高估。</td></tr><tr><td>Sharpe Degradation</td><td>样本内到样本外的 Sharpe 衰减。若衰减过大，通常意味着过拟合或 regime 依赖。</td></tr><tr><td>Regime Breakdown</td><td>按牛/熊/震荡、高低波动等 regime 拆分，检查信号是否只依赖单一市场环境。</td></tr></tbody></table></div>
+</section>
+<section class="panel">
+<h2>8. 最终推荐与下一步计划</h2>
+<div class="ledger"><article class="card"><h3>A Unified Framework for Anomalies based on Daily Returns</h3><div class="meta"><span class="label">决策</span><span><span class="badge rejected">rejected</span></span><span class="label">阶段</span><span>go_no_go</span><span class="label">原因</span><span>信号 FDR 不显著，严格回测结果不能单独支持进入实盘；保留为研究组件。</span><span class="label">严格回测</span><span>已记录严格 Backtester</span><span class="label">实盘分配</span><span>本流水线不允许自动实盘</span></div></article></div>
+<h3>下一步计划</h3>
+<ul><li>rejected idea 保留审计记录，不进入候选池；如需重启研究，必须有新的经济学假设、数据口径或样本外证据。</li><li>任何新策略默认保持研究产物或候选状态，不自动进入实盘分配。</li></ul>
+<h3>审计 Ledger</h3>
+<div class="ledger"><article class="card">
+<h3>A Unified Framework for Anomalies based on Daily Returns</h3>
+<div class="meta">
+<span class="label">状态</span><span><span class="badge rejected">rejected</span></span>
+<span class="label">阶段</span><span>go_no_go</span>
+<span class="label">Strategy ID</span><span><code>cn_a_share_drif_daily_return_information_2026</code></span>
+<span class="label">来源</span><span><a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6005614">SSRN</a></span>
+<span class="label">决策</span><span>信号 FDR 不显著，严格回测结果不能单独支持进入实盘；保留为研究组件。</span>
+<span class="label">研究假设</span><span>Daily Return Information Factor (DRIF): use last month&#x27;s daily return sequence/distribution to forecast future cross-sectional stock performance.</span>
+<span class="label">来源质量</span><span>8.5000</span>
+<span class="label">Admission Score</span><span>8.5000</span>
+<span class="label">信号质量</span><span>5.0000</span>
+<span class="label">研究置信度</span><span>6.0000</span>
+<span class="label">Rank IC</span><span>0.0085</span>
+<span class="label">Rank IC IR</span><span>0.0489</span>
+<span class="label">FDR p-value</span><span>0.4129</span>
+<span class="label">Hit Rate</span><span>0.5429</span>
+<span class="label">风险旗标</span><span>FDR not significant, cost sensitive, model complexity</span>
+<span class="label">验证清单</span><span>rank_ic, fdr_control, ic_decay, purged_walk_forward, transaction_cost_capacity</span>
+</div>
+</article></div>
+<h3>Pipeline Log</h3>
+<div class="table-wrap"><table><thead><tr><th>阶段</th><th>结论</th><th>标题</th><th>原因</th></tr></thead><tbody><tr><td>stage1_scout</td><td>info</td><td>A Unified Framework for Anomalies based on Daily Returns</td><td>Source=SSRN; posted=2026-01-07</td></tr><tr><td>stage2_validation</td><td>fail</td><td>A Unified Framework for Anomalies based on Daily Returns</td><td>Rank IC=0.0085, FDR p=0.4129</td></tr><tr><td>rigor</td><td>warn</td><td>cn_a_share_drif_daily_return_information_2026</td><td>rolling OOS diagnostic only; missing worst_oos_sharpe and DSR; positive split pct=66.67%</td></tr><tr><td>backtest</td><td>pass</td><td>A Unified Framework for Anomalies based on Daily Returns</td><td>Strict Backtester Sharpe=0.57, alpha=7.49%</td></tr></tbody></table></div>
+</section>
+</main>
+</body>
+</html>

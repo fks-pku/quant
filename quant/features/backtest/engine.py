@@ -297,13 +297,17 @@ class Backtester:
                 self.slippage_bps, self.market_impact_factor,
                 self.risk_price_deviation_limit,
                 entry_times, entry_prices,
+                ignore_settlement=True,
             )
             diag.forced_closeout_trades += len(all_trades) - trades_before
 
         # Record final NAV after all post-loop executions (deferred + on_stop)
         nav = calculate_daily_nav(portfolio_map, primary_portfolio, use_subs)
-        equity_curve_dates.append(current_date)
-        equity_curve_values.append(nav)
+        if equity_curve_values:
+            equity_curve_values[-1] = nav
+        else:
+            equity_curve_dates.append(end)
+            equity_curve_values.append(nav)
 
         return self._build_backtest_result(
             equity_curve_dates, equity_curve_values, all_trades,
@@ -333,6 +337,7 @@ class Backtester:
         risk_price_deviation_limit: float,
         entry_times: dict,
         entry_prices: dict,
+        ignore_settlement: bool = False,
     ) -> None:
         for order in deferred_orders:
             sym = order.symbol
@@ -362,6 +367,7 @@ class Backtester:
                     prev_bar=prev_close_bars.get(sym),
                     risk_price_deviation_limit=risk_price_deviation_limit,
                     market_impact_factor=market_impact_factor,
+                    ignore_settlement=ignore_settlement,
                 )
             except OrderRejectedError as e:
                 diag.record_rejection(e.reason)

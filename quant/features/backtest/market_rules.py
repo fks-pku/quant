@@ -31,6 +31,12 @@ def _round_half_up(value: float, decimals: int = 2) -> float:
     return math.floor(value * multiplier + 0.5) / multiplier
 
 
+def _as_date(value: date) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    return value
+
+
 def is_price_at_limit(
     symbol: str,
     open_price: float,
@@ -56,8 +62,9 @@ def get_price_limit_direction(
     if prev_close <= 0:
         return None
     if current_date and ipo_dates and symbol in ipo_dates:
-        ipo_d = ipo_dates[symbol]
-        calendar_days_since_ipo = (current_date - ipo_d).days
+        ipo_d = _as_date(ipo_dates[symbol])
+        current_d = _as_date(current_date)
+        calendar_days_since_ipo = (current_d - ipo_d).days
         if calendar_days_since_ipo <= IPO_NO_LIMIT_CALENDAR_DAYS:
             return None
     limit_pct = cn_price_limit_pct(symbol)

@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, List
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
@@ -19,7 +20,9 @@ class ArxivSource(ResearchSource):
 
     def search(self, query: Dict[str, Any], max_results: int = 10) -> List[Dict[str, Any]]:
         search_query = self._search_query(query)
-        url = f"{self._base_url}?search_query={quote(search_query)}&start=0&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"
+        sort_by = self._sort_by(query)
+        sort_order = self._sort_order(query)
+        url = f"{self._base_url}?search_query={quote(search_query)}&start=0&max_results={max_results}&sortBy={sort_by}&sortOrder={sort_order}"
         try:
             import requests
             resp = requests.get(url, timeout=30)
@@ -52,13 +55,46 @@ class ArxivSource(ResearchSource):
         return results
 
     def _search_query(self, query: Dict[str, Any]) -> str:
-        text = ""
+        category = self._category_for(query)
+        raw_query = self._raw_query(query)
+        if not raw_query:
+            return f"cat:{category}"
+        if self._looks_like_arxiv_query(raw_query):
+            if "cat:" in raw_query:
+                return raw_query
+            return f"({raw_query}) AND cat:{category}"
+        tokens = self._query_tokens(raw_query)
+        if not tokens:
+            return f"cat:{category}"
+        return " AND ".join(f"all:{token}" for token in tokens) + f" AND cat:{category}"
+
+    def _raw_query(self, query: Dict[str, Any]) -> str:
         if isinstance(query, dict):
-            for key in ("query", "q", "keywords", "text"):
+            for key in ("search_query", "query", "q", "keywords", "text"):
                 value = query.get(key)
                 if value:
-                    text = " ".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
-                    break
-        if not text:
-            return f"cat:{self._category}"
-        return f'all:"{text}" AND cat:{self._category}'
+                    return " ".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
+        return ""
+
+    def _category_for(self, query: Dict[str, Any]) -> str:
+        if isinstance(query, dict) and query.get("category"):
+            return str(query.get("category"))
+        return self._category
+
+    def _sort_by(self, query: Dict[str, Any]) -> str:
+        if isinstance(query, dict) and query.get("sort_by"):
+            return str(query.get("sort_by"))
+        return "relevance" if self._raw_query(query) else "submittedDate"
+
+    def _sort_order(self, query: Dict[str, Any]) -> str:
+        if isinstance(query, dict) and query.get("sort_order"):
+            return str(query.get("sort_order"))
+        return "descending"
+
+    def _looks_like_arxiv_query(self, text: str) -> bool:
+        return bool(re.search(r"\b(all|ti|abs|au|cat):", text))
+
+    def _query_tokens(self, text: str) -> List[str]:
+        tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
+        stopwords = {"and", "or", "the", "for", "with", "using", "to", "of", "in", "on"}
+        return [token for token in tokens if token not in stopwords]

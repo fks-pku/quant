@@ -2260,3 +2260,93 @@ class TestRegressionB1FinalDayOrder:
 
     def test_b1_trade_not_recorded(self, regression_b1_result):
         assert len(regression_b1_result.trades) == 0
+
+
+# ============================================================================
+# Regression: R2 data and execution guardrails
+# ============================================================================
+
+REGRESSION_R2_CONFIG = {
+    "backtest": {"slippage_bps": 0, "force_close_on_stop": True},
+    "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+@pytest.fixture
+def regression_r2_cn_closeout_result():
+    data = _make_bars("600519", [
+        (START, 10.0, 10.0, 10_000_000),
+        (START + timedelta(days=1), 10.0, 10.0, 10_000_000),
+    ])
+    bt = make_backtester(REGRESSION_R2_CONFIG)
+
+    class CNCloseOut:
+        name = "R2CNCloseOut"
+        context = None
+        _day = 0
+        _positions = {}
+
+        def on_start(self, ctx):
+            self.context = ctx
+
+        def on_before_trading(self, ctx, td):
+            pass
+
+        def on_data(self, ctx, data):
+            pass
+
+        def on_after_trading(self, ctx, td):
+            if self._day == 0:
+                self.context.order_manager.submit_order(
+                    "600519", 100, "BUY", "MARKET", None, self.name
+                )
+            self._day += 1
+
+        def on_fill(self, ctx, fill):
+            qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+            self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+        def on_stop(self, ctx):
+            pos = self._positions.get("600519", 0)
+            if pos > 0:
+                self.context.order_manager.submit_order(
+                    "600519", pos, "SELL", "MARKET", None, self.name
+                )
+
+    return bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[CNCloseOut()], initial_cash=100_000,
+        data_provider=DataFrameProvider(data), symbols=["600519"],
+    )
+
+
+class TestRegressionR2Guardrails:
+    def test_r2_04_cn_forced_closeout_bypasses_t1(self, regression_r2_cn_closeout_result):
+        result = regression_r2_cn_closeout_result
+        assert [t.side for t in result.trades] == ["BUY", "SELL"]
+        assert result.open_positions == []
+        assert result.diagnostics.forced_closeout_orders == 1
+        assert result.diagnostics.forced_closeout_trades == 1
+
+    def test_r2_05_equity_curve_uses_real_dates_only(self):
+        data = _make_bars("AAPL", [
+            (START, 100.0, 100.0, 1_000_000),
+            (START + timedelta(days=1), 100.0, 100.0, 1_000_000),
+        ])
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config)
+        provider = DataFrameProvider(data)
+        strat = _signal_strategy("R2NoTrade", "AAPL", buy_on=set(), sell_on=set(), qty=100)
+
+        result = bt.run(
+            start=data["timestamp"].min(), end=data["timestamp"].max(),
+            strategies=[strat], initial_cash=100_000,
+            data_provider=provider, symbols=["AAPL"],
+        )
+
+        assert list(result.equity_curve.index) == list(data["timestamp"])

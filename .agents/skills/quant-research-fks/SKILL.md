@@ -309,7 +309,26 @@ from quant.shared.utils.logger import get_logger
 
 ## 整体工作流程
 
-请严格按照以下 4 个阶段依次执行：
+正式研究管线分为两个可单独运行的阶段：`discover` 只搜集并沉淀多个 idea 到本地 `idea_bank`；`formal` 针对已入库的单个 idea 逐一完成准入评估、StrategySpec、真实数据验证、严格 Backtester、benchmark 比较和 full report。手工研究时可以按下面子步骤组织，但产物路径和报告模板必须遵守当前项目契约。
+
+## Full Report Template Contract (MANDATORY)
+
+所有正式策略研究报告必须生成中文 HTML：`full_research_report.html`。复杂报告不得自由发挥章节结构，必须严格使用模板：
+
+`quant/infrastructure/research/golden_reports/full_research_report_template.html`
+
+固定 8 个顶层章节：
+
+1. 结论汇总
+2. idea 来源与初筛
+3. 信号定义
+4. 数据来源及 benchmark 定义
+5. 信号验证
+6. 策略回测报告
+7. purged walk-forward
+8. 最终推荐与下一步计划
+
+正式报告应写入 `quant/infrastructure/var/research/reports/<strategy_or_idea_id>/full_research_report.html`，并同步维护 `quant/infrastructure/var/research/reports/latest/full_research_report.html`。`full_research_report.md` 只作为轻量入口索引。任何报告格式变更必须同时更新模板与 `quant/tests/test_research_report_contract.py`。
 
 ### 阶段 1：策略搜索 (Strategy Discovery)
 
@@ -337,7 +356,7 @@ from quant.shared.utils.logger import get_logger
 4. 优先关注近 6 个月内发布的策略
 5. 筛选标准：策略必须可用日线 OHLCV 数据实现，逻辑清晰，有初步实证或理论支撑
 
-将找到的策略整理为如下格式，保存到 `quant/infrastructure/var/research/discovered_strategies.md`：
+将找到的策略沉淀到 `quant/infrastructure/var/research/idea_bank/`，发现摘要可作为 Markdown 索引，但不能写回旧的 research 根目录散文件：
 
 ```markdown
 ## 策略名称
@@ -363,7 +382,7 @@ from quant.shared.utils.logger import get_logger
 | **过拟合风险** | 参数数量、样本内外差异、data snooping 风险 | 低风险 +2, 中等 +1 |
 | **容量与成本** | 资金容量、换手率对滑点敏感度 | 低换手 +1 |
 
-评估结果保存到 `quant/infrastructure/var/research/strategy_evaluation.md`，给出：
+评估结果应回写到本地 `idea_bank` 或正式研究报告的 ledger 中，给出：
 - 每个策略的综合评分 (0-10)
 - 推荐优先实现的策略排名
 - 不推荐的策略及原因
@@ -426,7 +445,8 @@ from quant.shared.utils.logger import get_logger
 **报告输出：**
 
 1. 控制台输出关键指标摘要
-2. 保存到 `quant/infrastructure/var/research/<strategy_name>_report.md`
+2. 保存到 `quant/infrastructure/var/research/reports/<strategy_or_idea_id>/full_research_report.html`
+3. 同步 `quant/infrastructure/var/research/reports/latest/full_research_report.html`
 
 **Walk-Forward 验证（推荐）：**
 
@@ -452,7 +472,7 @@ Walk-Forward 通过标准：
 | 策略搜索 | `exa_web_search_exa`, `web-search-prime_web_search_prime`, `web-reader_webReader` |
 | 策略评估 | 基于搜索结果的分析推理 |
 | 策略实现 | `write`, `edit` (创建 strategy.py + config.yaml), `bash` (验证注册) |
-| 回测报告 | `bash` (运行回测), `write` (生成报告) |
+| 回测报告 | `bash` (运行回测), `reporting.py` renderer (生成模板化 HTML 报告) |
 
 ## 交互规范
 

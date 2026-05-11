@@ -34,6 +34,14 @@ class ResearchStore(ABC):
         ...
 
     @abstractmethod
+    def upsert_idea(self, raw: Any, status: str = "discovered", run_id: str = "", reason: str = "") -> None:
+        ...
+
+    @abstractmethod
+    def list_ideas(self, status: Optional[Any] = None) -> List[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
     def has_seen(self, strategy_hash: str) -> bool:
         ...
 

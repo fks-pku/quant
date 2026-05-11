@@ -99,6 +99,15 @@ def test_evaluator_uses_professional_heuristic_when_llm_unavailable():
     assert report.rejection_reason == ""
 
 
+def test_heuristic_evaluator_uses_cn_symbols_when_target_market_is_cn():
+    report = StrategyEvaluator(rubric_config={
+        "target_market": "cn",
+        "default_symbols": ["000300", "600519"],
+    }).evaluate(_raw_strategy())
+
+    assert report.recommended_symbols == ["000300", "600519"]
+
+
 def test_evaluator_haircuts_hf_signals_even_when_llm_is_optimistic():
     class OptimisticLLM:
         def analyze(self, prompt, context):
@@ -164,19 +173,171 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         assert len(candidates) == 1
         assert candidates[0]["id"] == "daily_momentum_breakout"
         assert candidates[0]["research_meta"]["economic_rationale_score"] == pytest.approx(2.0)
-        assert (tmp_path / "research" / "last_result.json").exists()
-        assert "Daily Momentum Breakout" in (tmp_path / "research" / "discovered_strategies.md").read_text(encoding="utf-8")
-        assert "economic_rationale" in (tmp_path / "research" / "strategy_evaluation.md").read_text(encoding="utf-8")
-        report = (tmp_path / "research" / "full_research_report.html").read_text(encoding="utf-8")
-        assert "Full Research Report" in report
+        assert (tmp_path / "research" / "reports" / "latest" / "last_result.json").exists()
+        assert "Daily Momentum Breakout" in (tmp_path / "research" / "idea_bank" / "discovered_strategies.md").read_text(encoding="utf-8")
+        assert "economic_rationale" in (tmp_path / "research" / "reports" / "latest" / "strategy_evaluation.md").read_text(encoding="utf-8")
+        report = (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").read_text(encoding="utf-8")
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "latest" / "metadata.json").exists()
+        assert "完整研究报告" in report
+        assert "1. 结论汇总" in report
+        assert "2. idea 来源与初筛" in report
+        assert "信号构造细节" in report
+        assert "专业指标解释" in report
+        assert "6. 策略回测报告" in report
+        assert "收益与风险拆解" in report
+        assert "7. purged walk-forward" in report
+        assert "Walk-forward 细节" in report
         assert "Daily Momentum Breakout" in report
         assert "Strict framework backtest report" in report
         assert "000300 CSI 300 index" in report
-        index = (tmp_path / "research" / "full_research_report.md").read_text(encoding="utf-8")
+        index = (tmp_path / "research" / "reports" / "latest" / "full_research_report.md").read_text(encoding="utf-8")
         assert "[full_research_report.html](full_research_report.html)" in index
-        assert "Complex research reports are rendered as HTML" in index
+        assert "复杂研究报告统一使用 HTML" in index
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_discovery_only_stores_idea_bank_without_evaluation():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FailingEvaluator:
+        def evaluate(self, raw):
+            raise AssertionError("discovery-only mode must not evaluate ideas")
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=True),
+            scout=FixedScout(),
+            evaluator=FailingEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_discovery_only()
+        ideas = research_store.list_ideas("discovered")
+
+        assert result.discovered == 1
+        assert result.evaluated == 0
+        assert result.integrated == 0
+        assert len(ideas) == 1
+        assert ideas[0]["title"] == "Daily Momentum Breakout"
+        assert (tmp_path / "research" / "idea_bank" / "discovered_strategies.md").exists()
+        assert (tmp_path / "research" / "idea_bank" / "idea_bank.json").exists()
+        assert (tmp_path / "research" / "idea_bank" / "idea_bank.md").exists()
+        assert not (tmp_path / "research" / "full_research_report.html").exists()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_formal_research_loads_local_idea_bank_without_scouting():
+    tmp_path = _test_root()
+
+    class FailingScout:
+        def search(self, sources=None, max_results=10):
+            raise AssertionError("formal mode must load from local idea bank")
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_idea(_raw_strategy(), status="discovered", reason="seed")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False),
+            scout=FailingScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_formal_research_from_idea_bank()
+        ideas = research_store.list_ideas("candidate")
+
+        assert result.discovered == 1
+        assert result.evaluated == 1
+        assert result.integrated == 1
+        assert len(ideas) == 1
+        assert ideas[0]["title"] == "Daily Momentum Breakout"
+        assert (tmp_path / "research" / "reports" / "latest" / "strategy_evaluation.md").exists()
+        assert not (tmp_path / "research" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_formal_research_filters_by_idea_id():
+    tmp_path = _test_root()
+    second = RawStrategy(
+        title="Daily Breakout Candidate",
+        description="Daily OHLCV breakout strategy for liquid A-share equities.",
+        source="arxiv",
+        source_url="https://example.test/breakout",
+        authors="Researcher",
+        published_date="2026-02-01",
+    )
+
+    class FailingScout:
+        def search(self, sources=None, max_results=10):
+            raise AssertionError("formal mode must load from local idea bank")
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_idea(_raw_strategy(), status="discovered", reason="seed")
+        research_store.upsert_idea(second, status="discovered", reason="seed")
+        selected_id = next(row["idea_id"] for row in research_store.list_ideas() if row["title"] == second.title)
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False),
+            scout=FailingScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_formal_research_from_idea_bank(idea_ids=[selected_id])
+
+        assert result.discovered == 1
+        assert result.integrated == 1
+        assert research_store.list_ideas("candidate")[0]["title"] == second.title
+        assert research_store.list_ideas("discovered")[0]["title"] == "Daily Momentum Breakout"
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_full_research_report_replaces_corrupt_decision_reason():
+    from quant.infrastructure.research.reporting import build_full_research_report_html
+
+    report = build_full_research_report_html(
+        {"run_id": "encoding_guard", "backtested": 1, "walkforward_passed": 0},
+        [
+            {
+                "title": "Encoding Guard",
+                "status": "rejected",
+                "stage": "go_no_go",
+                "decision_reason": "?? FDR ?????????",
+                "metrics": {
+                    "fdr_adjusted_p": 0.41,
+                    "rank_ic": 0.008,
+                    "strict_backtest": {"metrics": {"sharpe": 0.5}},
+                },
+            }
+        ],
+    )
+
+    assert "?? FDR" not in report
+    assert "信号 FDR 不显著" in report
 
 
 def test_research_engine_records_candidate_hypothesis_ledger():
@@ -207,12 +368,14 @@ def test_research_engine_records_candidate_hypothesis_ledger():
         assert len(hypotheses) == 1
         assert hypotheses[0]["strategy_id"] == "daily_momentum_breakout"
         assert hypotheses[0]["title"] == "Daily Momentum Breakout"
-        assert hypotheses[0]["stage"] == "integrate"
+        assert hypotheses[0]["stage"] == "stage2_integrate"
         assert hypotheses[0]["metrics"]["suitability_score"] == pytest.approx(7.5)
         assert hypotheses[0]["metrics"]["estimated_edge"] == pytest.approx(0.08)
         assert "admission_score" in hypotheses[0]["metrics"]
         assert "signal_quality_score" in hypotheses[0]["metrics"]
         assert hypotheses[0]["evidence"]["source_url"] == "https://example.test/paper"
+        assert any(entry.phase == "stage1_queue" for entry in result.log)
+        assert any(entry.phase == "stage2_integrate" for entry in result.log)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -457,7 +620,7 @@ def test_research_engine_records_rejected_hypothesis_ledger():
         assert result.rejected == 1
         assert len(hypotheses) == 1
         assert hypotheses[0]["strategy_id"] == ""
-        assert hypotheses[0]["stage"] == "evaluate"
+        assert hypotheses[0]["stage"] == "stage1_admission"
         assert "suitability=3.0" in hypotheses[0]["decision_reason"]
         assert hypotheses[0]["metrics"]["suitability_score"] == pytest.approx(3.0)
     finally:
@@ -488,7 +651,7 @@ def test_candidate_pool_updates_persistent_status():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
-def test_research_engine_pauses_low_dsr_candidate_without_backtest():
+def test_research_engine_runs_strict_backtest_before_pausing_low_dsr_candidate():
     tmp_path = _test_root()
 
     class FixedScout:
@@ -511,8 +674,8 @@ def test_research_engine_pauses_low_dsr_candidate_without_backtest():
                 },
             )()
 
-    def fail_backtest(*args, **kwargs):
-        raise AssertionError("backtest should not run for low DSR candidate")
+    def record_backtest(sid, result, config, integrator, pool):
+        result.backtested += 1
 
     try:
         research_store = FileResearchStore(tmp_path / "research")
@@ -522,7 +685,7 @@ def test_research_engine_pauses_low_dsr_candidate_without_backtest():
             evaluator=FixedEvaluator(),
             research_store=research_store,
             strategies_dir=str(tmp_path / "strategies"),
-            backtest_fn=fail_backtest,
+            backtest_fn=record_backtest,
             rigor_hub=LowDsrRigorHub(),
         )
 
@@ -530,11 +693,106 @@ def test_research_engine_pauses_low_dsr_candidate_without_backtest():
 
         candidate = research_store.get_candidate("daily_momentum_breakout")
         assert result.rejected == 0
+        assert result.backtested == 1
         assert result.walkforward_passed == 0
         assert result.errors == []
         assert candidate["status"] == "needs_more_validation"
         assert candidate["research_meta"]["dsr_warning"] == pytest.approx(0.5)
         assert any(entry.phase == "rigor" and entry.verdict == "warning" for entry in result.log)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["000300"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class FixedValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=0.05,
+                rank_ic_ir=1.0,
+                ic_decay=[(1, 0.05), (5, 0.04), (10, 0.03), (21, 0.025)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=0.0,
+                hit_rate=0.55,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+            )
+
+    class NonviableRigorHub:
+        def run_walkforward(self, strategy_id, symbols, start, end):
+            return type(
+                "WalkForward",
+                (),
+                {
+                    "is_viable": False,
+                    "aggregate_oos_sharpe": -1.2,
+                    "worst_oos_sharpe": -4.6,
+                    "pct_profitable_splits": 0.2,
+                    "deflated_sharpe_ratio": 0.0,
+                },
+            )()
+
+    def record_backtest(sid, result, config, integrator, pool):
+        result.backtested += 1
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=True, rigor_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+            backtest_fn=record_backtest,
+            rigor_hub=NonviableRigorHub(),
+            spec_builder=FixedSpecBuilder(),
+            validator=FixedValidator(),
+        )
+
+        result = engine.run_full_pipeline()
+
+        candidate = research_store.get_candidate("daily_momentum_breakout")
+        hypothesis = research_store.list_hypotheses()[0]
+        assert result.rejected == 1
+        assert result.backtested == 1
+        assert candidate["status"] == "rejected"
+        assert hypothesis["status"] == "rejected"
+        assert hypothesis["stage"] == "go_no_go"
+        assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
+        assert any(entry.phase == "stage2_validation" and entry.verdict == "info" for entry in result.log)
+        assert any(entry.phase == "rigor" and entry.verdict == "info" for entry in result.log)
+        assert any(entry.phase == "rigor" and entry.verdict == "fail" for entry in result.log)
+        assert any(entry.phase == "backtest" and entry.verdict == "info" for entry in result.log)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -598,7 +856,7 @@ def test_ic_decay_warning_is_logged_without_rejecting():
 
         result = engine.run_full_pipeline()
 
-        warnings = [entry for entry in result.log if entry.phase == "validation" and entry.verdict == "warn"]
+        warnings = [entry for entry in result.log if entry.phase == "stage2_validation" and entry.verdict == "warn"]
         assert result.integrated == 1
         assert result.rejected == 0
         assert any("high_ic_decay" in entry.reason or "high_ic_decay" in entry.scores for entry in warnings)
@@ -745,7 +1003,7 @@ def test_research_engine_rejects_negative_rank_ic_direction():
     assert result.integrated == 0
     assert result.rejected == 1
     assert integrator.called is False
-    assert any(entry.phase == "validation" and entry.verdict == "fail" for entry in result.log)
+    assert any(entry.phase == "stage2_validation" and entry.verdict == "fail" for entry in result.log)
 
 
 def test_research_engine_uses_strategy_spec_universe_for_walkforward():
@@ -958,8 +1216,8 @@ def test_api_latest_report_payload_points_to_full_html_report(tmp_path):
     from quant.api import research_bp as research_module
 
     report_dir = tmp_path / "research"
-    report_dir.mkdir()
-    report_path = report_dir / "full_research_report.html"
+    (report_dir / "reports" / "latest").mkdir(parents=True)
+    report_path = report_dir / "reports" / "latest" / "full_research_report.html"
     report_path.write_text("<html><body>report</body></html>", encoding="utf-8")
 
     payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
@@ -967,7 +1225,31 @@ def test_api_latest_report_payload_points_to_full_html_report(tmp_path):
     assert payload["available"] is True
     assert payload["url"] == "/api/research/report/latest"
     assert payload["path"] == str(report_path)
+    assert payload["reports_root"] == str(report_dir / "reports")
     assert "updated_at" in payload
+
+
+def test_api_latest_report_payload_falls_back_to_legacy_report(tmp_path):
+    from quant.api import research_bp as research_module
+
+    report_dir = tmp_path / "research"
+    report_dir.mkdir()
+    report_path = report_dir / "full_research_report.html"
+    report_path.write_text("<html><body>legacy</body></html>", encoding="utf-8")
+
+    payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
+
+    assert payload["available"] is True
+    assert payload["path"] == str(report_path)
+
+
+def test_api_parse_research_idea_statuses():
+    from quant.api import research_bp as research_module
+
+    assert research_module._parse_statuses("discovered,research_queue") == ["discovered", "research_queue"]
+    assert research_module._parse_statuses(["candidate", " rejected "]) == ["candidate", "rejected"]
+    assert research_module._parse_statuses(None) is None
+    assert research_module._parse_idea_ids("abc,def") == ["abc", "def"]
 
 
 def test_api_scheduler_injects_validation_components(monkeypatch):

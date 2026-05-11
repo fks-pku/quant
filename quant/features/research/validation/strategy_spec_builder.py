@@ -87,4 +87,4 @@ def _strategy_id(title: str) -> str:
     hyphen_replaced = title.replace("-", " ")
     cleaned = re.sub(r"[^a-zA-Z0-9_\s]", "", hyphen_replaced)
     underscored = re.sub(r"\s+", "_", cleaned.strip()).lower()
-    return re.sub(r"_+", "_", underscored).strip("_")[:50] or "strategy_candidate"
+    return re.sub(r"_+", "_", underscored).strip("_")[:50].strip("_") or "strategy_candidate"

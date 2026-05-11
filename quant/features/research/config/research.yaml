@@ -13,11 +13,11 @@ research:
   default_backtest_start: "2020-01-01"
   default_backtest_end: "2024-12-31"
   default_symbols:
-    - AAPL
-    - MSFT
-    - GOOGL
-    - SPY
-    - QQQ
+    - "000300"
+    - "000905"
+    - "600519"
+    - "000001"
+    - "510300"
   validation_config:
     sensitivity_enabled: false
     sensitivity_lookback_grid: [10, 15, 20, 25, 30]
@@ -38,10 +38,16 @@ research:
       blog: 0.95
     query_plan:
       arxiv:
-        - query: "daily trading strategy"
-        - query: "cross sectional equity factor alpha"
-        - query: "mean reversion daily equity"
-        - query: "momentum anomaly transaction costs"
+        - query: "trading strategy"
+          category: "q-fin.TR"
+        - query: "cross sectional equity factor"
+          category: "q-fin.PM"
+        - query: "daily return anomaly equity"
+          category: "q-fin.PM"
+        - query: "mean reversion equity"
+          category: "q-fin.TR"
+        - query: "momentum stock returns transaction costs"
+          category: "q-fin.PM"
       ssrn:
         - query: "daily trading strategy equity factor"
         - query: "cross sectional momentum anomaly"
@@ -54,6 +60,8 @@ research:
         - query: "mean reversion trading"
   evaluation_config:
     min_admission_score: 6.0
+    target_market: cn
+    default_symbols: ["000300", "000905", "600519", "000001", "510300"]
     source_quality:
       arxiv: 1.75
       ssrn: 1.65

@@ -151,6 +151,65 @@ class TestDiscoveryQuality:
         assert "high_frequency_not_daily" in report.risk_flags
         assert "missing_source_url" in report.risk_flags
 
+    def test_agentic_ai_web_signal_is_flagged_as_non_price_signal(self):
+        from datetime import date
+        from quant.features.research.discovery.quality import score_discovery
+
+        raw = _make_raw(
+            title="Agentic AI Nowcasting Predicts Stock Returns",
+            description="Large Language Model agents autonomously search web interfaces and news to rank stocks daily.",
+            source="arxiv",
+            source_url="https://arxiv.org/abs/2601.11958",
+            authors="A",
+            published_date="2026-01-01",
+        )
+
+        report = score_discovery(raw, as_of=date(2026, 5, 9))
+
+        assert "non_price_signal" in report.risk_flags
+        assert "alternative_data_required" in report.risk_flags
+
+    def test_trailing_day_windows_count_as_daily_price_signal(self):
+        from datetime import date
+        from quant.features.research.discovery.quality import score_discovery
+
+        raw = _make_raw(
+            title="Drift Regime Equity Factor",
+            description=(
+                "A cross-sectional equity factor activates when stocks show "
+                "more than 60 percent positive days in trailing 63-day windows."
+            ),
+            source="arxiv",
+            source_url="https://arxiv.org/abs/2601.00002",
+            authors="Jane Researcher",
+            published_date="2026-04-01",
+        )
+
+        report = score_discovery(raw, as_of=date(2026, 5, 9))
+
+        assert "daily_ohlcv" in report.matched_terms
+        assert report.score >= 7.0
+
+
+class TestArxivSourceQuery:
+    def test_phrase_query_is_tokenized_and_category_can_be_overridden(self):
+        from quant.infrastructure.research.sources.arxiv_source import ArxivSource
+
+        source = ArxivSource()
+
+        query = source._search_query({"query": "cross sectional equity factor", "category": "q-fin.PM"})
+
+        assert query == "all:cross AND all:sectional AND all:equity AND all:factor AND cat:q-fin.PM"
+
+    def test_explicit_arxiv_query_is_preserved(self):
+        from quant.infrastructure.research.sources.arxiv_source import ArxivSource
+
+        source = ArxivSource()
+
+        query = source._search_query({"search_query": "ti:momentum AND abs:equity", "category": "q-fin.PM"})
+
+        assert query == "(ti:momentum AND abs:equity) AND cat:q-fin.PM"
+
 
 class TestSourceHubQueryPlan:
     def test_query_plan_runs_multiple_queries_and_attaches_quality_metadata(self):

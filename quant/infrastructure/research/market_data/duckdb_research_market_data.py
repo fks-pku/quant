@@ -2,12 +2,13 @@ import logging
 from typing import Any, Dict, List
 
 from quant.domain.ports.research_market_data import ResearchMarketData
+from quant.infrastructure.data.storage_duckdb import _DEFAULT_DB
 
 logger = logging.getLogger(__name__)
 
 
 class DuckDBResearchMarketData(ResearchMarketData):
-    def __init__(self, db_path: str = "quant/infrastructure/var/market.duckdb", pit_data: Any = None, pit_as_of_date: str = None):
+    def __init__(self, db_path: str = _DEFAULT_DB, pit_data: Any = None, pit_as_of_date: str = None):
         self._db_path = db_path
         self._pit_data = pit_data
         self._pit_as_of_date = pit_as_of_date

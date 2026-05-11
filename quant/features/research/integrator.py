@@ -36,8 +36,17 @@ class StrategyIntegrator:
         strategy_dir = self.strategies_dir / name
 
         if strategy_dir.exists():
-            logger.warning(f"Strategy directory {strategy_dir} already exists, skipping")
-            return None
+            strategy_file = strategy_dir / "strategy.py"
+            if not strategy_file.exists():
+                logger.warning(f"Strategy directory {strategy_dir} already exists without strategy.py, skipping")
+                return None
+            if not self._load_generated_strategy(strategy_file, name):
+                return None
+            entry = self._register_in_runtime(name, class_name, raw, report, spec)
+            if self.research_store is not None:
+                self.research_store.upsert_candidate(entry)
+            logger.info(f"Reused existing candidate strategy {name}")
+            return name
 
         try:
             strategy_dir.mkdir(parents=True)

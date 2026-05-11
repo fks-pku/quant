@@ -102,6 +102,16 @@ class TestPriceLimit:
             date(2025, 1, 3), {"600519": ipo_date}
         ) is False
 
+    def test_ipo_datetime_exempt(self):
+        ipo_date = datetime(2025, 1, 2)
+        prev_close = 100.0
+        limit_price = prev_close * 1.10 + 0.05
+        limit_rounded = round(limit_price, 2)
+        assert is_price_at_limit(
+            "600519", limit_rounded, prev_close,
+            date(2025, 1, 3), {"600519": ipo_date}
+        ) is False
+
     def test_ipo_no_exempt_after_grace_period(self):
         ipo_date = date(2025, 1, 2)
         prev_close = 100.0

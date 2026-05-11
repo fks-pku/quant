@@ -1,0 +1,11 @@
+strategy:
+  name: discovery_of_a_13_sharpe_oos_factor_drift_regimes
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  symbols: [000300, 000905, 600519, 000001, 510300]
+  lookback: 20
+  holding_days: 5
+  max_position_pct: 0.10

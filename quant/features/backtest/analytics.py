@@ -305,10 +305,11 @@ def calculate_statistical_significance(returns: pd.Series, benchmark_returns: Op
         else:
             p_value = 2.0 * (1.0 - scipy_stats.t.cdf(abs(t_stat), df=n - 1))
     except ImportError:
-        z = abs(t_stat)
         if benchmark_returns is not None and not benchmark_returns.empty:
-            p_value = max(0.0, 1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0))))
+            cdf = 0.5 * (1.0 + _erf_approx(t_stat / np.sqrt(2.0)))
+            p_value = min(1.0, max(0.0, 1.0 - cdf))
         else:
+            z = abs(t_stat)
             p_value = max(0.0, 2.0 * (1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0)))))
     ci_95 = (mean_ret - 1.96 * se, mean_ret + 1.96 * se)
     return {"t_stat": float(t_stat), "p_value": float(p_value), "is_significant": p_value < 0.05, "confidence_interval": ci_95}

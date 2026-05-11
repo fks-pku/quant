@@ -80,6 +80,60 @@ class ResearchEngine:
             self._experiment_store.complete_run(run_id, "completed")
         return result
 
+    def run_discovery_only(self, sources: Optional[List[str]] = None, result: Optional[ResearchResult] = None) -> ResearchResult:
+        if result is None:
+            result = ResearchResult()
+        raw_strategies = self.scout.search(sources=sources, max_results=self.config.max_results_per_source)
+        result.discovered = len(raw_strategies)
+        self.research_store.write_discoveries(raw_strategies)
+        for raw in raw_strategies:
+            self._upsert_idea(raw, "discovered", "Discovered by scout")
+        result.log.append(ResearchLogEntry(
+            phase="discovery_only",
+            title=f"Stored {result.discovered} ideas in local idea bank",
+            source="",
+            source_url="",
+            verdict="info",
+            reason="Discovery-only run: no admission evaluation, StrategySpec, validation, integration, or backtest was executed.",
+            scores=self._discovery_summary(raw_strategies),
+        ))
+        return result
+
+    def run_formal_research_from_idea_bank(
+        self,
+        statuses: Optional[List[str]] = None,
+        max_ideas: Optional[int] = None,
+        idea_ids: Optional[List[str]] = None,
+        result: Optional[ResearchResult] = None,
+    ) -> ResearchResult:
+        if result is None:
+            result = ResearchResult()
+        statuses = statuses or ["discovered"]
+        idea_rows = self.research_store.list_ideas(statuses)
+        if idea_ids:
+            allowed_ids = {str(item) for item in idea_ids}
+            idea_rows = [row for row in idea_rows if str(row.get("idea_id", "")) in allowed_ids]
+        if max_ideas is not None:
+            idea_rows = idea_rows[: int(max_ideas)]
+        raw_strategies = [self._raw_from_idea_record(row) for row in idea_rows]
+        result.discovered = len(raw_strategies)
+        result.log.append(ResearchLogEntry(
+            phase="local_idea_bank",
+            title=f"Loaded {result.discovered} ideas from local idea bank",
+            source="",
+            source_url="",
+            verdict="info",
+            reason=f"Statuses: {statuses}",
+            scores={"loaded": result.discovered},
+        ))
+        result = self._execute_formal_research(
+            raw_strategies,
+            result,
+            use_seen_gate=False,
+            queue_reason="Loaded from local idea bank for formal research.",
+        )
+        return result
+
     def _tracking_enabled(self) -> bool:
         return getattr(self.config, "tracking_enabled", False) and self._experiment_store is not None
 
@@ -134,182 +188,76 @@ class ResearchEngine:
         raw_strategies = self.scout.search(sources=sources, max_results=self.config.max_results_per_source)
         result.discovered = len(raw_strategies)
         self.research_store.write_discoveries(raw_strategies)
+        for raw in raw_strategies:
+            self._upsert_idea(raw, "discovered", "Discovered by full pipeline scout")
         logger.info(f"Discovered {result.discovered} strategies")
 
         result.log.append(ResearchLogEntry(
-            phase="scout", title=f"Scanned {result.discovered} strategies",
+            phase="stage1_scout", title=f"Scanned {result.discovered} strategies",
             source="", source_url="", verdict="info",
             reason=f"Sources: {sources or self.config.sources}",
             scores=self._discovery_summary(raw_strategies),
         ))
+        return self._execute_formal_research(raw_strategies, result, use_seen_gate=True)
 
-        integrated_ids = []
+    def _execute_formal_research(
+        self,
+        raw_strategies: List[RawStrategy],
+        result: ResearchResult,
+        use_seen_gate: bool = True,
+        queue_reason: str = "Stage 1 completed: discovery, admission evaluation, and StrategySpec drafting.",
+    ) -> ResearchResult:
+        research_queue: List[Tuple[RawStrategy, Any, Any]] = []
         evaluation_rows = []
         for raw in raw_strategies:
             try:
-                strategy_hash = StrategyScout.hash_strategy(raw)
-                validation_report = None
-                strategy_spec = None
-                if self.research_store.has_seen(strategy_hash):
-                    result.log.append(ResearchLogEntry(
-                        phase="scout", title=raw.title, source=raw.source,
-                        source_url=raw.source_url, verdict="skip",
-                        reason="Previously discovered",
-                    ))
-                    self._record_hypothesis(raw, status="skipped", stage="scout", reason="Previously discovered")
-                    continue
-                self.research_store.mark_seen(strategy_hash, raw)
-
-                report = self.evaluator.evaluate(raw)
-                result.evaluated += 1
-
-                evaluation_score = self._evaluation_score(report)
-                passes_filter = evaluation_score >= self.config.evaluation_threshold
-                if report.data_requirement == "high-frequency":
-                    passes_filter = passes_filter and report.daily_adaptable
-
-                if not passes_filter:
-                    reason_parts = [
-                        f"admission={evaluation_score:.1f} < {self.config.evaluation_threshold}",
-                        f"suitability={report.suitability_score:.1f}",
-                    ]
-                    if report.data_requirement == "high-frequency" and not report.daily_adaptable:
-                        reason_parts.append("high-frequency, not daily-adaptable")
-                    if getattr(report, "rejection_reason", ""):
-                        reason_parts.append(report.rejection_reason)
-                    result.log.append(ResearchLogEntry(
-                        phase="evaluate", title=raw.title, source=raw.source,
-                        source_url=raw.source_url, verdict="fail",
-                        reason="; ".join(reason_parts),
-                        scores={
-                            "suitability": report.suitability_score,
-                            "admission": evaluation_score,
-                            "signal_quality": getattr(report, "signal_quality_score", 0.0),
-                            "complexity": report.complexity_score,
-                            "edge": report.estimated_edge,
-                        },
-                    ))
-                    evaluation_rows.append((raw, report, "fail", "; ".join(reason_parts)))
-                    self._record_hypothesis(
-                        raw,
-                        status="rejected",
-                        stage="evaluate",
-                        reason="; ".join(reason_parts),
-                        report=report,
-                    )
-                    logger.info(f"'{raw.title}' filtered out (suitability={report.suitability_score})")
-                    result.rejected += 1
-                    continue
-
-                if self.config.validation_enabled and self._spec_builder is not None:
-                    spec = self._spec_builder.build(raw, report)
-                    strategy_spec = spec
-                    result.specified += 1
-                    if spec.status != "ready":
-                        result.needs_manual_spec += 1
-                        result.log.append(ResearchLogEntry(
-                            phase="validation", title=raw.title, source=raw.source,
-                            source_url=raw.source_url, verdict="skip",
-                            reason=f"Spec status: {spec.status}",
-                        ))
-                        self._record_hypothesis(
-                            raw,
-                            status="needs_manual_spec",
-                            stage="validation",
-                            reason=f"Spec status: {spec.status}",
-                            report=report,
-                        )
-                    elif self._validator is not None:
-                        vreport = self._validator.validate(spec)
-                        result.validated += 1
-                        if vreport.status == "error" or not vreport.fdr_significant or vreport.rank_ic < 0.02:
-                            result.log.append(ResearchLogEntry(
-                                phase="validation", title=raw.title, source=raw.source,
-                                source_url=raw.source_url, verdict="fail",
-                                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                                scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
-                            ))
-                            result.rejected += 1
-                            evaluation_rows.append((raw, report, "fail", f"Validation failed: IC={vreport.rank_ic:.4f}"))
-                            self._record_hypothesis(
-                                raw,
-                                status="rejected",
-                                stage="validation",
-                                reason=f"Validation failed: IC={vreport.rank_ic:.4f}",
-                                report=report,
-                                validation_report=vreport,
-                            )
-                            continue
-                        else:
-                            result.validated_passed += 1
-                            result.log.append(ResearchLogEntry(
-                                phase="validation", title=raw.title, source=raw.source,
-                                source_url=raw.source_url, verdict="pass",
-                                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                                scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
-                            ))
-                            vreport = self._append_ic_decay_warning(result, raw, vreport)
-                            validation_report = vreport
-                            self._record_hypothesis(
-                                raw,
-                                status="validated",
-                                stage="validation",
-                                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                                report=report,
-                                validation_report=vreport,
-                            )
-
-                strategy_id = self.integrator.integrate(raw, report, spec=strategy_spec)
-                if strategy_id:
-                    result.integrated += 1
-                    integrated_ids.append(strategy_id)
-                    result.log.append(ResearchLogEntry(
-                        phase="integrate", title=raw.title, source=raw.source,
-                        source_url=raw.source_url, verdict="pass",
-                        reason=f"Integrated as {strategy_id}",
-                        scores={
-                            "suitability": report.suitability_score,
-                            "admission": self._evaluation_score(report),
-                            "signal_quality": getattr(report, "signal_quality_score", 0.0),
-                            "complexity": report.complexity_score,
-                            "edge": report.estimated_edge,
-                            "type": report.strategy_type,
-                        },
-                    ))
-                    evaluation_rows.append((raw, report, "pass", f"Integrated as {strategy_id}"))
-                    self._record_hypothesis(
-                        raw,
-                        status="candidate",
-                        stage="integrate",
-                        reason=f"Integrated as {strategy_id}",
-                        strategy_id=strategy_id,
-                        report=report,
-                    )
-                    self._write_promotion_dossier(strategy_id, raw, report, validation_report, result.run_id, strategy_spec)
-                else:
-                    result.errors.append(f"Integration failed for '{raw.title}'")
-                    result.log.append(ResearchLogEntry(
-                        phase="integrate", title=raw.title, source=raw.source,
-                        source_url=raw.source_url, verdict="error",
-                        reason="Integration failed",
-                    ))
-                    evaluation_rows.append((raw, report, "error", "Integration failed"))
-                    self._record_hypothesis(
-                        raw,
-                        status="error",
-                        stage="integrate",
-                        reason="Integration failed",
-                        report=report,
-                    )
+                item = self._stage_one_candidate(raw, result, evaluation_rows, use_seen_gate=use_seen_gate)
+                if item is not None:
+                    research_queue.append(item)
             except Exception as e:
-                logger.error(f"Pipeline error for '{raw.title}': {e}")
+                logger.error(f"Stage 1 pipeline error for '{raw.title}': {e}")
                 result.errors.append(str(e))
                 result.log.append(ResearchLogEntry(
-                    phase="evaluate", title=raw.title, source=raw.source,
+                    phase="stage1_admission", title=raw.title, source=raw.source,
                     source_url=raw.source_url, verdict="error",
                     reason=str(e),
                 ))
-                self._record_hypothesis(raw, status="error", stage="evaluate", reason=str(e))
+                self._record_hypothesis(raw, status="error", stage="stage1_admission", reason=str(e))
+                self._upsert_idea(raw, "error", str(e))
+
+        result.log.append(ResearchLogEntry(
+            phase="stage1_queue",
+            title=f"{len(research_queue)} ideas ready for formal research",
+            source="",
+            source_url="",
+            verdict="info",
+            reason=queue_reason,
+            scores={"queued": len(research_queue), "evaluated": result.evaluated, "specified": result.specified},
+        ))
+
+        integrated_ids = []
+        for raw, report, strategy_spec in research_queue:
+            try:
+                strategy_id = self._stage_two_formal_research(raw, report, strategy_spec, result, evaluation_rows)
+                if strategy_id:
+                    integrated_ids.append(strategy_id)
+            except Exception as e:
+                logger.error(f"Stage 2 research error for '{raw.title}': {e}")
+                result.errors.append(str(e))
+                result.log.append(ResearchLogEntry(
+                    phase="stage2_research", title=raw.title, source=raw.source,
+                    source_url=raw.source_url, verdict="error",
+                    reason=str(e),
+                ))
+                self._record_hypothesis(
+                    raw,
+                    status="error",
+                    stage="stage2_research",
+                    reason=str(e),
+                    report=report,
+                    strategy_spec=strategy_spec,
+                )
+                self._upsert_idea(raw, "error", str(e))
 
         self.research_store.write_evaluations(evaluation_rows)
 
@@ -337,6 +285,251 @@ class ResearchEngine:
         logger.info(f"Pipeline complete: {result}")
         return result
 
+    def _stage_one_candidate(
+        self,
+        raw: RawStrategy,
+        result: ResearchResult,
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+        use_seen_gate: bool = True,
+    ) -> Optional[Tuple[RawStrategy, Any, Any]]:
+        strategy_hash = StrategyScout.hash_strategy(raw)
+        if use_seen_gate and self.research_store.has_seen(strategy_hash):
+            result.log.append(ResearchLogEntry(
+                phase="stage1_scout", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="skip",
+                reason="Previously discovered",
+            ))
+            self._record_hypothesis(raw, status="skipped", stage="stage1_scout", reason="Previously discovered")
+            self._upsert_idea(raw, "skipped", "Previously discovered")
+            return None
+        if use_seen_gate:
+            self.research_store.mark_seen(strategy_hash, raw)
+
+        report = self.evaluator.evaluate(raw)
+        result.evaluated += 1
+
+        evaluation_score = self._evaluation_score(report)
+        passes_filter = evaluation_score >= self.config.evaluation_threshold
+        if report.data_requirement == "high-frequency":
+            passes_filter = passes_filter and report.daily_adaptable
+
+        if not passes_filter:
+            reason = self._admission_rejection_reason(report, evaluation_score)
+            result.log.append(ResearchLogEntry(
+                phase="stage1_admission", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="fail",
+                reason=reason,
+                scores=self._evaluation_log_scores(report, evaluation_score),
+            ))
+            evaluation_rows.append((raw, report, "fail", reason))
+            self._record_hypothesis(
+                raw,
+                status="rejected",
+                stage="stage1_admission",
+                reason=reason,
+                report=report,
+            )
+            logger.info(f"'{raw.title}' filtered out (admission={evaluation_score})")
+            self._upsert_idea(raw, "stage1_rejected", reason)
+            result.rejected += 1
+            return None
+
+        strategy_spec = None
+        if self._spec_builder is not None:
+            strategy_spec = self._spec_builder.build(raw, report)
+            result.specified += 1
+            if strategy_spec.status != "ready":
+                result.needs_manual_spec += 1
+                reason = f"Spec status: {strategy_spec.status}"
+                result.log.append(ResearchLogEntry(
+                    phase="stage1_spec", title=raw.title, source=raw.source,
+                    source_url=raw.source_url, verdict="skip",
+                    reason=reason,
+                ))
+                evaluation_rows.append((raw, report, "manual_spec", reason))
+                self._record_hypothesis(
+                    raw,
+                    status="needs_manual_spec",
+                    stage="stage1_spec",
+                    reason=reason,
+                    report=report,
+                    strategy_spec=strategy_spec,
+                )
+                self._upsert_idea(raw, "needs_manual_spec", reason)
+                return None
+
+        result.log.append(ResearchLogEntry(
+            phase="stage1_spec", title=raw.title, source=raw.source,
+            source_url=raw.source_url, verdict="pass",
+            reason="Ready for formal research",
+            scores={
+                **self._evaluation_log_scores(report, evaluation_score),
+                "strategy_id": getattr(strategy_spec, "strategy_id", ""),
+                "formula": getattr(strategy_spec, "signal_formula_key", ""),
+            },
+        ))
+        evaluation_rows.append((raw, report, "research_queue", "Ready for formal research"))
+        self._record_hypothesis(
+            raw,
+            status="idea_candidate",
+            stage="stage1_spec",
+            reason="Ready for formal research",
+            report=report,
+            strategy_spec=strategy_spec,
+        )
+        self._upsert_idea(raw, "research_queue", "Ready for formal research")
+        return raw, report, strategy_spec
+
+    def _stage_two_formal_research(
+        self,
+        raw: RawStrategy,
+        report: Any,
+        strategy_spec: Any,
+        result: ResearchResult,
+        evaluation_rows: List[Tuple[Any, Any, str, str]],
+    ) -> Optional[str]:
+        validation_report = None
+        if self.config.validation_enabled and strategy_spec is not None and self._validator is not None:
+            result.log.append(ResearchLogEntry(
+                phase="stage2_validation",
+                title=raw.title,
+                source=raw.source,
+                source_url=raw.source_url,
+                verdict="info",
+                reason="Running HFQ real-data signal validation; this can take several minutes for full A-share data.",
+                scores={
+                    "strategy_id": getattr(strategy_spec, "strategy_id", ""),
+                    "formula": getattr(strategy_spec, "signal_formula_key", ""),
+                    "lookback_days": getattr(strategy_spec, "lookback_days", 0),
+                    "horizon_days": getattr(strategy_spec, "horizon_days", 0),
+                },
+            ))
+            vreport = self._validator.validate(strategy_spec)
+            result.validated += 1
+            if vreport.status == "error" or not vreport.fdr_significant or vreport.rank_ic < 0.02:
+                result.log.append(ResearchLogEntry(
+                    phase="stage2_validation", title=raw.title, source=raw.source,
+                    source_url=raw.source_url, verdict="fail",
+                    reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                    scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+                ))
+                result.rejected += 1
+                evaluation_rows.append((raw, report, "fail", f"Validation failed: IC={vreport.rank_ic:.4f}"))
+                self._record_hypothesis(
+                    raw,
+                    status="rejected",
+                    stage="stage2_validation",
+                    reason=f"Validation failed: IC={vreport.rank_ic:.4f}",
+                    report=report,
+                    validation_report=vreport,
+                    strategy_spec=strategy_spec,
+                )
+                self._upsert_idea(raw, "rejected", f"Validation failed: IC={vreport.rank_ic:.4f}")
+                return None
+
+            result.validated_passed += 1
+            result.log.append(ResearchLogEntry(
+                phase="stage2_validation", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="pass",
+                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+            ))
+            vreport = self._append_ic_decay_warning(result, raw, vreport)
+            validation_report = vreport
+            self._record_hypothesis(
+                raw,
+                status="validated",
+                stage="stage2_validation",
+                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                report=report,
+                validation_report=vreport,
+                strategy_spec=strategy_spec,
+            )
+            self._upsert_idea(raw, "validated", f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}")
+
+        strategy_id = self.integrator.integrate(raw, report, spec=strategy_spec)
+        if strategy_id:
+            result.integrated += 1
+            result.log.append(ResearchLogEntry(
+                phase="stage2_integrate", title=raw.title, source=raw.source,
+                source_url=raw.source_url, verdict="pass",
+                reason=f"Integrated as {strategy_id}",
+                scores={
+                    **self._evaluation_log_scores(report, self._evaluation_score(report)),
+                    "type": report.strategy_type,
+                },
+            ))
+            self._record_hypothesis(
+                raw,
+                status="candidate",
+                stage="stage2_integrate",
+                reason=f"Integrated as {strategy_id}",
+                strategy_id=strategy_id,
+                report=report,
+                validation_report=validation_report,
+                strategy_spec=strategy_spec,
+            )
+            self._write_promotion_dossier(strategy_id, raw, report, validation_report, result.run_id, strategy_spec)
+            self._upsert_idea(raw, "candidate", f"Integrated as {strategy_id}")
+            return strategy_id
+
+        result.errors.append(f"Integration failed for '{raw.title}'")
+        result.log.append(ResearchLogEntry(
+            phase="stage2_integrate", title=raw.title, source=raw.source,
+            source_url=raw.source_url, verdict="error",
+            reason="Integration failed",
+        ))
+        evaluation_rows.append((raw, report, "error", "Integration failed"))
+        self._record_hypothesis(
+            raw,
+            status="error",
+            stage="stage2_integrate",
+            reason="Integration failed",
+            report=report,
+            strategy_spec=strategy_spec,
+        )
+        self._upsert_idea(raw, "error", "Integration failed")
+        return None
+
+    def _admission_rejection_reason(self, report: Any, evaluation_score: float) -> str:
+        reason_parts = [
+            f"admission={evaluation_score:.1f} < {self.config.evaluation_threshold}",
+            f"suitability={report.suitability_score:.1f}",
+        ]
+        if report.data_requirement == "high-frequency" and not report.daily_adaptable:
+            reason_parts.append("high-frequency, not daily-adaptable")
+        if getattr(report, "rejection_reason", ""):
+            reason_parts.append(report.rejection_reason)
+        return "; ".join(reason_parts)
+
+    def _upsert_idea(self, raw: RawStrategy, status: str, reason: str = "") -> None:
+        try:
+            self.research_store.upsert_idea(raw, status=status, reason=reason)
+        except Exception as e:
+            logger.warning(f"Failed to upsert research idea '{raw.title}': {e}")
+
+    @staticmethod
+    def _raw_from_idea_record(row: Dict[str, Any]) -> RawStrategy:
+        return RawStrategy(
+            title=str(row.get("title", "")),
+            description=str(row.get("description", "")),
+            source=str(row.get("source", "")),
+            source_url=str(row.get("source_url", "")),
+            authors=str(row.get("authors") or "") or None,
+            published_date=str(row.get("published_date") or "") or None,
+            metadata=dict(row.get("metadata") or {}),
+        )
+
+    @staticmethod
+    def _evaluation_log_scores(report: Any, evaluation_score: float) -> Dict[str, Any]:
+        return {
+            "suitability": report.suitability_score,
+            "admission": evaluation_score,
+            "signal_quality": getattr(report, "signal_quality_score", 0.0),
+            "complexity": report.complexity_score,
+            "edge": report.estimated_edge,
+        }
+
     def _record_hypothesis(
         self,
         raw: RawStrategy,
@@ -346,6 +539,7 @@ class ResearchEngine:
         strategy_id: str = "",
         report: Any = None,
         validation_report: Any = None,
+        strategy_spec: Any = None,
     ) -> None:
         try:
             self.research_store.upsert_hypothesis(
@@ -367,6 +561,7 @@ class ResearchEngine:
                         "published_date": raw.published_date or "",
                         "metadata": dict(raw.metadata or {}),
                         "discovery_quality": discovery_quality(raw),
+                        "strategy_spec": self._strategy_spec_dict(strategy_spec),
                     },
                 }
             )
@@ -412,8 +607,13 @@ class ResearchEngine:
                 "ff_alpha_monthly",
                 "ff_alpha_tstat",
                 "ff_r2",
+                "fama_macbeth_tstat",
             ):
                 metrics[field] = getattr(validation_report, field, 0.0)
+            metrics["ic_decay"] = list(getattr(validation_report, "ic_decay", []) or [])
+            metrics["data_start"] = getattr(validation_report, "data_start", "")
+            metrics["data_end"] = getattr(validation_report, "data_end", "")
+            metrics["portfolio_diagnostics"] = dict(getattr(validation_report, "portfolio_diagnostics", {}) or {})
         return metrics
 
     def _write_promotion_dossier(
@@ -537,6 +737,7 @@ class ResearchEngine:
     def _scorecard_sort_key(row: Dict[str, Any]) -> tuple:
         status_rank = {
             "candidate": 0,
+            "idea_candidate": 1,
             "validated": 1,
             "needs_more_validation": 2,
             "needs_manual_spec": 3,
@@ -579,6 +780,9 @@ class ResearchEngine:
         for sid in strategy_ids:
             try:
                 symbols = self._strategy_symbols(sid)
+                final_status = ""
+                final_reason = ""
+                wf_result = None
                 if self._rigor_hub is not None and self.config.rigor_enabled:
                     split_benchmark_data = benchmark_data
                     if split_benchmark_data is None:
@@ -587,6 +791,19 @@ class ResearchEngine:
                             self.config.default_backtest_start,
                             self.config.default_backtest_end,
                         )
+                    result.log.append(ResearchLogEntry(
+                        phase="rigor",
+                        title=sid,
+                        source="",
+                        source_url="",
+                        verdict="info",
+                        reason="Running purged walk-forward validation.",
+                        scores={
+                            "symbols": len(symbols),
+                            "start": self.config.default_backtest_start,
+                            "end": self.config.default_backtest_end,
+                        },
+                    ))
                     wf_result = self._run_walkforward(
                         sid,
                         symbols,
@@ -595,26 +812,85 @@ class ResearchEngine:
                         split_benchmark_data,
                     )
                     if not wf_result.is_viable:
-                        self.pool.reject(sid, reason=f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}")
-                        result.rejected += 1
-                        continue
-                    dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
-                    if dsr is not None and dsr < 0.95:
-                        reason = f"Deflated Sharpe ratio warning: dsr={dsr:.2f} < 0.95"
-                        self._mark_needs_more_validation(sid, dsr, reason)
+                        reason = f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
+                        final_status = "rejected"
+                        final_reason = reason
                         result.log.append(ResearchLogEntry(
-                            phase="rigor", title=sid, source="", source_url="",
-                            verdict="warning", reason=reason,
-                            scores={"deflated_sharpe_ratio": dsr},
+                            phase="rigor",
+                            title=sid,
+                            source="",
+                            source_url="",
+                            verdict="fail",
+                            reason=reason,
+                            scores={
+                                "aggregate_oos_sharpe": getattr(wf_result, "aggregate_oos_sharpe", 0.0),
+                                "worst_oos_sharpe": getattr(wf_result, "worst_oos_sharpe", 0.0),
+                                "pct_profitable_splits": getattr(wf_result, "pct_profitable_splits", 0.0),
+                            },
                         ))
-                        continue
-                    result.walkforward_passed += 1
+                    else:
+                        dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
+                        if dsr is not None and dsr < 0.95:
+                            reason = f"Deflated Sharpe ratio warning: dsr={dsr:.2f} < 0.95"
+                            final_status = "needs_more_validation"
+                            final_reason = reason
+                            result.log.append(ResearchLogEntry(
+                                phase="rigor", title=sid, source="", source_url="",
+                                verdict="warning", reason=reason,
+                                scores={"deflated_sharpe_ratio": dsr},
+                            ))
+                        else:
+                            result.walkforward_passed += 1
+                rejected_before_backtest = result.rejected
+                result.log.append(ResearchLogEntry(
+                    phase="backtest",
+                    title=sid,
+                    source="",
+                    source_url="",
+                    verdict="info",
+                    reason="Running strict project Backtester with execution constraints.",
+                    scores={
+                        "start": self.config.default_backtest_start,
+                        "end": self.config.default_backtest_end,
+                    },
+                ))
                 self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
+                if final_status == "rejected":
+                    if self._candidate_status(sid) != "rejected":
+                        if self.pool.reject(sid, reason=final_reason) and result.rejected == rejected_before_backtest:
+                            result.rejected += 1
+                    self._update_hypothesis_status_for_strategy(
+                        sid,
+                        "rejected",
+                        "go_no_go",
+                        f"{final_reason}; strict Backtester executed for audit",
+                    )
+                elif final_status == "needs_more_validation" and self._candidate_status(sid) == "candidate":
+                    dsr_value = 0.0
+                    try:
+                        dsr_value = float(getattr(wf_result, "deflated_sharpe_ratio", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        dsr_value = 0.0
+                    self._mark_needs_more_validation(sid, dsr_value, final_reason)
             except Exception as e:
                 logger.error(f"Backtest failed for {sid}: {e}")
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
+                self._update_hypothesis_status_for_strategy(sid, "rejected", "backtest", f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _candidate_status(self, strategy_id: str) -> str:
+        if self.research_store is not None:
+            try:
+                info = self.research_store.get_candidate(strategy_id)
+                if info is not None:
+                    return str(info.get("status", ""))
+            except Exception:
+                pass
+        for entry in self.integrator.registry.values():
+            if entry.get("id") == strategy_id:
+                return str(entry.get("status", ""))
+        return ""
 
     def _strategy_symbols(self, strategy_id: str) -> List[str]:
         entry = self.integrator.get_registry_entry(strategy_id) if hasattr(self.integrator, "get_registry_entry") else None
@@ -636,7 +912,7 @@ class ResearchEngine:
             errors.append("high_ic_decay")
         vreport = replace(vreport, errors=errors)
         result.log.append(ResearchLogEntry(
-            phase="validation",
+            phase="stage2_validation",
             title=raw.title,
             source=raw.source,
             source_url=raw.source_url,
@@ -712,6 +988,21 @@ class ResearchEngine:
                 meta["dsr_warning"] = dsr
                 meta["needs_more_validation_reason"] = reason
                 break
+        self._update_hypothesis_status_for_strategy(strategy_id, "needs_more_validation", "rigor", reason)
+
+    def _update_hypothesis_status_for_strategy(self, strategy_id: str, status: str, stage: str, reason: str) -> None:
+        if self.research_store is None or not hasattr(self.research_store, "list_hypotheses"):
+            return
+        try:
+            for row in self.research_store.list_hypotheses():
+                if row.get("strategy_id") == strategy_id:
+                    updated = dict(row)
+                    updated["status"] = status
+                    updated["stage"] = stage
+                    updated["decision_reason"] = reason
+                    self.research_store.upsert_hypothesis(updated)
+        except Exception as e:
+            logger.warning(f"Failed to update hypothesis status for {strategy_id}: {e}")
 
 
 class _NullResearchStore(ResearchStore):
@@ -734,6 +1025,12 @@ class _NullResearchStore(ResearchStore):
         return None
 
     def list_hypotheses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        return []
+
+    def upsert_idea(self, raw: Any, status: str = "discovered", run_id: str = "", reason: str = "") -> None:
+        pass
+
+    def list_ideas(self, status: Optional[Any] = None) -> List[Dict[str, Any]]:
         return []
 
     def has_seen(self, strategy_hash: str) -> bool:

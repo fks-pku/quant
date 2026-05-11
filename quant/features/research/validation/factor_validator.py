@@ -202,6 +202,13 @@ class FactorValidator:
         rank_ic_ir = compute_icir(valid_ic)
         rank_ic_p = _ttest_1samp_pvalue(valid_ic, 0.0)
         long_short_series = self._long_short_series(signal_matrix, forward_returns)
+        portfolio_diagnostics = self._portfolio_diagnostics(
+            spec,
+            signal_matrix,
+            forward_returns,
+            str(close_prices.index[0].date()),
+            str(close_prices.index[-1].date()),
+        )
         ff, factor_errors = self._decompose_against_factors(long_short_series)
 
         return ValidationReport(
@@ -231,6 +238,7 @@ class FactorValidator:
                 forward_returns,
                 min_stocks=self._min_stocks,
             ),
+            portfolio_diagnostics=portfolio_diagnostics,
             errors=factor_errors,
         )
 
@@ -262,6 +270,142 @@ class FactorValidator:
             spreads.append(float(long_returns.mean() - short_returns.mean()))
             dates.append(date)
         return pd.Series(spreads, index=pd.to_datetime(dates)).sort_index() if spreads else pd.Series(dtype=float)
+
+    def _portfolio_diagnostics(
+        self,
+        spec: StrategySpec,
+        signals: pd.DataFrame,
+        forward_returns: pd.DataFrame,
+        start: str,
+        end: str,
+    ) -> Dict[str, Any]:
+        top_bucket = self._top_bucket_series(signals, forward_returns)
+        cost_bps = float(self._config.get("portfolio_diagnostic_cost_bps", 10.0) or 0.0)
+        after_cost = top_bucket - cost_bps / 10000.0 if not top_bucket.empty else top_bucket
+        benchmark_symbol, benchmark_returns, benchmark_coverage = self._benchmark_forward_returns(spec, start, end, top_bucket.index)
+        excess = pd.Series(dtype=float)
+        excess_after_cost = pd.Series(dtype=float)
+        if benchmark_returns is not None and not benchmark_returns.empty and not top_bucket.empty:
+            aligned = pd.concat(
+                [top_bucket.rename("top"), after_cost.rename("after_cost"), benchmark_returns.rename("benchmark")],
+                axis=1,
+            ).dropna()
+            if not aligned.empty:
+                excess = aligned["top"] - aligned["benchmark"]
+                excess_after_cost = aligned["after_cost"] - aligned["benchmark"]
+        series_for_oos = excess_after_cost if not excess_after_cost.empty else after_cost
+        return {
+            "kind": "top_bucket_long_only",
+            "top_quantile": 0.8,
+            "holding_horizon_days": spec.horizon_days,
+            "rebalance_frequency": "daily signal / holding horizon gate",
+            "cost_bps_per_turn": cost_bps,
+            "top_bucket_mean_return": self._safe_mean(top_bucket),
+            "top_bucket_annualized_return": self._annualize_period_return(self._safe_mean(top_bucket), spec.horizon_days),
+            "top_bucket_hit_rate": self._hit_rate(top_bucket),
+            "top_bucket_after_cost_mean_return": self._safe_mean(after_cost),
+            "benchmark_symbol": benchmark_symbol or "",
+            "benchmark_coverage": benchmark_coverage,
+            "benchmark_excess_mean_return": self._safe_mean(excess),
+            "benchmark_excess_after_cost_mean_return": self._safe_mean(excess_after_cost),
+            "rolling_oos": self._rolling_oos(series_for_oos, spec.horizon_days),
+            "long_short_usage": "alpha_diagnostic_only",
+        }
+
+    def _top_bucket_series(self, signals: pd.DataFrame, forward_returns: pd.DataFrame) -> pd.Series:
+        common_index = signals.index.intersection(forward_returns.index)
+        common_columns = signals.columns.intersection(forward_returns.columns)
+        values = []
+        dates = []
+        for date in common_index:
+            paired = pd.concat(
+                [
+                    signals.loc[date, common_columns].rename("signal"),
+                    forward_returns.loc[date, common_columns].rename("return"),
+                ],
+                axis=1,
+            ).dropna()
+            if len(paired) < self._min_stocks:
+                continue
+            high = paired["signal"].quantile(0.8)
+            long_returns = paired.loc[paired["signal"] >= high, "return"]
+            if long_returns.empty:
+                continue
+            values.append(float(long_returns.mean()))
+            dates.append(date)
+        return pd.Series(values, index=pd.to_datetime(dates)).sort_index() if values else pd.Series(dtype=float)
+
+    def _benchmark_forward_returns(
+        self,
+        spec: StrategySpec,
+        start: str,
+        end: str,
+        target_index: pd.Index,
+    ) -> tuple[str, pd.Series, Dict[str, Any]]:
+        if not spec.universe or detect_market(spec.universe[0]) != "cn":
+            return "", pd.Series(dtype=float), {}
+        from quant.features.research.validation.signal_library import adjusted_price_matrix
+
+        for symbol in ("000300", "510300"):
+            try:
+                raw = self._market_data.get_daily_bars([symbol], start, end)
+                frame = raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
+            except Exception as e:
+                logger.warning(f"Benchmark fetch failed for {symbol}: {e}")
+                continue
+            if frame.empty or "date" not in frame.columns:
+                continue
+            frame = frame.copy()
+            frame["date"] = pd.to_datetime(frame["date"])
+            prices = adjusted_price_matrix(frame, "close")
+            if prices.empty:
+                continue
+            column = symbol if symbol in prices.columns else prices.columns[0]
+            forward = prices[column].pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
+            forward = forward.reindex(pd.to_datetime(target_index)).dropna()
+            coverage = {
+                "start": str(prices.index.min().date()),
+                "end": str(prices.index.max().date()),
+                "rows": int(prices[column].dropna().shape[0]),
+                "fallback_used": symbol != "000300",
+            }
+            return symbol, forward, coverage
+        return "", pd.Series(dtype=float), {}
+
+    @staticmethod
+    def _safe_mean(series: pd.Series) -> float:
+        return float(series.dropna().mean()) if series is not None and not series.dropna().empty else 0.0
+
+    @staticmethod
+    def _hit_rate(series: pd.Series) -> float:
+        clean = series.dropna() if series is not None else pd.Series(dtype=float)
+        return float((clean > 0).mean()) if not clean.empty else 0.0
+
+    @staticmethod
+    def _annualize_period_return(mean_return: float, horizon_days: int) -> float:
+        if mean_return <= -1.0:
+            return -1.0
+        periods = 252.0 / max(1, float(horizon_days))
+        return float((1.0 + mean_return) ** periods - 1.0)
+
+    def _rolling_oos(self, series: pd.Series, horizon_days: int) -> List[Dict[str, Any]]:
+        clean = series.dropna() if series is not None else pd.Series(dtype=float)
+        if clean.empty:
+            return []
+        rows = []
+        grouped = clean.groupby(clean.index.year)
+        for year, chunk in grouped:
+            mean_return = self._safe_mean(chunk)
+            rows.append(
+                {
+                    "split": str(year),
+                    "observations": int(len(chunk)),
+                    "mean_return": mean_return,
+                    "annualized_return": self._annualize_period_return(mean_return, horizon_days),
+                    "hit_rate": self._hit_rate(chunk),
+                }
+            )
+        return rows
 
     def _decompose_against_factors(self, strategy_returns: pd.Series) -> tuple[Dict[str, float], List[str]]:
         zeros = {"alpha_monthly": 0.0, "tstat": 0.0, "r2": 0.0}

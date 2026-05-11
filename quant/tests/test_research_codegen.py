@@ -137,6 +137,20 @@ def test_integrator_uses_ready_spec_strategy_id_for_generated_candidate(tmp_path
     assert entry["research_meta"]["strategy_spec"]["strategy_id"] == "paper_alpha_v2"
 
 
+def test_integrator_reuses_existing_generated_strategy(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw()
+    report = _report("momentum")
+    spec = _spec("momentum", "momentum_close_return")
+
+    first_id = integrator.integrate(raw, report, spec=spec)
+    second_id = integrator.integrate(raw, report, spec=spec)
+
+    assert first_id == "daily_momentum_breakout"
+    assert second_id == "daily_momentum_breakout"
+    assert integrator.get_registry_entry("daily_momentum_breakout")["status"] == "candidate"
+
+
 def test_integrator_registers_generated_strategy_for_backtest_lookup(tmp_path):
     from quant.features.strategies.registry import StrategyRegistry
 

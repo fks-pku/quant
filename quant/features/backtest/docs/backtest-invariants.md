@@ -1390,6 +1390,35 @@ C35-05  winning_trades/losing_trades 使用完整 round-trip PnL 分类
 
 ---
 
+## Regression W1: Walk-forward aggregate max drawdown
+
+Walk-forward `aggregate_max_dd` must preserve the backtest analytics sign convention:
+drawdown percentages are negative, and the most severe window is the minimum value.
+
+### Assertions
+
+    W1-01  window max_drawdown_pct == [-0.02, -0.25, -0.08]
+    W1-02  aggregate_max_dd == -0.25
+
+---
+
+## Regression R2: Data and execution guardrails
+
+Backtest inputs and fill-time prices must fail closed before mutating portfolio state or analytics state.
+
+### Assertions
+
+    R2-01  DataValidator.validate() returns ValidationReport, not raw pandas exceptions, for unparseable timestamp values.
+    R2-02  DataValidator.validate() rejects NaN/null and non-numeric OHLCV values.
+    R2-03  execute_order() rejects non-finite or non-positive fill prices with PRICE_INVALID before cash/position mutation.
+    R2-04  on_stop forced close-out can sell same-day CN lots by explicit close-out semantics, not by normal T+1 deferred semantics.
+    R2-05  equity_curve index must contain real trading dates only; post-loop close-out updates final real-date NAV instead of appending end+1.
+    R2-06  CN SELL volume caps must keep sellable odd-lot quantities; board-lot rounding applies to CN BUY and HK lot-constrained trades.
+    R2-07  benchmark statistical significance is a one-sided outperformance test; negative excess-return t-stat is not significant outperformance.
+    R2-08  CN IPO price-limit exemption accepts both date and datetime IPO metadata.
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -1425,3 +1454,5 @@ C35-05  winning_trades/losing_trades 使用完整 round-trip PnL 分类
 |34|CN|多策略同标的送股 synthetic fill 只同步对应策略|
 |35|US|round-trip 交易统计包含买入佣金|
 |B1|US|结束日 deferred order 过期|
+|W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
+|R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

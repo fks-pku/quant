@@ -52,6 +52,18 @@ class TestStrategySpecBuilder:
         spec = builder.build(_raw("Momentum: Test-v2!"), _report("momentum"))
         assert spec.strategy_id == "momentum_test_v2"
 
+    def test_strategy_id_truncation_does_not_leave_trailing_separator(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        builder = StrategySpecBuilder()
+        spec = builder.build(
+            _raw("Discovery of a 13-Sharpe OOS Factor: Drift Regimes Unlock Hidden Cross-Sectional Predictability"),
+            _report("mean_reversion"),
+        )
+        assert spec.strategy_id == "discovery_of_a_13_sharpe_oos_factor_drift_regimes"
+
     def test_mean_reversion_maps_to_close_to_ma(self):
         from quant.features.research.validation.strategy_spec_builder import (
             StrategySpecBuilder,

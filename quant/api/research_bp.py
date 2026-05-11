@@ -1,5 +1,7 @@
+import json
 import os
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +13,15 @@ from quant.features.research.models import ResearchConfig, ResearchResult
 from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
+from quant.infrastructure.research.asset_paths import (
+    IDEA_BANK_JSON,
+    IDEA_BANK_MD,
+    LATEST_REPORT_METADATA,
+    LEGACY_IDEA_BANK_JSON,
+    LEGACY_IDEA_BANK_MD,
+    REPORT_HTML,
+    latest_report_html_path,
+)
 
 
 def _make_backtest_fn():
@@ -20,6 +31,7 @@ def _make_backtest_fn():
     architectural composition-root wiring, not feature-to-feature coupling.
     """
     from quant.features.backtest.engine import Backtester
+    from quant.features.backtest.benchmark import BenchmarkProvider
     from quant.features.strategies.registry import StrategyRegistry
     from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
     from quant.features.backtest.walkforward import DataFrameProvider
@@ -27,6 +39,7 @@ def _make_backtest_fn():
     from quant.features.trading.risk import RiskEngine
     from quant.features.trading.sub_portfolio import SubPortfolio
     from quant.features.research.models import ResearchLogEntry
+    from quant.domain.models.market import is_cn_symbol
     import pandas as pd
 
     def _run_backtest(sid, result, config, integrator, pool):
@@ -40,15 +53,28 @@ def _make_backtest_fn():
         symbols = _candidate_symbols(info, config.default_symbols)
         start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
         end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
+        is_cn = any(is_cn_symbol(sym) for sym in symbols)
+        initial_cash = 500000 if is_cn else 100000
 
         db_provider = DuckDBProvider()
         db_provider.connect()
         all_data = []
-        for sym in symbols:
-            bars = db_provider.get_bars(sym, start, end, "1d")
-            if not bars.empty:
-                all_data.append(bars)
-        db_provider.disconnect()
+        lot_sizes = {}
+        benchmark_provider = None
+        benchmark_meta = {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
+        try:
+            for sym in symbols:
+                bars = db_provider.get_bars(sym, start, end, "1d")
+                if not bars.empty:
+                    all_data.append(bars)
+                try:
+                    lot_sizes[sym] = db_provider.storage.get_lot_size(sym) if is_cn_symbol(sym) else 1
+                except Exception:
+                    lot_sizes[sym] = 100 if is_cn_symbol(sym) else 1
+            if is_cn:
+                benchmark_provider, benchmark_meta = _load_cn_benchmark_provider(db_provider, start, end, BenchmarkProvider)
+        finally:
+            db_provider.disconnect()
 
         if not all_data:
             result.errors.append(f"No data for {sid}")
@@ -60,51 +86,245 @@ def _make_backtest_fn():
 
         bt_config = {
             "backtest": {"slippage_bps": 5},
-            "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+            "execution": {"commission": {
+                "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                "HK": {"type": "hk_realistic"},
+                "CN": {"type": "cn_realistic"},
+            }},
             "data": {"default_timeframe": "1d"},
             "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
         }
 
-        backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
-        bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=100000, data_provider=data_provider, symbols=symbols)
+        backtester = Backtester(
+            bt_config,
+            portfolio_class=Portfolio,
+            risk_engine_class=RiskEngine,
+            sub_portfolio_class=SubPortfolio,
+            lot_sizes=lot_sizes,
+            benchmark_provider=benchmark_provider,
+        )
+        bt_result = backtester.run(
+            start=start,
+            end=end,
+            strategies=[strategy],
+            initial_cash=initial_cash,
+            data_provider=data_provider,
+            symbols=symbols,
+        )
+        strict_report = _strict_backtest_report(
+            bt_result,
+            start,
+            end,
+            initial_cash,
+            symbols,
+            benchmark_meta,
+            lot_sizes,
+        )
+        result.backtested += 1
 
         if info is not None:
-            info["backtest"] = {
-                "sharpe": round(bt_result.sharpe_ratio, 2),
-                "max_dd": round(bt_result.max_drawdown_pct, 2),
-                "cagr": round(bt_result.total_return * 100 / max(1, (end - start).days / 365.25), 2),
-                "win_rate": round(bt_result.win_rate * 100, 2),
-                "period": f"{config.default_backtest_start}-{config.default_backtest_end}",
-            }
+            info["backtest"] = strict_report
             meta = info.setdefault("research_meta", {})
-            meta["backtest_result"] = info["backtest"]
+            meta["backtest_result"] = strict_report
+            meta["strict_backtest_result"] = strict_report
+            _persist_candidate_backtest(pool, sid, info, strict_report)
             if bt_result.sharpe_ratio < config.backtest_sharpe_threshold:
                 pool.reject(sid, reason=f"Backtest Sharpe {bt_result.sharpe_ratio:.2f} below threshold")
                 result.rejected += 1
+                _update_hypothesis_backtest(
+                    pool,
+                    sid,
+                    strict_report,
+                    "rejected",
+                    "backtest",
+                    f"Strict Backtester Sharpe {bt_result.sharpe_ratio:.2f} < {config.backtest_sharpe_threshold}",
+                )
                 result.log.append(ResearchLogEntry(
                     phase="backtest", title=info.get("name", sid),
                     source="", source_url="", verdict="fail",
                     reason=f"Sharpe {bt_result.sharpe_ratio:.2f} < {config.backtest_sharpe_threshold}",
                     scores={
                         "sharpe": round(bt_result.sharpe_ratio, 2),
+                        "sortino": round(float(bt_result.sortino_ratio), 2) if bt_result.sortino_ratio != float("inf") else "inf",
                         "max_dd": round(bt_result.max_drawdown_pct, 2),
                         "win_rate": round(bt_result.win_rate * 100, 2),
+                        "profit_factor": round(bt_result.profit_factor, 2),
+                        "trades": len(bt_result.trades),
+                        "benchmark": benchmark_meta.get("symbol", ""),
                     },
                 ))
             else:
-                result.backtested += 1
+                _update_hypothesis_backtest(
+                    pool,
+                    sid,
+                    strict_report,
+                    "candidate",
+                    "backtest",
+                    f"Strict Backtester Sharpe {bt_result.sharpe_ratio:.2f}",
+                )
                 result.log.append(ResearchLogEntry(
                     phase="backtest", title=info.get("name", sid),
                     source="", source_url="", verdict="pass",
                     reason=f"Sharpe {bt_result.sharpe_ratio:.2f}",
                     scores={
                         "sharpe": round(bt_result.sharpe_ratio, 2),
+                        "sortino": round(float(bt_result.sortino_ratio), 2) if bt_result.sortino_ratio != float("inf") else "inf",
                         "max_dd": round(bt_result.max_drawdown_pct, 2),
                         "win_rate": round(bt_result.win_rate * 100, 2),
+                        "profit_factor": round(bt_result.profit_factor, 2),
+                        "trades": len(bt_result.trades),
+                        "benchmark": benchmark_meta.get("symbol", ""),
                     },
                 ))
 
     return _run_backtest
+
+
+def _load_cn_benchmark_provider(db_provider, start, end, benchmark_provider_cls):
+    import pandas as pd
+
+    for symbol in ("000300", "510300"):
+        bars = db_provider.get_bars(symbol, start, end, "1d")
+        if bars.empty:
+            continue
+        price_column = "adj_close" if "adj_close" in bars.columns and not bars["adj_close"].isna().all() else "close"
+        provider = benchmark_provider_cls(bars, price_column=price_column)
+        timestamps = pd.to_datetime(bars["timestamp"], errors="coerce").dropna() if "timestamp" in bars.columns else None
+        meta = {
+            "symbol": symbol,
+            "coverage_start": str(timestamps.min().date()) if timestamps is not None and not timestamps.empty else "",
+            "coverage_end": str(timestamps.max().date()) if timestamps is not None and not timestamps.empty else "",
+            "rows": int(len(bars)),
+            "fallback_used": symbol != "000300",
+            "price_column": price_column,
+        }
+        return provider, meta
+    return None, {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
+
+
+def _strict_backtest_report(bt_result, start, end, initial_cash, symbols, benchmark_meta, lot_sizes):
+    metrics = getattr(bt_result, "metrics", None)
+    diagnostics = getattr(bt_result, "diagnostics", None)
+    days = max(1, (end - start).days)
+    cagr = (float(bt_result.final_nav) / float(initial_cash)) ** (365.25 / days) - 1.0 if initial_cash > 0 else 0.0
+    stat_sig = getattr(metrics, "statistical_significance", {}) if metrics is not None else {}
+    return {
+        "framework": "Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio",
+        "period": f"{start.date()}-{end.date()}",
+        "initial_cash": float(initial_cash),
+        "symbols": list(symbols),
+        "metrics": {
+            "sharpe": _metric_float(getattr(bt_result, "sharpe_ratio", 0.0)),
+            "sortino": _metric_float(getattr(bt_result, "sortino_ratio", 0.0)),
+            "cagr": _metric_float(cagr),
+            "total_return": _metric_float(getattr(bt_result, "total_return", 0.0)),
+            "max_drawdown_pct": _metric_float(getattr(bt_result, "max_drawdown_pct", 0.0)),
+            "win_rate": _metric_float(getattr(bt_result, "win_rate", 0.0)),
+            "profit_factor": _metric_float(getattr(bt_result, "profit_factor", 0.0)),
+            "total_trades": int(len(getattr(bt_result, "trades", []) or [])),
+            "round_trip_trades": int(getattr(metrics, "total_trades", 0) if metrics is not None else 0),
+            "t_stat": _metric_float(stat_sig.get("t_stat", 0.0) if isinstance(stat_sig, dict) else 0.0),
+            "p_value": _metric_float(stat_sig.get("p_value", 1.0) if isinstance(stat_sig, dict) else 1.0),
+        },
+        "benchmark": {
+            **dict(benchmark_meta or {}),
+            "benchmark_return": _metric_float(getattr(metrics, "benchmark_return", None) if metrics is not None else None),
+            "alpha": _metric_float(getattr(metrics, "alpha", None) if metrics is not None else None),
+            "beta": _metric_float(getattr(metrics, "beta", None) if metrics is not None else None),
+            "information_ratio": _metric_float(getattr(metrics, "information_ratio", None) if metrics is not None else None),
+            "tracking_error": _metric_float(getattr(metrics, "tracking_error", None) if metrics is not None else None),
+        },
+        "diagnostics": _diagnostics_dict(diagnostics),
+        "constraints": {
+            "hfq_signal_policy": "Strategy helpers use adj_* prices for signal logic; raw close is reserved for order sizing/fill accounting.",
+            "long_only": True,
+            "t_plus_1": True,
+            "cn_lot_size": 100,
+            "lot_sizes": dict(lot_sizes or {}),
+            "volume_limit": "Backtester execution diagnostics record volume_limited_trades.",
+            "price_limits": "Backtester execution diagnostics record limit_rejected_orders.",
+            "commission": {"CN": "cn_realistic", "HK": "hk_realistic", "US": "per_share"},
+            "slippage_bps": 5,
+        },
+    }
+
+
+def _persist_candidate_backtest(pool, sid, info, strict_report):
+    store = getattr(pool, "research_store", None)
+    if store is None or not hasattr(store, "upsert_candidate"):
+        return
+    try:
+        stored = store.get_candidate(sid) or dict(info or {"id": sid})
+        stored["backtest"] = strict_report
+        meta = stored.setdefault("research_meta", {})
+        meta["backtest_result"] = strict_report
+        meta["strict_backtest_result"] = strict_report
+        store.upsert_candidate(stored)
+    except Exception:
+        return
+
+
+def _update_hypothesis_backtest(pool, sid, strict_report, status, stage, reason):
+    store = getattr(pool, "research_store", None)
+    if store is None or not hasattr(store, "list_hypotheses"):
+        return
+    try:
+        for row in store.list_hypotheses():
+            if row.get("strategy_id") != sid:
+                continue
+            updated = dict(row)
+            metrics = dict(updated.get("metrics") or {})
+            metrics["strict_backtest"] = strict_report
+            metrics["backtest_sharpe"] = strict_report.get("metrics", {}).get("sharpe", 0.0)
+            metrics["backtest_sortino"] = strict_report.get("metrics", {}).get("sortino", 0.0)
+            metrics["backtest_cagr"] = strict_report.get("metrics", {}).get("cagr", 0.0)
+            metrics["backtest_max_drawdown_pct"] = strict_report.get("metrics", {}).get("max_drawdown_pct", 0.0)
+            metrics["benchmark_symbol"] = strict_report.get("benchmark", {}).get("symbol", "")
+            updated["metrics"] = metrics
+            updated["status"] = status
+            updated["stage"] = stage
+            updated["decision_reason"] = reason
+            store.upsert_hypothesis(updated)
+    except Exception:
+        return
+
+
+def _diagnostics_dict(diagnostics):
+    if diagnostics is None:
+        return {}
+    fields = (
+        "fill_count",
+        "total_commission",
+        "cost_drag_pct",
+        "volume_limited_trades",
+        "lot_adjusted_trades",
+        "t1_rejected_sells",
+        "limit_rejected_orders",
+        "discarded_orders",
+        "expired_orders",
+        "submission_rejected",
+        "risk_skipped_orders",
+        "truncated_sells",
+        "forced_closeout_orders",
+        "forced_closeout_trades",
+    )
+    data = {field: _metric_float(getattr(diagnostics, field, 0.0)) for field in fields}
+    data["rejection_counts"] = dict(getattr(diagnostics, "rejection_counts", {}) or {})
+    return data
+
+
+def _metric_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if number == float("inf"):
+        return "inf"
+    if number == float("-inf"):
+        return "-inf"
+    if number != number:
+        return 0.0
+    return number
 
 
 def _serialize_walkforward_trade(trade, data_df):
@@ -199,6 +419,7 @@ def _make_walkforward_runner():
     from quant.features.trading.portfolio import Portfolio
     from quant.features.trading.risk import RiskEngine
     from quant.features.trading.sub_portfolio import SubPortfolio
+    from quant.domain.models.market import is_cn_symbol
     import pandas as pd
 
     def _run_walkforward_backtest(sid, request):
@@ -215,11 +436,16 @@ def _make_walkforward_runner():
         db_provider = DuckDBProvider()
         db_provider.connect()
         all_data = []
+        lot_sizes = {}
         try:
             for sym in symbols:
                 bars = db_provider.get_bars(sym, start, end, "1d")
                 if not bars.empty:
                     all_data.append(bars)
+                try:
+                    lot_sizes[sym] = db_provider.storage.get_lot_size(sym) if is_cn_symbol(sym) else 1
+                except Exception:
+                    lot_sizes[sym] = 100 if is_cn_symbol(sym) else 1
         finally:
             db_provider.disconnect()
 
@@ -231,11 +457,21 @@ def _make_walkforward_runner():
         strategy = strategy_class(symbols=symbols)
         bt_config = {
             "backtest": {"slippage_bps": 5},
-            "execution": {"commission": {"US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}}},
+            "execution": {"commission": {
+                "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+                "HK": {"type": "hk_realistic"},
+                "CN": {"type": "cn_realistic"},
+            }},
             "data": {"default_timeframe": "1d"},
             "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
         }
-        backtester = Backtester(bt_config, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
+        backtester = Backtester(
+            bt_config,
+            portfolio_class=Portfolio,
+            risk_engine_class=RiskEngine,
+            sub_portfolio_class=SubPortfolio,
+            lot_sizes=lot_sizes,
+        )
         bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=initial_cash, data_provider=data_provider, symbols=symbols)
         returns = bt_result.equity_curve.pct_change().dropna() if hasattr(bt_result, "equity_curve") else pd.Series(dtype=float)
         days = max(1, (end - start).days)
@@ -285,19 +521,70 @@ def _research_artifact_root(cfg: ResearchConfig) -> Path:
 
 
 def _latest_report_path(cfg: ResearchConfig) -> Path:
-    return _research_artifact_root(cfg) / "full_research_report.html"
+    root = _research_artifact_root(cfg)
+    primary = root / latest_report_html_path()
+    legacy = root / REPORT_HTML
+    if primary.exists() or not legacy.exists():
+        return primary
+    return legacy
 
 
 def _latest_report_payload(cfg: ResearchConfig) -> dict:
+    root = _research_artifact_root(cfg)
     path = _latest_report_path(cfg)
     payload = {
         "available": path.exists(),
         "url": "/api/research/report/latest",
         "path": str(path),
+        "reports_root": str(root / "reports"),
     }
+    metadata_path = root / LATEST_REPORT_METADATA
+    if metadata_path.exists():
+        try:
+            with metadata_path.open("r", encoding="utf-8-sig") as f:
+                payload["metadata"] = json.load(f)
+        except Exception:
+            payload["metadata"] = {}
     if path.exists():
         payload["updated_at"] = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
     return payload
+
+
+def _idea_bank_payload(cfg: ResearchConfig) -> dict:
+    root = _research_artifact_root(cfg)
+    primary_json = root / IDEA_BANK_JSON
+    primary_md = root / IDEA_BANK_MD
+    legacy_json = root / LEGACY_IDEA_BANK_JSON
+    legacy_md = root / LEGACY_IDEA_BANK_MD
+    json_path = primary_json if primary_json.exists() or not legacy_json.exists() else legacy_json
+    md_path = primary_md if primary_md.exists() or not legacy_md.exists() else legacy_md
+    payload = {
+        "available": json_path.exists() or md_path.exists(),
+        "json_path": str(json_path),
+        "markdown_path": str(md_path),
+        "idea_bank_root": str(root / "idea_bank"),
+    }
+    if json_path.exists():
+        payload["updated_at"] = datetime.fromtimestamp(json_path.stat().st_mtime).isoformat()
+    elif md_path.exists():
+        payload["updated_at"] = datetime.fromtimestamp(md_path.stat().st_mtime).isoformat()
+    return payload
+
+
+def _parse_statuses(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _parse_idea_ids(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _make_experiment_stores(cfg: ResearchConfig):
@@ -539,6 +826,10 @@ def run_research():
     data = request.get_json() or {}
     sources = data.get("sources")
     max_results = data.get("max_results")
+    mode = str(data.get("mode", "full")).lower().replace("-", "_")
+    idea_statuses = _parse_statuses(data.get("idea_statuses") or data.get("statuses"))
+    idea_ids = _parse_idea_ids(data.get("idea_ids") or data.get("idea_id"))
+    max_ideas = data.get("max_ideas")
     job_id = str(uuid.uuid4())[:8]
 
     cfg = _load_research_config()
@@ -573,20 +864,43 @@ def run_research():
 
     def _run():
         try:
-            engine.run_full_pipeline(sources=sources, result=result_obj)
+            if mode in {"discover", "discovery", "discovery_only"}:
+                engine.run_discovery_only(sources=sources, result=result_obj)
+            elif mode in {"formal", "research", "from_bank", "formal_research"}:
+                engine.run_formal_research_from_idea_bank(
+                    statuses=idea_statuses,
+                    idea_ids=idea_ids,
+                    max_ideas=int(max_ideas) if max_ideas is not None else None,
+                    result=result_obj,
+                )
+            else:
+                engine.run_full_pipeline(sources=sources, result=result_obj)
             with _research_lock:
                 _research_jobs[job_id]["status"] = "completed"
+                _research_jobs[job_id]["updated_at"] = datetime.utcnow().isoformat() + "Z"
         except Exception as e:
             with _research_lock:
-                _research_jobs[job_id] = {"status": "error", "error": str(e)}
+                _research_jobs[job_id].update({
+                    "status": "error",
+                    "error": str(e),
+                    "updated_at": datetime.utcnow().isoformat() + "Z",
+                })
 
     result_obj = ResearchResult()
+    started_at = datetime.utcnow().isoformat() + "Z"
     with _research_lock:
-        _research_jobs[job_id] = {"status": "running", "result": result_obj}
+        _research_jobs[job_id] = {
+            "status": "running",
+            "result": result_obj,
+            "mode": mode,
+            "started_at": started_at,
+            "started_monotonic": time.monotonic(),
+            "updated_at": started_at,
+        }
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
-    return jsonify({"research_id": job_id, "status": "running"})
+    return jsonify({"research_id": job_id, "status": "running", "mode": mode})
 
 
 @research_bp.route("/api/research/status/<research_id>")
@@ -596,11 +910,21 @@ def get_research_status(research_id):
     if job is None:
         return jsonify({"error": "Research job not found"}), 404
     response = {"research_id": research_id, "status": job["status"]}
+    mode = job.get("mode", "full")
+    response["mode"] = mode
+    response["started_at"] = job.get("started_at")
+    response["updated_at"] = job.get("updated_at")
+    started_monotonic = job.get("started_monotonic")
+    if started_monotonic is not None:
+        response["elapsed_seconds"] = round(time.monotonic() - float(started_monotonic), 1)
     result = job.get("result")
     if result is not None:
         response["result"] = result.to_dict()
     if job["status"] == "completed":
-        response["report"] = _latest_report_payload(_load_research_config())
+        if mode in {"discover", "discovery", "discovery_only"}:
+            response["idea_bank"] = _idea_bank_payload(_load_research_config())
+        else:
+            response["report"] = _latest_report_payload(_load_research_config())
     elif job["status"] == "error":
         response["error"] = job.get("error", "Unknown error")
     return jsonify(response)
@@ -610,6 +934,13 @@ def get_research_status(research_id):
 def list_candidates():
     pool = CandidatePool(research_store=_make_research_store(_load_research_config()))
     return jsonify({"candidates": pool.list_candidates()})
+
+
+@research_bp.route("/api/research/ideas")
+def list_ideas():
+    status = _parse_statuses(request.args.get("status"))
+    store = _make_research_store(_load_research_config())
+    return jsonify({"ideas": store.list_ideas(status)})
 
 
 @research_bp.route("/api/research/report")

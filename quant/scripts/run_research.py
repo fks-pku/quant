@@ -1,7 +1,7 @@
 """Standalone research pipeline runner.
 
 Usage:
-    python quant/scripts/run_research.py [--source arxiv] [--max 5] [--threshold 6.0] [--backtest]
+    python quant/scripts/run_research.py [--mode discover|formal|full] [--source arxiv] [--max 5] [--threshold 6.0] [--backtest]
 """
 import argparse
 import logging
@@ -250,8 +250,12 @@ def _create_validation_components(config):
 
 def main():
     parser = argparse.ArgumentParser(description="Run quant strategy research pipeline")
+    parser.add_argument("--mode", default="full", choices=["full", "discover", "formal"], help="Pipeline mode")
     parser.add_argument("--source", default="arxiv", help="Source (arxiv, ssrn, all)")
     parser.add_argument("--max", type=int, default=5, dest="max_results", help="Max results per source")
+    parser.add_argument("--max-ideas", type=int, default=None, help="Max local ideas to research in formal mode")
+    parser.add_argument("--idea-id", action="append", dest="idea_ids", help="Specific idea_bank id to research in formal mode")
+    parser.add_argument("--idea-status", action="append", dest="idea_statuses", help="Idea bank status to load in formal mode")
     parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
     parser.add_argument("--backtest", action="store_true", help="Run backtests (requires DuckDB data)")
     parser.add_argument("--no-validation", action="store_true", help="Disable statistical validation gate")
@@ -288,7 +292,10 @@ def main():
         store = FileResearchStore(str(var_root))
     scout = _create_keyword_scout()
 
-    if args.no_heuristic:
+    if args.mode == "discover":
+        evaluator = HeuristicEvaluator()
+        logger.info("Discovery mode: evaluator will not be used")
+    elif args.no_heuristic:
         evaluator = _create_llm_evaluator(args)
     else:
         evaluator = HeuristicEvaluator()
@@ -322,12 +329,18 @@ def main():
 
     print("=" * 70)
     print("  QUANT RESEARCH PIPELINE")
+    print(f"  Mode: {args.mode}")
     print(f"  Source: arXiv (keyword search, 6 queries) | Max/query: {args.max_results}")
     print(f"  Threshold: {args.threshold} | Evaluator: {'heuristic' if not args.no_heuristic else 'LLM'}")
     print(f"  Backtest: {'ON' if args.backtest else 'OFF'}")
     print("=" * 70)
 
-    result = engine.run_full_pipeline()
+    if args.mode == "discover":
+        result = engine.run_discovery_only()
+    elif args.mode == "formal":
+        result = engine.run_formal_research_from_idea_bank(statuses=args.idea_statuses, idea_ids=args.idea_ids, max_ideas=args.max_ideas)
+    else:
+        result = engine.run_full_pipeline()
 
     print()
     print("=" * 70)

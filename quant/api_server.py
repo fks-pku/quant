@@ -7,7 +7,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from flask import Flask, send_file
-from flask_cors import CORS
+try:
+    from flask_cors import CORS
+except ImportError:
+    def CORS(app):
+        return app
 
 from quant.api.state.runtime import _load_strategy_state
 from quant.api.system_bp import system_bp

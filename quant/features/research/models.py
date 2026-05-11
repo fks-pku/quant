@@ -201,6 +201,7 @@ class ValidationReport:
     data_end: str
     n_observations: int
     fama_macbeth_tstat: float = 0.0
+    portfolio_diagnostics: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
 
 

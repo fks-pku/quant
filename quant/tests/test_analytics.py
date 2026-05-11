@@ -241,6 +241,17 @@ class TestStatisticalSignificance:
         result = calculate_statistical_significance(returns)
         assert result["is_significant"] is False
 
+    def test_benchmark_underperformance_not_significant_outperformance(self):
+        idx = pd.date_range("2025-01-01", periods=30, freq="D")
+        returns = pd.Series(
+            [-0.01 + (0.0001 if i % 2 == 0 else -0.0001) for i in range(30)],
+            index=idx,
+        )
+        benchmark = pd.Series([0.0] * 30, index=idx)
+        result = calculate_statistical_significance(returns, benchmark)
+        assert result["t_stat"] < 0
+        assert result["is_significant"] is False
+
 
 class TestPerformanceMetrics:
     def test_empty_equity_curve(self):

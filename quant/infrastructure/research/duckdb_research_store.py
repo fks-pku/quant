@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -8,6 +9,20 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import duckdb
 
 from quant.domain.ports.research_store import ResearchStore
+from quant.infrastructure.research.asset_paths import (
+    IDEA_BANK_JSON,
+    IDEA_BANK_MD,
+    DISCOVERED_STRATEGIES_MD,
+    LAST_RESULT_JSON,
+    LATEST_REPORT_DIR,
+    LATEST_REPORT_METADATA,
+    REPORT_HTML,
+    REPORT_MD,
+    STRATEGY_EVALUATION_MD,
+    latest_report_html_path,
+    report_dir,
+    report_id_for_result,
+)
 from quant.infrastructure.research.reporting import build_full_research_report_html, build_full_research_report_index
 
 
@@ -57,6 +72,23 @@ class DuckDBResearchStore(ResearchStore):
                     metrics JSON,
                     evidence JSON,
                     created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS idea_bank (
+                    idea_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    description TEXT,
+                    source TEXT,
+                    source_url TEXT,
+                    authors TEXT,
+                    published_date TEXT,
+                    status TEXT,
+                    reason TEXT,
+                    run_id TEXT,
+                    metadata JSON,
+                    discovered_at TEXT,
                     updated_at TEXT
                 )
             """)
@@ -144,6 +176,59 @@ class DuckDBResearchStore(ResearchStore):
                 ).fetchall()
         return [self._hypothesis_row_to_dict(row) for row in rows]
 
+    def upsert_idea(self, raw: Any, status: str = "discovered", run_id: str = "", reason: str = "") -> None:
+        idea_id = self._idea_id(raw)
+        existing = self._get_idea_row(idea_id) or {}
+        now = self._now()
+        discovered_at = existing.get("discovered_at") or now
+        metadata = dict(self._raw_field(raw, "metadata") or {})
+        metadata_json = json.dumps(metadata, default=str, ensure_ascii=False)
+        final_status = self._merged_idea_status(existing.get("status", ""), status)
+        with duckdb.connect(self._db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO idea_bank
+                   (idea_id, title, description, source, source_url, authors, published_date,
+                    status, reason, run_id, metadata, discovered_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON, ?, ?)""",
+                [
+                    idea_id,
+                    self._raw_field(raw, "title"),
+                    self._raw_field(raw, "description"),
+                    self._raw_field(raw, "source"),
+                    self._raw_field(raw, "source_url"),
+                    self._raw_field(raw, "authors"),
+                    self._raw_field(raw, "published_date"),
+                    final_status,
+                    reason if final_status == status else existing.get("reason", ""),
+                    run_id or existing.get("run_id", ""),
+                    metadata_json,
+                    discovered_at,
+                    now,
+                ],
+            )
+        self._write_idea_bank_artifacts(self.list_ideas())
+
+    def list_ideas(self, status: Optional[Any] = None) -> List[Dict[str, Any]]:
+        with duckdb.connect(self._db_path) as conn:
+            if status is None:
+                rows = conn.execute(
+                    """SELECT idea_id, title, description, source, source_url, authors, published_date,
+                              status, reason, run_id, metadata, discovered_at, updated_at
+                       FROM idea_bank ORDER BY updated_at, idea_id"""
+                ).fetchall()
+            else:
+                statuses = [status] if isinstance(status, str) else list(status or [])
+                if not statuses:
+                    return []
+                placeholders = ", ".join("?" for _ in statuses)
+                rows = conn.execute(
+                    f"""SELECT idea_id, title, description, source, source_url, authors, published_date,
+                               status, reason, run_id, metadata, discovered_at, updated_at
+                        FROM idea_bank WHERE status IN ({placeholders}) ORDER BY updated_at, idea_id""",
+                    statuses,
+                ).fetchall()
+        return [self._idea_row_to_dict(row) for row in rows]
+
     def has_seen(self, strategy_hash: str) -> bool:
         with duckdb.connect(self._db_path) as conn:
             row = conn.execute("SELECT 1 FROM seen_hashes WHERE hash = ?", [strategy_hash]).fetchone()
@@ -184,7 +269,7 @@ class DuckDBResearchStore(ResearchStore):
                     "",
                 ]
             )
-        self._write_text("discovered_strategies.md", "\n".join(lines))
+        self._write_text(DISCOVERED_STRATEGIES_MD, "\n".join(lines))
 
     def write_evaluations(self, evaluations: Iterable[Tuple[Any, Any, str, str]]) -> None:
         lines = ["# Strategy Evaluation", ""]
@@ -213,19 +298,34 @@ class DuckDBResearchStore(ResearchStore):
                     "",
                 ]
             )
-        self._write_text("strategy_evaluation.md", "\n".join(lines))
+        self._write_text(LATEST_REPORT_DIR / STRATEGY_EVALUATION_MD, "\n".join(lines))
 
     def save_run_result(self, result: Any) -> None:
         data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
         data["saved_at"] = self._now()
-        self._write_json("last_result.json", data)
+        hypotheses = self._hypotheses_for_result(result)
+        report_id = report_id_for_result(data, hypotheses)
+        report_root = report_dir(report_id)
+        self._write_json(report_root / LAST_RESULT_JSON, data)
+        self._write_json(LATEST_REPORT_DIR / LAST_RESULT_JSON, data)
         run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        self._write_json(Path("runs") / f"{run_name}_result.json", data)
-        report = build_full_research_report_html(data, self.list_hypotheses(), generated_at=data["saved_at"])
-        self._write_text("full_research_report.html", report)
-        self._write_text(Path("runs") / f"{run_name}_full_research_report.html", report)
-        index = build_full_research_report_index(data, "full_research_report.html", generated_at=data["saved_at"])
-        self._write_text("full_research_report.md", index)
+        self._write_json(report_root / "runs" / f"{run_name}_result.json", data)
+        report = build_full_research_report_html(data, hypotheses, generated_at=data["saved_at"])
+        self._write_text(report_root / REPORT_HTML, report)
+        self._write_text(latest_report_html_path(), report)
+        self._write_text(report_root / "runs" / f"{run_name}_full_research_report.html", report)
+        index = build_full_research_report_index(data, str(REPORT_HTML), generated_at=data["saved_at"])
+        self._write_text(report_root / REPORT_MD, index)
+        self._write_text(LATEST_REPORT_DIR / REPORT_MD, index)
+        self._write_json(
+            LATEST_REPORT_METADATA,
+            {
+                "report_id": report_id,
+                "run_name": run_name,
+                "updated_at": data["saved_at"],
+                "report_path": str(report_root / REPORT_HTML),
+            },
+        )
 
     def _get_candidate_row(self, strategy_id: str) -> Optional[Dict[str, Any]]:
         with duckdb.connect(self._db_path) as conn:
@@ -236,6 +336,18 @@ class DuckDBResearchStore(ResearchStore):
         if row is None:
             return None
         return self._row_to_dict(row)
+
+    def _get_idea_row(self, idea_id: str) -> Optional[Dict[str, Any]]:
+        with duckdb.connect(self._db_path) as conn:
+            row = conn.execute(
+                """SELECT idea_id, title, description, source, source_url, authors, published_date,
+                          status, reason, run_id, metadata, discovered_at, updated_at
+                   FROM idea_bank WHERE idea_id = ?""",
+                [idea_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._idea_row_to_dict(row)
 
     def _row_to_dict(self, row: tuple) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -277,6 +389,23 @@ class DuckDBResearchStore(ResearchStore):
             "metrics": self._json_value(row[9]),
             "evidence": self._json_value(row[10]),
             "created_at": row[11],
+            "updated_at": row[12],
+        }
+
+    def _idea_row_to_dict(self, row: tuple) -> Dict[str, Any]:
+        return {
+            "idea_id": row[0],
+            "title": row[1] or "",
+            "description": row[2] or "",
+            "source": row[3] or "",
+            "source_url": row[4] or "",
+            "authors": row[5] or "",
+            "published_date": row[6] or "",
+            "status": row[7] or "",
+            "reason": row[8] or "",
+            "run_id": row[9] or "",
+            "metadata": self._json_value(row[10]),
+            "discovered_at": row[11],
             "updated_at": row[12],
         }
 
@@ -345,6 +474,65 @@ class DuckDBResearchStore(ResearchStore):
         path = self._artifact_root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+
+    def _hypotheses_for_result(self, result: Any) -> List[Dict[str, Any]]:
+        rows = self.list_hypotheses()
+        titles = {
+            getattr(entry, "title", "")
+            for entry in getattr(result, "log", []) or []
+            if getattr(entry, "title", "") and getattr(entry, "phase", "") not in {"stage1_queue", "local_idea_bank"}
+        }
+        if not titles:
+            return rows
+        selected = [row for row in rows if row.get("title") in titles]
+        return selected or rows
+
+    def _write_idea_bank_artifacts(self, ideas: Iterable[Dict[str, Any]]) -> None:
+        rows = sorted((dict(item) for item in ideas), key=lambda item: (item.get("updated_at", ""), item.get("title", "")))
+        payload = {"ideas": rows, "updated_at": self._now()}
+        self._write_json(IDEA_BANK_JSON, payload)
+        lines = ["# Research Idea Bank", ""]
+        for item in rows:
+            quality = (item.get("metadata") or {}).get("discovery_quality") or {}
+            lines.extend(
+                [
+                    f"## {item.get('title', '')}",
+                    f"- **Status**: {item.get('status', '')}",
+                    f"- **Source**: [{item.get('source', '')}]({item.get('source_url', '')})",
+                    f"- **Published**: {item.get('published_date') or 'Unknown'}",
+                    f"- **Discovery Quality**: {float(quality.get('score', 0.0) or 0.0):.2f}",
+                    f"- **Reason**: {item.get('reason', '') or 'n/a'}",
+                    f"- **Core Idea**: {str(item.get('description', ''))[:500]}",
+                    "",
+                ]
+            )
+        body = "\n".join(lines)
+        self._write_text(IDEA_BANK_MD, body)
+
+    @classmethod
+    def _idea_id(cls, raw: Any) -> str:
+        text = "|".join(
+            [
+                cls._raw_field(raw, "title"),
+                cls._raw_field(raw, "source"),
+                cls._raw_field(raw, "source_url"),
+            ]
+        )
+        return sha256(text.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _raw_field(raw: Any, field: str) -> Any:
+        if isinstance(raw, dict):
+            return raw.get(field, "")
+        return getattr(raw, field, "")
+
+    @staticmethod
+    def _merged_idea_status(existing_status: str, new_status: str) -> str:
+        terminal = {"candidate", "rejected", "stage1_rejected", "needs_manual_spec", "error"}
+        non_terminal = {"discovered", "skipped", "research_queue"}
+        if existing_status in terminal and new_status in non_terminal:
+            return existing_status
+        return new_status
 
     @staticmethod
     def _now() -> str:

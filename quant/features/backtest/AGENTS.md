@@ -135,3 +135,9 @@ while current_date ≤ end:
 - Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）
 - `risk_price_deviation_limit` 从 config 读取（键名 `risk_price_deviation_limit`），而非硬编码 0.15
 - `order.strategy` 为 `None` 时 engine 记录 error 并跳过 fill 分发，不会广播到所有策略
+- `DataValidator.validate()` 对坏 timestamp、NaN/null、非数值 OHLCV 必须返回 `ValidationReport`，不得冒出 pandas 原始异常
+- `execute_order()` 在任何 cash/position mutation 前必须拒绝非有限或非正成交价，使用 `PRICE_INVALID`
+- `on_stop` forced close-out 是显式清仓语义；默认可绕过 CN T+1，且 final NAV 更新最后真实交易日，不追加 `end+1`
+- CN SELL 的 volume cap 不做整手归零；碎股/部分成交数量应可通过，CN BUY 与 HK 仍按 lot size 约束
+- benchmark 显著性是单尾跑赢检验；负 excess-return `t_stat` 不能标记为显著跑赢
+- IPO 日期元数据可能是 `date` 或 `datetime`，涨跌停豁免判断前必须归一化

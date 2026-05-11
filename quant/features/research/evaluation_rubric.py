@@ -6,8 +6,8 @@ from quant.features.research.models import EvaluationReport, RawStrategy
 
 
 _TYPE_PATTERNS = [
-    (r"momentum|trend following|cross.?sectional", "momentum"),
     (r"mean reversion|reversal|contrarian", "mean_reversion"),
+    (r"momentum|trend following", "momentum"),
     (r"breakout|channel", "breakout"),
     (r"factor|value|quality|low volatility|fama", "factor"),
     (r"pairs|cointegration|statistical arbitrage|stat.?arb", "stat_arb"),
@@ -55,7 +55,7 @@ def heuristic_evaluation(raw: RawStrategy, config: Optional[Dict[str, Any]] = No
         data_requirement=data_requirement,
         daily_adaptable=daily_adaptable,
         estimated_edge=0.06 if not hf else 0.01,
-        recommended_symbols=_symbols(text),
+        recommended_symbols=_symbols(text, config),
         strategy_type=strategy_type,
         summary=summary,
         economic_rationale_score=round(economic, 2),
@@ -237,9 +237,14 @@ def _strategy_type(text: str) -> str:
     return "unknown"
 
 
-def _symbols(text: str) -> List[str]:
+def _symbols(text: str, config: Optional[Dict[str, Any]] = None) -> List[str]:
+    cfg = config or {}
+    target_market = str(cfg.get("target_market") or cfg.get("market") or "").lower()
+    configured_symbols = cfg.get("default_symbols") or cfg.get("symbols") or []
+    if target_market in {"cn", "china", "a_share", "a-share", "ashare"}:
+        return list(configured_symbols or ["000300", "000905", "600519", "000001", "510300"])
     if _has_any(text, ("a-share", "china", "chinese equity")):
-        return ["000300", "600519"]
+        return list(configured_symbols or ["000300", "600519"])
     if _has_any(text, ("hong kong", "hk equity")):
         return ["HSI", "00700"]
     if _has_any(text, ("etf", "equity", "stock", "large cap", "liquid")):

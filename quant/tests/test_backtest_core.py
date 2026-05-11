@@ -20,6 +20,9 @@ from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestDiagnostics, BacktestResult, CommissionConfig
 from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE, is_suspended
 from quant.features.backtest.commission import VOLUME_PARTICIPATION_LIMIT
+from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
+from quant.features.backtest.order_executor import execute_order
+from quant.features.backtest.schemas import DeferredOrder
 from quant.features.backtest.walkforward import WalkForwardEngine
 from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.trading.portfolio import Portfolio
@@ -455,6 +458,41 @@ class TestWalkForwardEngine:
         assert result.min_train_trades == 35
         assert result.min_test_trades == 35
         assert result.multiple_testing_adjusted_alpha == pytest.approx(0.05 / 6)
+
+    def test_aggregate_max_drawdown_uses_worst_negative_window(self, monkeypatch):
+        data = make_us_bars(["AAPL"], START, 80, {"AAPL": 150.0})
+        engine = WalkForwardEngine(
+            train_window_days=50,
+            test_window_days=10,
+            step_days=10,
+            min_trades=0,
+            portfolio_class=Portfolio,
+            risk_engine_class=RiskEngine,
+            sub_portfolio_class=SubPortfolio,
+        )
+        drawdowns = iter([-0.02, -0.25, -0.08])
+
+        def fake_find_best_params(strategy_factory, train_data, param_grid, initial_cash, config):
+            return {"lookback": 5}, 1.0, [{"lookback": 5}], 1, 10
+
+        def fake_run_single_backtest(config, strategy, data, initial_cash):
+            return SimpleNamespace(
+                sharpe_ratio=1.0,
+                total_return=0.05,
+                max_drawdown_pct=next(drawdowns),
+                trades=[object()] * 10,
+            )
+
+        monkeypatch.setattr(engine, "_find_best_params", fake_find_best_params)
+        monkeypatch.setattr(engine, "_run_single_backtest", fake_run_single_backtest)
+
+        result = engine.run(
+            strategy_factory=lambda params: SimpleNamespace(name="WFDDBug"),
+            data=data,
+            param_grid={"lookback": [5]},
+        )
+
+        assert result.aggregate_max_dd == pytest.approx(-0.25)
 
     def test_insufficient_oos_trades_marks_result_not_viable(self, monkeypatch):
         data = make_us_bars(["AAPL"], START, 70, {"AAPL": 150.0})
@@ -1100,6 +1138,62 @@ class TestCriticalRegression:
         assert result.diagnostics.forced_closeout_orders == 1
         assert result.diagnostics.forced_closeout_trades == 1
 
+    def test_cn_on_stop_forced_closeout_bypasses_t1(self):
+        data = make_cn_bars(["600519"], START, 2, {"600519": 10.0})
+        config = {
+            "backtest": {"slippage_bps": 0, "force_close_on_stop": True},
+            "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config)
+
+        class CNCloseOut:
+            name = "CNCloseOut"
+            context = None
+            _positions = {}
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if self._day == 0:
+                    self.context.order_manager.submit_order(
+                        "600519", 100, "BUY", "MARKET", None, "CNCloseOut"
+                    )
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pos = self._positions.get("600519", 0)
+                if pos > 0:
+                    self.context.order_manager.submit_order(
+                        "600519", pos, "SELL", "MARKET", None, "CNCloseOut"
+                    )
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[CNCloseOut()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["600519"],
+        )
+
+        assert len(result.open_positions) == 0
+        assert [t.side for t in result.trades] == ["BUY", "SELL"]
+        assert result.diagnostics.forced_closeout_orders == 1
+        assert result.diagnostics.forced_closeout_trades == 1
+
     def test_on_stop_closeout_can_be_disabled(self):
         """on_stop orders can be discarded instead of synthetic close-out fills."""
         data = make_us_bars(["AAPL"], START, 4, {"AAPL": 100.0})
@@ -1260,6 +1354,99 @@ class TestCriticalRegression:
         assert result.trades == []
         assert result.diagnostics.discarded_orders == 1
         assert result.diagnostics.expired_orders == 1
+
+    def test_equity_curve_does_not_append_end_plus_one_without_closeout(self):
+        data = make_us_bars(["AAPL"], START, 2, {"AAPL": 150.0})
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config)
+
+        class NoTrade:
+            name = "NoTrade"
+            context = None
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                pass
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def get_position(self, symbol):
+                return 0
+
+            def on_stop(self, ctx):
+                pass
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[NoTrade()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["AAPL"],
+        )
+
+        assert list(result.equity_curve.index) == list(data["timestamp"])
+
+    def test_nan_sell_open_is_rejected_before_state_mutation(self):
+        portfolio = Portfolio(initial_cash=100000)
+        portfolio.update_position("AAPL", quantity=1, price=10, cost=10, trade_date=START.date())
+        order = DeferredOrder(
+            symbol="AAPL", quantity=1, side="SELL", order_type="MARKET",
+            price=None, strategy="NaNGuard", signal_date=START, risk_check_price=10,
+        )
+        bar = {
+            "symbol": "AAPL", "timestamp": START + timedelta(days=1),
+            "open": float("nan"), "high": 10.0, "low": 10.0, "close": 10.0,
+            "volume": 1000,
+        }
+
+        with pytest.raises(OrderRejectedError) as exc:
+            execute_order(
+                order, portfolio, "AAPL", bar, {}, {}, BacktestDiagnostics(),
+                {}, None, 0, CommissionConfig(),
+            )
+
+        assert exc.value.reason == OrderRejectionReason.PRICE_INVALID
+        assert np.isfinite(portfolio.cash)
+        assert np.isfinite(portfolio.nav)
+
+    def test_cn_odd_lot_sell_volume_cap_keeps_sellable_quantity(self):
+        portfolio = Portfolio(initial_cash=100000, currency="CNY")
+        portfolio.update_position(
+            "600519", quantity=50, price=10.0, cost=500.0,
+            trade_date=(START - timedelta(days=2)).date(),
+        )
+        order = DeferredOrder(
+            symbol="600519", quantity=50, side="SELL", order_type="MARKET",
+            price=None, strategy="CNOddLotCap", signal_date=START, risk_check_price=10,
+        )
+        bar = {
+            "symbol": "600519", "timestamp": START + timedelta(days=1),
+            "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+            "volume": 500,
+        }
+        diag = BacktestDiagnostics()
+
+        trades = execute_order(
+            order, portfolio, "600519", bar, {}, {}, diag,
+            {}, None, 0, CommissionConfig(), prev_bar={"close": 10.0},
+        )
+
+        assert sum(t.quantity for t in trades) == pytest.approx(25.0)
+        assert diag.volume_limited_trades == 1
 
     def test_context_drain_resets_buy_dedup(self):
         """OrderManager drain clears the BUY dedup set."""

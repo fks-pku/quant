@@ -228,7 +228,7 @@ class WalkForwardEngine:
             return WFResult.empty()
         
         aggregate_sharpe = np.mean([w.test_sharpe for w in window_results])
-        aggregate_max_dd = max(w.test_max_dd for w in window_results) if window_results else 0.0
+        aggregate_max_dd = min(w.test_max_dd for w in window_results) if window_results else 0.0
         consistency = len([w for w in window_results if w.test_return > 0]) / len(window_results)
         
         train_sharpes = [w.train_sharpe for w in window_results]

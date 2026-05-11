@@ -48,6 +48,13 @@ _STRATEGY_TERMS = {
     "regime": "regime",
 }
 
+_DAILY_PATTERNS = (
+    re.compile(r"\b\d{1,4}[-\s]?day\b"),
+    re.compile(r"\btrailing\s+\d{1,4}[-\s]?day"),
+    re.compile(r"\bpositive days\b"),
+    re.compile(r"\bdaily returns?\b"),
+)
+
 _RISK_TERMS = {
     "high-frequency": "high_frequency_not_daily",
     "high frequency": "high_frequency_not_daily",
@@ -64,7 +71,11 @@ _RISK_TERMS = {
     "reinforcement learning": "ml_overfit_risk",
     "neural network": "ml_overfit_risk",
     "llm": "non_price_signal",
+    "large language model": "non_price_signal",
     "multi-agent": "non_price_signal",
+    "agentic ai": "non_price_signal",
+    "autonomously searches": "non_price_signal",
+    "web interfaces": "alternative_data_required",
     "prediction market": "non_equity_market",
     "polymarket": "non_equity_market",
     "perpetual": "non_equity_market",
@@ -226,6 +237,8 @@ def _matched_terms(text: str) -> set[str]:
     for term, label in {**_DAILY_TERMS, **_STRATEGY_TERMS}.items():
         if _contains_term(text, term):
             matches.add(label)
+    if any(pattern.search(text) for pattern in _DAILY_PATTERNS):
+        matches.add("daily_ohlcv")
     return matches
 
 

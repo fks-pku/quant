@@ -233,7 +233,7 @@ class TestHypothesisLedger:
                     "hypothesis_id": "hyp-001",
                     "strategy_id": "momentum_hypothesis",
                     "status": "candidate",
-                    "stage": "integrate",
+                    "stage": "stage2_integrate",
                     "decision_reason": "Integrated as momentum_hypothesis",
                 }
             )
@@ -242,11 +242,45 @@ class TestHypothesisLedger:
             assert got["title"] == "Momentum Hypothesis", f"{name}: title should be preserved"
             assert got["strategy_id"] == "momentum_hypothesis", f"{name}: strategy id should merge"
             assert got["status"] == "candidate", f"{name}: status should update"
-            assert got["stage"] == "integrate", f"{name}: stage should update"
+            assert got["stage"] == "stage2_integrate", f"{name}: stage should update"
             assert got["metrics"]["suitability_score"] == pytest.approx(7.2)
             assert got["evidence"]["published_date"] == "2026-01-01"
             assert store.list_hypotheses("candidate")[0]["hypothesis_id"] == "hyp-001"
             assert store.list_hypotheses("rejected") == []
+
+
+class TestIdeaBank:
+    def test_upserts_and_filters_local_ideas(self, tmp_path):
+        for name, store in _store_factories(tmp_path):
+            raw = _FakeRaw(title="Idea Bank Momentum", source="arxiv", source_url="https://example.com/idea")
+            store.upsert_idea(raw, status="discovered", reason="scouted")
+            store.upsert_idea(raw, status="research_queue", reason="ready")
+
+            got = store.list_ideas("research_queue")
+            assert len(got) == 1, f"{name}: idea should be filterable by status"
+            assert got[0]["title"] == "Idea Bank Momentum"
+            assert got[0]["reason"] == "ready"
+            assert store.list_ideas("discovered") == []
+
+    def test_does_not_downgrade_terminal_idea_status(self, tmp_path):
+        for name, store in _store_factories(tmp_path):
+            raw = _FakeRaw(title="Terminal Idea", source="ssrn", source_url="https://example.com/terminal")
+            store.upsert_idea(raw, status="candidate", reason="integrated")
+            store.upsert_idea(raw, status="discovered", reason="rediscovered")
+
+            got = store.list_ideas("candidate")
+            assert len(got) == 1, f"{name}: terminal status should be preserved"
+            assert got[0]["reason"] == "integrated"
+
+    def test_writes_organized_idea_bank_artifacts(self, tmp_path):
+        for name, store in _store_factories(tmp_path):
+            raw = _FakeRaw(title="Organized Idea", source="arxiv", source_url="https://example.com/organized")
+            store.upsert_idea(raw, status="discovered", reason="scouted")
+            root = Path(store.root_dir) if hasattr(store, "root_dir") else Path(store._artifact_root)
+
+            assert (root / "idea_bank" / "idea_bank.json").exists(), f"{name}: organized json should exist"
+            assert (root / "idea_bank" / "idea_bank.md").exists(), f"{name}: organized markdown should exist"
+            assert not (root / "idea_bank.json").exists(), f"{name}: legacy json mirror should not be created"
 
 
 class TestDuckDBSpecific:
@@ -260,11 +294,16 @@ class TestDuckDBSpecific:
         assert "candidates" in tables
         assert "seen_hashes" in tables
         assert "hypotheses" in tables
+        assert "idea_bank" in tables
 
     def test_writes_artifact_files(self, tmp_path):
         store = _make_duckdb_store(tmp_path)
         store.write_discoveries([_FakeRaw()])
         store.save_run_result(_FakeResult())
         artifacts = tmp_path / "artifacts"
-        assert (artifacts / "discovered_strategies.md").exists()
-        assert (artifacts / "last_result.json").exists()
+        assert (artifacts / "idea_bank" / "discovered_strategies.md").exists()
+        assert not (artifacts / "last_result.json").exists()
+        assert (artifacts / "reports" / "latest" / "last_result.json").exists()
+        assert (artifacts / "reports" / "research_pipeline" / "full_research_report.html").exists()
+        assert (artifacts / "reports" / "latest" / "full_research_report.html").exists()
+        assert (artifacts / "reports" / "latest" / "metadata.json").exists()

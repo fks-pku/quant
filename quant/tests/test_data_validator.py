@@ -115,6 +115,14 @@ class TestCheckTimestamp:
         assert not report.ok
         assert any("null" in e.lower() for e in report.errors)
 
+    def test_unparseable_timestamp_returns_report(self):
+        df = _make_good_data(n_days=1)
+        df["timestamp"] = df["timestamp"].astype(object)
+        df.loc[0, "timestamp"] = "bad-date"
+        report = DataValidator.validate(df)
+        assert not report.ok
+        assert any("cannot be parsed" in e for e in report.errors)
+
 
 class TestCheckDuplicates:
     def test_duplicate_symbol_date(self):
@@ -163,6 +171,21 @@ class TestCheckNegativePrices:
         report = DataValidator.validate(df)
         assert not report.ok
 
+    def test_nan_price_is_error(self):
+        df = _make_good_data(n_days=3)
+        df.loc[0, "open"] = np.nan
+        report = DataValidator.validate(df)
+        assert not report.ok
+        assert any("open" in e and "NaN" in e for e in report.errors)
+
+    def test_non_numeric_price_returns_report(self):
+        df = _make_good_data(n_days=3)
+        df["open"] = df["open"].astype(object)
+        df.loc[0, "open"] = "bad"
+        report = DataValidator.validate(df)
+        assert not report.ok
+        assert any("open" in e and "numeric" in e for e in report.errors)
+
 
 class TestCheckOHLCLogic:
     def test_high_less_than_low(self):
@@ -204,6 +227,14 @@ class TestCheckVolumeSanity:
         report = DataValidator.validate(df)
         assert not report.ok
         assert any("Negative volume" in e for e in report.errors)
+
+    def test_non_numeric_volume_returns_report(self):
+        df = _make_good_data(n_days=3)
+        df["volume"] = df["volume"].astype(object)
+        df.loc[0, "volume"] = "bad"
+        report = DataValidator.validate(df)
+        assert not report.ok
+        assert any("volume" in e and "numeric" in e for e in report.errors)
 
     def test_zero_volume_is_warning(self):
         df = _make_good_data(n_days=3)

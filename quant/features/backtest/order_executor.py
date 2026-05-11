@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import logging
+import math
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 
@@ -25,6 +26,28 @@ from quant.features.backtest.market_rules import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_RISK_PRICE_DEVIATION_LIMIT = 0.15
+
+
+def _positive_finite_float(value: Any, symbol: str, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
+                                 f"{label}={value!r}")
+    if not math.isfinite(number) or number <= 0:
+        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
+                                 f"{label}={value!r}")
+    return number
+
+
+def _non_negative_volume(value: Any) -> float:
+    try:
+        volume = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(volume) or volume <= 0:
+        return 0.0
+    return volume
 
 
 def compute_market_impact(quantity: float, daily_volume: float, impact_factor: float) -> float:
@@ -72,13 +95,11 @@ def execute_order(
     prev_bar: Optional["BacktestBar"] = None,
     risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
     market_impact_factor: float = 0.0,
+    ignore_settlement: bool = False,
 ) -> List[Trade]:
     if bar is None:
         raise OrderRejectedError(OrderRejectionReason.BAR_UNAVAILABLE, symbol)
-    raw_open = bar.get('open')
-    if not raw_open or raw_open <= 0:
-        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
-                                 f"open={raw_open}")
+    raw_open = _positive_finite_float(bar.get('open'), symbol, "open")
 
     signal_date = order.signal_date
     fill_ts = bar.get('timestamp', datetime.now())
@@ -100,6 +121,7 @@ def execute_order(
 
     order_type = (order.order_type or "MARKET").upper()
     fill_price = resolve_base_fill_price(order, raw_open, order_type, slippage_bps)
+    fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
 
     risk_price = order.risk_check_price
     if order_type != "LIMIT" and risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
@@ -115,10 +137,10 @@ def execute_order(
     if lot_adjusted:
         diag.lot_adjusted_trades += 1
 
-    bar_volume = bar.get('volume', 0)
+    bar_volume = _non_negative_volume(bar.get('volume', 0))
     if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
         max_qty = max(1, int(bar_volume * VOLUME_PARTICIPATION_LIMIT))
-        if market in ("HK", "CN"):
+        if market == "HK" or (market == "CN" and order.side == "BUY"):
             max_qty = (max_qty // lot_size) * lot_size
         if max_qty <= 0:
             raise OrderRejectedError(OrderRejectionReason.VOLUME_ZERO, symbol)
@@ -127,6 +149,7 @@ def execute_order(
 
     impact_bps = compute_market_impact(quantity, bar_volume, market_impact_factor)
     fill_price = apply_market_impact(fill_price, order.side, impact_bps)
+    fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
     enforce_limit_after_impact(order, fill_price, order_type)
 
     if order.side == 'BUY':
@@ -138,6 +161,7 @@ def execute_order(
         return _execute_sell(
             order, portfolio, symbol, fill_ts, fill_price, quantity,
             signal_date, market, entry_times, entry_prices, diag, commission_config,
+            ignore_settlement,
         )
 
     raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, symbol,
@@ -157,9 +181,7 @@ def resolve_base_fill_price(order: "DeferredOrder", raw_open: float, order_type:
     if order_type != "LIMIT":
         return apply_slippage(raw_open, order.side, slippage_bps)
     limit_price = order.price
-    if not isinstance(limit_price, (int, float)) or limit_price <= 0:
-        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, order.symbol,
-                                 f"limit price={limit_price!r}")
+    limit_price = _positive_finite_float(limit_price, order.symbol, "limit price")
     if order.side == "BUY" and raw_open > limit_price:
         raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
                                  f"open={raw_open} > limit={limit_price}")
@@ -284,6 +306,7 @@ def _execute_sell(
     entry_prices: Dict[Any, float],
     diag: BacktestDiagnostics,
     commission_config: Any,
+    ignore_settlement: bool = False,
 ) -> List[Trade]:
     pos = portfolio.get_position(symbol)
     if not pos or pos.quantity <= 0:
@@ -291,7 +314,7 @@ def _execute_sell(
                                  "no position to sell (short not supported)")
 
     fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-    settled_qty = get_settled_quantity(symbol, pos, fill_date_val, market)
+    settled_qty = pos.quantity if ignore_settlement else get_settled_quantity(symbol, pos, fill_date_val, market)
     if settled_qty <= 0:
         if market == "CN":
             diag.t1_rejected_sells += 1

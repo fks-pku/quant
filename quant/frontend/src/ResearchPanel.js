@@ -8,8 +8,32 @@ const API_ORIGIN = API_BASE.replace(/\/api$/, '');
 const SOURCE_COLORS = {
   arxiv: '#ff6b6b',
   ssrn: '#ffaa00',
+  springer: '#00ff88',
+  nber: '#9be7ff',
+  blog: '#d7ff66',
   default: '#00d4ff',
 };
+
+const IDEA_FILTERS = ['discovered', 'research_queue', 'candidate', 'rejected', 'all'];
+
+function fmtScore(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n.toFixed(1) : '0.0';
+}
+
+function fmtNum(value, digits = 1) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(digits) : '-';
+}
+
+function fmtElapsed(seconds) {
+  const n = Number(seconds || 0);
+  if (!Number.isFinite(n) || n <= 0) return '0s';
+  if (n < 60) return `${Math.floor(n)}s`;
+  const minutes = Math.floor(n / 60);
+  const rest = Math.floor(n % 60);
+  return `${minutes}m ${rest}s`;
+}
 
 function ScoreBar({ value, max = 10, label, color = 'var(--accent-cyan)' }) {
   const pct = Math.min((value / max) * 100, 100);
@@ -26,7 +50,10 @@ function ScoreBar({ value, max = 10, label, color = 'var(--accent-cyan)' }) {
 
 export default function ResearchPanel() {
   const [candidates, setCandidates] = useState([]);
+  const [ideas, setIdeas] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedIdeaId, setSelectedIdeaId] = useState(null);
+  const [ideaFilter, setIdeaFilter] = useState('discovered');
   const [readme, setReadme] = useState(null);
   const [readmeLoading, setReadmeLoading] = useState(false);
   const [schedule, setSchedule] = useState(null);
@@ -37,6 +64,7 @@ export default function ResearchPanel() {
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [researchMode, setResearchMode] = useState(null);
 
   const fetchCandidates = useCallback(async () => {
     try {
@@ -44,6 +72,15 @@ export default function ResearchPanel() {
       setCandidates(res.data.candidates || []);
     } catch (e) {
       console.error('Fetch candidates error', e);
+    }
+  }, []);
+
+  const fetchIdeas = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/research/ideas`);
+      setIdeas(res.data.ideas || []);
+    } catch (e) {
+      console.error('Fetch idea bank error', e);
     }
   }, []);
 
@@ -67,12 +104,22 @@ export default function ResearchPanel() {
 
   useEffect(() => {
     fetchCandidates();
+    fetchIdeas();
     fetchResearchMeta();
-    const interval = setInterval(fetchCandidates, 10000);
+    const interval = setInterval(() => {
+      fetchCandidates();
+      fetchIdeas();
+    }, 10000);
     return () => clearInterval(interval);
-  }, [fetchCandidates, fetchResearchMeta]);
+  }, [fetchCandidates, fetchIdeas, fetchResearchMeta]);
 
   const selected = candidates.find(c => c.id === selectedId);
+  const visibleIdeas = ideaFilter === 'all' ? ideas : ideas.filter(i => i.status === ideaFilter);
+  const selectedIdea = ideas.find(i => i.idea_id === selectedIdeaId);
+  const ideaCounts = ideas.reduce((acc, idea) => {
+    acc[idea.status] = (acc[idea.status] || 0) + 1;
+    return acc;
+  }, {});
 
   useEffect(() => {
     if (!selectedId) {
@@ -96,6 +143,7 @@ export default function ResearchPanel() {
         if (res.data.status === 'completed' || res.data.status === 'error') {
           clearInterval(poll);
           setRunningResearch(false);
+          setResearchMode(null);
           if (res.data.status === 'completed') {
             if (res.data.report) {
               setLatestReport(res.data.report);
@@ -103,26 +151,71 @@ export default function ResearchPanel() {
               fetchResearchMeta();
             }
             fetchCandidates();
+            fetchIdeas();
           }
         }
-      } catch {
+      } catch (e) {
         clearInterval(poll);
         setRunningResearch(false);
+        setResearchMode(null);
+        setResearchStatus({
+          status: 'error',
+          error: e?.message || 'Polling research status failed',
+        });
       }
     }, 2000);
     return () => clearInterval(poll);
-  }, [researchJobId, fetchCandidates, fetchResearchMeta]);
+  }, [researchJobId, fetchCandidates, fetchIdeas, fetchResearchMeta]);
 
   const handleRunResearch = async () => {
     setRunningResearch(true);
+    setResearchMode('full');
     setResearchStatus(null);
     try {
-      const res = await axios.post(`${API_BASE}/research/run`, {});
+      const res = await axios.post(`${API_BASE}/research/run`, { mode: 'full' });
       setResearchJobId(res.data.research_id);
-      setResearchStatus({ status: 'running', research_id: res.data.research_id });
+      setResearchStatus({ status: 'running', research_id: res.data.research_id, mode: 'full' });
     } catch (e) {
       console.error('Run research error', e);
       setRunningResearch(false);
+      setResearchMode(null);
+    }
+  };
+
+  const handleDiscoverIdeas = async () => {
+    setRunningResearch(true);
+    setResearchMode('discover');
+    setResearchStatus(null);
+    try {
+      const res = await axios.post(`${API_BASE}/research/run`, { mode: 'discover' });
+      setResearchJobId(res.data.research_id);
+      setResearchStatus({ status: 'running', research_id: res.data.research_id, mode: 'discover' });
+    } catch (e) {
+      console.error('Discover ideas error', e);
+      setRunningResearch(false);
+      setResearchMode(null);
+    }
+  };
+
+  const handleResearchIdea = async (idea = selectedIdea) => {
+    if (!idea?.idea_id) return;
+    setSelectedIdeaId(idea.idea_id);
+    setRunningResearch(true);
+    setResearchMode('formal');
+    setResearchStatus(null);
+    try {
+      const res = await axios.post(`${API_BASE}/research/run`, {
+        mode: 'formal',
+        idea_ids: [idea.idea_id],
+        idea_statuses: [idea.status || 'discovered'],
+        max_ideas: 1,
+      });
+      setResearchJobId(res.data.research_id);
+      setResearchStatus({ status: 'running', research_id: res.data.research_id, mode: 'formal' });
+    } catch (e) {
+      console.error('Run formal research error', e);
+      setRunningResearch(false);
+      setResearchMode(null);
     }
   };
 
@@ -164,6 +257,14 @@ export default function ResearchPanel() {
   const meta = selected?.research_meta || {};
   const sourceColor = SOURCE_COLORS[meta.source] || SOURCE_COLORS.default;
   const latestReportHref = reportHref(latestReport);
+  const lastProgress = researchStatus?.result?.log?.length
+    ? researchStatus.result.log[researchStatus.result.log.length - 1]
+    : null;
+  const activeRunningLabel = researchMode === 'discover'
+    ? 'Discovering...'
+    : researchMode === 'formal'
+      ? 'Researching idea...'
+      : 'Researching...';
 
   return (
     <div className="rs-panel">
@@ -181,10 +282,38 @@ export default function ResearchPanel() {
           </div>
           <button
             className="rs-run-btn"
+            onClick={handleDiscoverIdeas}
+            disabled={runningResearch}
+          >
+            {runningResearch && researchMode === 'discover' ? (
+              <>
+                <span className="rs-spinner" />
+                Discovering...
+              </>
+            ) : (
+              'Discover Ideas'
+            )}
+          </button>
+          <button
+            className="rs-run-btn rs-run-btn-formal"
+            onClick={() => handleResearchIdea()}
+            disabled={runningResearch || !selectedIdea}
+          >
+            {runningResearch && researchMode === 'formal' ? (
+              <>
+                <span className="rs-spinner" />
+                Running...
+              </>
+            ) : (
+              'Research Selected'
+            )}
+          </button>
+          <button
+            className="rs-run-btn rs-run-btn-muted"
             onClick={handleRunResearch}
             disabled={runningResearch}
           >
-            {runningResearch ? (
+            {runningResearch && researchMode === 'full' ? (
               <>
                 <span className="rs-spinner" />
                 Researching...
@@ -193,6 +322,76 @@ export default function ResearchPanel() {
               'Run End-to-End'
             )}
           </button>
+        </div>
+      </div>
+
+      <div className="rs-idea-pool">
+        <div className="rs-idea-head">
+          <div>
+            <div className="rs-section-heading">Idea Bank</div>
+            <div className="rs-subtitle">
+              {ideas.length} local ideas, {ideaCounts.discovered || 0} waiting
+            </div>
+          </div>
+          <div className="rs-idea-filters">
+            {IDEA_FILTERS.map(filter => (
+              <button
+                key={filter}
+                className={`rs-filter-btn ${ideaFilter === filter ? 'rs-filter-active' : ''}`}
+                onClick={() => setIdeaFilter(filter)}
+              >
+                {filter}
+                {filter !== 'all' && <span>{ideaCounts[filter] || 0}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="rs-idea-table">
+          {visibleIdeas.length === 0 ? (
+            <div className="rs-empty-row">No ideas in this status.</div>
+          ) : (
+            visibleIdeas.map(idea => {
+              const quality = idea.metadata?.discovery_quality || {};
+              const color = SOURCE_COLORS[idea.source] || SOURCE_COLORS.default;
+              const active = selectedIdeaId === idea.idea_id;
+              return (
+                <div
+                  key={idea.idea_id}
+                  className={`rs-idea-row ${active ? 'rs-idea-active' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedIdeaId(idea.idea_id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') setSelectedIdeaId(idea.idea_id);
+                  }}
+                >
+                  <span className="rs-idea-main">
+                    <b>{idea.title}</b>
+                    <em>{idea.reason || 'queued'}</em>
+                  </span>
+                  <span className="rs-source-badge" style={{ background: `${color}22`, color }}>
+                    {idea.source || 'unknown'}
+                  </span>
+                  <span className={`rs-idea-status rs-idea-status-${idea.status || 'unknown'}`}>
+                    {idea.status || 'unknown'}
+                  </span>
+                  <span className="rs-idea-date">{idea.published_date || 'n/a'}</span>
+                  <span className="rs-idea-score">{fmtScore(quality.score)}/10</span>
+                  <button
+                    type="button"
+                    className="rs-idea-action"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleResearchIdea(idea);
+                    }}
+                    disabled={runningResearch}
+                  >
+                    Research
+                  </button>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -226,8 +425,18 @@ export default function ResearchPanel() {
       {researchStatus && (
         <div className={`rs-job-bar ${researchStatus.status === 'error' ? 'rs-job-error' : ''}`}>
           {researchStatus.status === 'running' && (
-            <div className="rs-progress-header">
-              <span className="rs-spinner" /> Scanning sources and evaluating strategies...
+            <div className="rs-progress-header rs-progress-running">
+              <span>
+                <span className="rs-spinner" /> {activeRunningLabel}
+                {researchStatus.elapsed_seconds != null && (
+                  <em className="rs-progress-elapsed">{fmtElapsed(researchStatus.elapsed_seconds)}</em>
+                )}
+              </span>
+              {lastProgress && (
+                <span className="rs-progress-step">
+                  {lastProgress.phase}: {lastProgress.reason}
+                </span>
+              )}
             </div>
           )}
           {researchStatus.status === 'completed' && researchStatus.result && (
@@ -263,7 +472,7 @@ export default function ResearchPanel() {
                   <span className="rs-log-reason">{entry.reason}</span>
                   {entry.scores && entry.scores.suitability != null && (
                     <span className="rs-log-scores">
-                      S:{entry.scores.suitability.toFixed(1)} C:{entry.scores.complexity?.toFixed(1) || '-'} E:{entry.scores.edge != null ? (entry.scores.edge * 100).toFixed(1) + '%' : '-'}
+                      S:{fmtNum(entry.scores.suitability)} C:{fmtNum(entry.scores.complexity)} E:{entry.scores.edge != null ? fmtNum(Number(entry.scores.edge) * 100) + '%' : '-'}
                     </span>
                   )}
                   {entry.scores && entry.scores.sharpe != null && (
