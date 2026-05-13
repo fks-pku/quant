@@ -259,6 +259,17 @@ class TestCheckDateGaps:
         assert report.ok
         assert any("gap" in w.lower() for w in report.warnings)
 
+    def test_large_gap_checked_per_symbol(self):
+        df1 = _make_good_data(n_days=5, symbol="AAPL")
+        df2 = _make_good_data(n_days=5, symbol="MSFT")
+        df2.loc[3:, "timestamp"] = df2.loc[3:, "timestamp"] + timedelta(days=30)
+        df = pd.concat([df1, df2], ignore_index=True)
+        report = DataValidator.validate(df)
+        assert report.ok
+        gap_warnings = [w for w in report.warnings if "gap" in w.lower()]
+        assert len(gap_warnings) == 1
+        assert "MSFT" in gap_warnings[0]
+
     def test_continuous_dates_no_gap_warning(self):
         report = DataValidator.validate(_make_good_data(n_days=5))
         gap_warnings = [w for w in report.warnings if "gap" in w.lower()]

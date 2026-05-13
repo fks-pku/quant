@@ -1,9 +1,11 @@
 """基础设施测试 — EventBus, Portfolio, RiskEngine。"""
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
+import pandas as pd
 import pytest
 
 from quant.infrastructure.events import EventBus
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.domain.events.base import EventType, Event
 from quant.features.trading.portfolio import Portfolio
 from quant.domain.models.position import Position
@@ -29,6 +31,41 @@ class TestEventBus:
         bus.unsubscribe(EventType.BAR, handler)
         bus.publish(Event(event_type=EventType.BAR, data={}))
         assert len(received) == 0
+
+
+class TestDuckDBStorage:
+    def test_get_bars_for_symbols_reads_multiple_symbols(self, tmp_path):
+        db_path = tmp_path / "bulk.duckdb"
+        storage = DuckDBStorage(str(db_path))
+        start = datetime(2025, 1, 2)
+        try:
+            for symbol, base in (("AAPL", 100.0), ("MSFT", 200.0)):
+                rows = []
+                for i in range(3):
+                    price = base + i
+                    rows.append({
+                        "timestamp": start + timedelta(days=i),
+                        "symbol": symbol,
+                        "open": price,
+                        "high": price + 1,
+                        "low": price - 1,
+                        "close": price,
+                        "volume": 1000 + i,
+                    })
+                storage.save_bars(pd.DataFrame(rows), "1d")
+
+            bars = storage.get_bars_for_symbols(
+                ["MSFT", "AAPL"],
+                start,
+                start + timedelta(days=1),
+                "1d",
+            )
+        finally:
+            storage.close()
+
+        assert len(bars) == 4
+        assert sorted(bars["symbol"].unique().tolist()) == ["AAPL", "MSFT"]
+        assert bars.groupby("symbol").size().to_dict() == {"AAPL": 2, "MSFT": 2}
 
     def test_multiple_subscribers(self):
         bus = EventBus()

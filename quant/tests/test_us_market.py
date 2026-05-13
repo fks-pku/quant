@@ -6,11 +6,11 @@ import pytest
 from quant.tests.conftest import (
     make_backtester,
     make_us_bars,
+    make_buy_and_hold_strategy,
     run_simple_backtest,
 )
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.data_provider import DataFrameProvider
-from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 
 
 US_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
@@ -238,7 +238,7 @@ class TestUSSlippage:
 
 
 class TestUSEndToEnd:
-    def test_dual_ma_crossover_us_backtest(self):
+    def test_buy_and_hold_us_backtest(self):
         np.random.seed(42)
         data = make_us_bars(
             US_SYMBOLS, START, 120,
@@ -246,12 +246,7 @@ class TestUSEndToEnd:
             daily_return=0.002,
         )
         bt = make_backtester()
-        strategy = DualMACrossover(
-            symbols=US_SYMBOLS,
-            fast_period=5,
-            slow_period=20,
-            max_position_pct=0.10,
-        )
+        strategy = make_buy_and_hold_strategy("USBuyHold", US_SYMBOLS, quantity=10)
         result = run_simple_backtest(bt, data, [strategy], US_SYMBOLS, initial_cash=1000000)
         assert result.final_nav > 0
         assert result.diagnostics.total_commission >= 0

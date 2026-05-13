@@ -12,8 +12,8 @@ backtest_bp = Blueprint('backtest', __name__)
 
 @backtest_bp.route('/api/backtest/run', methods=['POST'])
 def run_backtest():
-    data = request.json
-    strategy_id = data.get('strategy_id', 'SimpleMomentum')
+    data = request.json or {}
+    strategy_id = data.get('strategy_id')
     start_date = data.get('start_date', '2020-01-01')
     end_date = data.get('end_date', '2024-12-31')
     symbols = data.get('symbols', ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY'])
@@ -21,6 +21,9 @@ def run_backtest():
     slippage_bps = data.get('slippage_bps', 5)
     strategy_params = data.get('strategy_params', {})
     risk_config = data.get('risk_config', {})
+
+    if not strategy_id:
+        return jsonify({'error': 'strategy_id is required. No built-in strategies are currently registered.'}), 400
 
     backtest_id = str(uuid.uuid4())[:8]
     with _backtest_lock:
@@ -37,7 +40,6 @@ def run_backtest():
         benchmark_symbol = detect_benchmark_symbol(symbols)
 
         try:
-            import pandas as pd
             from quant.features.backtest.engine import Backtester
             from quant.features.strategies.registry import StrategyRegistry
             from quant.domain.ports.storage import Storage
@@ -48,22 +50,13 @@ def run_backtest():
 
             db: Storage = DuckDBStorage(read_only=True)
             try:
-                all_data = []
-                missing_symbols = []
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                data_df = db.get_bars_for_symbols(symbols, start_dt, end_dt, "1d")
+                loaded_symbols = set(data_df["symbol"].unique().tolist()) if not data_df.empty else set()
+                missing_symbols = [symbol for symbol in symbols if symbol not in loaded_symbols]
 
-                for symbol in symbols:
-                    bars = db.get_bars(
-                        symbol,
-                        datetime.strptime(start_date, '%Y-%m-%d'),
-                        datetime.strptime(end_date, '%Y-%m-%d'),
-                        "1d",
-                    )
-                    if not bars.empty:
-                        all_data.append(bars)
-                    else:
-                        missing_symbols.append(symbol)
-
-                if not all_data:
+                if data_df.empty:
                     available_hk = db.get_symbols('daily', 'hk')
                     available_us = db.get_symbols('daily', 'us')
                     available_cn = db.get_symbols('daily', 'cn')
@@ -79,7 +72,6 @@ def run_backtest():
                 from quant.features.backtest.walkforward import DataFrameProvider
                 from quant.features.backtest.data_validator import DataValidator
 
-                data_df = pd.concat(all_data, ignore_index=True)
                 data_provider = DataFrameProvider(data_df)
 
                 validation_report = DataValidator.validate(data_df)

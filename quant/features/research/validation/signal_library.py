@@ -39,6 +39,11 @@ def adjusted_price_matrix(data: pd.DataFrame, field: str = "close") -> pd.DataFr
 
 
 def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
+    if formula_key == "worldquant_alpha_001":
+        if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+            return _worldquant_alpha_001_panel(data, lookback)
+        return _worldquant_alpha_001_raw(data, lookback)
+
     calculators = {
         "momentum_close_return": _momentum_close_return,
         "mean_reversion_close_to_ma": _mean_reversion_close_to_ma,
@@ -86,6 +91,25 @@ def _volatility_breakout_atr(data: Any, lookback: int) -> Any:
     return (close - previous_high) / atr
 
 
+def _worldquant_alpha_001_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    returns = close.pct_change(fill_method=None)
+    stddev = returns.rolling(lookback, min_periods=lookback).std()
+    base = close.mask(returns < 0, stddev)
+    signed_power = base.where(base >= 0, -base.abs()).abs().pow(2).where(base >= 0, -base.abs().pow(2))
+    ts_argmax = signed_power.rolling(5, min_periods=5).apply(lambda values: float(values.argmax()), raw=True)
+    return ts_argmax.rank(axis=1, pct=True) - 0.5
+
+
+def _worldquant_alpha_001_raw(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    returns = close.pct_change(fill_method=None)
+    stddev = returns.rolling(lookback, min_periods=lookback).std()
+    base = close.mask(returns < 0, stddev)
+    signed_power = base.where(base >= 0, -base.abs()).abs().pow(2).where(base >= 0, -base.abs().pow(2))
+    return signed_power.rolling(5, min_periods=5).apply(lambda values: float(values.argmax()), raw=True)
+
+
 def _coalesce_adjusted(adjusted: Any, raw: Any) -> Any:
     if adjusted is None:
         return raw
@@ -103,4 +127,5 @@ SUPPORTED_FORMULAS = {
     "momentum_close_return",
     "mean_reversion_close_to_ma",
     "volatility_breakout_atr",
+    "worldquant_alpha_001",
 }

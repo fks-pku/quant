@@ -84,6 +84,22 @@ class TestStrategySpecBuilder:
         assert spec.signal_formula_key == "volatility_breakout_atr"
         assert spec.status == "ready"
 
+    def test_worldquant_alpha_001_maps_to_exact_formula(self):
+        from quant.features.research.discovery.worldquant101 import build_worldquant101_raw_strategies
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_worldquant101_raw_strategies(alpha_numbers=[1])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("momentum", symbols=["600519"]))
+
+        assert spec.strategy_id == "worldquant_101_alpha_001"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == "worldquant_alpha_001"
+        assert spec.required_fields == ["close"]
+        assert spec.status == "ready"
+
     def test_unknown_type_returns_unsupported(self):
         from quant.features.research.validation.strategy_spec_builder import (
             StrategySpecBuilder,
@@ -241,6 +257,38 @@ class TestResearchAdjustedPrices:
         signal = compute_signal("volatility_breakout_atr", frame, lookback=2)
 
         assert signal.iloc[-1] > 0
+
+    def test_worldquant_alpha_001_returns_cross_sectional_rank_signal(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=40, freq="B")
+        symbols = ["600001", "600002", "600003", "600004"]
+        rng = np.random.default_rng(17)
+        frames = []
+        for idx, symbol in enumerate(symbols):
+            returns = rng.normal(0.0005 * (idx + 1), 0.018 + idx * 0.002, len(dates))
+            close = 100.0 * np.cumprod(1.0 + returns)
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "close": close,
+                        "adj_close": close,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        frame = pd.concat(frames, ignore_index=True)
+
+        signal = compute_signal("worldquant_alpha_001", frame, lookback=20)
+        last = signal.dropna(how="all").iloc[-1].dropna()
+
+        assert list(signal.columns) == symbols
+        assert not last.empty
+        assert last.max() <= 0.5
+        assert last.min() >= -0.5
+        assert last.nunique() > 1
 
     def test_factor_validator_uses_adjusted_close_for_forward_returns(self):
         from quant.features.research.validation.factor_validator import FactorValidator
@@ -451,6 +499,12 @@ class TestFactorValidator:
         assert report.status == "validated"
         assert len(report.ic_decay) == 4
         assert isinstance(report.fama_macbeth_tstat, float)
+        diagnostics = report.portfolio_diagnostics
+        assert "top_bucket_after_cost_calmar_ratio" in diagnostics
+        assert "top1_pct_annualized_return" in diagnostics
+        assert "top1_pct_after_cost_calmar_ratio" in diagnostics
+        assert np.isfinite(diagnostics["top_bucket_after_cost_calmar_ratio"])
+        assert np.isfinite(diagnostics["top1_pct_after_cost_calmar_ratio"])
 
     def test_factor_validator_populates_ff_fields_when_factor_port_available(self):
         from quant.features.research.validation.factor_validator import FactorValidator

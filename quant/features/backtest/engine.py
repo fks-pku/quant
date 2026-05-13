@@ -104,6 +104,7 @@ class Backtester:
         last_prices: Dict[str, float] = {}
         last_price_times: Dict[str, datetime] = {}
         prev_bars: "Dict[str, BacktestBar]" = {}
+        latest_bars: "Dict[str, BacktestBar]" = {}
 
         deferred_orders: "List[DeferredOrder]" = []
         pending_orders: "List[DeferredOrder]" = []
@@ -152,7 +153,7 @@ class Backtester:
             # --- Step 2: Load today's bar data ---
             prev_close_bars: "Dict[str, BacktestBar]" = dict(prev_bars)
             today_bars, any_suspended_today = self._load_daily_bars(
-                data_provider, symbols, current_date, last_prices, last_price_times, prev_bars,
+                data_provider, symbols, current_date, last_prices, last_price_times, prev_bars, latest_bars,
             )
             if any_suspended_today:
                 diag.suspended_days += 1
@@ -254,6 +255,10 @@ class Backtester:
             diag.expired_orders += expired_count
             diag.discarded_orders += expired_count
             deferred_orders = []
+
+        self._record_final_suspended_holdings(
+            diag, portfolio_map, primary_portfolio, use_subs, latest_bars, last_prices,
+        )
 
         for strategy in strategies:
             strategy.on_stop(strategy.context)
@@ -437,7 +442,7 @@ class Backtester:
             open_positions=open_positions,
         )
 
-    def _load_daily_bars(self, data_provider, symbols, current_date, last_prices, last_price_times, prev_bars):
+    def _load_daily_bars(self, data_provider, symbols, current_date, last_prices, last_price_times, prev_bars, latest_bars):
         today_bars: Dict[str, Dict] = {}
         any_suspended = False
 
@@ -455,6 +460,7 @@ class Backtester:
                     bar_data['symbol'] = symbol
                     bar_data['_suspended'] = is_suspended(bar_data)
                     today_bars[symbol] = bar_data
+                    latest_bars[symbol] = bar_data
                     if bar_data['_suspended']:
                         any_suspended = True
                     else:
@@ -475,6 +481,7 @@ class Backtester:
                             bar_data['symbol'] = symbol
                             bar_data['_suspended'] = is_suspended(bar_data)
                             today_bars[symbol] = bar_data
+                            latest_bars[symbol] = bar_data
                             if bar_data['_suspended']:
                                 any_suspended = True
                             else:
@@ -500,6 +507,38 @@ class Backtester:
         for symbol, pos in portfolio.positions.items():
             if pos.quantity != 0 and symbol in last_prices:
                 pos.update_market_price(last_prices[symbol])
+
+    @staticmethod
+    def _record_final_suspended_holdings(
+        diag: BacktestDiagnostics,
+        portfolio_map: Dict[str, Any],
+        primary_portfolio: Any,
+        use_subs: bool,
+        prev_bars: Dict[str, Dict[str, Any]],
+        last_prices: Dict[str, float],
+    ) -> None:
+        holdings = []
+        portfolios = portfolio_map.values() if use_subs else [primary_portfolio]
+        for portfolio in portfolios:
+            for symbol, pos in getattr(portfolio, "positions", {}).items():
+                quantity = float(getattr(pos, "quantity", 0.0) or 0.0)
+                if quantity <= 0:
+                    continue
+                final_bar = prev_bars.get(symbol) or {}
+                if not final_bar.get("_suspended"):
+                    continue
+                price = float(last_prices.get(symbol) or 0.0)
+                if price <= 0:
+                    market_value = float(getattr(pos, "market_value", 0.0) or 0.0)
+                    price = (
+                        market_value / quantity
+                        if market_value > 0 and quantity > 0
+                        else float(getattr(pos, "avg_cost", 0.0) or 0.0)
+                    )
+                holdings.append((symbol, quantity * max(price, 0.0)))
+        diag.final_suspended_holding_nav = sum(value for _, value in holdings)
+        diag.final_suspended_holding_count = len(holdings)
+        diag.final_suspended_symbols = sorted({symbol for symbol, _ in holdings})
 
     @staticmethod
     def _reset_daily(portfolio_map, risk_map, use_subs, diag):

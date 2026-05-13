@@ -614,7 +614,7 @@ C9-04  sell_trades 有 2 条（FIFO 跨两个 lot）
 CN 市场 `adj_close ≈ close × adj_factor`（adj_factor 可达 100+），若误用后复权价算下单量会导致手数
 静默丢弃。
 
-**真实 Bug 回归**: dual_ma_crossover 用 `closes[-1]`（= `_adj(bar, "close")` = 后复权 ~1700）算下单量 →
+**真实 Bug 回归**: 日线策略曾用 `closes[-1]`（= `_adj(bar, "close")` = 后复权 ~1700）算下单量 →
 `qty=55 < 100 lot` → 39 次金叉全部静默丢弃，`fill_count=0, discarded_orders=40`。
 
 ### 前置条件

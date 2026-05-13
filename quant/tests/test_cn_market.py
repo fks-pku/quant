@@ -7,13 +7,13 @@ import pytest
 from quant.tests.conftest import (
     make_backtester,
     make_cn_bars,
+    make_buy_and_hold_strategy,
     run_simple_backtest,
 )
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.dividend_processor import calculate_cn_dividend_tax
 from quant.features.backtest.data_provider import DataFrameProvider
 from quant.features.strategies.base import Strategy
-from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 
 
 CN_SYMBOLS = ["600519", "000858", "300750", "601318"]
@@ -205,21 +205,21 @@ class TestCNDividendTax:
 
 
 class TestCNEndToEnd:
-    def test_dual_ma_crossover_backtest(self):
+    def test_buy_and_hold_cn_backtest(self):
         np.random.seed(42)
         data = make_cn_bars(CN_SYMBOLS, START, 120, {"600519": 50, "000858": 30, "300750": 40, "601318": 45})
         bt = make_backtester()
-        strategy = DualMACrossover(symbols=CN_SYMBOLS, fast_period=5, slow_period=20)
+        strategy = make_buy_and_hold_strategy("CNBuyHold", CN_SYMBOLS, quantity=100)
         result = run_simple_backtest(bt, data, [strategy], CN_SYMBOLS, initial_cash=2000000)
         assert result.final_nav > 0
         assert result.diagnostics.total_commission >= 0
 
-    def test_dual_ma_crossover_multi_backtest(self):
+    def test_buy_and_hold_cn_multi_backtest(self):
         np.random.seed(123)
         symbols = ["600519", "000858", "601318", "600036", "000333"]
         data = make_cn_bars(symbols, START, 120, {"600519": 50, "000858": 30, "601318": 45, "600036": 35, "000333": 25})
         bt = make_backtester()
-        strategy = DualMACrossover(symbols=symbols, fast_period=5, slow_period=20)
+        strategy = make_buy_and_hold_strategy("CNMultiBuyHold", symbols, quantity=100)
         result = run_simple_backtest(bt, data, [strategy], strategy.symbols, initial_cash=2000000)
         assert result.final_nav > 0
 

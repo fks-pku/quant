@@ -114,10 +114,13 @@ class StrategyIntegrator:
         class_name = self._to_class_name(raw.title)
         default_symbols = _a_share_symbols(getattr(spec, "universe", []) or report.recommended_symbols)
         symbols_str = ", ".join(f'"{s}"' for s in default_symbols)
+        default_symbols_block = _default_symbols_block(default_symbols)
+        default_symbols_expr = "DEFAULT_SYMBOLS" if default_symbols_block else f"[{symbols_str}]"
         lookback = int(getattr(spec, "lookback_days", 20) or 20)
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
         formula_key = getattr(spec, "signal_formula_key", "") or ""
         body = self._formula_body(formula_key)
+        rebalance_body = "" if formula_key == "worldquant_alpha_001" else self._generic_rebalance_body()
 
         return f'''"""{raw.title}
 
@@ -141,6 +144,7 @@ if TYPE_CHECKING:
     from quant.domain.context import StrategyContext as Context
 
 
+{default_symbols_block}
 @strategy("{name}")
 class {class_name}(DailyBarStrategy):
     def __init__(
@@ -149,10 +153,12 @@ class {class_name}(DailyBarStrategy):
         lookback: int = {lookback},
         holding_days: int = {horizon},
         max_position_pct: float = 0.10,
+        max_positions: int = 20,
     ):
-        self._symbols = symbols or [{symbols_str}]
+        self._symbols = symbols or {default_symbols_expr}
         self.lookback = lookback
         self.max_position_pct = max_position_pct
+        self.max_positions = max_positions
         super().__init__("{name}", self._symbols, holding_days=holding_days)
 
     @property
@@ -163,7 +169,28 @@ class {class_name}(DailyBarStrategy):
         super().on_start(context)
         self.logger = get_logger("{class_name}")
 
-    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+{rebalance_body}
+    def _target_quantity(self, context: "Context", price: float, slots: int) -> int:
+        portfolio = getattr(context, "portfolio", None)
+        nav = float(getattr(portfolio, "nav", 0.0) or 0.0)
+        if nav <= 0 or price <= 0:
+            return 0
+        return int((nav * self.max_position_pct / max(1, slots)) / price)
+
+{body}
+
+    def _get_parameters(self) -> Dict[str, Any]:
+        return {{
+            "lookback": self.lookback,
+            "max_position_pct": self.max_position_pct,
+            "max_positions": self.max_positions,
+            "formula_key": "{formula_key or "manual_review_required"}",
+        }}
+'''
+
+    @staticmethod
+    def _generic_rebalance_body() -> str:
+        return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
         candidates = []
         for symbol in self._symbols:
             signal = self._signal(symbol)
@@ -186,21 +213,6 @@ class {class_name}(DailyBarStrategy):
             elif delta < 0:
                 self.sell(symbol, int(abs(delta)), "MARKET", price)
 
-    def _target_quantity(self, context: "Context", price: float, slots: int) -> int:
-        portfolio = getattr(context, "portfolio", None)
-        nav = float(getattr(portfolio, "nav", 0.0) or 0.0)
-        if nav <= 0 or price <= 0:
-            return 0
-        return int((nav * self.max_position_pct / max(1, slots)) / price)
-
-{body}
-
-    def _get_parameters(self) -> Dict[str, Any]:
-        return {{
-            "lookback": self.lookback,
-            "max_position_pct": self.max_position_pct,
-            "formula_key": "{formula_key or "manual_review_required"}",
-        }}
 '''
 
     def _formula_body(self, formula_key: str) -> str:
@@ -250,6 +262,69 @@ class {class_name}(DailyBarStrategy):
             ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
         return float(np.mean(ranges)) if ranges else 0.0
 '''
+        if formula_key == "worldquant_alpha_001":
+            return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        raw_scores = []
+        for symbol in self._symbols:
+            raw_signal = self._worldquant_alpha_001_raw(symbol)
+            price = self._get_last_price(symbol)
+            if np.isfinite(raw_signal) and price > 0:
+                raw_scores.append((raw_signal, symbol, price))
+        if not raw_scores:
+            return
+        raw_scores.sort()
+        count = len(raw_scores)
+        ranked = []
+        for rank_index, (_, symbol, price) in enumerate(raw_scores, start=1):
+            ranked.append((rank_index / count - 0.5, symbol, price))
+        ranked.sort(reverse=True)
+        top_count = max(1, min(self.max_positions, int(np.ceil(count * 0.01))))
+        selected = [(signal, symbol, price) for signal, symbol, price in ranked if signal > 0][:top_count]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        if not selected:
+            for _, symbol, price in ranked:
+                current_pos = self._positions.get(symbol, 0)
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+            return
+        slots = len(selected)
+        for signal, symbol, price in ranked:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
+            if signal <= 0 and current_pos > 0:
+                self.sell(symbol, int(current_pos), "MARKET", price)
+            elif signal > 0:
+                target_qty = self._target_quantity(context, price, slots)
+                delta = target_qty - current_pos
+                if delta > 0:
+                    self.buy(symbol, int(delta), "MARKET", price)
+                elif delta < 0:
+                    self.sell(symbol, int(abs(delta)), "MARKET", price)
+
+    def _worldquant_alpha_001_raw(self, symbol: str) -> float:
+        closes = np.asarray(self._get_closes(symbol), dtype=float)
+        if len(closes) < self.lookback + 5:
+            return float("nan")
+        returns = closes[1:] / closes[:-1] - 1.0
+        values = []
+        for close_index in range(len(closes) - 5, len(closes)):
+            return_index = close_index - 1
+            if return_index < self.lookback - 1:
+                return float("nan")
+            if returns[return_index] < 0:
+                window = returns[return_index - self.lookback + 1:return_index + 1]
+                base = float(np.std(window, ddof=1))
+            else:
+                base = float(closes[close_index])
+            values.append(float(np.sign(base) * abs(base) ** 2))
+        return float(np.argmax(values))
+
+    def _signal(self, symbol: str) -> float:
+        return self._worldquant_alpha_001_raw(symbol)
+'''
         return '''    def _signal(self, symbol: str) -> float:
         self.logger.warning("Manual implementation required for unsupported formula: %s", symbol)
         return 0.0
@@ -283,7 +358,11 @@ class {class_name}(DailyBarStrategy):
     def _generate_config(self, raw: RawStrategy, report: EvaluationReport, spec: Optional[StrategySpec] = None) -> str:
         strategy_id = self._strategy_id(raw, spec)
         symbols = _a_share_symbols(getattr(spec, "universe", []) or report.recommended_symbols)
-        symbols_text = ", ".join(symbols)
+        symbols_text = ", ".join(f'"{symbol}"' for symbol in symbols)
+        if len(symbols) > 20:
+            symbols_yaml = "symbols:\n" + "\n".join(f'    - "{symbol}"' for symbol in symbols)
+        else:
+            symbols_yaml = f"symbols: [{symbols_text}]"
         lookback = int(getattr(spec, "lookback_days", 20) or 20)
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
         return f"""strategy:
@@ -293,10 +372,11 @@ class {class_name}(DailyBarStrategy):
   priority: 999
 
 parameters:
-  symbols: [{symbols_text}]
+  {symbols_yaml}
   lookback: {lookback}
   holding_days: {horizon}
   max_position_pct: 0.10
+  max_positions: 20
 """
 
     def _register_in_runtime(
@@ -373,3 +453,10 @@ parameters:
 def _a_share_symbols(symbols) -> list[str]:
     resolved = [str(symbol) for symbol in symbols or [] if re.fullmatch(r"\d{6}", str(symbol))]
     return resolved or list(DEFAULT_A_SHARE_SYMBOLS)
+
+
+def _default_symbols_block(symbols) -> str:
+    if len(symbols or []) <= 20:
+        return ""
+    body = ",\n    ".join(f'"{symbol}"' for symbol in symbols)
+    return f"DEFAULT_SYMBOLS = [\n    {body}\n]\n\n\n"

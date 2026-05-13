@@ -40,7 +40,6 @@ def _make_backtest_fn():
     from quant.features.trading.sub_portfolio import SubPortfolio
     from quant.features.research.models import ResearchLogEntry
     from quant.domain.models.market import is_cn_symbol
-    import pandas as pd
 
     def _run_backtest(sid, result, config, integrator, pool):
         registry = StrategyRegistry()
@@ -58,15 +57,12 @@ def _make_backtest_fn():
 
         db_provider = DuckDBProvider()
         db_provider.connect()
-        all_data = []
         lot_sizes = {}
         benchmark_provider = None
         benchmark_meta = {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
         try:
+            data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
             for sym in symbols:
-                bars = db_provider.get_bars(sym, start, end, "1d")
-                if not bars.empty:
-                    all_data.append(bars)
                 try:
                     lot_sizes[sym] = db_provider.storage.get_lot_size(sym) if is_cn_symbol(sym) else 1
                 except Exception:
@@ -76,11 +72,10 @@ def _make_backtest_fn():
         finally:
             db_provider.disconnect()
 
-        if not all_data:
+        if data_df.empty:
             result.errors.append(f"No data for {sid}")
             return
 
-        data_df = pd.concat(all_data, ignore_index=True)
         data_provider = DataFrameProvider(data_df)
         strategy = strategy_class(symbols=symbols)
 
@@ -207,6 +202,7 @@ def _strict_backtest_report(bt_result, start, end, initial_cash, symbols, benchm
     diagnostics = getattr(bt_result, "diagnostics", None)
     days = max(1, (end - start).days)
     cagr = (float(bt_result.final_nav) / float(initial_cash)) ** (365.25 / days) - 1.0 if initial_cash > 0 else 0.0
+    max_drawdown_pct = _metric_float(getattr(bt_result, "max_drawdown_pct", 0.0))
     stat_sig = getattr(metrics, "statistical_significance", {}) if metrics is not None else {}
     return {
         "framework": "Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio",
@@ -218,7 +214,8 @@ def _strict_backtest_report(bt_result, start, end, initial_cash, symbols, benchm
             "sortino": _metric_float(getattr(bt_result, "sortino_ratio", 0.0)),
             "cagr": _metric_float(cagr),
             "total_return": _metric_float(getattr(bt_result, "total_return", 0.0)),
-            "max_drawdown_pct": _metric_float(getattr(bt_result, "max_drawdown_pct", 0.0)),
+            "max_drawdown_pct": max_drawdown_pct,
+            "calmar_ratio": _metric_float(_calmar_ratio(cagr, max_drawdown_pct)),
             "win_rate": _metric_float(getattr(bt_result, "win_rate", 0.0)),
             "profit_factor": _metric_float(getattr(bt_result, "profit_factor", 0.0)),
             "total_trades": int(len(getattr(bt_result, "trades", []) or [])),
@@ -279,6 +276,7 @@ def _update_hypothesis_backtest(pool, sid, strict_report, status, stage, reason)
             metrics["backtest_sortino"] = strict_report.get("metrics", {}).get("sortino", 0.0)
             metrics["backtest_cagr"] = strict_report.get("metrics", {}).get("cagr", 0.0)
             metrics["backtest_max_drawdown_pct"] = strict_report.get("metrics", {}).get("max_drawdown_pct", 0.0)
+            metrics["backtest_calmar_ratio"] = strict_report.get("metrics", {}).get("calmar_ratio", 0.0)
             metrics["benchmark_symbol"] = strict_report.get("benchmark", {}).get("symbol", "")
             updated["metrics"] = metrics
             updated["status"] = status
@@ -307,8 +305,11 @@ def _diagnostics_dict(diagnostics):
         "truncated_sells",
         "forced_closeout_orders",
         "forced_closeout_trades",
+        "final_suspended_holding_nav",
+        "final_suspended_holding_count",
     )
     data = {field: _metric_float(getattr(diagnostics, field, 0.0)) for field in fields}
+    data["final_suspended_symbols"] = list(getattr(diagnostics, "final_suspended_symbols", []) or [])
     data["rejection_counts"] = dict(getattr(diagnostics, "rejection_counts", {}) or {})
     return data
 
@@ -325,6 +326,17 @@ def _metric_float(value):
     if number != number:
         return 0.0
     return number
+
+
+def _calmar_ratio(cagr, max_drawdown):
+    cagr_value = _metric_float(cagr)
+    drawdown_value = _metric_float(max_drawdown)
+    if isinstance(cagr_value, str) or isinstance(drawdown_value, str):
+        return 0.0
+    drawdown = abs(drawdown_value)
+    if drawdown <= 1e-12:
+        return 0.0
+    return cagr_value / drawdown
 
 
 def _serialize_walkforward_trade(trade, data_df):
@@ -435,13 +447,10 @@ def _make_walkforward_runner():
 
         db_provider = DuckDBProvider()
         db_provider.connect()
-        all_data = []
         lot_sizes = {}
         try:
+            data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
             for sym in symbols:
-                bars = db_provider.get_bars(sym, start, end, "1d")
-                if not bars.empty:
-                    all_data.append(bars)
                 try:
                     lot_sizes[sym] = db_provider.storage.get_lot_size(sym) if is_cn_symbol(sym) else 1
                 except Exception:
@@ -449,10 +458,9 @@ def _make_walkforward_runner():
         finally:
             db_provider.disconnect()
 
-        if not all_data:
+        if data_df.empty:
             return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
 
-        data_df = pd.concat(all_data, ignore_index=True)
         data_provider = DataFrameProvider(data_df)
         strategy = strategy_class(symbols=symbols)
         bt_config = {
@@ -665,14 +673,25 @@ def _make_validation_components(cfg: ResearchConfig):
     from quant.features.research.validation import FactorValidator, StrategySpecBuilder
 
     validation_cfg = _validation_config(cfg)
+    market_data = _make_research_market_data(cfg)
+    validation_cfg.setdefault("default_universe", _default_research_universe(market_data))
     return (
         StrategySpecBuilder(validation_cfg),
         FactorValidator(
-            _make_research_market_data(cfg),
+            market_data,
             config=validation_cfg,
             factor_data_port=_make_factor_data(cfg),
         ),
     )
+
+
+def _default_research_universe(market_data):
+    if not hasattr(market_data, "get_universe_symbols"):
+        return []
+    try:
+        return [str(symbol) for symbol in market_data.get_universe_symbols("cn") if str(symbol).isdigit()]
+    except Exception:
+        return []
 
 
 def _make_research_market_data(cfg: ResearchConfig, as_of_date: str = None):

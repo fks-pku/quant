@@ -161,7 +161,7 @@ function CollapsibleSection({ title, defaultOpen = false, children }) {
 }
 
 export default function BacktestDashboard() {
-  const [strategy, setStrategy] = useState('SimpleMomentum');
+  const [strategy, setStrategy] = useState('');
   const [startDate, setStartDate] = useState('2020-01-01');
   const [endDate, setEndDate] = useState('2024-12-31');
   const [symbols, setSymbols] = useState('HK.00700');
@@ -197,6 +197,8 @@ export default function BacktestDashboard() {
       setStrategies(strats);
       if (strats.length > 0 && !strats.find(s => s.id === strategy)) {
         setStrategy(strats[0].id);
+      } else if (strats.length === 0) {
+        setStrategy('');
       }
     } catch (e) { console.error('Failed to fetch strategies:', e); }
   }, [strategy]);
@@ -273,6 +275,11 @@ export default function BacktestDashboard() {
   };
 
   const runBacktest = async () => {
+    if (!strategy) {
+      setError('No strategy is registered yet.');
+      setStatus('error');
+      return;
+    }
     setStatus('running');
     setError('');
     setResult(null);
@@ -329,6 +336,7 @@ export default function BacktestDashboard() {
         <div className="bt-control-group">
           <label>Strategy</label>
           <select className="bt-select" value={strategy} onChange={e => setStrategy(e.target.value)}>
+            {strategies.length === 0 && <option value="">No strategies registered</option>}
             {strategies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
@@ -370,7 +378,7 @@ export default function BacktestDashboard() {
             ))}
           </div>
         </CollapsibleSection>
-        <button className="bt-run-btn" onClick={runBacktest} disabled={status === 'running'}>
+        <button className="bt-run-btn" onClick={runBacktest} disabled={status === 'running' || !strategy}>
           {status === 'running' ? 'RUNNING...' : 'RUN BACKTEST'}
         </button>
         <span className="bt-status" style={{ color: statusColor[status] }}>{statusText[status]}</span>

@@ -12,10 +12,10 @@ from quant.tests.conftest import (
     make_cn_bars,
     make_us_bars,
     make_dividends_df,
+    make_buy_and_hold_strategy,
+    make_scripted_strategy,
     run_simple_backtest,
 )
-from quant.features.strategies.registry import StrategyRegistry
-from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestDiagnostics, BacktestResult, CommissionConfig
 from quant.features.backtest.market_rules import DEFAULT_LOT_SIZE, is_suspended
@@ -72,6 +72,66 @@ class TestBacktesterExecution:
     def test_normal_bar_not_suspended(self):
         bar = {"volume": 1000, "open": 100, "close": 100}
         assert is_suspended(bar) is False
+
+    def test_final_suspended_holding_nav_records_pre_closeout_exposure(self):
+        data = pd.DataFrame([
+            {"symbol": "600519", "timestamp": START, "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000000},
+            {"symbol": "600519", "timestamp": START + timedelta(days=1), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000000},
+            {"symbol": "600519", "timestamp": START + timedelta(days=2), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 0},
+        ])
+        config = {
+            "backtest": {"slippage_bps": 0, "force_close_on_stop": True},
+            "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+        }
+        bt = make_backtester(config, lot_sizes={"600519": 100})
+
+        class HoldIntoSuspension:
+            name = "HoldIntoSuspension"
+            context = None
+            _positions = {}
+            _day = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                if self._day == 0:
+                    self.context.order_manager.submit_order(
+                        "600519", 100, "BUY", "MARKET", None, "HoldIntoSuspension"
+                    )
+                self._day += 1
+
+            def on_fill(self, ctx, fill):
+                qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+
+            def on_stop(self, ctx):
+                pos = self._positions.get("600519", 0)
+                if pos > 0:
+                    self.context.order_manager.submit_order(
+                        "600519", pos, "SELL", "MARKET", None, "HoldIntoSuspension"
+                    )
+
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[HoldIntoSuspension()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["600519"],
+        )
+
+        assert result.open_positions == []
+        assert result.diagnostics.final_suspended_holding_nav == pytest.approx(1000.0)
+        assert result.diagnostics.final_suspended_holding_count == 1
+        assert result.diagnostics.final_suspended_symbols == ["600519"]
 
     def test_buy_creates_trade_with_negative_pnl(self):
         config = {
@@ -387,7 +447,7 @@ class TestWalkForwardEngine:
             "volume": [1000000.0],
         })
         result = engine.run(
-            strategy_factory=lambda params: DualMACrossover.__new__(DualMACrossover),
+            strategy_factory=lambda params: SimpleNamespace(name="WFEmpty"),
             data=df,
             param_grid={"lookback": [10]},
         )
@@ -397,11 +457,7 @@ class TestWalkForwardEngine:
     def test_wf_result_structure(self):
         engine = WalkForwardEngine(train_window_days=5, test_window_days=2, step_days=30, min_trades=0, portfolio_class=Portfolio, risk_engine_class=RiskEngine, sub_portfolio_class=SubPortfolio)
         result = engine.run(
-            strategy_factory=lambda params: DualMACrossover(
-                symbols=["AAPL", "MSFT"],
-                fast_period=3,
-                slow_period=10,
-            ),
+            strategy_factory=lambda params: make_buy_and_hold_strategy("WFBuyHold", ["AAPL"]),
             data=pd.DataFrame({
                 "timestamp": pd.to_datetime(["2025-01-02"]),
                 "symbol": ["AAPL"],
@@ -560,17 +616,6 @@ class TestAdjustedPriceSeparation:
         assert Strategy._adj(bar, "high") == 110.0
         assert Strategy._adj(bar, "low") == 99.0
 
-    def test_dual_ma_uses_adj_close(self):
-        strategy = DualMACrossover(symbols=["TEST"], fast_period=2, slow_period=5)
-        strategy.context = None
-        bars = []
-        for i in range(10):
-            bars.append({"symbol": "TEST", "close": 100.0 - i * 2, "adj_close": 100.0,
-                         "open": 100.0, "high": 101.0, "low": 99.0, "volume": 1000000})
-        strategy._day_data["TEST"] = bars
-        strategy._process_symbol(None, "TEST")
-        assert strategy._positions.get("TEST", 0) == 0
-
     def test_engine_fill_uses_real_open(self):
         rows = []
         for i in range(5):
@@ -718,7 +763,7 @@ class TestStockDividendLotTracking:
         bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
-            strategies=[StrategyRegistry.create("DualMACrossover", symbols=["600519"], fast_period=2, slow_period=3)],
+            strategies=[make_buy_and_hold_strategy("DividendHold", ["600519"], quantity=100)],
             symbols=["600519"],
             dividends=div,
             initial_cash=1000000,
@@ -753,7 +798,12 @@ class TestStockDividendLotTracking:
         bt = make_backtester(config)
         result = run_simple_backtest(
             bt, data,
-            strategies=[StrategyRegistry.create("DualMACrossover", symbols=["600519"], fast_period=2, slow_period=3)],
+            strategies=[
+                make_scripted_strategy(
+                    "DividendSell",
+                    [(0, "600519", "BUY", 100), (10, "600519", "SELL", 200)],
+                )
+            ],
             symbols=["600519"],
             dividends=div,
             initial_cash=1000000,
@@ -832,14 +882,13 @@ class TestStrategyPositionSyncAfterDividend:
             "symbol": ["600519"], "ex_date": [start + timedelta(days=5)],
             "cash_dividend": [0.0], "stock_dividend": [0.5],
         })
-        from quant.features.strategies.registry import StrategyRegistry
         config = {
             "backtest": {"slippage_bps": 0},
             "execution": {"commission": {}},
             "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
         }
         bt = make_backtester(config)
-        strat = StrategyRegistry.create("DualMACrossover", symbols=["600519"], fast_period=2, slow_period=3)
+        strat = make_scripted_strategy("DividendSync", [(0, "600519", "BUY", 100)])
         result = run_simple_backtest(bt, data, strategies=[strat], symbols=["600519"], dividends=div, initial_cash=1000000)
         buy_trades = [t for t in result.trades if t.side == "BUY"]
         if buy_trades:

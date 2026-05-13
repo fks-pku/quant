@@ -312,7 +312,7 @@ def calculate_statistical_significance(returns: pd.Series, benchmark_returns: Op
             z = abs(t_stat)
             p_value = max(0.0, 2.0 * (1.0 - 0.5 * (1.0 + _erf_approx(z / np.sqrt(2.0)))))
     ci_95 = (mean_ret - 1.96 * se, mean_ret + 1.96 * se)
-    return {"t_stat": float(t_stat), "p_value": float(p_value), "is_significant": p_value < 0.05, "confidence_interval": ci_95}
+    return {"t_stat": float(t_stat), "p_value": float(p_value), "is_significant": bool(p_value < 0.05), "confidence_interval": ci_95}
 
 
 def calculate_alpha(returns: pd.Series, benchmark_returns: pd.Series, periods_per_year: int = 252) -> float:

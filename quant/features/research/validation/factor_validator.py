@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
@@ -317,8 +319,10 @@ class FactorValidator:
         end: str,
     ) -> Dict[str, Any]:
         top_bucket = self._top_bucket_series(signals, forward_returns)
+        top1_pct = self._top_pct_series(signals, forward_returns, 0.01)
         cost_bps = float(self._config.get("portfolio_diagnostic_cost_bps", 10.0) or 0.0)
         after_cost = top_bucket - cost_bps / 10000.0 if not top_bucket.empty else top_bucket
+        top1_after_cost = top1_pct - cost_bps / 10000.0 if not top1_pct.empty else top1_pct
         benchmark_symbol, benchmark_returns, benchmark_coverage = self._benchmark_forward_returns(spec, start, end, top_bucket.index)
         excess = pd.Series(dtype=float)
         excess_after_cost = pd.Series(dtype=float)
@@ -331,25 +335,63 @@ class FactorValidator:
                 excess = aligned["top"] - aligned["benchmark"]
                 excess_after_cost = aligned["after_cost"] - aligned["benchmark"]
         series_for_oos = excess_after_cost if not excess_after_cost.empty else after_cost
+        top_bucket_mean = self._safe_mean(top_bucket)
+        top_bucket_annualized = self._annualize_period_return(top_bucket_mean, spec.horizon_days)
+        after_cost_mean = self._safe_mean(after_cost)
+        after_cost_annualized = self._annualize_period_return(after_cost_mean, spec.horizon_days)
+        top1_mean = self._safe_mean(top1_pct)
+        top1_annualized = self._annualize_period_return(top1_mean, spec.horizon_days)
+        top1_after_cost_mean = self._safe_mean(top1_after_cost)
+        top1_after_cost_annualized = self._annualize_period_return(top1_after_cost_mean, spec.horizon_days)
+        excess_mean = self._safe_mean(excess)
+        excess_annualized = self._annualize_period_return(excess_mean, spec.horizon_days)
+        excess_after_cost_mean = self._safe_mean(excess_after_cost)
+        excess_after_cost_annualized = self._annualize_period_return(excess_after_cost_mean, spec.horizon_days)
         return {
             "kind": "top_bucket_long_only",
             "top_quantile": 0.8,
             "holding_horizon_days": spec.horizon_days,
             "rebalance_frequency": "daily signal / holding horizon gate",
             "cost_bps_per_turn": cost_bps,
-            "top_bucket_mean_return": self._safe_mean(top_bucket),
-            "top_bucket_annualized_return": self._annualize_period_return(self._safe_mean(top_bucket), spec.horizon_days),
+            "top_bucket_mean_return": top_bucket_mean,
+            "top_bucket_annualized_return": top_bucket_annualized,
             "top_bucket_hit_rate": self._hit_rate(top_bucket),
-            "top_bucket_after_cost_mean_return": self._safe_mean(after_cost),
+            "top_bucket_after_cost_mean_return": after_cost_mean,
+            "top_bucket_after_cost_annualized_return": after_cost_annualized,
+            "top_bucket_max_drawdown": self._max_drawdown(top_bucket),
+            "top_bucket_after_cost_max_drawdown": self._max_drawdown(after_cost),
+            "top_bucket_calmar_ratio": self._calmar_ratio(top_bucket_annualized, top_bucket),
+            "top_bucket_after_cost_calmar_ratio": self._calmar_ratio(after_cost_annualized, after_cost),
+            "top1_pct": 0.01,
+            "top1_pct_mean_return": top1_mean,
+            "top1_pct_annualized_return": top1_annualized,
+            "top1_pct_hit_rate": self._hit_rate(top1_pct),
+            "top1_pct_after_cost_mean_return": top1_after_cost_mean,
+            "top1_pct_after_cost_annualized_return": top1_after_cost_annualized,
+            "top1_pct_max_drawdown": self._max_drawdown(top1_pct),
+            "top1_pct_after_cost_max_drawdown": self._max_drawdown(top1_after_cost),
+            "top1_pct_calmar_ratio": self._calmar_ratio(top1_annualized, top1_pct),
+            "top1_pct_after_cost_calmar_ratio": self._calmar_ratio(top1_after_cost_annualized, top1_after_cost),
             "benchmark_symbol": benchmark_symbol or "",
             "benchmark_coverage": benchmark_coverage,
-            "benchmark_excess_mean_return": self._safe_mean(excess),
-            "benchmark_excess_after_cost_mean_return": self._safe_mean(excess_after_cost),
+            "benchmark_excess_mean_return": excess_mean,
+            "benchmark_excess_annualized_return": excess_annualized,
+            "benchmark_excess_after_cost_mean_return": excess_after_cost_mean,
+            "benchmark_excess_after_cost_annualized_return": excess_after_cost_annualized,
+            "benchmark_excess_max_drawdown": self._max_drawdown(excess),
+            "benchmark_excess_after_cost_max_drawdown": self._max_drawdown(excess_after_cost),
+            "benchmark_excess_calmar_ratio": self._calmar_ratio(excess_annualized, excess),
+            "benchmark_excess_after_cost_calmar_ratio": self._calmar_ratio(excess_after_cost_annualized, excess_after_cost),
             "rolling_oos": self._rolling_oos(series_for_oos, spec.horizon_days),
             "long_short_usage": "alpha_diagnostic_only",
         }
 
     def _top_bucket_series(self, signals: pd.DataFrame, forward_returns: pd.DataFrame) -> pd.Series:
+        return self._top_pct_series(signals, forward_returns, 0.20)
+
+    def _top_pct_series(self, signals: pd.DataFrame, forward_returns: pd.DataFrame, top_pct: float) -> pd.Series:
+        if top_pct <= 0.0 or top_pct > 1.0:
+            return pd.Series(dtype=float)
         common_index = signals.index.intersection(forward_returns.index)
         common_columns = signals.columns.intersection(forward_returns.columns)
         values = []
@@ -364,8 +406,8 @@ class FactorValidator:
             ).dropna()
             if len(paired) < self._min_stocks:
                 continue
-            high = paired["signal"].quantile(0.8)
-            long_returns = paired.loc[paired["signal"] >= high, "return"]
+            n_top = max(1, int(np.ceil(len(paired) * top_pct)))
+            long_returns = paired.sort_values("signal", ascending=False).head(n_top)["return"]
             if long_returns.empty:
                 continue
             values.append(float(long_returns.mean()))
@@ -424,6 +466,25 @@ class FactorValidator:
             return -1.0
         periods = 252.0 / max(1, float(horizon_days))
         return float((1.0 + mean_return) ** periods - 1.0)
+
+    @staticmethod
+    def _max_drawdown(series: pd.Series) -> float:
+        clean = series.dropna() if series is not None else pd.Series(dtype=float)
+        clean = clean.replace([np.inf, -np.inf], np.nan).dropna().clip(lower=-0.999999)
+        if clean.empty:
+            return 0.0
+        equity = (1.0 + clean).cumprod()
+        drawdown = equity / equity.cummax() - 1.0
+        value = float(drawdown.min()) if not drawdown.empty else 0.0
+        return value if np.isfinite(value) else 0.0
+
+    def _calmar_ratio(self, annualized_return: float, returns: pd.Series) -> float:
+        if not np.isfinite(annualized_return):
+            return 0.0
+        max_drawdown = abs(self._max_drawdown(returns))
+        if max_drawdown <= 1e-12:
+            return 0.0
+        return float(annualized_return / max_drawdown)
 
     def _rolling_oos(self, series: pd.Series, horizon_days: int) -> List[Dict[str, Any]]:
         clean = series.dropna() if series is not None else pd.Series(dtype=float)

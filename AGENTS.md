@@ -16,7 +16,7 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 | trading | `quant/features/trading/` | 交易引擎、风控、调度器 | `quant/features/trading/AGENTS.md` |
 | portfolio | `quant/features/portfolio/` | 仓位管理 | `quant/features/portfolio/AGENTS.md` |
 | cio | `quant/features/cio/` | CIO 市场评估、LLM 分析 | `quant/features/cio/AGENTS.md` |
-| strategies | `quant/features/strategies/` | 策略框架 + 实现 (13 strategies) | `quant/features/strategies/AGENTS.md` |
+| strategies | `quant/features/strategies/` | 策略框架 + 注册表（当前无内置策略） | `quant/features/strategies/AGENTS.md` |
 | research | `quant/features/research/` | 自动策略研究管线 | `quant/features/research/AGENTS.md` |
 | shared | `quant/shared/` | 跨模块工具 (logger, config) | `quant/shared/AGENTS.md` |
 | api | `quant/api/` | Flask REST 路由层 | `quant/api/AGENTS.md` |
@@ -39,7 +39,7 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 ```bash
 python quant/api_server.py                                     # API 服务
 python -m pytest quant/tests/ -q                               # 测试
-python quant/backtest_runner.py --strategy SimpleMomentum ...  # CLI 回测
+python quant/backtest_runner.py --strategy <RegisteredStrategy> ...  # CLI 回测
 python quant/quant_system.py --mode paper                      # 实盘/模拟
 python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 2025-01-01
 ```

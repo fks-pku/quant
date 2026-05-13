@@ -7,8 +7,8 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 ## 对外契约
 
 - `EventBus` — implements `EventPublisher` port
-- `DuckDBStorage` — implements `Storage` port, supports `read_only=True`
-- `TushareProvider`, `AkshareProvider`, `YfinanceProvider` — implement `DataFeed` port
+- `DuckDBStorage` — implements `Storage` port, supports `read_only=True` and bulk `get_bars_for_symbols()`
+- `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
 - `PaperBroker`, `FutuProvider` — implement `BrokerAdapter` port
 
 ## 依赖

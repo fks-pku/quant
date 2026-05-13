@@ -31,6 +31,9 @@ class BacktestDiagnostics:
     total_net_dividends: float = 0.0
     forced_closeout_orders: int = 0
     forced_closeout_trades: int = 0
+    final_suspended_holding_nav: float = 0.0
+    final_suspended_holding_count: int = 0
+    final_suspended_symbols: List[str] = field(default_factory=list)
     rejection_counts: Dict[str, int] = field(default_factory=dict)
 
     def record_rejection(self, reason: OrderRejectionReason) -> None:

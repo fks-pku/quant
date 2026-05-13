@@ -213,6 +213,59 @@ class DuckDBStorage(Storage):
         with self._lock:
             return self.conn.execute(query, params).fetchdf()
 
+    def get_bars_for_symbols(
+        self,
+        symbols: List[str],
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        timeframe: str = "1d",
+    ) -> pd.DataFrame:
+        if not symbols:
+            return pd.DataFrame()
+
+        unique_symbols = list(dict.fromkeys(symbols))
+        symbols_by_table: Dict[str, List[str]] = {}
+        for symbol in unique_symbols:
+            table_name = self._resolve_table(symbol, timeframe)
+            symbols_by_table.setdefault(table_name, []).append(symbol)
+
+        try:
+            existing_tables = {
+                row[0]
+                for row in self.conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchall()
+            }
+        except Exception:
+            return pd.DataFrame()
+
+        frames = []
+        with self._lock:
+            for table_name, table_symbols in symbols_by_table.items():
+                if table_name not in existing_tables:
+                    continue
+                placeholders = ", ".join("?" for _ in table_symbols)
+                query = (
+                    "SELECT timestamp, symbol, open, high, low, close, volume, "
+                    f"adj_open, adj_high, adj_low, adj_close, adj_factor FROM {table_name} "
+                    f"WHERE symbol IN ({placeholders})"
+                )
+                params: list = list(table_symbols)
+                if start is not None:
+                    query += " AND timestamp >= ?"
+                    params.append(start)
+                if end is not None:
+                    query += " AND timestamp <= ?"
+                    params.append(end)
+                query += " ORDER BY symbol ASC, timestamp ASC"
+                frame = self.conn.execute(query, params).fetchdf()
+                if not frame.empty:
+                    frames.append(frame)
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
     def get_symbols(self, timeframe: str = "1d", market: str = "hk") -> List[str]:
         table_name = f"{timeframe if timeframe in ('daily', 'minute') else 'daily'}_{market}"
         try:

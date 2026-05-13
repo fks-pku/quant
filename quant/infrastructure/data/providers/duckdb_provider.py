@@ -45,6 +45,17 @@ class DuckDBProvider(DataFeed):
             raise RuntimeError("DuckDBProvider not connected")
         return self._storage.get_bars(symbol, start, end, timeframe)
 
+    def get_bars_for_symbols(
+        self,
+        symbols: List[str],
+        start: datetime,
+        end: datetime,
+        timeframe: str = "1d",
+    ) -> pd.DataFrame:
+        if not self.is_connected():
+            raise RuntimeError("DuckDBProvider not connected")
+        return self._storage.get_bars_for_symbols(symbols, start, end, timeframe)
+
     def get_quote(self, symbol: str) -> dict:
         if not self.is_connected():
             raise RuntimeError("DuckDBProvider not connected")

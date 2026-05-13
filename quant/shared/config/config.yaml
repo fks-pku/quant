@@ -101,28 +101,4 @@ walkforward:
   step_days: 21
   rebalance_freq: monthly
 
-strategies:
-  - name: MomentumEOD
-    enabled: true
-    priority: 1
-    max_risk_pct: 0.30
-    symbols:
-      - AAPL
-      - GOOGL
-      - MSFT
-      - AMZN
-      - TSLA
-  - name: MeanReversion1m
-    enabled: false
-    priority: 2
-    max_risk_pct: 0.50
-    symbols:
-      - SPY
-      - QQQ
-  - name: DualThrust
-    enabled: false
-    priority: 3
-    max_risk_pct: 0.20
-    symbols:
-      - ES
-      - NQ
+strategies: []

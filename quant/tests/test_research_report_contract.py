@@ -109,6 +109,9 @@ def test_canonical_full_research_report_template_defines_contract():
         assert marker in html
     assert "full_research_report.html" in html
     assert "000300" in html
+    assert "Calmar Ratio" in html
+    assert "Top 1% long-only" in html
+    assert "final_suspended_holding_nav" in html
 
 
 def test_legacy_golden_full_research_report_has_no_encoding_regression():
@@ -192,8 +195,18 @@ def test_generated_full_research_report_matches_golden_contract():
                         "top_bucket_annualized_return": 0.28,
                         "top_bucket_hit_rate": 0.54,
                         "top_bucket_after_cost_mean_return": 0.003,
+                        "top_bucket_after_cost_max_drawdown": -0.21,
+                        "top_bucket_after_cost_calmar_ratio": 1.11,
+                        "top1_pct_annualized_return": 0.41,
+                        "top1_pct_hit_rate": 0.52,
+                        "top1_pct_after_cost_mean_return": 0.004,
+                        "top1_pct_after_cost_max_drawdown": -0.32,
+                        "top1_pct_after_cost_calmar_ratio": 1.28,
                         "benchmark_symbol": "000300",
+                        "benchmark_excess_after_cost_annualized_return": 0.14,
                         "benchmark_excess_after_cost_mean_return": 0.003,
+                        "benchmark_excess_after_cost_max_drawdown": -0.18,
+                        "benchmark_excess_after_cost_calmar_ratio": 0.78,
                     },
                     "strict_backtest": {
                         "period": "2020-01-01 to 2025-12-31",
@@ -203,6 +216,7 @@ def test_generated_full_research_report_matches_golden_contract():
                             "cagr": 0.11,
                             "total_return": 0.84,
                             "max_drawdown_pct": -0.43,
+                            "calmar_ratio": 0.26,
                             "win_rate": 0.49,
                             "profit_factor": 1.11,
                             "total_trades": 100,
@@ -228,6 +242,8 @@ def test_generated_full_research_report_matches_golden_contract():
                             "volume_limited_trades": 3,
                             "limit_rejected_orders": 1,
                             "t1_rejected_sells": 0,
+                            "final_suspended_holding_nav": 12345.67,
+                            "final_suspended_symbols": ["600519"],
                         },
                         "yearly_returns": {"2025-12-31": 0.16},
                     },
@@ -243,5 +259,10 @@ def test_generated_full_research_report_matches_golden_contract():
         assert heading in generated_h3
     for marker in REQUIRED_TEMPLATE_MARKERS:
         assert marker in html
+    assert "Calmar Ratio" in html
+    assert "Top 1% long-only" in html
+    assert "final_suspended_holding_nav" in html
+    assert "12,345.67" in html
+    assert "Rejected strategy archive" in html
     for placeholder in ("[strategy_id]", "[Rank IC]", "[000300 coverage]", "[YYYY-MM-DD]"):
         assert placeholder not in html

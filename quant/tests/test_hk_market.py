@@ -6,12 +6,12 @@ import pytest
 from quant.tests.conftest import (
     make_backtester,
     make_hk_bars,
+    make_buy_and_hold_strategy,
     run_simple_backtest,
 )
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.commission import HK_MIN_COMMISSION
 from quant.features.backtest.data_provider import DataFrameProvider
-from quant.features.strategies.dual_ma_crossover.strategy import DualMACrossover
 
 
 HK_SYMBOLS = ["00700", "00005", "00941"]
@@ -124,7 +124,7 @@ class TestHKT0DayTrading:
 
 
 class TestHKEndToEnd:
-    def test_dual_ma_crossover_hk_backtest(self):
+    def test_buy_and_hold_hk_backtest(self):
         np.random.seed(42)
         data = make_hk_bars(
             HK_SYMBOLS, START, 120,
@@ -132,12 +132,7 @@ class TestHKEndToEnd:
             daily_return=0.002,
         )
         bt = make_backtester()
-        strategy = DualMACrossover(
-            symbols=HK_SYMBOLS,
-            fast_period=5,
-            slow_period=20,
-            max_position_pct=0.15,
-        )
+        strategy = make_buy_and_hold_strategy("HKBuyHold", HK_SYMBOLS, quantity=100)
         result = run_simple_backtest(bt, data, [strategy], HK_SYMBOLS, initial_cash=2000000)
         assert result.final_nav > 0
         assert result.diagnostics.total_commission >= 0

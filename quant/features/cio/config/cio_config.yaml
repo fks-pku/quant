@@ -16,18 +16,6 @@ llm:
     Return JSON: {"sentiment": "bullish|bearish|neutral", "confidence": 0.0-1.0, "summary": "1-2 sentence summary"}
 
 weight_allocation:
-  low_vol_bull:
-    volatility_regime: 0.40
-    simple_momentum: 0.35
-    cross_sectional_mr: 0.15
-    dual_momentum: 0.10
-  medium_vol_chop:
-    volatility_regime: 0.35
-    simple_momentum: 0.20
-    cross_sectional_mr: 0.30
-    dual_momentum: 0.15
-  high_vol_bear:
-    volatility_regime: 0.50
-    simple_momentum: 0.10
-    cross_sectional_mr: 0.25
-    dual_momentum: 0.15
+  low_vol_bull: {}
+  medium_vol_chop: {}
+  high_vol_bear: {}

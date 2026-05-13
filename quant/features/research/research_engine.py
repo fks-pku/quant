@@ -1,5 +1,6 @@
 import inspect
 import logging
+import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -235,12 +236,12 @@ class ResearchEngine:
             scores={"queued": len(research_queue), "evaluated": result.evaluated, "specified": result.specified},
         ))
 
-        integrated_ids = []
+        integrated_items = []
         for raw, report, strategy_spec in research_queue:
             try:
                 strategy_id = self._stage_two_formal_research(raw, report, strategy_spec, result, evaluation_rows)
                 if strategy_id:
-                    integrated_ids.append(strategy_id)
+                    integrated_items.append((strategy_id, raw))
             except Exception as e:
                 logger.error(f"Stage 2 research error for '{raw.title}': {e}")
                 result.errors.append(str(e))
@@ -261,8 +262,8 @@ class ResearchEngine:
 
         self.research_store.write_evaluations(evaluation_rows)
 
-        if self.config.auto_backtest and integrated_ids:
-            self._run_backtests(integrated_ids, result)
+        if self.config.auto_backtest and integrated_items:
+            self._run_backtests(integrated_items, result)
 
         if getattr(self.config, "ensemble_enabled", False) and self._ensemble is not None:
             try:
@@ -406,6 +407,8 @@ class ResearchEngine:
             ))
             vreport = self._validator.validate(strategy_spec)
             result.validated += 1
+            vreport = self._append_ic_decay_warning(result, raw, vreport)
+            validation_report = vreport
             if vreport.status == "error" or not vreport.fdr_significant or vreport.rank_ic < 0.02:
                 result.log.append(ResearchLogEntry(
                     phase="stage2_validation", title=raw.title, source=raw.source,
@@ -413,42 +416,39 @@ class ResearchEngine:
                     reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
                     scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
                 ))
-                result.rejected += 1
-                evaluation_rows.append((raw, report, "fail", f"Validation failed: IC={vreport.rank_ic:.4f}"))
+                evaluation_rows.append((raw, report, "validation_failed", f"Validation failed: IC={vreport.rank_ic:.4f}"))
                 self._record_hypothesis(
                     raw,
-                    status="rejected",
+                    status="validation_failed",
                     stage="stage2_validation",
-                    reason=f"Validation failed: IC={vreport.rank_ic:.4f}",
+                    reason=f"Validation failed but continuing full research: IC={vreport.rank_ic:.4f}",
                     report=report,
                     validation_report=vreport,
                     strategy_spec=strategy_spec,
                 )
-                self._upsert_idea(raw, "rejected", f"Validation failed: IC={vreport.rank_ic:.4f}")
-                return None
-
-            result.validated_passed += 1
-            result.log.append(ResearchLogEntry(
-                phase="stage2_validation", title=raw.title, source=raw.source,
-                source_url=raw.source_url, verdict="pass",
-                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
-            ))
-            vreport = self._append_ic_decay_warning(result, raw, vreport)
-            validation_report = vreport
-            self._record_hypothesis(
-                raw,
-                status="validated",
-                stage="stage2_validation",
-                reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                report=report,
-                validation_report=vreport,
-                strategy_spec=strategy_spec,
-            )
-            self._upsert_idea(raw, "validated", f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}")
+                self._upsert_idea(raw, "validation_failed", f"Validation failed but continuing full research: IC={vreport.rank_ic:.4f}")
+            else:
+                result.validated_passed += 1
+                result.log.append(ResearchLogEntry(
+                    phase="stage2_validation", title=raw.title, source=raw.source,
+                    source_url=raw.source_url, verdict="pass",
+                    reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                    scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+                ))
+                self._record_hypothesis(
+                    raw,
+                    status="validated",
+                    stage="stage2_validation",
+                    reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                    report=report,
+                    validation_report=vreport,
+                    strategy_spec=strategy_spec,
+                )
+                self._upsert_idea(raw, "validated", f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}")
 
         strategy_id = self.integrator.integrate(raw, report, spec=strategy_spec)
         if strategy_id:
+            self._attach_validation_gate(strategy_id, validation_report)
             result.integrated += 1
             result.log.append(ResearchLogEntry(
                 phase="stage2_integrate", title=raw.title, source=raw.source,
@@ -778,16 +778,24 @@ class ResearchEngine:
             "max_discovery_score": round(max(scores), 2) if scores else 0.0,
         }
 
-    def _run_backtests(self, strategy_ids: List[str], result: ResearchResult, benchmark_data: Any = None) -> None:
+    def _run_backtests(self, strategy_items: List[Any], result: ResearchResult, benchmark_data: Any = None) -> None:
         if self._backtest_fn is None:
             logger.warning("No backtest function injected — skipping backtests")
             return
-        for sid in strategy_ids:
+        for item in strategy_items:
+            if isinstance(item, tuple):
+                sid, raw = item
+            else:
+                sid, raw = item, None
             try:
                 symbols = self._strategy_symbols(sid)
                 final_status = ""
-                final_reason = ""
+                final_reasons = []
                 wf_result = None
+                validation_failure = self._validation_failure_reason(sid)
+                if validation_failure:
+                    final_status = "rejected"
+                    final_reasons.append(validation_failure)
                 if self._rigor_hub is not None and self.config.rigor_enabled:
                     split_benchmark_data = benchmark_data
                     if split_benchmark_data is None:
@@ -819,7 +827,7 @@ class ResearchEngine:
                     if not wf_result.is_viable:
                         reason = f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
                         final_status = "rejected"
-                        final_reason = reason
+                        final_reasons.append(reason)
                         result.log.append(ResearchLogEntry(
                             phase="rigor",
                             title=sid,
@@ -835,10 +843,10 @@ class ResearchEngine:
                         ))
                     else:
                         dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
-                        if dsr is not None and dsr < 0.95:
+                        if final_status != "rejected" and dsr is not None and dsr < 0.95:
                             reason = f"Deflated Sharpe ratio warning: dsr={dsr:.2f} < 0.95"
                             final_status = "needs_more_validation"
-                            final_reason = reason
+                            final_reasons.append(reason)
                             result.log.append(ResearchLogEntry(
                                 phase="rigor", title=sid, source="", source_url="",
                                 verdict="warning", reason=reason,
@@ -860,16 +868,20 @@ class ResearchEngine:
                     },
                 ))
                 self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
+                final_reason = "; ".join(final_reasons)
                 if final_status == "rejected":
                     if self._candidate_status(sid) != "rejected":
                         if self.pool.reject(sid, reason=final_reason) and result.rejected == rejected_before_backtest:
                             result.rejected += 1
+                    self._archive_rejected_strategy(sid, final_reason)
                     self._update_hypothesis_status_for_strategy(
                         sid,
                         "rejected",
                         "go_no_go",
                         f"{final_reason}; strict Backtester executed for audit",
                     )
+                    if raw is not None:
+                        self._upsert_idea(raw, "rejected", final_reason)
                 elif final_status == "needs_more_validation" and self._candidate_status(sid) == "candidate":
                     dsr_value = 0.0
                     try:
@@ -881,7 +893,10 @@ class ResearchEngine:
                 logger.error(f"Backtest failed for {sid}: {e}")
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
+                self._archive_rejected_strategy(sid, f"Backtest exception: {e}")
                 self._update_hypothesis_status_for_strategy(sid, "rejected", "backtest", f"Backtest exception: {e}")
+                if raw is not None:
+                    self._upsert_idea(raw, "rejected", f"Backtest exception: {e}")
                 result.rejected += 1
 
     def _candidate_status(self, strategy_id: str) -> str:
@@ -896,6 +911,142 @@ class ResearchEngine:
             if entry.get("id") == strategy_id:
                 return str(entry.get("status", ""))
         return ""
+
+    def _attach_validation_gate(self, strategy_id: str, validation_report: Any = None) -> None:
+        if validation_report is None:
+            return
+        gate_status = self._validation_gate_status(validation_report)
+        gate = {
+            "status": gate_status,
+            "rank_ic": _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0),
+            "rank_ic_ir": _float_or_default(getattr(validation_report, "rank_ic_ir", 0.0), 0.0),
+            "fdr_adjusted_p": _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0),
+            "hit_rate": _float_or_default(getattr(validation_report, "hit_rate", 0.0), 0.0),
+            "reason": self._validation_gate_reason(validation_report),
+        }
+        if self.research_store is not None:
+            try:
+                candidate = self.research_store.get_candidate(strategy_id)
+                if candidate is not None:
+                    meta = candidate.setdefault("research_meta", {})
+                    meta["validation_gate"] = gate
+                    self.research_store.upsert_candidate(candidate)
+            except Exception as e:
+                logger.warning(f"Failed to attach validation gate for {strategy_id}: {e}")
+        for entry in self.integrator.registry.values():
+            if entry.get("id") == strategy_id:
+                entry.setdefault("research_meta", {})["validation_gate"] = gate
+                break
+
+    @staticmethod
+    def _validation_gate_status(validation_report: Any) -> str:
+        if getattr(validation_report, "status", "") == "error":
+            return "failed"
+        if not bool(getattr(validation_report, "fdr_significant", False)):
+            return "failed"
+        try:
+            if float(getattr(validation_report, "rank_ic", 0.0) or 0.0) < 0.02:
+                return "failed"
+        except (TypeError, ValueError):
+            return "failed"
+        return "passed"
+
+    @staticmethod
+    def _validation_gate_reason(validation_report: Any) -> str:
+        rank_ic = _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0)
+        fdr = _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0)
+        if getattr(validation_report, "status", "") == "error":
+            errors = "; ".join(str(item) for item in getattr(validation_report, "errors", []) or [])
+            return f"Validation error: {errors or 'unknown'}"
+        if not bool(getattr(validation_report, "fdr_significant", False)):
+            return f"Validation failed: FDR={fdr:.4f}"
+        if rank_ic < 0.02:
+            return f"Validation failed: IC={rank_ic:.4f}"
+        return f"Validation passed: IC={rank_ic:.4f}, FDR={fdr:.4f}"
+
+    def _validation_failure_reason(self, strategy_id: str) -> str:
+        gate = self._candidate_validation_gate(strategy_id)
+        if not gate or gate.get("status") != "failed":
+            return ""
+        return str(gate.get("reason") or "Validation gate failed")
+
+    def _candidate_validation_gate(self, strategy_id: str) -> Dict[str, Any]:
+        if self.research_store is not None:
+            try:
+                candidate = self.research_store.get_candidate(strategy_id)
+                if candidate is not None:
+                    return dict((candidate.get("research_meta") or {}).get("validation_gate") or {})
+            except Exception:
+                pass
+        for entry in self.integrator.registry.values():
+            if entry.get("id") == strategy_id:
+                return dict((entry.get("research_meta") or {}).get("validation_gate") or {})
+        return {}
+
+    def _archive_rejected_strategy(self, strategy_id: str, reason: str = "") -> None:
+        strategies_dir_value = getattr(self.integrator, "strategies_dir", None)
+        if strategies_dir_value is None:
+            return
+        strategies_dir = Path(strategies_dir_value)
+        source_dir = strategies_dir / strategy_id
+        rejected_strategy_root = strategies_dir.parent / "rejected_strategy"
+        archive_dir = rejected_strategy_root / strategy_id
+        try:
+            if source_dir.exists():
+                rejected_strategy_root.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source_dir, archive_dir, dirs_exist_ok=True)
+                shutil.rmtree(source_dir)
+            self._mark_rejected_strategy_config(archive_dir, reason)
+            self._attach_rejected_strategy_archive(strategy_id, archive_dir, reason)
+        except Exception as e:
+            logger.warning(f"Failed to archive rejected strategy {strategy_id}: {e}")
+
+    def _mark_rejected_strategy_config(self, archive_dir: Path, reason: str = "") -> None:
+        config_path = archive_dir / "config.yaml"
+        if not config_path.exists():
+            return
+        try:
+            text = config_path.read_text(encoding="utf-8")
+            lines = []
+            in_strategy = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if line and not line.startswith((" ", "\t")):
+                    in_strategy = stripped == "strategy:"
+                if in_strategy and stripped.startswith("enabled:"):
+                    indent = line[: len(line) - len(line.lstrip())]
+                    line = f"{indent}enabled: false"
+                elif in_strategy and stripped.startswith("status:"):
+                    indent = line[: len(line) - len(line.lstrip())]
+                    line = f"{indent}status: rejected"
+                lines.append(line)
+            suffix = "\n" if text.endswith("\n") else ""
+            config_path.write_text("\n".join(lines) + suffix, encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to mark rejected strategy config {config_path}: {e}")
+
+    def _attach_rejected_strategy_archive(self, strategy_id: str, archive_dir: Path, reason: str = "") -> None:
+        rel_archive = _repo_relative_path(archive_dir)
+        if self.research_store is not None:
+            try:
+                candidate = self.research_store.get_candidate(strategy_id)
+                if candidate is not None:
+                    meta = candidate.setdefault("research_meta", {})
+                    meta["rejected_strategy_dir"] = rel_archive
+                    meta["strategy_pool_archived"] = True
+                    if reason:
+                        meta["rejection_reason"] = reason
+                    self.research_store.upsert_candidate(candidate)
+            except Exception as e:
+                logger.warning(f"Failed to attach rejected strategy archive for {strategy_id}: {e}")
+        for entry in self.integrator.registry.values():
+            if entry.get("id") == strategy_id:
+                meta = entry.setdefault("research_meta", {})
+                meta["rejected_strategy_dir"] = rel_archive
+                meta["strategy_pool_archived"] = True
+                if reason:
+                    meta["rejection_reason"] = reason
+                break
 
     def _strategy_symbols(self, strategy_id: str) -> List[str]:
         entry = self.integrator.get_registry_entry(strategy_id) if hasattr(self.integrator, "get_registry_entry") else None
@@ -1009,6 +1160,20 @@ class ResearchEngine:
                     self.research_store.upsert_hypothesis(updated)
         except Exception as e:
             logger.warning(f"Failed to update hypothesis status for {strategy_id}: {e}")
+
+
+def _repo_relative_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(Path(__file__).resolve().parents[3]))
+    except Exception:
+        return str(path)
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _is_a_share_symbol(symbol: str) -> bool:

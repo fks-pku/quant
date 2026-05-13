@@ -236,14 +236,26 @@ def _create_validation_components(config):
 
     validation_cfg = dict(getattr(config, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(config, "validation_min_obs", 252))
+    market_data = _create_research_market_data(config)
+    validation_cfg.setdefault("default_universe", _default_research_universe(market_data))
     return (
         StrategySpecBuilder(validation_cfg),
         FactorValidator(
-            _create_research_market_data(config),
+            market_data,
             config=validation_cfg,
             factor_data_port=_create_factor_data(config),
         ),
     )
+
+
+def _default_research_universe(market_data):
+    if not hasattr(market_data, "get_universe_symbols"):
+        return []
+    try:
+        return [str(symbol) for symbol in market_data.get_universe_symbols("cn") if str(symbol).isdigit()]
+    except Exception as exc:
+        logger.warning("Failed to resolve full CN research universe: %s", exc)
+        return []
 
 
 # =============================================================================

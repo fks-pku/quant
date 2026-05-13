@@ -8,8 +8,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pandas as pd
-
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.entities import BacktestResultExporter
 from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider, _DEFAULT_DB
@@ -23,7 +21,7 @@ from quant.shared.utils.symbol_utils import normalize_symbol_for_backtest as _no
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Backtest Runner (DuckDB data)")
-    parser.add_argument("--strategy", required=True, help="Strategy name (e.g. SimpleMomentum)")
+    parser.add_argument("--strategy", required=True, help="Registered strategy name")
     parser.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
     parser.add_argument("--end", required=True, help="End date YYYY-MM-DD")
     parser.add_argument("--symbols", required=True, help="Comma-separated symbols (e.g. AAPL,HK.00700)")
@@ -53,24 +51,21 @@ def main(argv=None):
     provider = DuckDBProvider(db_path=args.db)
     provider.connect()
 
-    all_data = []
+    data = provider.get_bars_for_symbols(symbols, start, end, "1d")
+    loaded_symbols = set(data["symbol"].unique().tolist()) if not data.empty else set()
     for symbol in symbols:
-        bars = provider.get_bars(symbol, start, end, "1d")
-        if bars.empty:
+        if symbol not in loaded_symbols:
             print(f"Warning: No data for {symbol}, skipping")
-            continue
-        all_data.append(bars)
 
-    if not all_data:
+    if data.empty:
         print("Error: No data found for any symbol. Run `python scripts/prepare_data.py` first.")
         sys.exit(1)
 
-    data = pd.concat(all_data, ignore_index=True)
     print(f"Loaded {len(data)} bars for {data['symbol'].nunique()} symbols")
 
     provider.disconnect()
 
-    storage = DuckDBStorage(args.db)
+    storage = DuckDBStorage(args.db, read_only=True)
     lot_sizes = {}
     for symbol in symbols:
         lot_sizes[symbol] = storage.get_lot_size(symbol)

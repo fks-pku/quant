@@ -15,7 +15,7 @@ portfolio_data: Dict[str, float] = {
 strategies_data: list = []
 positions_data: list = []
 orders_data: list = []
-selected_strategy = 'DualMACrossover'
+selected_strategy: Optional[str] = None
 simulation_running = False
 _backtest_results: Dict[str, Any] = {}
 _backtest_lock = threading.Lock()
@@ -263,12 +263,7 @@ def run_quant_system():
     global system_status, portfolio_data, strategies_data, positions_data, simulation_running
     system_status = 'running'
     simulation_running = True
-    strategies_data = [
-        {'name': 'VolatilityRegime', 'enabled': True, 'symbols': ['AAPL', 'MSFT', 'GOOGL']},
-        {'name': 'MomentumEOD', 'enabled': True, 'symbols': ['AAPL', 'MSFT', 'GOOGL']},
-        {'name': 'MeanReversion1m', 'enabled': True, 'symbols': ['SPY', 'QQQ']},
-        {'name': 'DualThrust', 'enabled': False, 'symbols': ['ES']},
-    ]
+    strategies_data = []
     try:
         from quant.quant_system import QuantSystem
         quant = QuantSystem()

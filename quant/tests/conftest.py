@@ -178,6 +178,40 @@ def make_test_strategy(name: str, symbols: List[str],
     return _TestStrategy(name, symbols, on_after)
 
 
+class _BuyAndHoldTestStrategy(Strategy):
+    def __init__(self, name: str, symbols: List[str], quantity: float = 100):
+        super().__init__(name)
+        self._symbols = symbols
+        self._quantity = quantity
+        self._ordered = False
+
+    @property
+    def symbols(self) -> List[str]:
+        return self._symbols
+
+    def on_after_trading(self, context, trading_date):
+        if self._ordered:
+            return
+        for symbol in self._symbols:
+            context.order_manager.submit_order(
+                symbol,
+                self._quantity,
+                "BUY",
+                "MARKET",
+                None,
+                self.name,
+            )
+        self._ordered = True
+
+
+def make_buy_and_hold_strategy(
+    name: str,
+    symbols: List[str],
+    quantity: float = 100,
+) -> _BuyAndHoldTestStrategy:
+    return _BuyAndHoldTestStrategy(name, symbols, quantity)
+
+
 def make_scripted_strategy(name: str, signals: list):
     """Create a strategy that replays predefined signals.
 

@@ -1,7 +1,7 @@
 """Run backtest for a strategy using yfinance data + DataFrameProvider.
 
 Usage:
-    python quant/scripts/run_backtest.py --strategy PowerAssistedTrendFollowingStrategy --symbols SPY GLD TLT --start 2020-01-01 --end 2025-01-01
+    python quant/scripts/run_backtest.py --strategy MyStrategy --symbols SPY GLD TLT --start 2020-01-01 --end 2025-01-01
 """
 import argparse
 import json

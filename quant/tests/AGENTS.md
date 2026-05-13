@@ -86,7 +86,7 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 |--------|--------|
 | `TestHKLotSizeIntegration` | 低于一手被拒绝 (集成) |
 | `TestHKT0DayTrading` | T+0 可日内交易 |
-| `TestHKEndToEnd` | SimpleMomentum 港股回测、佣金 cost_breakdown |
+| `TestHKEndToEnd` | 测试内 buy-and-hold 港股回测、佣金 cost_breakdown |
 
 ### test_us_market.py — 美股集成测试
 
@@ -95,7 +95,7 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 | `TestUSNoLotSize` | 可买 1 股 |
 | `TestUST0DayTrading` | T+0 可日内交易 |
 | `TestUSSlippage` | 买入滑点加价、卖出滑点减价 |
-| `TestUSEndToEnd` | SimpleMomentum、VolatilityRegime、cost_breakdown |
+| `TestUSEndToEnd` | 测试内 buy-and-hold、cost_breakdown |
 
 ### test_backtest_core.py — 引擎核心集成测试
 

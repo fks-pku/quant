@@ -319,11 +319,12 @@ forward_return_i,t+h = adj_close_i,t+h / adj_close_i,t+1 - 1</div>
     <h3>组合诊断</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>组合</th><th>年化</th><th>Sharpe</th><th>MaxDD</th><th>换手</th><th>成本后表现</th><th>用途</th></tr></thead>
+        <thead><tr><th>组合</th><th>年化</th><th>Sharpe</th><th>MaxDD</th><th>Calmar Ratio</th><th>换手</th><th>成本后表现</th><th>用途</th></tr></thead>
         <tbody>
-          <tr><td>Top bucket long-only</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>[x%]</td><td>A 股可交易方向诊断</td></tr>
-          <tr><td>Top vs 000300 excess</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>[x%]</td><td>相对沪深 300 诊断</td></tr>
-          <tr><td>Long-short diagnostic</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>[x%]</td><td>仅 alpha 诊断，不可部署</td></tr>
+          <tr><td>Top bucket long-only</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>A 股可交易方向诊断</td></tr>
+          <tr><td>Top 1% long-only</td><td>[x%]</td><td>-</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>极端头部信号集中度诊断</td></tr>
+          <tr><td>Top vs 000300 excess</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>相对沪深 300 诊断</td></tr>
+          <tr><td>Long-short diagnostic</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>仅 alpha 诊断，不可部署</td></tr>
         </tbody>
       </table>
     </div>
@@ -359,6 +360,7 @@ forward_return_i,t+h = adj_close_i,t+h / adj_close_i,t+1 - 1</div>
           <tr><td>Sharpe</td><td>[x.xx]</td><td>[x.xx]</td><td>必须成本后</td></tr>
           <tr><td>Sortino</td><td>[x.xx]</td><td>[x.xx]</td><td>下行风险调整</td></tr>
           <tr><td>Max Drawdown</td><td>[x%]</td><td>[x%]</td><td>风险底线</td></tr>
+          <tr><td>Calmar Ratio</td><td>[x.xx]</td><td>[x.xx]</td><td>CAGR / |Max Drawdown|</td></tr>
           <tr><td>Win Rate</td><td>[x%]</td><td>-</td><td>按交易统计</td></tr>
           <tr><td>Profit Factor</td><td>[x.xx]</td><td>-</td><td>总盈利 / 总亏损</td></tr>
           <tr><td>Total Trades</td><td>[N]</td><td>-</td><td>含拒单和成交诊断</td></tr>
@@ -379,6 +381,7 @@ forward_return_i,t+h = adj_close_i,t+h / adj_close_i,t+1 - 1</div>
           <tr><td>limit_rejected_orders</td><td>[N]</td><td>涨跌停拒单</td></tr>
           <tr><td>volume_limited_trades</td><td>[N]</td><td>成交量限制</td></tr>
           <tr><td>risk_skipped_orders</td><td>[N]</td><td>风控跳过订单</td></tr>
+          <tr><td>final_suspended_holding_nav</td><td>[amount]</td><td>最终停牌/冻结持仓按最后有效价估值的 NAV</td></tr>
         </tbody>
       </table>
     </div>

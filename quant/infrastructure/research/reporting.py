@@ -218,15 +218,16 @@ def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> s
         if _signal_badge_class(metrics) == "fail":
             text = (
                 f"{strategy_id} 未通过真实 A 股 HFQ 信号验证，Rank IC={rank_ic}、FDR={fdr}。"
-                "流水线按规则在 Stage 2 停止，未继续执行策略集成、严格 Backtester 或 purged walk-forward。"
-                "最终结论是不进入候选池或 paper trading，仅作为研究产物归档。"
+                f"流水线仍完成策略集成、严格 Backtester 与 purged walk-forward 审计，"
+                f"严格回测 Sharpe={sharpe}、CAGR={cagr}，样本外 aggregate OOS Sharpe={aggregate}。"
+                "最终结论是不进入策略池或 paper trading，仅作为 rejected_strategy 归档。"
             )
         else:
             text = (
                 f"{strategy_id} 的信号验证具备统计证据，Rank IC={rank_ic}、FDR={fdr}；"
                 f"但严格回测仅 Sharpe={sharpe}、CAGR={cagr}，purged walk-forward 未通过，"
                 f"aggregate OOS Sharpe={aggregate}、worst OOS Sharpe={worst}。"
-                "最终结论是不进入候选池或 paper trading，仅作为研究产物归档。"
+                "最终结论是不进入策略池或 paper trading，仅作为 rejected_strategy 归档。"
             )
     elif status in {"candidate", "paper_trading_candidate"}:
         text = (
@@ -441,16 +442,31 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
             "Top bucket long-only",
             _pct(diag.get("top_bucket_annualized_return")),
             _fmt(strict_metrics.get("sharpe")),
-            _pct(strict_metrics.get("max_drawdown_pct")),
+            _pct(_first_present(diag, "top_bucket_after_cost_max_drawdown", "top_bucket_max_drawdown") or strict_metrics.get("max_drawdown_pct")),
+            _fmt(
+                _first_present(diag, "top_bucket_after_cost_calmar_ratio", "top_bucket_calmar_ratio")
+                or _first_present(strict_metrics, "calmar_ratio", "calmar")
+            ),
             _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
             _pct(diag.get("top_bucket_after_cost_mean_return")),
             "A 股可交易方向诊断",
         ),
         (
+            "Top 1% long-only",
+            _pct(diag.get("top1_pct_annualized_return")),
+            "-",
+            _pct(_first_present(diag, "top1_pct_after_cost_max_drawdown", "top1_pct_max_drawdown")),
+            _fmt(_first_present(diag, "top1_pct_after_cost_calmar_ratio", "top1_pct_calmar_ratio")),
+            _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
+            _pct(diag.get("top1_pct_after_cost_mean_return")),
+            "极端头部信号集中度诊断",
+        ),
+        (
             f"Top vs {benchmark.get('symbol') or _report_benchmark(row)} excess",
-            _pct(diag.get("benchmark_excess_annualized_return")),
+            _pct(_first_present(diag, "benchmark_excess_after_cost_annualized_return", "benchmark_excess_annualized_return")),
             _fmt(benchmark.get("information_ratio")),
-            _pct(diag.get("benchmark_excess_max_drawdown")),
+            _pct(_first_present(diag, "benchmark_excess_after_cost_max_drawdown", "benchmark_excess_max_drawdown")),
+            _fmt(_first_present(diag, "benchmark_excess_after_cost_calmar_ratio", "benchmark_excess_calmar_ratio")),
             _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
             _pct(diag.get("benchmark_excess_after_cost_mean_return")),
             "相对沪深 300 诊断",
@@ -460,6 +476,7 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
             _pct(metrics.get("long_short_spread")),
             _fmt(metrics.get("long_short_sharpe")),
             _pct(metrics.get("long_short_max_drawdown")),
+            _fmt(_first_present(metrics, "long_short_calmar_ratio", "long_short_calmar")),
             _fmt(metrics.get("long_short_turnover")),
             _pct(metrics.get("long_short_after_cost_mean_return") or metrics.get("long_short_spread")),
             "仅 alpha 诊断，不可部署",
@@ -468,10 +485,10 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
     body = "".join(
         "<tr>"
         + f"<td>{escape(name)}</td><td>{escape(ann)}</td><td>{escape(sharpe)}</td><td>{escape(maxdd)}</td>"
-        + f"<td>{escape(turnover)}</td><td>{escape(after_cost)}</td><td>{escape(use)}</td></tr>"
-        for name, ann, sharpe, maxdd, turnover, after_cost, use in rows_data
+        + f"<td>{escape(calmar)}</td><td>{escape(turnover)}</td><td>{escape(after_cost)}</td><td>{escape(use)}</td></tr>"
+        for name, ann, sharpe, maxdd, calmar, turnover, after_cost, use in rows_data
     )
-    return _table(["组合", "年化", "Sharpe", "MaxDD", "换手", "成本后表现", "用途"], body)
+    return _table(["组合", "年化", "Sharpe", "MaxDD", "Calmar Ratio", "换手", "成本后表现", "用途"], body)
 
 
 def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -520,6 +537,7 @@ def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, 
         ("Sharpe", _fmt(metrics.get("sharpe")), _fmt(benchmark.get("benchmark_sharpe")), "必须成本后"),
         ("Sortino", _fmt(metrics.get("sortino")), _fmt(benchmark.get("benchmark_sortino")), "下行风险调整"),
         ("Max Drawdown", _pct(metrics.get("max_drawdown_pct")), _pct(benchmark.get("benchmark_max_drawdown_pct")), "风险底线"),
+        ("Calmar Ratio", _fmt(_first_present(metrics, "calmar_ratio", "calmar")), _fmt(_first_present(benchmark, "benchmark_calmar_ratio", "benchmark_calmar")), "CAGR / |Max Drawdown|"),
         ("Win Rate", _pct(metrics.get("win_rate")), "-", "按交易统计"),
         ("Profit Factor", _fmt(metrics.get("profit_factor")), "-", "总盈利 / 总亏损"),
         ("Total Trades", str(metrics.get("total_trades") or "n/a"), "-", "含拒单和成交诊断"),
@@ -543,6 +561,10 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
             "信号验证失败，未生成成交、拒单、手续费或容量诊断。",
         )
     diagnostics = strict.get("diagnostics") or {}
+    suspended_symbols = list(diagnostics.get("final_suspended_symbols") or [])
+    suspended_note = "最终停牌/冻结持仓按最后有效价估值"
+    if suspended_symbols:
+        suspended_note += "；样例：" + ", ".join(str(symbol) for symbol in suspended_symbols[:8])
     rows_data = [
         ("total_commission", _fmt(diagnostics.get("total_commission")), "总交易成本"),
         ("cost_drag_pct", _pct(_cost_drag_value(diagnostics)), "成本拖累"),
@@ -551,6 +573,7 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
         ("limit_rejected_orders", str(diagnostics.get("limit_rejected_orders") or 0), "涨跌停拒单"),
         ("volume_limited_trades", str(diagnostics.get("volume_limited_trades") or 0), "成交量限制"),
         ("risk_skipped_orders", str(diagnostics.get("risk_skipped_orders") or 0), "风控跳过订单"),
+        ("final_suspended_holding_nav", _money(diagnostics.get("final_suspended_holding_nav")), suspended_note),
     ]
     body = "".join(
         f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
@@ -666,7 +689,7 @@ def _next_steps_contract_table(rows: List[Dict[str, Any]]) -> str:
         rows_data = [
             ("P0", "拒绝归档", "候选池状态保持 rejected，报告和审计 ledger 可追溯", f"quant/infrastructure/var/research/reports/{strategy_id}/"),
             ("P1", "若重启研究，补充独立 OOS、行业分类和容量约束", "walk-forward aggregate Sharpe 转正且最差 split 不崩", "quant/features/research/rigor/"),
-            ("P2", "候选池维护", "策略代码保持 candidate/inactive，不进入 paper trading", f"quant/features/strategies/{strategy_id}/"),
+            ("P2", "rejected_strategy 归档", "策略代码只保留在 rejected_strategy，不进入策略池或 paper trading", f"quant/features/rejected_strategy/{strategy_id}/"),
         ]
     else:
         rows_data = [
@@ -761,17 +784,20 @@ def _universe_summary(row: Dict[str, Any]) -> str:
     metrics = row.get("metrics") or {}
     evidence = row.get("evidence") or {}
     spec = evidence.get("strategy_spec") or {}
+    spec_universe = list(spec.get("universe") or [])
     size = _safe_int(metrics.get("universe_size"))
     data_symbol_count = _safe_int(metrics.get("data_symbol_count"))
-    sample = list(metrics.get("universe_sample") or [])
+    sample = list(metrics.get("universe_sample") or spec_universe[:8])
     source = str(metrics.get("universe_source") or "")
-    if size and size > len(spec.get("universe") or []):
+    if spec_universe and len(spec_universe) > 20:
+        size = size or len(spec_universe)
+    if size and (size > 20 or size > len(spec_universe)):
         sample_text = ", ".join(str(symbol) for symbol in sample[:8])
         actual = f"，实际取数 {data_symbol_count} 个 symbol" if data_symbol_count else ""
         suffix = f"；样例：{sample_text}" if sample_text else ""
         source_text = f"，来源：{source}" if source else ""
         return f"全 A 股 daily_cn universe（解析 {size} 个 symbol{actual}{source_text}{suffix}）"
-    return _join_text(spec.get("universe") or "CN A-share full daily_cn universe")
+    return _join_text(spec_universe or "CN A-share full daily_cn universe")
 
 
 def _format_decay(value: Any) -> str:
@@ -913,7 +939,8 @@ def _strict_backtest_summary(metrics: Dict[str, Any]) -> str:
         return "本轮未运行严格 Backtester；信号验证失败后流水线停止。"
     return (
         f"Sharpe={_fmt(metrics.get('sharpe'))}，CAGR={_pct(metrics.get('cagr'))}，"
-        f"MaxDD={_pct(metrics.get('max_drawdown_pct'))}，交易数={metrics.get('total_trades') or 'n/a'}"
+        f"MaxDD={_pct(metrics.get('max_drawdown_pct'))}，"
+        f"Calmar={_fmt(_first_present(metrics, 'calmar_ratio', 'calmar'))}，交易数={metrics.get('total_trades') or 'n/a'}"
     )
 
 
@@ -1426,7 +1453,10 @@ def _portfolio_diagnostics_table(rows: List[Dict[str, Any]]) -> str:
             + f"<td>{escape(str(diag.get('kind', '')))}</td>"
             + f"<td>{escape(_pct(diag.get('top_bucket_annualized_return')))}</td>"
             + f"<td>{escape(_pct(diag.get('top_bucket_hit_rate')))}</td>"
+            + f"<td>{escape(_fmt(_first_present(diag, 'top_bucket_after_cost_calmar_ratio', 'top_bucket_calmar_ratio')))}</td>"
             + f"<td>{escape(_pct(diag.get('top_bucket_after_cost_mean_return')))}</td>"
+            + f"<td>{escape(_pct(diag.get('top1_pct_annualized_return')))}</td>"
+            + f"<td>{escape(_fmt(_first_present(diag, 'top1_pct_after_cost_calmar_ratio', 'top1_pct_calmar_ratio')))}</td>"
             + f"<td>{escape(str(diag.get('benchmark_symbol', '')))}</td>"
             + f"<td>{escape(_pct(diag.get('benchmark_excess_after_cost_mean_return')))}</td>"
             + f"<td>{escape(rolling_text or 'n/a')}</td>"
@@ -1434,7 +1464,7 @@ def _portfolio_diagnostics_table(rows: List[Dict[str, Any]]) -> str:
         )
     if not body:
         return "<p>本次没有记录 long-only 组合诊断；这会阻断完整研究结论。</p>"
-    return _table(["Idea", "诊断类型", "Top 年化", "Top Hit", "成本后均值", "Benchmark", "成本后超额", "Rolling OOS"], body)
+    return _table(["Idea", "诊断类型", "Top 年化", "Top Hit", "Top Calmar", "成本后均值", "Top 1% 年化", "Top 1% Calmar", "Benchmark", "成本后超额", "Rolling OOS"], body)
 
 
 def _strict_backtest_table(rows: List[Dict[str, Any]]) -> str:
@@ -1454,6 +1484,7 @@ def _strict_backtest_table(rows: List[Dict[str, Any]]) -> str:
             + f"<td>{escape(_pct(metrics.get('cagr')))}</td>"
             + f"<td>{escape(_pct(metrics.get('total_return')))}</td>"
             + f"<td>{escape(_pct(metrics.get('max_drawdown_pct')))}</td>"
+            + f"<td>{escape(_fmt(_first_present(metrics, 'calmar_ratio', 'calmar')))}</td>"
             + f"<td>{escape(_pct(metrics.get('win_rate')))}</td>"
             + f"<td>{escape(_fmt(metrics.get('profit_factor')))}</td>"
             + f"<td>{escape(str(metrics.get('total_trades', 0)))}</td>"
@@ -1463,7 +1494,7 @@ def _strict_backtest_table(rows: List[Dict[str, Any]]) -> str:
         )
     if not body:
         return "<p>本次没有记录严格 Backtester 结果；这会阻断 Go / No-Go。</p>"
-    return _table(["Idea", "区间", "Sharpe", "Sortino", "CAGR", "累计", "MaxDD", "胜率", "PF", "成交数", "手续费", "涨跌停/T+1拒单"], body)
+    return _table(["Idea", "区间", "Sharpe", "Sortino", "CAGR", "累计", "MaxDD", "Calmar", "胜率", "PF", "成交数", "手续费", "涨跌停/T+1拒单"], body)
 
 
 def _backtest_return_risk_table(rows: List[Dict[str, Any]]) -> str:
@@ -1482,7 +1513,7 @@ def _backtest_return_risk_table(rows: List[Dict[str, Any]]) -> str:
             + f"<td>{escape(_fmt(metrics.get('sharpe')))}</td>"
             + f"<td>{escape(_fmt(metrics.get('sortino')))}</td>"
             + f"<td>{escape(_pct(metrics.get('max_drawdown_pct')))}</td>"
-            + f"<td>{escape(_fmt(metrics.get('calmar')))}</td>"
+            + f"<td>{escape(_fmt(_first_present(metrics, 'calmar_ratio', 'calmar')))}</td>"
             + f"<td>{escape(_fmt(metrics.get('tail_ratio')))}</td>"
             + f"<td>{escape(_fmt(metrics.get('ulcer_index')))}</td>"
             + "</tr>"
@@ -1748,13 +1779,21 @@ def _artifact_links(rows: List[Dict[str, Any]]) -> str:
         if not strategy_id or strategy_id in seen:
             continue
         seen.add(strategy_id)
-        items.extend(
-            [
-                f"<li>Strategy code: <code>quant/features/strategies/{escape(strategy_id)}/strategy.py</code></li>",
-                f"<li>Config: <code>quant/features/strategies/{escape(strategy_id)}/config.yaml</code></li>",
-                f"<li>Report: <code>quant/infrastructure/var/research/reports/{escape(strategy_id)}/full_research_report.html</code></li>",
-            ]
-        )
+        if row.get("status") == "rejected":
+            items.extend(
+                [
+                    f"<li>Rejected strategy archive: <code>quant/features/rejected_strategy/{escape(strategy_id)}/strategy.py</code></li>",
+                    f"<li>Rejected strategy config: <code>quant/features/rejected_strategy/{escape(strategy_id)}/config.yaml</code></li>",
+                ]
+            )
+        elif row.get("status") not in {"error", "needs_manual_spec"}:
+            items.extend(
+                [
+                    f"<li>Strategy code: <code>quant/features/strategies/{escape(strategy_id)}/strategy.py</code></li>",
+                    f"<li>Config: <code>quant/features/strategies/{escape(strategy_id)}/config.yaml</code></li>",
+                ]
+            )
+        items.append(f"<li>Report: <code>quant/infrastructure/var/research/reports/{escape(strategy_id)}/full_research_report.html</code></li>")
     return "<ul>" + "".join(items) + "</ul>"
 
 
@@ -1908,6 +1947,13 @@ def _ledger_sort_key(row: Dict[str, Any]) -> tuple:
 def _fmt(value: Any) -> str:
     try:
         return f"{float(value):.4f}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _money(value: Any) -> str:
+    try:
+        return f"{float(value):,.2f}"
     except (TypeError, ValueError):
         return "n/a"
 

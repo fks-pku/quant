@@ -20,11 +20,11 @@ def _ensure_datetime(data: pd.DataFrame, col: str) -> pd.Series:
 
 
 def _iter_symbol_sorted(data: pd.DataFrame, ts: pd.Series) -> Iterable[Tuple[str, pd.DataFrame]]:
-    for symbol in data["symbol"].unique():
-        mask = data["symbol"] == symbol
-        sym_data = data.loc[mask].copy()
-        sym_data["_ts"] = ts[mask]
-        sym_data = sym_data.sort_values("_ts")
+    work = data.copy()
+    work["_ts"] = ts.to_numpy()
+    work["_symbol_order"] = pd.factorize(work["symbol"], sort=False)[0]
+    work = work.sort_values(["_symbol_order", "_ts"])
+    for symbol, sym_data in work.groupby("symbol", sort=False, dropna=False):
         yield symbol, sym_data
 
 
@@ -229,8 +229,8 @@ class DataValidator:
 
         ts = _ensure_datetime(data, "timestamp")
 
-        for symbol in data["symbol"].unique():
-            sym_ts = ts[data["symbol"] == symbol].dropna().sort_values().reset_index(drop=True)
+        for symbol, sym_data in _iter_symbol_sorted(data, ts):
+            sym_ts = sym_data["_ts"].dropna().reset_index(drop=True)
             if len(sym_ts) < 2:
                 continue
             dates = sym_ts.dt.date

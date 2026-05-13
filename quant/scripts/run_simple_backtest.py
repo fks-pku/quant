@@ -1,7 +1,7 @@
 """Lightweight backtest runner — simulates DailyBarStrategy on yfinance data.
 
 Usage:
-    python quant/scripts/run_simple_backtest.py --strategy PowerAssistedTrendFollowingStrategy --symbols SPY GLD TLT
+    python quant/scripts/run_simple_backtest.py --strategy MyStrategy --symbols SPY GLD TLT
 """
 import argparse
 import json
@@ -174,22 +174,17 @@ def run_backtest(strategy_name, symbols, start, end, capital=1_000_000):
     }
 
 
-STRATEGIES = {
-    "PowerAssistedTrendFollowingStrategy": ["SPY", "GLD", "TLT"],
-    "FollowTheLeaderEnhancingSystematicTrendfollowingUsingNetworkMomentumStrategy": ["SPY", "QQQ", "IWM", "GLD", "TLT"],
-    "LearningFinancialNetworksMomentumStrategy": ["SPY", "QQQ", "IWM", "GLD", "TLT"],
-    "DeepMomentumNetworksStrategy": ["SPY", "QQQ", "GLD"],
-}
+STRATEGIES = {}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--strategy", default="all")
+    parser.add_argument("--strategy", required=True)
     parser.add_argument("--start", default="2020-01-01")
     parser.add_argument("--end", default="2025-01-01")
     args = parser.parse_args()
 
     results = {}
-    to_run = STRATEGIES if args.strategy == "all" else {args.strategy: STRATEGIES.get(args.strategy, ["SPY"])}
+    to_run = {args.strategy: ["SPY"]}
     for name, syms in to_run.items():
         try:
             results[name] = run_backtest(name, syms, args.start, args.end)

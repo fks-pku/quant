@@ -63,6 +63,11 @@ def test_research_defaults_and_spec_universe_are_a_share_only():
 
     assert spec.universe == DEFAULT_A_SHARE_SYMBOLS
 
+    full_universe = ["000001", "000002", "600519", "AAPL"]
+    full_spec = StrategySpecBuilder({"default_universe": full_universe}).build(_raw_strategy(), report)
+
+    assert full_spec.universe == ["000001", "000002", "600519"]
+
     cli_report = HeuristicEvaluator().evaluate(_raw_strategy())
 
     assert cli_report.recommended_symbols == DEFAULT_A_SHARE_SYMBOLS
@@ -798,12 +803,16 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
 
         candidate = research_store.get_candidate("daily_momentum_breakout")
         hypothesis = research_store.list_hypotheses()[0]
+        idea = research_store.list_ideas()[0]
         assert result.rejected == 1
         assert result.backtested == 1
         assert candidate["status"] == "rejected"
+        assert not (tmp_path / "strategies" / "daily_momentum_breakout" / "strategy.py").exists()
+        assert (tmp_path / "rejected_strategy" / "daily_momentum_breakout" / "strategy.py").exists()
         assert hypothesis["status"] == "rejected"
         assert hypothesis["stage"] == "go_no_go"
         assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
+        assert idea["status"] == "rejected"
         assert any(entry.phase == "stage2_validation" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "fail" for entry in result.log)
@@ -950,7 +959,7 @@ def test_research_engine_passes_ready_strategy_spec_to_integrator():
     assert integrator.received_spec.signal_formula_key == "momentum_close_return"
 
 
-def test_research_engine_rejects_negative_rank_ic_direction():
+def test_research_engine_continues_after_negative_rank_ic_direction():
     class FixedScout:
         def search(self, sources=None, max_results=10):
             return [_raw_strategy()]
@@ -1015,10 +1024,95 @@ def test_research_engine_rejects_negative_rank_ic_direction():
 
     result = engine.run_full_pipeline()
 
-    assert result.integrated == 0
-    assert result.rejected == 1
-    assert integrator.called is False
+    assert result.integrated == 1
+    assert result.rejected == 0
+    assert integrator.called is True
     assert any(entry.phase == "stage2_validation" and entry.verdict == "fail" for entry in result.log)
+
+
+def test_validation_failed_strategy_runs_backtest_then_archives_to_rejected_strategy():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["000300"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class NegativeValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=-0.05,
+                rank_ic_ir=-1.0,
+                ic_decay=[(1, -0.04), (5, -0.05), (10, -0.03), (21, -0.02)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=-0.001,
+                hit_rate=0.45,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+            )
+
+    def record_backtest(sid, result, config, integrator, pool):
+        result.backtested += 1
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=True, validation_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+            backtest_fn=record_backtest,
+            spec_builder=FixedSpecBuilder(),
+            validator=NegativeValidator(),
+        )
+
+        result = engine.run_full_pipeline()
+
+        candidate = research_store.get_candidate("daily_momentum_breakout")
+        hypothesis = research_store.list_hypotheses()[0]
+        idea = research_store.list_ideas()[0]
+        assert result.integrated == 1
+        assert result.backtested == 1
+        assert result.rejected == 1
+        assert candidate["status"] == "rejected"
+        assert candidate["research_meta"]["validation_gate"]["status"] == "failed"
+        assert candidate["research_meta"]["rejected_strategy_dir"].endswith(
+            "rejected_strategy/daily_momentum_breakout"
+        )
+        assert not (tmp_path / "strategies" / "daily_momentum_breakout" / "strategy.py").exists()
+        assert (tmp_path / "rejected_strategy" / "daily_momentum_breakout" / "strategy.py").exists()
+        assert hypothesis["status"] == "rejected"
+        assert hypothesis["stage"] == "go_no_go"
+        assert "Validation failed" in hypothesis["decision_reason"]
+        assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
+        assert idea["status"] == "rejected"
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 def test_research_engine_uses_strategy_spec_universe_for_walkforward():

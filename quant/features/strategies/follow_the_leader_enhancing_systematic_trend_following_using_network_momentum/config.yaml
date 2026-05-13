@@ -1,8 +1,0 @@
-strategy:
-  name: FollowTheLeaderEnhancingSystematicTrendfollowingUsingNetworkMomentumStrategy
-  enabled: false
-  status: candidate
-  priority: 999
-
-parameters:
-  symbols: [CL, GC, SI, NG, C, W, S, HG, RB, HO]

@@ -118,6 +118,27 @@ def test_integrator_generates_mean_reversion_formula_logic(tmp_path):
     assert "TODO" not in code
 
 
+def test_integrator_generates_worldquant_alpha_001_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("WorldQuant 101 Alpha #001")
+    report = _report("worldquant_factor")
+    spec = _spec("worldquant_factor", "worldquant_alpha_001", strategy_id="worldquant_101_alpha_001")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "worldquant_alpha_001" in code
+    assert "_worldquant_alpha_001_raw" in code
+    assert code.count("def _execute_rebalance") == 1
+    assert "Manual implementation required" not in code
+    assert "TODO" not in code
+
+    cls = _load_generated_class(strategy_file, "Worldquant101Alpha001Strategy")
+    strategy = cls(symbols=["600001", "600002"], lookback=20)
+    assert strategy.name == "worldquant_101_alpha_001"
+
+
 def test_integrator_uses_ready_spec_strategy_id_for_generated_candidate(tmp_path):
     integrator = StrategyIntegrator(tmp_path)
     raw = _raw("Paper Title With Punctuation!")
@@ -133,6 +154,7 @@ def test_integrator_uses_ready_spec_strategy_id_for_generated_candidate(tmp_path
     assert '@strategy("paper_alpha_v2")' in code
     assert 'super().__init__("paper_alpha_v2"' in code
     assert "name: paper_alpha_v2" in config
+    assert 'symbols: ["000300", "000905", "600519", "000001", "510300"]' in config
     assert entry["id"] == "paper_alpha_v2"
     assert entry["research_meta"]["strategy_spec"]["strategy_id"] == "paper_alpha_v2"
 

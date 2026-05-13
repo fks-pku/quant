@@ -35,12 +35,13 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 - Evaluation reports should carry `signal_quality_score`, `research_confidence_score`, `required_data_fields`, and `validation_tests` so downstream validation can audit look-ahead, FDR, factor exposure, IC decay, costs, and capacity.
 - Every evaluated hypothesis must leave a structured ledger record with source, thesis, stage, status, decision reason, metrics, and evidence.
 - Each run should write a lineage manifest and candidate scorecard artifact when artifact storage is available.
-- Research orchestration has two separately runnable stages. `discover` mode only scouts multiple ideas, writes `discovered_strategies.md`, and persists them into the local `idea_bank` as future candidates; it must not run admission evaluation, StrategySpec drafting, validation, integration, backtest, or full report generation. `formal` mode loads selected local `idea_bank` rows and then runs admission evaluation, StrategySpec drafting, HFQ real-data signal validation, long-only portfolio diagnostics, strict framework backtest, benchmark comparison, and Go / No-Go one idea at a time. `full` mode may still run discovery plus formal research for compatibility.
+- Research orchestration has two separately runnable stages. `discover` mode only scouts multiple ideas, writes `discovered_strategies.md`, and persists them into the local `idea_bank` as future candidates; it must not run admission evaluation, StrategySpec drafting, validation, integration, backtest, or full report generation. `formal` mode loads selected local `idea_bank` rows and then runs admission evaluation, StrategySpec drafting, HFQ real-data signal validation, long-only portfolio diagnostics, strict framework backtest, benchmark comparison, and Go / No-Go one idea at a time. Validation failure is not an early stop; rejection is a final Go / No-Go decision after the strict flow has run. `full` mode may still run discovery plus formal research for compatibility.
 - Stable research assets live under `quant/infrastructure/var/research/idea_bank/` for the local idea bank and discovery summaries, and `quant/infrastructure/var/research/reports/<strategy_or_idea_id>/` for each full research report. `quant/infrastructure/var/research/reports/latest/` is the API/frontend pointer to the latest report and latest evaluation summary. New runs should not write root-level `idea_bank.*`, `discovered_strategies.md`, `strategy_evaluation.md`, `full_research_report.*`, or `last_result.json`; API helpers may still read old root-level files only as fallback during migration.
 - Complex research reports must be rendered as HTML. Simple operational notes, AGENTS files, and short indexes may remain Markdown.
 - Each run must write a Chinese `full_research_report.html` plus a timestamped run copy. A lightweight `full_research_report.md` index may point to the HTML report for compatibility. The report must follow the canonical template contract at `quant/infrastructure/var/research/report_templates/full_research_report_template.html` exactly, including the fixed top-level structure: `1. 结论汇总`, `2. idea 来源与初筛`, `3. 信号定义`, `4. 数据来源及 benchmark 定义`, `5. 信号验证`, `6. 策略回测报告`, `7. purged walk-forward`, `8. 最终推荐与下一步计划`. Any report format change must update that template and `quant/tests/test_research_report_contract.py` in the same change.
 - A final strategy research recommendation cannot rely on vectorized portfolio diagnostics alone. Implemented strategies need a strict framework backtest through the injected backtest path, including realistic execution, costs, trading constraints, statistical significance, and artifact links.
 - Successful candidate integration should write a promotion dossier artifact and attach artifact metadata to candidate `research_meta`.
+- Rejected generated strategies must be removed from `quant/features/strategies/` and archived under `quant/features/rejected_strategy/<strategy_id>/` so they remain auditable without entering the strategy pool.
 - Research signal logic, validation forward returns, IC decay, and sensitivity sweeps must use HFQ adjusted prices (`adj_*`, or raw price multiplied by `adj_factor`) when available. Raw prices are only a fallback for missing adjustment data or execution/fill accounting outside research validation.
 - Validation signal formulas must match generated strategy signal orientation. A candidate should not pass validation on a negative IC unless the spec/code explicitly encodes an inverse signal.
 - A-share strategy recommendations must be long-only unless the implementation explicitly uses a legal shorting or hedging instrument. Long-short spreads may be reported only as non-tradable alpha diagnostics, not as deployable portfolio results.
@@ -57,6 +58,7 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 | Evaluation prompt/parsing | `evaluator.py` |
 | Admission-score rubric | `evaluation_rubric.py` |
 | Strategy code generation | `integrator.py` |
+| Rejected strategy archive | `research_engine.py` |
 | Candidate lifecycle | `pool.py` |
 | Scheduling | `scheduler.py` |
 | Pipeline orchestration/artifacts | `research_engine.py` |
@@ -79,6 +81,7 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 ## Research Rigor Modules
 
 - `validation/cross_sectional.py` owns full-universe rank IC, ICIR, IC decay, and Fama-MacBeth statistics.
+- `validation/signal_library.py` owns executable validation formula keys, including WorldQuant Alpha #001 exact daily close signal support.
 - `validation/factor_validator.py` is the validation gate; sensitivity checks are opt-in through config.
 - API/CLI composition roots inject `StrategySpecBuilder` and `FactorValidator` by default when `validation_enabled=True`.
 - `rigor/backtest_hub.py` owns purged walk-forward, DSR, regime breakdown, and capacity viability checks.
