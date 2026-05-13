@@ -78,13 +78,15 @@ _STRATEGY_TYPE_MAP = [
     (r"value.investing|fundamental", "value"),
 ]
 
+_CN_RESEARCH_SYMBOLS = ["000300", "000905", "600519", "000001", "510300"]
+
 _SYMBOL_MAP = {
-    "equity": ["SPY", "QQQ"],
-    "stock": ["AAPL", "MSFT"],
-    "futures": ["ES", "NQ"],
-    "etf": ["SPY", "QQQ", "IWM"],
-    "forex": ["EURUSD"],
-    "commodity": ["GC", "CL"],
+    "equity": _CN_RESEARCH_SYMBOLS,
+    "stock": _CN_RESEARCH_SYMBOLS,
+    "futures": _CN_RESEARCH_SYMBOLS,
+    "etf": ["510300", "510500", "159915"],
+    "forex": _CN_RESEARCH_SYMBOLS,
+    "commodity": _CN_RESEARCH_SYMBOLS,
 }
 
 
@@ -117,7 +119,7 @@ class HeuristicEvaluator:
                 strategy_type = stype
                 break
 
-        symbols = ["SPY"]
+        symbols = list(_CN_RESEARCH_SYMBOLS)
         for token, syms in _SYMBOL_MAP.items():
             if token in normalized:
                 symbols = syms
@@ -279,7 +281,7 @@ def main():
         auto_backtest=args.backtest,
         validation_enabled=not args.no_validation,
         backtest_sharpe_threshold=0.5,
-        default_symbols=["AAPL", "MSFT", "GOOGL", "SPY", "QQQ"],
+        default_symbols=list(_CN_RESEARCH_SYMBOLS),
         default_backtest_start="2020-01-01",
         default_backtest_end="2024-12-31",
     )

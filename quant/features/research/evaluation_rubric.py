@@ -2,7 +2,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from quant.features.research.discovery.quality import attach_discovery_quality, discovery_quality, discovery_score
-from quant.features.research.models import EvaluationReport, RawStrategy
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, EvaluationReport, RawStrategy
 
 
 _TYPE_PATTERNS = [
@@ -239,17 +239,13 @@ def _strategy_type(text: str) -> str:
 
 def _symbols(text: str, config: Optional[Dict[str, Any]] = None) -> List[str]:
     cfg = config or {}
-    target_market = str(cfg.get("target_market") or cfg.get("market") or "").lower()
     configured_symbols = cfg.get("default_symbols") or cfg.get("symbols") or []
-    if target_market in {"cn", "china", "a_share", "a-share", "ashare"}:
-        return list(configured_symbols or ["000300", "000905", "600519", "000001", "510300"])
-    if _has_any(text, ("a-share", "china", "chinese equity")):
-        return list(configured_symbols or ["000300", "600519"])
-    if _has_any(text, ("hong kong", "hk equity")):
-        return ["HSI", "00700"]
-    if _has_any(text, ("etf", "equity", "stock", "large cap", "liquid")):
-        return ["SPY", "QQQ"]
-    return ["SPY"]
+    cn_symbols = [str(symbol) for symbol in configured_symbols if _is_a_share_symbol(str(symbol))]
+    return cn_symbols or list(DEFAULT_A_SHARE_SYMBOLS)
+
+
+def _is_a_share_symbol(symbol: str) -> bool:
+    return bool(re.fullmatch(r"\d{6}", symbol))
 
 
 def _score_terms(text: str, terms: tuple[str, ...], max_score: float, step: float) -> float:

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from quant.domain.ports.research_store import ResearchStore
-from quant.features.research.models import ResearchConfig, ResearchResult, ResearchLogEntry, RawStrategy
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, ResearchConfig, ResearchResult, ResearchLogEntry, RawStrategy
 from quant.features.research.scout import StrategyScout
 from quant.features.research.evaluator import StrategyEvaluator
 from quant.features.research.integrator import StrategyIntegrator
@@ -608,11 +608,16 @@ class ResearchEngine:
                 "ff_alpha_tstat",
                 "ff_r2",
                 "fama_macbeth_tstat",
+                "universe_size",
+                "universe_source",
+                "data_rows",
+                "data_symbol_count",
             ):
                 metrics[field] = getattr(validation_report, field, 0.0)
             metrics["ic_decay"] = list(getattr(validation_report, "ic_decay", []) or [])
             metrics["data_start"] = getattr(validation_report, "data_start", "")
             metrics["data_end"] = getattr(validation_report, "data_end", "")
+            metrics["universe_sample"] = list(getattr(validation_report, "universe_sample", []) or [])
             metrics["portfolio_diagnostics"] = dict(getattr(validation_report, "portfolio_diagnostics", {}) or {})
         return metrics
 
@@ -897,8 +902,9 @@ class ResearchEngine:
         meta = dict((entry or {}).get("research_meta") or {})
         spec = dict(meta.get("strategy_spec") or {})
         universe = spec.get("universe") or []
-        symbols = [str(symbol) for symbol in universe if str(symbol)]
-        return symbols or list(self.config.default_symbols)
+        symbols = [str(symbol) for symbol in universe if _is_a_share_symbol(str(symbol))]
+        fallback = [str(symbol) for symbol in self.config.default_symbols if _is_a_share_symbol(str(symbol))]
+        return symbols or fallback or list(DEFAULT_A_SHARE_SYMBOLS)
 
     def _append_ic_decay_warning(self, result: ResearchResult, raw: RawStrategy, vreport: Any) -> Any:
         decay_values = self._ic_decay_values(getattr(vreport, "ic_decay", []))
@@ -1003,6 +1009,10 @@ class ResearchEngine:
                     self.research_store.upsert_hypothesis(updated)
         except Exception as e:
             logger.warning(f"Failed to update hypothesis status for {strategy_id}: {e}")
+
+
+def _is_a_share_symbol(symbol: str) -> bool:
+    return len(symbol) == 6 and symbol.isdigit()
 
 
 class _NullResearchStore(ResearchStore):

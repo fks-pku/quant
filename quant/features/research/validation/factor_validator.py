@@ -100,22 +100,28 @@ class FactorValidator:
         from quant.features.research.validation.signal_library import compute_signal
 
         symbols = self._resolve_universe(spec)
+        seed_universe_size = len(list(spec.universe or []))
         raw_data = self._market_data.get_daily_bars(
             symbols=symbols,
             start="2019-01-01",
             end="2024-12-31",
         )
         if raw_data is None:
-            return self._error_report(spec, ["No market data returned"])
+            return self._error_report(
+                spec,
+                ["No market data returned"],
+                self._universe_metadata(symbols, None, seed_universe_size),
+            )
 
         data = raw_data if isinstance(raw_data, pd.DataFrame) else pd.DataFrame(raw_data)
+        universe_metadata = self._universe_metadata(symbols, data, seed_universe_size)
         if len(data) < self._min_obs:
-            return self._error_report(spec, [f"Insufficient data: {len(data)} < {self._min_obs}"])
+            return self._error_report(spec, [f"Insufficient data: {len(data)} < {self._min_obs}"], universe_metadata)
 
         if {"symbol", "date"}.issubset(data.columns):
-            report = self._validate_cross_sectional(spec, data, compute_signal)
+            report = self._validate_cross_sectional(spec, data, compute_signal, universe_metadata)
         else:
-            report = self._validate_single_symbol(spec, data, compute_signal)
+            report = self._validate_single_symbol(spec, data, compute_signal, universe_metadata)
 
         return self._with_sensitivity(spec, report)
 
@@ -132,12 +138,34 @@ class FactorValidator:
             logger.warning(f"Universe fetch failed: {e}")
             return fallback
 
-    def _validate_single_symbol(self, spec: StrategySpec, data: pd.DataFrame, compute_signal: Any) -> ValidationReport:
+    def _universe_metadata(self, symbols: List[str], data: Any, seed_universe_size: int) -> Dict[str, Any]:
+        data_rows = len(data) if data is not None else 0
+        data_symbol_count = 0
+        if isinstance(data, pd.DataFrame) and "symbol" in data.columns:
+            data_symbol_count = int(data["symbol"].astype(str).nunique())
+        elif data_rows:
+            data_symbol_count = min(len(symbols), 1)
+        source = "daily_cn resolved full universe" if len(symbols) > seed_universe_size else "StrategySpec universe"
+        return {
+            "universe_size": int(len(symbols)),
+            "universe_sample": [str(symbol) for symbol in symbols[:10]],
+            "universe_source": source,
+            "data_rows": int(data_rows),
+            "data_symbol_count": int(data_symbol_count),
+        }
+
+    def _validate_single_symbol(
+        self,
+        spec: StrategySpec,
+        data: pd.DataFrame,
+        compute_signal: Any,
+        universe_metadata: Dict[str, Any],
+    ) -> ValidationReport:
         from quant.features.research.validation.signal_library import adjusted_price_series
 
         signal = compute_signal(spec.signal_formula_key, data, spec.lookback_days)
         if signal is None:
-            return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"])
+            return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"], universe_metadata)
 
         close = adjusted_price_series(data, "close")
         forward_return = close.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
@@ -145,7 +173,7 @@ class FactorValidator:
 
         common_idx = signal.dropna().index.intersection(forward_return.dropna().index)
         if len(common_idx) < self._min_obs:
-            return self._error_report(spec, [f"Insufficient valid observations: {len(common_idx)}"])
+            return self._error_report(spec, [f"Insufficient valid observations: {len(common_idx)}"], universe_metadata)
 
         sig = signal.loc[common_idx]
         fwd = forward_return.loc[common_idx]
@@ -170,9 +198,16 @@ class FactorValidator:
             data_start=str(data.index[0]),
             data_end=str(data.index[-1]),
             n_observations=len(common_idx),
+            **universe_metadata,
         )
 
-    def _validate_cross_sectional(self, spec: StrategySpec, data: pd.DataFrame, compute_signal: Any) -> ValidationReport:
+    def _validate_cross_sectional(
+        self,
+        spec: StrategySpec,
+        data: pd.DataFrame,
+        compute_signal: Any,
+        universe_metadata: Dict[str, Any],
+    ) -> ValidationReport:
         from quant.features.research.validation.signal_library import adjusted_price_matrix
 
         frame = data.copy()
@@ -181,7 +216,7 @@ class FactorValidator:
 
         signal_matrix = compute_signal(spec.signal_formula_key, frame, spec.lookback_days)
         if signal_matrix is None:
-            return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"])
+            return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"], universe_metadata)
 
         close_prices = adjusted_price_matrix(frame, "close")
         signal_matrix = signal_matrix.shift(self._exec_lag)
@@ -196,6 +231,7 @@ class FactorValidator:
             return self._error_report(
                 spec,
                 [f"Insufficient valid cross-sectional dates: {len(valid_ic)} < {self._min_cs_dates}"],
+                universe_metadata,
             )
 
         rank_ic = float(valid_ic.mean())
@@ -240,6 +276,7 @@ class FactorValidator:
             ),
             portfolio_diagnostics=portfolio_diagnostics,
             errors=factor_errors,
+            **universe_metadata,
         )
 
     def _long_short_spread(self, signals: pd.DataFrame, forward_returns: pd.DataFrame) -> float:
@@ -445,7 +482,8 @@ class FactorValidator:
             logger.warning(f"Sensitivity sweep unavailable: {e}")
             return report
 
-    def _error_report(self, spec, errors):
+    def _error_report(self, spec, errors, universe_metadata: Dict[str, Any] | None = None):
+        universe_metadata = universe_metadata or {}
         return ValidationReport(
             strategy_id=spec.strategy_id,
             status="error",
@@ -455,4 +493,5 @@ class FactorValidator:
             long_short_spread=0.0, hit_rate=0.0,
             data_start="", data_end="", n_observations=0,
             errors=errors,
+            **universe_metadata,
         )

@@ -7,8 +7,9 @@ from quant.infrastructure.research.reporting import build_full_research_report_h
 REPORT_TEMPLATE = (
     Path(__file__).resolve().parents[1]
     / "infrastructure"
+    / "var"
     / "research"
-    / "golden_reports"
+    / "report_templates"
     / "full_research_report_template.html"
 )
 
@@ -48,6 +49,15 @@ REQUIRED_DETAIL_SECTIONS = [
     "推荐理由",
     "下一步计划",
     "产物链接",
+]
+
+REQUIRED_TEMPLATE_MARKERS = [
+    'class="template-note"',
+    'class="grid"',
+    'class="metric"',
+    'class="formula"',
+    'class="decision"',
+    'class="decision-mark"',
 ]
 
 
@@ -95,6 +105,8 @@ def test_canonical_full_research_report_template_defines_contract():
     template_h3 = _headings(html, "h3")
     for heading in REQUIRED_DETAIL_SECTIONS:
         assert heading in template_h3
+    for marker in REQUIRED_TEMPLATE_MARKERS:
+        assert marker in html
     assert "full_research_report.html" in html
     assert "000300" in html
 
@@ -229,5 +241,7 @@ def test_generated_full_research_report_matches_golden_contract():
     generated_h3 = _headings(html, "h3")
     for heading in REQUIRED_DETAIL_SECTIONS:
         assert heading in generated_h3
+    for marker in REQUIRED_TEMPLATE_MARKERS:
+        assert marker in html
     for placeholder in ("[strategy_id]", "[Rank IC]", "[000300 coverage]", "[YYYY-MM-DD]"):
         assert placeholder not in html

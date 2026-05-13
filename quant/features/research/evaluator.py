@@ -20,7 +20,7 @@ class StrategyEvaluator:
         '- "data_requirement": string ("low", "medium", "high-frequency")\n'
         '- "daily_adaptable": boolean (can a high-frequency version be adapted to daily bars?)\n'
         '- "estimated_edge": float (estimated annual return as decimal, e.g. 0.12 for 12%)\n'
-        '- "recommended_symbols": list of strings (e.g. ["AAPL", "SPY"])\n'
+        '- "recommended_symbols": list of A-share symbols (e.g. ["000300", "600519"])\n'
         '- "strategy_type": string (e.g. "momentum", "mean_reversion", "stat_arb")\n'
         '- "summary": string (one-sentence assessment)\n'
         '- "economic_rationale_score": float (0-2, theory or behavioral rationale)\n'

@@ -52,7 +52,7 @@ def benchmark_symbol_for_universe(symbols: List[str]) -> str:
         return "HSI"
     if first.endswith((".SS", ".SZ")) or (bare.isdigit() and len(bare) == 6):
         return "000300"
-    return "SPY"
+    return "000300"
 
 
 def label_split_regime(

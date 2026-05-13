@@ -10,6 +10,7 @@ _SOURCE_PROFILE = {
     "ssrn": ("academic", 1.65),
     "nber": ("institutional", 1.55),
     "aqr": ("practitioner_research", 1.45),
+    "worldquant101": ("public_factor_library", 1.35),
     "alpha_architect": ("practitioner_research", 1.35),
     "quantocracy": ("curated_blog", 1.15),
     "blog": ("blog", 0.95),

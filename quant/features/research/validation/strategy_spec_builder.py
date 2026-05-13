@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from quant.features.research.models import StrategySpec, EvaluationReport, RawStrategy
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, StrategySpec, EvaluationReport, RawStrategy
 
 _FORMULA_MAP = {
     "momentum": {
@@ -40,13 +40,14 @@ class StrategySpecBuilder:
     def build(self, raw: RawStrategy, report: EvaluationReport, universe: Optional[List[str]] = None) -> StrategySpec:
         strategy_type = report.strategy_type
         strategy_id = _strategy_id(raw.title)
+        resolved_universe = _a_share_universe(universe or report.recommended_symbols)
 
         if strategy_type not in _SUPPORTED_TYPES:
             return StrategySpec(
                 strategy_id=strategy_id,
                 strategy_type=strategy_type,
                 signal_formula_key="",
-                universe=universe or report.recommended_symbols,
+                universe=resolved_universe,
                 horizon_days=0,
                 lookback_days=0,
                 execution_lag_days=0,
@@ -61,7 +62,7 @@ class StrategySpecBuilder:
                 strategy_id=strategy_id,
                 strategy_type=strategy_type,
                 signal_formula_key="",
-                universe=universe or report.recommended_symbols,
+                universe=resolved_universe,
                 horizon_days=0,
                 lookback_days=0,
                 execution_lag_days=0,
@@ -74,7 +75,7 @@ class StrategySpecBuilder:
             strategy_id=strategy_id,
             strategy_type=strategy_type,
             signal_formula_key=formula["formula_key"],
-            universe=universe or report.recommended_symbols,
+            universe=resolved_universe,
             horizon_days=formula["horizon_days"],
             lookback_days=formula["lookback_days"],
             execution_lag_days=formula["execution_lag_days"],
@@ -88,3 +89,8 @@ def _strategy_id(title: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_\s]", "", hyphen_replaced)
     underscored = re.sub(r"\s+", "_", cleaned.strip()).lower()
     return re.sub(r"_+", "_", underscored).strip("_")[:50].strip("_") or "strategy_candidate"
+
+
+def _a_share_universe(symbols: Optional[List[str]]) -> List[str]:
+    cn_symbols = [str(symbol) for symbol in symbols or [] if re.fullmatch(r"\d{6}", str(symbol))]
+    return cn_symbols or list(DEFAULT_A_SHARE_SYMBOLS)

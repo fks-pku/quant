@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from quant.domain.ports.research_store import ResearchStore
-from quant.features.research.models import RawStrategy, EvaluationReport, StrategySpec
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, RawStrategy, EvaluationReport, StrategySpec
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class StrategyIntegrator:
         spec: Optional[StrategySpec] = None,
     ) -> str:
         class_name = self._to_class_name(raw.title)
-        default_symbols = list(getattr(spec, "universe", []) or report.recommended_symbols or ["AAPL"])
+        default_symbols = _a_share_symbols(getattr(spec, "universe", []) or report.recommended_symbols)
         symbols_str = ", ".join(f'"{s}"' for s in default_symbols)
         lookback = int(getattr(spec, "lookback_days", 20) or 20)
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
@@ -282,7 +282,7 @@ class {class_name}(DailyBarStrategy):
 
     def _generate_config(self, raw: RawStrategy, report: EvaluationReport, spec: Optional[StrategySpec] = None) -> str:
         strategy_id = self._strategy_id(raw, spec)
-        symbols = list(getattr(spec, "universe", []) or report.recommended_symbols or ["AAPL"])
+        symbols = _a_share_symbols(getattr(spec, "universe", []) or report.recommended_symbols)
         symbols_text = ", ".join(symbols)
         lookback = int(getattr(spec, "lookback_days", 20) or 20)
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
@@ -368,3 +368,8 @@ parameters:
             self._on_register(class_name, entry)
         logger.info(f"Registered candidate strategy {strategy_id}")
         return entry
+
+
+def _a_share_symbols(symbols) -> list[str]:
+    resolved = [str(symbol) for symbol in symbols or [] if re.fullmatch(r"\d{6}", str(symbol))]
+    return resolved or list(DEFAULT_A_SHARE_SYMBOLS)

@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
+
+
+_REPORT_TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "var"
+    / "research"
+    / "report_templates"
+    / "full_research_report_template.html"
+)
+_FALLBACK_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent / "golden_reports" / "full_research_report_template.html"
 
 
 def build_full_research_report_html(
@@ -14,94 +25,83 @@ def build_full_research_report_html(
     rows = list(hypotheses or [])
     generated = generated_at or datetime.now(timezone.utc).isoformat()
     run_id = str(data.get("run_id") or "research_pipeline")
+    report_title = _report_title(rows)
     body = [
         '<section class="hero">',
         '<p class="eyebrow">Two-Stage Quant Research Pipeline</p>',
-        "<h1>完整研究报告</h1>",
-        f"<p>生成时间 {escape(generated)}，Run ID <code>{escape(run_id)}</code>。本报告固定采用 8 章中文格式：结论、来源、信号、数据与 benchmark、信号验证、策略回测、purged walk-forward、最终推荐。</p>",
+        f"<h1>{escape(report_title)}</h1>",
+        f"<p>生成时间 {escape(generated)}，Run ID <code>{escape(run_id)}</code>。本报告按 <code>quant/infrastructure/var/research/report_templates/full_research_report_template.html</code> 渲染，区分 idea 初筛、信号验证、组合诊断、严格 Backtester、purged walk-forward 和最终 Go / No-Go。</p>",
+        '<div class="template-note">模板字段已替换为本次研究的实际数据；报告不得保留方括号占位符，也不得用轻量组合诊断替代正式结论。</div>',
         "</section>",
         '<section class="panel">',
         "<h2>1. 结论汇总</h2>",
+        _report_metric_grid(rows, generated),
         "<h3>一句话结论</h3>",
-        _conclusion_summary(data, rows),
-        _summary_table(data),
+        _conclusion_paragraph(data, rows),
+        _judgement_table(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>2. idea 来源与初筛</h2>",
-        "<p>本章对应 Stage 1：从 arXiv / SSRN / NBER / blog 等来源搜集多个 idea，先做来源质量评分，再以 admission_score 为准判断是否进入正式研究队列。</p>",
-        _idea_discovery_table(rows),
+        "<p>本节回答：这个 idea 从哪里来，是否足够可信，为什么值得进入正式研究。第一阶段只做搜集、来源质量评分、admission 评估和 StrategySpec 草拟，不跑正式验证。</p>",
+        _idea_source_overview_table(rows),
         "<h3>来源质量与准入评分</h3>",
-        _admission_table(rows),
+        _source_quality_score_table(data, rows),
         "<h3>初筛风险旗标</h3>",
         _risk_flags_list(rows),
         "</section>",
         '<section class="panel">',
         "<h2>3. 信号定义</h2>",
-        "<p>通过初筛的 idea 必须被翻译成可执行 StrategySpec：信号公式、方向、lookback、holding horizon、调仓频率、universe、字段需求和验证清单必须明确。</p>",
-        _spec_table(rows),
+        "<p>本节必须把 idea 翻译成可审计的 StrategySpec。这里要足够详细，让别人不读代码也能复现信号方向和调仓逻辑。</p>",
+        _strategy_spec_contract_table(rows),
         "<h3>信号公式</h3>",
-        _signal_definition_detail(rows),
+        _formula_block(rows),
         "<h3>交易解释</h3>",
-        _signal_implementation_checks(rows),
+        _trade_explanation_list(rows),
         "</section>",
         '<section class="panel">',
         "<h2>4. 数据来源及 benchmark 定义</h2>",
-        "<p>研究判断逻辑统一使用 DuckDB <code>daily_cn</code> 中的后复权价格：优先 <code>adj_*</code>，缺失时才使用 raw price × <code>adj_factor</code>。A 股默认 benchmark 是 <code>000300</code> 沪深 300（000300 CSI 300 index）；只有 DB 缺失 000300 时才 fallback 到 <code>510300</code>。</p>",
-        _data_benchmark_definition(rows),
-        _benchmark_table(rows),
+        "<p>本节回答：用了什么数据、覆盖期是什么、后复权处理是否严格、benchmark 是否为 A 股默认的沪深 300。</p>",
+        _data_source_contract_table(data, rows),
         "<h3>数据质量检查</h3>",
-        _data_quality_checks(rows),
+        _data_quality_contract_list(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>5. 信号验证</h2>",
-        "<p>本章只回答信号本身是否有研究价值，重点看 rank IC、ICIR、FDR、hit rate、IC decay、OOS 稳定性。这里的 long-short 只允许作为 alpha 诊断，不允许作为 A 股可部署组合。</p>",
-        _signal_validation_table(rows),
-        _signal_validation_judgement(rows),
-        _signal_validation_metric_explanations(),
+        "<p>本节验证信号本身是否有统计研究价值，不等同于正式回测。核心是横截面预测能力、稳健性、显著性和方向一致性。</p>",
+        _signal_validation_contract_table(data, rows),
         "<h3>组合诊断</h3>",
-        _portfolio_diagnostics_table(rows),
+        _portfolio_diagnostics_contract_table(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>6. 策略回测报告</h2>",
-        "<p>Strict framework backtest report：正式结论必须来自项目 Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio，并纳入 T+1、手续费、滑点、A 股 100 股手数、涨跌停拒单、成交量限制、风险约束和交易产物。</p>",
+        "<p>正式结论必须来自项目 Backtester：<code>Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio</code>。本节回答真实交易约束下策略是否仍成立。</p>",
         "<h3>回测配置</h3>",
-        _backtest_requirements_table(),
+        _backtest_config_contract_table(data, rows),
         "<h3>核心绩效</h3>",
-        _strict_backtest_table(rows),
-        _backtest_return_risk_table(rows),
-        _backtest_stat_benchmark_table(rows),
-        _yearly_returns_table(rows),
+        _core_performance_contract_table(data, rows),
         "<h3>成交与成本诊断</h3>",
-        _backtest_trade_cost_constraints_table(rows),
+        _trade_cost_contract_table(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>7. purged walk-forward</h2>",
-        "<p>本章用于检查样本外稳定性、Sharpe 衰减、最差 OOS split、盈利 split 占比和 deflated Sharpe ratio。通过信号验证并不等于通过 purged walk-forward。</p>",
+        "<p>Purged walk-forward 用来检查参数和信号是否在滚动样本外稳定。这里的“训练”不是机器学习训练的必要含义，而是指每个窗口内用于确定参数、阈值或组合规则的历史区间；即使策略没有 ML，也要防止未来信息泄露。</p>",
         "<h3>方法设置</h3>",
-        _walkforward_methodology(),
+        _walkforward_methodology_contract_table(rows),
         "<h3>结果摘要</h3>",
-        _walkforward_table(data),
-        _walkforward_metric_explanations(),
+        _walkforward_summary_contract_table(data),
         "<h3>Split 明细</h3>",
-        _walkforward_detail_table(data),
+        _walkforward_split_contract_table(data),
         "</section>",
         '<section class="panel">',
         "<h2>8. 最终推荐与下一步计划</h2>",
-        "<h3>推荐理由</h3>",
-        _go_no_go(rows),
+        _decision_contract(data, rows),
         "<h3>下一步计划</h3>",
-        _next_steps_list(rows),
+        _next_steps_contract_table(rows),
         "<h3>产物链接</h3>",
         _artifact_links(rows),
-        "<details><summary>审计 Ledger</summary>",
-        _ledger_html(rows),
-        "</details>",
-        "<details><summary>Pipeline Log</summary>",
-        _log_table(data.get("log") or []),
-        "</details>",
         "</section>",
     ]
-    return _html_document("完整研究报告", "\n".join(body))
+    return _html_document(report_title, "\n".join(body))
 
 
 def build_full_research_report_index(
@@ -139,6 +139,822 @@ def build_full_research_report(
     return build_full_research_report_html(result, hypotheses, generated_at=generated_at)
 
 
+def _report_title(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    title = str(row.get("title") or "").strip()
+    strategy_id = _row_strategy_id(row)
+    subject = title or strategy_id or "策略"
+    return f"{subject} 完整策略研究报告"
+
+
+def _primary_row(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not rows:
+        return {}
+    return sorted(rows, key=_ledger_sort_key)[0]
+
+
+def _row_strategy_id(row: Dict[str, Any]) -> str:
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    return str(row.get("strategy_id") or spec.get("strategy_id") or "not_integrated")
+
+
+def _report_status(rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "no_hypothesis"
+    return str(_primary_row(rows).get("status") or "needs_more_validation")
+
+
+def _report_date(generated: str) -> str:
+    try:
+        return datetime.fromisoformat(generated.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return generated[:10] if generated else datetime.now(timezone.utc).date().isoformat()
+
+
+def _report_benchmark(row: Dict[str, Any]) -> str:
+    metrics = row.get("metrics") or {}
+    strict = metrics.get("strict_backtest") or {}
+    benchmark = strict.get("benchmark") or {}
+    diag = metrics.get("portfolio_diagnostics") or {}
+    return str(benchmark.get("symbol") or diag.get("benchmark_symbol") or "000300")
+
+
+def _badge(label: str, klass: str) -> str:
+    return f'<span class="badge {escape(klass)}">{escape(label)}</span>'
+
+
+def _report_metric_grid(rows: List[Dict[str, Any]], generated: str) -> str:
+    row = _primary_row(rows)
+    items = [
+        ("最终状态", _report_status(rows)),
+        ("研究对象", _row_strategy_id(row)),
+        ("Benchmark", _report_benchmark(row)),
+        ("报告日期", _report_date(generated)),
+    ]
+    cells = "".join(
+        f'<div class="metric"><span>{escape(label)}</span><b>{escape(value)}</b></div>'
+        for label, value in items
+    )
+    return f'<div class="grid">{cells}</div>'
+
+
+def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>本次运行没有形成可审计的 hypothesis 记录，因此不能给出策略推荐。</p>"
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    strict_metrics = strict.get("metrics") or {}
+    wf_scores, wf_reason, wf_verdict = _walkforward_scores(data)
+    status = str(row.get("status") or "needs_more_validation")
+    strategy_id = _row_strategy_id(row)
+    rank_ic = _fmt(metrics.get("rank_ic"))
+    fdr = _fmt(metrics.get("fdr_adjusted_p"))
+    sharpe = _fmt(strict_metrics.get("sharpe"))
+    cagr = _pct(strict_metrics.get("cagr"))
+    aggregate = _fmt(wf_scores.get("aggregate_oos_sharpe"))
+    worst = _fmt(wf_scores.get("worst_oos_sharpe"))
+    if status == "rejected":
+        if _signal_badge_class(metrics) == "fail":
+            text = (
+                f"{strategy_id} 未通过真实 A 股 HFQ 信号验证，Rank IC={rank_ic}、FDR={fdr}。"
+                "流水线按规则在 Stage 2 停止，未继续执行策略集成、严格 Backtester 或 purged walk-forward。"
+                "最终结论是不进入候选池或 paper trading，仅作为研究产物归档。"
+            )
+        else:
+            text = (
+                f"{strategy_id} 的信号验证具备统计证据，Rank IC={rank_ic}、FDR={fdr}；"
+                f"但严格回测仅 Sharpe={sharpe}、CAGR={cagr}，purged walk-forward 未通过，"
+                f"aggregate OOS Sharpe={aggregate}、worst OOS Sharpe={worst}。"
+                "最终结论是不进入候选池或 paper trading，仅作为研究产物归档。"
+            )
+    elif status in {"candidate", "paper_trading_candidate"}:
+        text = (
+            f"{strategy_id} 当前状态为 {status}，已完成信号验证、严格回测和样本外稳定性审查。"
+            "进入下一阶段前仍需人工复核容量、组合相关性、风控预算和实盘执行细节。"
+        )
+    else:
+        text = (
+            f"{strategy_id} 当前状态为 {status}，尚不足以进入 paper trading。"
+            f"需要补齐最弱环节：{wf_reason or wf_verdict or '样本外稳定性、成本或容量验证'}。"
+        )
+    return f"<p>{escape(text)}</p>"
+
+
+def _judgement_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    strict_metrics = strict.get("metrics") or {}
+    wf_scores, wf_reason, _ = _walkforward_scores(data)
+    signal_class = _signal_badge_class(metrics)
+    strict_class = _strict_badge_class(strict_metrics)
+    walk_class = _walkforward_badge_class(wf_scores)
+    deploy_class = _status_badge_class(_report_status(rows))
+    body = [
+        "<tr><td>信号验证</td>"
+        + f"<td>{_badge(signal_class, signal_class)}</td>"
+        + f"<td>{escape(_signal_validation_summary(metrics))}</td></tr>",
+        "<tr><td>严格回测</td>"
+        + f"<td>{_badge(strict_class, strict_class)}</td>"
+        + f"<td>{escape(_strict_backtest_summary(strict_metrics))}</td></tr>",
+        "<tr><td>Walk-forward</td>"
+        + f"<td>{_badge(walk_class, walk_class)}</td>"
+        + f"<td>{escape(_walkforward_summary_sentence(wf_scores, wf_reason))}</td></tr>",
+        "<tr><td>部署建议</td>"
+        + f"<td>{_badge(_report_status(rows), deploy_class)}</td>"
+        + f"<td>{escape(_deployment_summary(row))}</td></tr>",
+    ]
+    return _table(["判断项", "结果", "解释"], body)
+
+
+def _idea_source_overview_table(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    if not row:
+        return "<p>本次没有搜集到策略 idea。</p>"
+    evidence = row.get("evidence") or {}
+    metadata = evidence.get("metadata") or {}
+    authors = evidence.get("authors") or metadata.get("authors") or row.get("authors") or "未记录"
+    body = [
+        f"<tr><td>标题</td><td>{escape(str(row.get('title') or '未命名 idea'))}</td><td>必须写完整标题</td></tr>",
+        f"<tr><td>来源</td><td>{_source_link(row)}</td><td>必须附 URL</td></tr>",
+        f"<tr><td>发布时间</td><td>{escape(str(evidence.get('published_date') or '未记录'))}</td><td>用于判断 post-publication 风险</td></tr>",
+        f"<tr><td>作者/机构</td><td>{escape(_join_text(authors))}</td><td>用于来源可信度审计</td></tr>",
+        f"<tr><td>核心假设</td><td>{escape(str(row.get('thesis') or _decision_reason(row)))}</td><td>不能只写“可能赚钱”</td></tr>",
+    ]
+    return _table(["字段", "内容", "要求"], body)
+
+
+def _source_quality_score_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    if not row:
+        return "<p>本次没有写入准入评估记录。</p>"
+    evidence = row.get("evidence") or {}
+    quality = evidence.get("discovery_quality") or {}
+    metrics = row.get("metrics") or {}
+    score_rows = [
+        ("source_quality", _first_present(quality, "source_quality_score", "source_quality"), "来源是否可信、是否有正式论文或可复现材料"),
+        ("recency", _first_present(quality, "recency_score", "recency"), "发布时间与当前研究窗口的关系"),
+        ("formula_clarity", _first_present(quality, "detail_score", "formula_clarity_score", "formula_clarity"), "是否有明确公式、排序方向、持有期"),
+        ("daily_feasibility", _first_present(quality, "daily_data_score", "daily_feasibility_score", "daily_feasibility"), "是否可以用日线 OHLCV / 可得字段实现"),
+        ("A 股适配性", _first_present(metrics, "data_availability_score", "cost_capacity_score", "implementation_score"), "是否适合 A 股 long-only、T+1、涨跌停和流动性约束"),
+        ("admission_score", _stage1_score(data, "admission", metrics.get("admission_score")), "低于阈值不得进入正式研究"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(_fmt(value))}</td><td>{escape(note)}</td></tr>"
+        for label, value, note in score_rows
+    )
+    return '<div class="table-wrap"><table><thead><tr><th>维度</th><th>分数</th><th>解释</th></tr></thead><tbody>' + body + "</tbody></table></div>"
+
+
+def _strategy_spec_contract_table(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    if not spec:
+        return "<p>本次没有生成 ready 状态的 StrategySpec。</p>"
+    rows_data = [
+        ("strategy_id", _row_strategy_id(row), "策略目录、候选池、报告归档的主键"),
+        ("signal_formula_key", spec.get("signal_formula_key"), "对应验证器和策略实现中的公式"),
+        ("prediction_direction", _prediction_direction(row), "必须与 IC 符号一致"),
+        ("lookback_days", spec.get("lookback_days"), "历史窗口"),
+        ("horizon_days", spec.get("horizon_days"), "预测和持有期"),
+        ("rebalance_frequency", spec.get("rebalance_frequency") or "daily", "影响换手和成本"),
+        ("universe", _universe_summary(row), "A 股默认 long-only；报告显示验证器解析后的真实 universe"),
+        ("required_fields", _join_text(spec.get("required_fields") or []), "缺字段不得静默通过"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(field)}</td><td>{escape(_cell(value))}</td><td>{escape(note)}</td></tr>"
+        for field, value, note in rows_data
+    )
+    return _table(["StrategySpec 字段", "取值", "说明"], body)
+
+
+def _formula_block(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    lookback = spec.get("lookback_days") or 20
+    horizon = spec.get("horizon_days") or 5
+    formula = str(spec.get("signal_formula_key") or "")
+    if "mean_reversion" in formula or "reversal" in formula:
+        lines = [
+            f"ma_i,t = mean(adj_close_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback} ... adj_close_i,t)",
+            "raw_reversal_i,t = (ma_i,t - adj_close_i,t) / ma_i,t",
+            "industry_momentum_i,t = mean(industry_return_i,t-lookback ... industry_return_i,t)",
+            "signal_i,t = raw_reversal_i,t with industry momentum hedge and cross-sectional winsorization",
+            "rank_i,t = cross_sectional_rank(signal_i,t)",
+            "target_i,t+1 = top_bucket(rank_i,t), long-only only",
+            f"forward_return_i,t+{horizon} = adj_close_i,t+{horizon} / adj_close_i,t+1 - 1",
+        ]
+    else:
+        lines = [
+            f"signal_i,t = {formula or 'StrategySpec declared signal'}",
+            "rank_i,t = cross_sectional_rank(signal_i,t)",
+            "target_i,t+1 = top_bucket(rank_i,t), long-only only",
+            f"forward_return_i,t+{horizon} = adj_close_i,t+{horizon} / adj_close_i,t+1 - 1",
+        ]
+    return f'<div class="formula">{escape(chr(10).join(lines))}</div>'
+
+
+def _trade_explanation_list(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    lookback = spec.get("lookback_days") or "StrategySpec"
+    horizon = spec.get("horizon_days") or "StrategySpec"
+    lag = spec.get("execution_lag_days") or 1
+    items = [
+        "判断逻辑使用后复权价格：优先 adj_close / adj_open / adj_high / adj_low，缺失时才用 raw price * adj_factor。",
+        "A 股不允许 long-short 作为可部署组合；long-short 只能作为 alpha 诊断表。",
+        f"信号使用 lookback={lookback} 个交易日、horizon={horizon} 个交易日，信号日和成交日保留至少 {lag} 个交易日延迟以避免 look-ahead。",
+    ]
+    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>"
+
+
+def _data_source_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    benchmark = strict.get("benchmark") or {}
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    data_start, data_end = _data_coverage(metrics, strict)
+    n_obs = metrics.get("n_observations") or "未记录"
+    data_rows = metrics.get("data_rows") or "未记录"
+    benchmark_symbol = benchmark.get("symbol") or _report_benchmark(row)
+    fallback_used = bool(benchmark.get("fallback_used", False))
+    fallback_note = "未使用；000300 已可用" if not fallback_used else "已使用；需说明 000300 缺失原因"
+    body = [
+        f"<tr><td>行情表</td><td>DuckDB <code>daily_cn</code></td><td>{escape(str(data_start))} - {escape(str(data_end))}, {escape(str(data_rows))} symbol-date rows, {escape(str(n_obs))} valid IC dates</td></tr>",
+        "<tr><td>价格口径</td><td>HFQ 后复权</td><td>优先 adj_*；缺失时 raw price * adj_factor，不允许静默切换</td></tr>",
+        f"<tr><td>Universe</td><td>{escape(_universe_summary(row))}</td><td>当前报告按 A 股 long-only 约束审计；PIT 成分股限制需在后续增强</td></tr>",
+        f"<tr><td>Benchmark</td><td>{escape(str(benchmark_symbol))} 沪深 300</td><td>{escape(str(benchmark.get('coverage_start') or '未记录'))} - {escape(str(benchmark.get('coverage_end') or '未记录'))}, {escape(str(benchmark.get('rows') or '未记录'))} rows</td></tr>",
+        f"<tr><td>Fallback</td><td>510300</td><td>{escape(fallback_note)}</td></tr>",
+    ]
+    return _table(["项目", "定义", "覆盖/备注"], body)
+
+
+def _data_quality_contract_list(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    benchmark = (strict.get("benchmark") or {}) if strict else {}
+    data_start, data_end = _data_coverage(metrics, strict)
+    data_symbol_count = metrics.get("data_symbol_count") or "未记录"
+    items = [
+        f"数据覆盖 {data_start} 至 {data_end}，验证器实际读取 {data_symbol_count} 个 A 股 symbol，信号验证有效截面日期 {metrics.get('n_observations') or '未记录'}；停牌、成交量为 0 和异常价格由数据提供层过滤或在诊断中暴露。",
+        "信号日、成交日和 forward return 使用 execution lag / holding horizon 边界，避免训练、验证和成交之间的信息重叠。",
+        f"benchmark={benchmark.get('symbol') or _report_benchmark(row)}，覆盖 {benchmark.get('coverage_start') or '未记录'} 至 {benchmark.get('coverage_end') or '未记录'}；当前报告未使用点时成分股数据，需在候选池阶段继续补强 survivorship 审计。",
+    ]
+    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>"
+
+
+def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    wf_scores, _, _ = _walkforward_scores(data)
+    rows_data = [
+        ("Rank IC", _fmt(metrics.get("rank_ic")), "横截面秩相关；正负号必须与预测方向一致"),
+        ("ICIR", _fmt(metrics.get("rank_ic_ir")), "IC 均值 / IC 波动，衡量稳定性"),
+        ("t-stat", _fmt(metrics.get("t_stat") or metrics.get("fama_macbeth_tstat")), "统计显著性"),
+        ("p-value", _fmt(metrics.get("p_value")), "单信号显著性"),
+        ("FDR adjusted p", _fmt(metrics.get("fdr_adjusted_p")), "多重检验控制；不过则不能给强结论"),
+        ("Hit rate", _pct(metrics.get("hit_rate")), "预测方向命中率"),
+        ("IC decay", _format_decay(metrics.get("ic_decay")), "看 alpha 半衰期与持有期是否匹配"),
+        ("Fama-MacBeth t-stat", _fmt(metrics.get("fama_macbeth_tstat")), "横截面回归显著性"),
+        ("Factor exposure", _factor_exposure_text(metrics), "是否只是已知风险因子暴露"),
+        ("OOS validation", _signal_oos_text(metrics, wf_scores), "滚动样本外是否保持方向和显著性"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(note)}</td></tr>"
+        for metric, value, note in rows_data
+    )
+    return _table(["Metric", "数值", "阈值/解释"], body)
+
+
+def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    diag = metrics.get("portfolio_diagnostics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    strict_metrics = strict.get("metrics") or {}
+    benchmark = strict.get("benchmark") or {}
+    rows_data = [
+        (
+            "Top bucket long-only",
+            _pct(diag.get("top_bucket_annualized_return")),
+            _fmt(strict_metrics.get("sharpe")),
+            _pct(strict_metrics.get("max_drawdown_pct")),
+            _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
+            _pct(diag.get("top_bucket_after_cost_mean_return")),
+            "A 股可交易方向诊断",
+        ),
+        (
+            f"Top vs {benchmark.get('symbol') or _report_benchmark(row)} excess",
+            _pct(diag.get("benchmark_excess_annualized_return")),
+            _fmt(benchmark.get("information_ratio")),
+            _pct(diag.get("benchmark_excess_max_drawdown")),
+            _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
+            _pct(diag.get("benchmark_excess_after_cost_mean_return")),
+            "相对沪深 300 诊断",
+        ),
+        (
+            "Long-short diagnostic",
+            _pct(metrics.get("long_short_spread")),
+            _fmt(metrics.get("long_short_sharpe")),
+            _pct(metrics.get("long_short_max_drawdown")),
+            _fmt(metrics.get("long_short_turnover")),
+            _pct(metrics.get("long_short_after_cost_mean_return") or metrics.get("long_short_spread")),
+            "仅 alpha 诊断，不可部署",
+        ),
+    ]
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(name)}</td><td>{escape(ann)}</td><td>{escape(sharpe)}</td><td>{escape(maxdd)}</td>"
+        + f"<td>{escape(turnover)}</td><td>{escape(after_cost)}</td><td>{escape(use)}</td></tr>"
+        for name, ann, sharpe, maxdd, turnover, after_cost, use in rows_data
+    )
+    return _table(["组合", "年化", "Sharpe", "MaxDD", "换手", "成本后表现", "用途"], body)
+
+
+def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["项目", "取值", "说明"],
+            "本轮未运行严格 Backtester",
+            "信号验证失败后流水线停止；不得展示历史残留回测指标作为本轮结论。",
+        )
+    constraints = strict.get("constraints") or {}
+    rows_data = [
+        ("回测区间", strict.get("period") or "未记录", "必须与数据覆盖一致"),
+        ("初始资金", strict.get("initial_cash") or metrics.get("initial_cash") or "500000 CNY", "A 股示例默认 500000 CNY"),
+        ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
+        ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
+        ("佣金", _commission_text(constraints.get("commission")), "含最低佣金、印花税等"),
+        ("T+1", "启用" if constraints.get("t_plus_1", True) else "未启用", "当日买入不可卖出"),
+        ("100 股手数", "启用" if constraints.get("cn_lot_size", 100) else "未启用", "A 股下单约束"),
+        ("成交量限制", str(constraints.get("volume_limit") or "Backtester diagnostics"), "记录 volume_limited_trades"),
+        ("涨跌停拒单", str(constraints.get("price_limits") or "启用"), "记录 limit_rejected_orders"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(_cell(value))}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["项目", "取值", "说明"], body)
+
+
+def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["Metric", "策略", "000300", "超额/说明"],
+            "本轮未运行严格 Backtester",
+            "信号验证失败，未进入可比较的成本后回测阶段。",
+        )
+    metrics = strict.get("metrics") or {}
+    benchmark = strict.get("benchmark") or {}
+    rows_data = [
+        ("CAGR", _pct(metrics.get("cagr")), _pct(benchmark.get("benchmark_cagr")), _pct(benchmark.get("alpha"))),
+        ("Total Return", _pct(metrics.get("total_return")), _pct(benchmark.get("benchmark_return")), _pct(_excess(metrics.get("total_return"), benchmark.get("benchmark_return")))),
+        ("Sharpe", _fmt(metrics.get("sharpe")), _fmt(benchmark.get("benchmark_sharpe")), "必须成本后"),
+        ("Sortino", _fmt(metrics.get("sortino")), _fmt(benchmark.get("benchmark_sortino")), "下行风险调整"),
+        ("Max Drawdown", _pct(metrics.get("max_drawdown_pct")), _pct(benchmark.get("benchmark_max_drawdown_pct")), "风险底线"),
+        ("Win Rate", _pct(metrics.get("win_rate")), "-", "按交易统计"),
+        ("Profit Factor", _fmt(metrics.get("profit_factor")), "-", "总盈利 / 总亏损"),
+        ("Total Trades", str(metrics.get("total_trades") or "n/a"), "-", "含拒单和成交诊断"),
+        ("Information Ratio", _fmt(benchmark.get("information_ratio")), "-", "相对 000300"),
+        ("Beta / Alpha", f"{_fmt(benchmark.get('beta'))} / {_pct(benchmark.get('alpha'))}", "-", "基准归因"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(metric)}</td><td>{escape(strategy)}</td><td>{escape(bench)}</td><td>{escape(note)}</td></tr>"
+        for metric, strategy, bench, note in rows_data
+    )
+    return _table(["Metric", "策略", "000300", "超额/说明"], body)
+
+
+def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "本轮未运行交易成本诊断",
+            "信号验证失败，未生成成交、拒单、手续费或容量诊断。",
+        )
+    diagnostics = strict.get("diagnostics") or {}
+    rows_data = [
+        ("total_commission", _fmt(diagnostics.get("total_commission")), "总交易成本"),
+        ("cost_drag_pct", _pct(_cost_drag_value(diagnostics)), "成本拖累"),
+        ("lot_adjusted_trades", str(diagnostics.get("lot_adjusted_trades") or 0), "因 100 股手数调整的交易"),
+        ("t1_rejected_sells", str(diagnostics.get("t1_rejected_sells") or 0), "T+1 拒绝卖出"),
+        ("limit_rejected_orders", str(diagnostics.get("limit_rejected_orders") or 0), "涨跌停拒单"),
+        ("volume_limited_trades", str(diagnostics.get("volume_limited_trades") or 0), "成交量限制"),
+        ("risk_skipped_orders", str(diagnostics.get("risk_skipped_orders") or 0), "风控跳过订单"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _walkforward_methodology_contract_table(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    horizon = spec.get("horizon_days") or 5
+    lookback = spec.get("lookback_days") or 20
+    rows_data = [
+        ("train_window", "126 trading days", "用于参数/阈值确认"),
+        ("test_window", "21 trading days", "样本外测试区间"),
+        ("step", "21 trading days", "滚动步长"),
+        ("purge_gap", f"{horizon} trading days", "训练和测试之间剔除重叠信息"),
+        ("parameter_grid", f"lookback={lookback}; horizon={horizon}; frozen parameters", "若无参数优化，写明 frozen parameters"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["项目", "取值", "解释"], body)
+
+
+def _walkforward_summary_contract_table(data: Dict[str, Any]) -> str:
+    scores, reason, _ = _walkforward_scores(data)
+    rows_data = [
+        ("aggregate_oos_sharpe", _fmt(scores.get("aggregate_oos_sharpe")), "所有 OOS split 聚合表现"),
+        ("worst_oos_sharpe", _fmt(scores.get("worst_oos_sharpe")), "最差样本外窗口"),
+        ("pct_profitable_splits", _pct(scores.get("pct_profitable_splits")), "赚钱 split 占比"),
+        ("deflated_sharpe_ratio", _fmt(scores.get("deflated_sharpe_ratio")), "调整多重试验后的 Sharpe 可靠性"),
+        ("regime_breakdown", _cell(scores.get("regime_breakdown") or reason or "未保存分 regime 明细"), "分市场状态稳定性"),
+        ("capacity_viability", _cell(scores.get("capacity_viability") or "未通过 Go / No-Go，容量阶段未开启"), "容量和冲击成本是否可接受"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(note)}</td></tr>"
+        for metric, value, note in rows_data
+    )
+    return _table(["Metric", "数值", "解释"], body)
+
+
+def _walkforward_split_contract_table(data: Dict[str, Any]) -> str:
+    detail = data.get("walkforward_detail") or data.get("oos") or {}
+    split_rows = []
+    if isinstance(detail, dict):
+        raw_splits = detail.get("splits") or detail.get("split_results") or []
+        if isinstance(raw_splits, list):
+            for idx, split in enumerate(raw_splits[:12], start=1):
+                if not isinstance(split, dict):
+                    continue
+                split_rows.append(
+                    (
+                        str(split.get("split") or idx),
+                        _range_text(split, "train_start", "train_end"),
+                        _range_text(split, "test_start", "test_end"),
+                        _cell(split.get("params") or split.get("parameters") or "frozen parameters"),
+                        _fmt(split.get("oos_sharpe") or split.get("sharpe")),
+                        _pct(split.get("max_drawdown") or split.get("maxdd")),
+                        _pct(split.get("turnover")),
+                        _split_verdict(split),
+                    )
+                )
+    if not split_rows:
+        scores, reason, verdict = _walkforward_scores(data)
+        split_rows = [
+            (
+                "汇总",
+                "rolling train windows",
+                "rolling OOS windows",
+                "frozen parameters",
+                _fmt(scores.get("aggregate_oos_sharpe")),
+                "n/a",
+                "n/a",
+                verdict or ("fail" if _walkforward_badge_class(scores) == "fail" else "pass"),
+            )
+        ]
+        if reason:
+            split_rows.append(("原因", "n/a", "n/a", reason, _fmt(scores.get("worst_oos_sharpe")), "n/a", "n/a", "fail"))
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(split)}</td><td>{escape(train)}</td><td>{escape(test)}</td><td>{escape(params)}</td>"
+        + f"<td>{escape(sharpe)}</td><td>{escape(maxdd)}</td><td>{escape(turnover)}</td><td>{escape(result)}</td></tr>"
+        for split, train, test, params, sharpe, maxdd, turnover, result in split_rows
+    )
+    return _table(["Split", "Train", "Test", "参数", "OOS Sharpe", "MaxDD", "Turnover", "结论"], body)
+
+
+def _decision_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    status = _report_status(rows)
+    klass = _status_badge_class(status)
+    reasons = _decision_reasons(data, row)
+    return (
+        '<div class="decision">'
+        '<div class="decision-mark">'
+        f'{_badge("Go / No-Go", klass)}'
+        f"<b>{escape(status)}</b>"
+        "</div>"
+        "<div><h3>推荐理由</h3><ul>"
+        + "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
+        + "</ul></div></div>"
+    )
+
+
+def _next_steps_contract_table(rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strategy_id = _row_strategy_id(row)
+    status = _report_status(rows)
+    if status == "rejected":
+        rows_data = [
+            ("P0", "拒绝归档", "候选池状态保持 rejected，报告和审计 ledger 可追溯", f"quant/infrastructure/var/research/reports/{strategy_id}/"),
+            ("P1", "若重启研究，补充独立 OOS、行业分类和容量约束", "walk-forward aggregate Sharpe 转正且最差 split 不崩", "quant/features/research/rigor/"),
+            ("P2", "候选池维护", "策略代码保持 candidate/inactive，不进入 paper trading", f"quant/features/strategies/{strategy_id}/"),
+        ]
+    else:
+        rows_data = [
+            ("P0", "人工复核信号和回测配置", "公式方向、复权、成本和 benchmark 均被复核", f"quant/features/strategies/{strategy_id}/"),
+            ("P1", "扩大 OOS、容量分析和因子暴露", "通过 walk-forward、容量和风险因子阈值", "quant/features/research/validation/"),
+            ("P2", "paper trading 观察", "观察期、风险预算和停机规则明确", "quant/api/ 与 quant/frontend/"),
+        ]
+    body = "".join(
+        f"<tr><td>{escape(priority)}</td><td>{escape(task)}</td><td>{escape(criteria)}</td><td>{escape(owner)}</td></tr>"
+        for priority, task, criteria, owner in rows_data
+    )
+    return _table(["优先级", "任务", "验收标准", "负责人/入口"], body)
+
+
+def _template_style() -> str:
+    for path in (_REPORT_TEMPLATE_PATH, _FALLBACK_REPORT_TEMPLATE_PATH):
+        try:
+            html = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        start = html.find("<style>")
+        end = html.find("</style>", start)
+        if start >= 0 and end > start:
+            return html[start + len("<style>") : end].strip()
+    return (
+        ":root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}"
+    )
+
+
+def _strict_backtest_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
+    if int(data.get("backtested", 0) or 0) <= 0:
+        return {}
+    return (row.get("metrics") or {}).get("strict_backtest") or {}
+
+
+def _not_run_table(headers: List[str], item: str, reason: str) -> str:
+    body = "<tr>" + "".join(f"<td>{escape(value)}</td>" for value in (item, "not_run", reason)[: len(headers)]) + "</tr>"
+    while body.count("<td>") < len(headers):
+        body = body.replace("</tr>", "<td>n/a</td></tr>")
+    return _table(headers, [body])
+
+
+def _stage1_score(data: Dict[str, Any], key: str, fallback: Any) -> Any:
+    for entry in data.get("log") or []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("phase")) != "stage1_spec":
+            continue
+        scores = entry.get("scores") or {}
+        if key in scores:
+            return scores.get(key)
+    return fallback
+
+
+def _first_present(mapping: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _join_text(value: Any) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return "; ".join(f"{key}={val}" for key, val in value.items())
+    return str(value)
+
+
+def _prediction_direction(row: Dict[str, Any]) -> str:
+    metrics = row.get("metrics") or {}
+    rank_ic = _safe_float(metrics.get("rank_ic"))
+    if rank_ic is not None and rank_ic < 0:
+        return "lower_is_better / inverse"
+    return "higher_is_better"
+
+
+def _data_coverage(metrics: Dict[str, Any], strict: Dict[str, Any]) -> tuple[str, str]:
+    period = str(strict.get("period") or "")
+    start = str(metrics.get("data_start") or "")
+    end = str(metrics.get("data_end") or "")
+    if period and " to " in period:
+        left, right = period.split(" to ", 1)
+        start = start or left
+        end = end or right
+    return start or "未记录", end or "未记录"
+
+
+def _universe_summary(row: Dict[str, Any]) -> str:
+    metrics = row.get("metrics") or {}
+    evidence = row.get("evidence") or {}
+    spec = evidence.get("strategy_spec") or {}
+    size = _safe_int(metrics.get("universe_size"))
+    data_symbol_count = _safe_int(metrics.get("data_symbol_count"))
+    sample = list(metrics.get("universe_sample") or [])
+    source = str(metrics.get("universe_source") or "")
+    if size and size > len(spec.get("universe") or []):
+        sample_text = ", ".join(str(symbol) for symbol in sample[:8])
+        actual = f"，实际取数 {data_symbol_count} 个 symbol" if data_symbol_count else ""
+        suffix = f"；样例：{sample_text}" if sample_text else ""
+        source_text = f"，来源：{source}" if source else ""
+        return f"全 A 股 daily_cn universe（解析 {size} 个 symbol{actual}{source_text}{suffix}）"
+    return _join_text(spec.get("universe") or "CN A-share full daily_cn universe")
+
+
+def _format_decay(value: Any) -> str:
+    if isinstance(value, dict):
+        return "; ".join(f"{key}={_fmt(val)}" for key, val in value.items())
+    if isinstance(value, (list, tuple)):
+        return "; ".join(_fmt(item) for item in value)
+    return _fmt(value)
+
+
+def _factor_exposure_text(metrics: Dict[str, Any]) -> str:
+    exposure = metrics.get("factor_exposure") or metrics.get("factor_exposures")
+    if exposure:
+        return _join_text(exposure)
+    parts = []
+    for key in ("ff_alpha_monthly", "ff_alpha_tstat", "ff_r2", "beta", "size", "value", "momentum"):
+        if key in metrics:
+            parts.append(f"{key}={_fmt(metrics.get(key))}")
+    return "; ".join(parts) if parts else "未保存独立因子暴露明细"
+
+
+def _signal_oos_text(metrics: Dict[str, Any], wf_scores: Dict[str, Any]) -> str:
+    if metrics.get("oos_validation"):
+        return _join_text(metrics.get("oos_validation"))
+    aggregate = _safe_float(wf_scores.get("aggregate_oos_sharpe"))
+    if aggregate is None:
+        return "需结合 purged walk-forward 结果"
+    return "pass" if aggregate > 0 else "fail"
+
+
+def _commission_text(value: Any) -> str:
+    if isinstance(value, dict):
+        cn = value.get("CN") or value.get("cn") or value
+        return _join_text(cn)
+    return str(value or "CN realistic")
+
+
+def _excess(left: Any, right: Any) -> float | None:
+    left_float = _safe_float(left)
+    right_float = _safe_float(right)
+    if left_float is None or right_float is None:
+        return None
+    return left_float - right_float
+
+
+def _range_text(split: Dict[str, Any], start_key: str, end_key: str) -> str:
+    start = split.get(start_key) or split.get(start_key.replace("_", ""))
+    end = split.get(end_key) or split.get(end_key.replace("_", ""))
+    if start or end:
+        return f"{start or 'n/a'} - {end or 'n/a'}"
+    return "n/a"
+
+
+def _split_verdict(split: Dict[str, Any]) -> str:
+    explicit = split.get("verdict") or split.get("result")
+    if explicit:
+        return str(explicit)
+    sharpe = _safe_float(split.get("oos_sharpe") or split.get("sharpe"))
+    return "pass" if sharpe is not None and sharpe > 0 else "fail"
+
+
+def _walkforward_scores(data: Dict[str, Any]) -> tuple[Dict[str, Any], str, str]:
+    fallback: tuple[Dict[str, Any], str, str] | None = None
+    for entry in data.get("log") or []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("phase")) not in {"rigor", "walkforward", "purged_walk_forward"}:
+            continue
+        scores = entry.get("scores") or {}
+        current = (scores, str(entry.get("reason") or ""), str(entry.get("verdict") or ""))
+        if scores and any(key in scores for key in ("aggregate_oos_sharpe", "worst_oos_sharpe", "pct_profitable_splits")):
+            fallback = current
+        elif fallback is None:
+            fallback = current
+    if fallback is not None:
+        return fallback
+    detail = data.get("walkforward_detail") or data.get("oos") or {}
+    if isinstance(detail, dict):
+        return detail, "", ""
+    return {}, "", ""
+
+
+def _signal_badge_class(metrics: Dict[str, Any]) -> str:
+    rank_ic = _safe_float(metrics.get("rank_ic"))
+    fdr = _safe_float(metrics.get("fdr_adjusted_p"))
+    hit = _safe_float(metrics.get("hit_rate"))
+    if rank_ic is None:
+        return "fail"
+    if rank_ic > 0 and (fdr is None or fdr <= 0.05) and (hit is None or hit >= 0.5):
+        return "pass"
+    if rank_ic > 0:
+        return "warn"
+    return "fail"
+
+
+def _strict_badge_class(metrics: Dict[str, Any]) -> str:
+    sharpe = _safe_float(metrics.get("sharpe"))
+    total_return = _safe_float(metrics.get("total_return"))
+    cagr = _safe_float(metrics.get("cagr"))
+    if sharpe is None:
+        return "fail"
+    if sharpe >= 1.0 and (cagr is None or cagr > 0.03):
+        return "pass"
+    if sharpe > 0 and (total_return is None or total_return > 0):
+        return "warn"
+    return "fail"
+
+
+def _walkforward_badge_class(scores: Dict[str, Any]) -> str:
+    aggregate = _safe_float(scores.get("aggregate_oos_sharpe"))
+    worst = _safe_float(scores.get("worst_oos_sharpe"))
+    pct_profitable = _safe_float(scores.get("pct_profitable_splits"))
+    if aggregate is None and worst is None:
+        return "fail"
+    if aggregate is not None and aggregate > 0 and (worst is None or worst > 0) and (pct_profitable is None or pct_profitable >= 0.5):
+        return "pass"
+    if aggregate is not None and aggregate > 0:
+        return "warn"
+    return "fail"
+
+
+def _status_badge_class(status: str) -> str:
+    if status in {"candidate", "paper_trading_candidate"}:
+        return "pass"
+    if status in {"needs_more_validation", "validated", "idea_candidate", "needs_manual_spec"}:
+        return "warn"
+    return "fail"
+
+
+def _signal_validation_summary(metrics: Dict[str, Any]) -> str:
+    return (
+        f"Rank IC={_fmt(metrics.get('rank_ic'))}，FDR={_fmt(metrics.get('fdr_adjusted_p'))}，"
+        f"ICIR={_fmt(metrics.get('rank_ic_ir'))}，hit rate={_pct(metrics.get('hit_rate'))}"
+    )
+
+
+def _strict_backtest_summary(metrics: Dict[str, Any]) -> str:
+    if not metrics:
+        return "本轮未运行严格 Backtester；信号验证失败后流水线停止。"
+    return (
+        f"Sharpe={_fmt(metrics.get('sharpe'))}，CAGR={_pct(metrics.get('cagr'))}，"
+        f"MaxDD={_pct(metrics.get('max_drawdown_pct'))}，交易数={metrics.get('total_trades') or 'n/a'}"
+    )
+
+
+def _walkforward_summary_sentence(scores: Dict[str, Any], reason: str) -> str:
+    base = (
+        f"aggregate OOS Sharpe={_fmt(scores.get('aggregate_oos_sharpe'))}，"
+        f"worst OOS Sharpe={_fmt(scores.get('worst_oos_sharpe'))}，"
+        f"盈利 split 占比={_pct(scores.get('pct_profitable_splits'))}"
+    )
+    return f"{base}；{reason}" if reason else base
+
+
+def _deployment_summary(row: Dict[str, Any]) -> str:
+    status = str(row.get("status") or "needs_more_validation")
+    if status == "rejected":
+        return "不进入候选池或 paper trading；保留报告、代码和审计记录。"
+    if status == "paper_trading_candidate":
+        return "可进入 paper trading 候选，但需要人工复核和风控审批。"
+    if status == "candidate":
+        return "进入候选池继续做容量、组合相关性和风控预算验证。"
+    return "暂不部署；需要更多正式验证。"
+
+
+def _decision_reasons(data: Dict[str, Any], row: Dict[str, Any]) -> List[str]:
+    if not row:
+        return ["缺少 hypothesis ledger，无法形成 Go / No-Go。"]
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    strict_metrics = strict.get("metrics") or {}
+    wf_scores, wf_reason, _ = _walkforward_scores(data)
+    reasons = [
+        _signal_validation_summary(metrics),
+        _strict_backtest_summary(strict_metrics),
+        _walkforward_summary_sentence(wf_scores, wf_reason),
+    ]
+    decision = _decision_reason(row)
+    if decision:
+        reasons.append(decision)
+    return reasons
+
+
 def _html_document(title: str, body: str) -> str:
     return "\n".join(
         [
@@ -149,8 +965,7 @@ def _html_document(title: str, body: str) -> str:
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
             f"<title>{escape(title)}</title>",
             "<style>",
-            ":root{color-scheme:light;--ink:#172026;--muted:#66737f;--line:#d7dde2;--paper:#f7f4ed;--panel:#fffdfa;--accent:#0f766e;--warn:#b45309;--bad:#991b1b;--good:#166534;}",
-            "*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 64px}.hero{border-bottom:2px solid var(--ink);padding:28px 0 32px;margin-bottom:28px}.eyebrow{font:700 12px/1.2 'Segoe UI',system-ui,sans-serif;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin:0 0 16px}.hero h1{font-size:42px;line-height:1.12;margin:0 0 14px;font-weight:750;letter-spacing:0}.hero p{max-width:860px;color:var(--muted);font-size:17px}.panel{background:var(--panel);border:1px solid var(--line);padding:24px;margin:18px 0}.panel h2{font-size:25px;line-height:1.25;margin:0 0 18px;border-bottom:1px solid var(--line);padding-bottom:10px;font-weight:720}.panel h3{font-size:18px;line-height:1.35;margin:22px 0 10px;font-weight:720}.panel h3:first-child{margin-top:0}.standard p{max-width:920px}.table-wrap{overflow-x:auto;margin-bottom:14px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}th{font:700 12px/1.2 'Segoe UI',system-ui,sans-serif;text-transform:uppercase;letter-spacing:.04em;color:#34414c;background:#f0ece3}code{font-family:'Cascadia Mono','Consolas','SFMono-Regular',monospace;background:#eee7da;padding:2px 5px;border-radius:4px}.ledger{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}.card{border:1px solid var(--line);background:#fff;padding:18px}.card h3{margin:0 0 12px;font-size:19px;line-height:1.3}.meta{display:grid;grid-template-columns:145px 1fr;gap:7px 12px;font-size:14px}.label{color:var(--muted);font-family:'Segoe UI',system-ui,sans-serif;font-size:12px;text-transform:uppercase;letter-spacing:.04em}.badge{display:inline-block;border:1px solid var(--line);padding:2px 8px;border-radius:999px;font:700 12px/1.4 'Segoe UI',system-ui,sans-serif}.badge.candidate,.badge.validated{color:var(--good);border-color:#86efac;background:#ecfdf5}.badge.idea_candidate{color:#155e75;border-color:#67e8f9;background:#ecfeff}.badge.rejected,.badge.error{color:var(--bad);border-color:#fecaca;background:#fef2f2}.badge.needs_more_validation,.badge.needs_manual_spec{color:var(--warn);border-color:#fed7aa;background:#fff7ed}ul{margin:0;padding-left:22px}a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:3px}@media(max-width:720px){main{width:min(100% - 24px,1180px);padding-top:24px}.hero h1{font-size:32px}.panel{padding:18px}.meta{grid-template-columns:1fr}}",
+            _template_style(),
             "</style>",
             "</head>",
             "<body>",
@@ -1100,6 +1915,13 @@ def _fmt(value: Any) -> str:
 def _safe_float(value: Any) -> float | None:
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 

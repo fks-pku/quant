@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 
+DEFAULT_A_SHARE_SYMBOLS = ["000300", "000905", "600519", "000001", "510300"]
+
+
 @dataclass
 class RawStrategy:
     title: str
@@ -108,7 +111,7 @@ class ResearchConfig:
     auto_backtest: bool = True
     default_backtest_start: str = "2020-01-01"
     default_backtest_end: str = "2024-12-31"
-    default_symbols: List[str] = field(default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "SPY", "QQQ"])
+    default_symbols: List[str] = field(default_factory=lambda: list(DEFAULT_A_SHARE_SYMBOLS))
     llm_provider: str = "minimax"
     llm_model: str = "MiniMax-M2.7"
     llm_api_key: Optional[str] = None
@@ -203,6 +206,11 @@ class ValidationReport:
     fama_macbeth_tstat: float = 0.0
     portfolio_diagnostics: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
+    universe_size: int = 0
+    universe_sample: List[str] = field(default_factory=list)
+    universe_source: str = ""
+    data_rows: int = 0
+    data_symbol_count: int = 0
 
 
 @dataclass(frozen=True)

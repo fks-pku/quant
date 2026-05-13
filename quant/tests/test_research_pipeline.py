@@ -7,7 +7,7 @@ import pytest
 import pandas as pd
 
 from quant.features.research.evaluator import StrategyEvaluator
-from quant.features.research.models import EvaluationReport, RawStrategy, ResearchConfig, StrategySpec, ValidationReport
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, EvaluationReport, RawStrategy, ResearchConfig, StrategySpec, ValidationReport
 from quant.features.research.pool import CandidatePool
 from quant.features.research.research_engine import ResearchEngine
 from quant.infrastructure.research.repository import FileResearchStore
@@ -50,6 +50,22 @@ def _test_root() -> Path:
     root = Path(__file__).resolve().parents[1] / "infrastructure" / "var" / "test_research_pipeline" / str(uuid.uuid4())
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def test_research_defaults_and_spec_universe_are_a_share_only():
+    from quant.features.research.validation.strategy_spec_builder import StrategySpecBuilder
+    from quant.scripts.run_research import HeuristicEvaluator
+
+    assert ResearchConfig().default_symbols == DEFAULT_A_SHARE_SYMBOLS
+
+    report = _evaluation_report()
+    spec = StrategySpecBuilder().build(_raw_strategy(), report)
+
+    assert spec.universe == DEFAULT_A_SHARE_SYMBOLS
+
+    cli_report = HeuristicEvaluator().evaluate(_raw_strategy())
+
+    assert cli_report.recommended_symbols == DEFAULT_A_SHARE_SYMBOLS
 
 
 def test_evaluator_parses_extended_json_report():
@@ -180,18 +196,17 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "latest" / "metadata.json").exists()
-        assert "完整研究报告" in report
+        assert "完整策略研究报告" in report
         assert "1. 结论汇总" in report
         assert "2. idea 来源与初筛" in report
-        assert "信号构造细节" in report
-        assert "专业指标解释" in report
+        assert "信号公式" in report
+        assert 'class="grid"' in report
+        assert 'class="formula"' in report
         assert "6. 策略回测报告" in report
-        assert "收益与风险拆解" in report
         assert "7. purged walk-forward" in report
-        assert "Walk-forward 细节" in report
+        assert "Split 明细" in report
         assert "Daily Momentum Breakout" in report
-        assert "Strict framework backtest report" in report
-        assert "000300 CSI 300 index" in report
+        assert "000300" in report
         index = (tmp_path / "research" / "reports" / "latest" / "full_research_report.md").read_text(encoding="utf-8")
         assert "[full_research_report.html](full_research_report.html)" in index
         assert "复杂研究报告统一使用 HTML" in index
@@ -1023,7 +1038,7 @@ def test_research_engine_uses_strategy_spec_universe_for_walkforward():
                 strategy_id="daily_momentum_breakout",
                 strategy_type="momentum",
                 signal_formula_key="momentum_close_return",
-                universe=["AAPL"],
+                universe=["600519"],
                 horizon_days=5,
                 lookback_days=20,
                 execution_lag_days=1,
@@ -1073,7 +1088,7 @@ def test_research_engine_uses_strategy_spec_universe_for_walkforward():
             config=ResearchConfig(
                 auto_backtest=True,
                 rigor_enabled=True,
-                default_symbols=["SPY", "QQQ"],
+                default_symbols=["000300", "000905"],
             ),
             scout=FixedScout(),
             evaluator=FixedEvaluator(),
@@ -1088,7 +1103,7 @@ def test_research_engine_uses_strategy_spec_universe_for_walkforward():
         result = engine.run_full_pipeline()
 
         assert result.integrated == 1
-        assert rigor_hub.symbols == ["AAPL"]
+        assert rigor_hub.symbols == ["600519"]
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -1206,10 +1221,11 @@ def test_api_make_validation_components_respects_disabled_flag():
 def test_api_candidate_symbols_prefer_strategy_spec_universe():
     from quant.api import research_bp as research_module
 
-    info = {"research_meta": {"strategy_spec": {"universe": ["AAPL", "MSFT"]}}}
+    info = {"research_meta": {"strategy_spec": {"universe": ["600519", "000001"]}}}
 
-    assert research_module._candidate_symbols(info, ["SPY"]) == ["AAPL", "MSFT"]
-    assert research_module._candidate_symbols({}, ["SPY"]) == ["SPY"]
+    assert research_module._candidate_symbols(info, ["000300"]) == ["600519", "000001"]
+    assert research_module._candidate_symbols({"research_meta": {"strategy_spec": {"universe": ["AAPL"]}}}, ["SPY"]) == DEFAULT_A_SHARE_SYMBOLS
+    assert research_module._candidate_symbols({}, ["000300"]) == ["000300"]
 
 
 def test_api_latest_report_payload_points_to_full_html_report(tmp_path):

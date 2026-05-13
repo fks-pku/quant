@@ -501,8 +501,13 @@ def _candidate_symbols(info, fallback):
     meta = dict((info or {}).get("research_meta") or {})
     spec = dict(meta.get("strategy_spec") or {})
     universe = spec.get("universe") or []
-    symbols = [str(symbol) for symbol in universe if str(symbol)]
-    return symbols or list(fallback or [])
+    symbols = [str(symbol) for symbol in universe if _is_a_share_symbol(str(symbol))]
+    fallback_symbols = [str(symbol) for symbol in fallback or [] if _is_a_share_symbol(str(symbol))]
+    return symbols or fallback_symbols or ["000300", "000905", "600519", "000001", "510300"]
+
+
+def _is_a_share_symbol(symbol: str) -> bool:
+    return len(symbol) == 6 and symbol.isdigit()
 
 
 def _make_research_store(cfg: ResearchConfig):
