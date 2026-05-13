@@ -689,9 +689,9 @@ class TestFactorValidator:
         db_path = tmp_path / "research_market.duckdb"
         conn = duckdb.connect(str(db_path))
         schema = "(symbol VARCHAR, timestamp TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)"
-        for table in ("daily_cn", "daily_hk", "daily_us"):
+        for table in ("daily_cn_ochl", "daily_hk", "daily_us"):
             conn.execute(f"CREATE TABLE {table} {schema}")
-        conn.execute("INSERT INTO daily_cn VALUES ('600519', '2024-01-02 09:30:00', 1, 2, 0.5, 1.5, 100)")
+        conn.execute("INSERT INTO daily_cn_ochl VALUES ('600519', '2024-01-02 09:30:00', 1, 2, 0.5, 1.5, 100)")
         conn.execute("INSERT INTO daily_hk VALUES ('12345', '2024-01-02 09:30:00', 2, 3, 1.5, 2.5, 200)")
         conn.execute("INSERT INTO daily_hk VALUES ('HK.00700', '2024-01-03 09:30:00', 4, 5, 3.5, 4.5, 250)")
         conn.execute("INSERT INTO daily_us VALUES ('AAPL', '2024-01-02 09:30:00', 3, 4, 2.5, 3.5, 300)")
@@ -708,7 +708,7 @@ class TestFactorValidator:
         assert set(bars["symbol"]) == {"600519", "12345", "HK.00700", "AAPL"}
         assert "date" in bars.columns
         assert "timestamp" not in bars.columns
-        assert market_data._table_for_symbol("600519") == "daily_cn"
+        assert market_data._table_for_symbol("600519") == "daily_cn_ochl"
         assert market_data._table_for_symbol("12345") == "daily_hk"
         assert market_data._table_for_symbol("HK.00700") == "daily_hk"
         assert market_data._table_for_symbol("HSI") == "daily_hk"
@@ -725,7 +725,7 @@ class TestFactorValidator:
         conn.execute(
             "CREATE TABLE daily_us (symbol VARCHAR, date DATE, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)"
         )
-        conn.execute("CREATE TABLE daily_cn AS SELECT * FROM daily_us WHERE 1 = 0")
+        conn.execute("CREATE TABLE daily_cn_ochl AS SELECT * FROM daily_us WHERE 1 = 0")
         conn.execute("CREATE TABLE daily_hk AS SELECT * FROM daily_us WHERE 1 = 0")
         conn.execute("INSERT INTO daily_us VALUES ('AAPL', '2024-01-02', 3, 4, 2.5, 3.5, 300)")
         conn.close()
@@ -748,7 +748,7 @@ class TestFactorValidator:
             "(symbol VARCHAR, date DATE, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
             "volume BIGINT, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE)"
         )
-        for table in ("daily_cn", "daily_hk", "daily_us"):
+        for table in ("daily_cn_ochl", "daily_hk", "daily_us"):
             conn.execute(f"CREATE TABLE {table} {schema}")
         conn.execute(
             "INSERT INTO daily_us VALUES ('AAPL', '2024-01-02', 3, 4, 2.5, 3.5, 300, 6, 8, 5, 7, 2)"

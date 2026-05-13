@@ -205,7 +205,7 @@ def _is_fresh(path, stale_days):
 
 New file: `infrastructure/research/factors/cn_factor_builder.py`
 
-Build simplified Chinese 3-factor model from DuckDB `daily_cn` table:
+Build simplified Chinese 3-factor model from DuckDB `daily_cn_ochl` table:
 
 ```python
 import logging
@@ -218,7 +218,7 @@ logger = logging.getLogger(__name__)
 
 def build_cn3_factors(db_path, start="2019-01-01", end="2024-12-31", cache_dir=None):
     """
-    Build simplified CN 3-factor (MKT, SMB, HML) from DuckDB daily_cn data.
+    Build simplified CN 3-factor (MKT, SMB, HML) from DuckDB daily_cn_ochl data.
     - MKT: equal-weighted daily return of all valid stocks
     - SMB: top 50% by market_cap_proxy short, bottom 50% long
     - HML: top 30% by EP proxy short, bottom 30% long
@@ -232,7 +232,7 @@ def build_cn3_factors(db_path, start="2019-01-01", end="2024-12-31", cache_dir=N
     conn = duckdb.connect(db_path, read_only=True)
     df = conn.execute("""
         SELECT symbol, date, close, volume, turnover
-        FROM daily_cn
+        FROM daily_cn_ochl
         WHERE date >= ? AND date <= ?
         ORDER BY date
     """, [start, end]).fetchdf()
@@ -420,7 +420,7 @@ No new fields needed. Existing fields populated for the first time:
 - DSR computed with Bailey/Lopez de Prado formula (not just `min(test_sharpe)`)
 - DSR gate enforced (DSR < 0.95 flagged, not hard-rejected)
 - US FF5 factor data downloaded from Kenneth French Data Library and cached as Parquet
-- CN 3-factor model self-constructed from existing DuckDB daily_cn table
+- CN 3-factor model self-constructed from existing DuckDB daily_cn_ochl table
 - `ff_alpha_monthly` populated from OLS regression when factor data available
 - Graceful degradation: all zeros with error message when factor data unavailable
 - `n_trials` tracked from ExperimentStore for DSR computation

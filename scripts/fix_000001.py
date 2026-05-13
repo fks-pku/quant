@@ -17,8 +17,8 @@ for t in tables:
     except Exception:
         pass
 
-conn.execute("DELETE FROM daily_cn WHERE symbol='000001'")
-print("Deleted from daily_cn")
+conn.execute("DELETE FROM daily_cn_ochl WHERE symbol='000001'")
+print("Deleted from daily_cn_ochl")
 conn.close()
 
 from quant.infrastructure.data.providers.tushare import TushareProvider

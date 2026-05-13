@@ -90,7 +90,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 conn.close()
 
     def _symbols_by_table(self, symbols: List[str]) -> Dict[str, List[str]]:
-        grouped: Dict[str, List[str]] = {"daily_cn": [], "daily_hk": [], "daily_us": []}
+        grouped: Dict[str, List[str]] = {"daily_cn_ochl": [], "daily_hk": [], "daily_us": []}
         for symbol in symbols:
             grouped[self._table_for_symbol(symbol)].append(symbol)
         return grouped
@@ -98,7 +98,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
     def _table_for_symbol(self, symbol: str) -> str:
         value = str(symbol).strip().upper()
         if value.endswith((".SS", ".SZ")):
-            return "daily_cn"
+            return "daily_cn_ochl"
         if value == "HSI":
             return "daily_hk"
         if value.startswith("HK."):
@@ -109,12 +109,12 @@ class DuckDBResearchMarketData(ResearchMarketData):
         if bare.isdigit() and len(bare) == 5:
             return "daily_hk"
         if bare.isdigit() and len(bare) == 6:
-            return "daily_cn"
+            return "daily_cn_ochl"
         return "daily_us"
 
     def _table_for_market(self, market: str) -> Any:
         return {
-            "cn": "daily_cn",
+            "cn": "daily_cn_ochl",
             "hk": "daily_hk",
             "us": "daily_us",
         }.get(str(market).lower())

@@ -76,7 +76,7 @@ def _raw_strategy(spec: Dict[str, Any]) -> RawStrategy:
     required = ", ".join(spec["required_local_fields"])
     families = ", ".join(spec["families"])
     if spec["a_share_ready"]:
-        coverage = "current A-share daily_cn data-ready using local OHLCV fields"
+        coverage = "current A-share daily_cn_ochl data-ready using local OHLCV fields"
         validation_note = "ready for exact-expression implementation and full A-share rank IC validation"
     else:
         missing = ", ".join(spec["missing_daily_cn_fields"])
@@ -232,4 +232,3 @@ def _build_required_params() -> Dict[int, Tuple[str, ...]]:
 
 
 ALPHA_REQUIRED_PARAMS = _build_required_params()
-

@@ -45,7 +45,7 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 - Research signal logic, validation forward returns, IC decay, and sensitivity sweeps must use HFQ adjusted prices (`adj_*`, or raw price multiplied by `adj_factor`) when available. Raw prices are only a fallback for missing adjustment data or execution/fill accounting outside research validation.
 - Validation signal formulas must match generated strategy signal orientation. A candidate should not pass validation on a negative IC unless the spec/code explicitly encodes an inverse signal.
 - A-share strategy recommendations must be long-only unless the implementation explicitly uses a legal shorting or hedging instrument. Long-short spreads may be reported only as non-tradable alpha diagnostics, not as deployable portfolio results.
-- A-share full reports must benchmark against CSI 300 index symbol `000300` when it is present in `daily_cn`; fallback to `510300` only when `000300` is missing. Reports must state which benchmark was used and the benchmark data coverage.
+- A-share full reports must benchmark against CSI 300 index symbol `000300` when it is present in `daily_cn_ochl`; fallback to `510300` only when `000300` is missing. Reports must state which benchmark was used and the benchmark data coverage.
 - Current research scope is A-share only. Strategy discovery, admission, StrategySpec universe, validation, reports, generated strategy defaults, and research CLI/API defaults must use A-share symbols such as `000300`, `000905`, `600519`, `000001`, and `510300`; do not emit US symbols such as `AAPL`, `MSFT`, `SPY`, or `QQQ` in research artifacts until US-market research is explicitly added.
 
 ## Modification Rules

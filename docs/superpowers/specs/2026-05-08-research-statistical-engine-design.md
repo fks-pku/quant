@@ -85,7 +85,7 @@ Not allowed:
 `quant/infrastructure/research/market_data/`:
 
 - Implements `ResearchMarketData` port.
-- Market-aware table routing (`daily_cn`, `daily_us`, `daily_hk`).
+- Market-aware table routing (`daily_cn_ochl`, `daily_us`, `daily_hk`).
 - Must not import `quant.features.*`.
 
 ### Domain port
@@ -107,7 +107,7 @@ Rules (from `docs/reference/symbol-registry.md`):
 
 | Pattern | Market | DuckDB table |
 |---------|--------|-------------|
-| 6-digit numeric | `cn` | `daily_cn` |
+| 6-digit numeric | `cn` | `daily_cn_ochl` |
 | 5-digit numeric | `hk` | `daily_hk` |
 | 1-5 char alphabetic | `us` | `daily_us` |
 
@@ -233,7 +233,7 @@ The function must also work when called with single-symbol data (no `symbol` col
 `DuckDBResearchMarketData` changes:
 
 1. **New port method**: `get_universe_symbols(market: str) -> List[str]`
-   - CN: `SELECT DISTINCT symbol FROM daily_cn`
+   - CN: `SELECT DISTINCT symbol FROM daily_cn_ochl`
    - US: `SELECT DISTINCT symbol FROM daily_us`
    - HK: `SELECT DISTINCT symbol FROM daily_hk`
 
@@ -327,7 +327,7 @@ FactorValidator.validate(spec)
 
 ## Storage Design
 
-No new storage is required. This module reads existing DuckDB market data tables (`daily_cn`, `daily_us`, `daily_hk`) through the existing port.
+No new storage is required. This module reads existing DuckDB market data tables (`daily_cn_ochl`, `daily_us`, `daily_hk`) through the existing port.
 
 The validation results are stored in the existing `ValidationReport` dataclass, which is serialized through whichever persistence mechanism the research engine uses.
 
@@ -406,7 +406,7 @@ Each step must be independently shippable. No step may break existing tests.
 
 | Risk | Mitigation |
 |------|------------|
-| DuckDB tables `daily_cn`/`daily_us`/`daily_hk` may not exist in all deployments | `get_universe_symbols` returns empty list and `FactorValidator` produces an error report |
+| DuckDB tables `daily_cn_ochl`/`daily_us`/`daily_hk` may not exist in all deployments | `get_universe_symbols` returns empty list and `FactorValidator` produces an error report |
 | Large universe (3000+ CN stocks) causes slow queries | Infrastructure adapter can limit to top-N by volume or market cap; validation config controls max universe size |
 | Spearman rank correlation is O(N log N) per date | Acceptable for typical universe sizes (< 5000); profile before optimizing |
 | Fama-MacBeth OLS per date requires `numpy.linalg.lstsq` or `scipy` | Use `numpy.linalg.lstsq` which is already available through existing imports |

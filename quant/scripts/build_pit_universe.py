@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 TABLE_MARKETS = {
-    "daily_cn": "cn",
+    "daily_cn_ochl": "cn",
     "daily_us": "us",
     "daily_hk": "hk",
 }

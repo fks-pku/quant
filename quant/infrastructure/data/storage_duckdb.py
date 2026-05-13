@@ -2,7 +2,7 @@
 
 Replaces SQLite+Parquet with a single DuckDB columnar database.
 Tables are organized by market and frequency:
-  - daily_hk, daily_us, minute_hk, minute_us
+  - daily_cn_ochl, daily_hk, daily_us, minute_hk, minute_us
   - orders, trades, portfolio_snapshots
 
 Supports ALTER TABLE ADD COLUMN for schema evolution without rewriting data.
@@ -151,6 +151,8 @@ class DuckDBStorage(Storage):
     def _resolve_table(self, symbol: str, timeframe: str) -> str:
         freq = "daily" if timeframe in ("1d", "day", "daily") else "minute"
         market = _detect_market(symbol).lower()
+        if freq == "daily" and market == "cn":
+            return "daily_cn_ochl"
         return f"{freq}_{market}"
 
     def save_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:
@@ -267,7 +269,9 @@ class DuckDBStorage(Storage):
         return pd.concat(frames, ignore_index=True)
 
     def get_symbols(self, timeframe: str = "1d", market: str = "hk") -> List[str]:
-        table_name = f"{timeframe if timeframe in ('daily', 'minute') else 'daily'}_{market}"
+        freq = timeframe if timeframe in ("daily", "minute") else "daily"
+        market = str(market).lower()
+        table_name = "daily_cn_ochl" if freq == "daily" and market == "cn" else f"{freq}_{market}"
         try:
             df = self.conn.execute(f"SELECT DISTINCT symbol FROM {table_name}").fetchdf()
             return df["symbol"].tolist()

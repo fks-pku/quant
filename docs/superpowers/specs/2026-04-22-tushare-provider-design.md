@@ -43,7 +43,7 @@ Dependency direction: `infrastructure → domain` (compliant with hexagonal rule
 3. If partially cached: compute missing date range, fetch only missing portion from Tushare, upsert into DuckDB, return merged result
 4. If not cached: fetch full range from Tushare, save to DuckDB, return
 
-All data stored in `daily_cn` table (matching existing table naming convention).
+All data stored in `daily_cn_ochl` table (matching existing table naming convention).
 
 ### 3. Column Mapping
 

@@ -360,7 +360,7 @@ Implement `_compute_single(formula_key, data, lookback)` using the existing form
 Modify `DuckDBResearchMarketData`:
 
 ```python
-_TABLE_BY_MARKET = {"cn": "daily_cn", "hk": "daily_hk", "us": "daily_us"}
+_TABLE_BY_MARKET = {"cn": "daily_cn_ochl", "hk": "daily_hk", "us": "daily_us"}
 
 
 def get_universe_symbols(self, market: str) -> List[str]:
@@ -560,7 +560,7 @@ Create `ff_downloader.py` with cached download functions for FF5 daily and momen
 
 - [ ] **Step 7: Implement CN factor builder**
 
-Create `cn_factor_builder.py` with `build_cn3_factors(db_path, start, end, cache_dir=None)`. Use DuckDB read-only, build `MKT`, `SMB`, and `HML` from `daily_cn`, cache to `cn3_daily.parquet`, and return `None` when the table is unavailable.
+Create `cn_factor_builder.py` with `build_cn3_factors(db_path, start, end, cache_dir=None)`. Use DuckDB read-only, build `MKT`, `SMB`, and `HML` from `daily_cn_ochl`, cache to `cn3_daily.parquet`, and return `None` when the table is unavailable.
 
 - [ ] **Step 8: Rewrite `decompose_alpha()`**
 
@@ -884,7 +884,7 @@ Create `quant/infrastructure/research/pit_duckdb.py` implementing `PITData`. If 
 
 - [ ] **Step 5: Add universe snapshot script**
 
-Create `quant/scripts/build_pit_universe.py`. It should read DuckDB tables `daily_cn`, `daily_us`, and `daily_hk` when present, infer `listing_date` and `delisting_date` from first and last bar dates, and write monthly Parquet snapshots under `quant/infrastructure/var/research/universe_snapshots/`.
+Create `quant/scripts/build_pit_universe.py`. It should read DuckDB tables `daily_cn_ochl`, `daily_us`, and `daily_hk` when present, infer `listing_date` and `delisting_date` from first and last bar dates, and write monthly Parquet snapshots under `quant/infrastructure/var/research/universe_snapshots/`.
 
 - [ ] **Step 6: Upgrade ERC optimizer**
 

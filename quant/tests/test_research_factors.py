@@ -138,19 +138,19 @@ def test_ff_downloader_uses_fresh_momentum_cache_before_network(tmp_path, monkey
     assert list(result["Mom"]) == [0.03, 0.04]
 
 
-def test_cn_factor_builder_builds_cached_cn3_from_daily_cn(tmp_path):
+def test_cn_factor_builder_builds_cached_cn3_from_daily_cn_ochl(tmp_path):
     duckdb = pytest.importorskip("duckdb")
     pytest.importorskip("pyarrow")
     from quant.infrastructure.research.factors.cn_factor_builder import build_cn3_factors
 
     db_path = tmp_path / "market.duckdb"
     conn = duckdb.connect(str(db_path))
-    conn.execute("CREATE TABLE daily_cn (symbol VARCHAR, date DATE, close DOUBLE, turnover DOUBLE)")
+    conn.execute("CREATE TABLE daily_cn_ochl (symbol VARCHAR, date DATE, close DOUBLE, turnover DOUBLE)")
     rows = []
     for i, symbol in enumerate(["000001", "000002", "000003", "000004"]):
         for day, close in enumerate([10.0 + i, 10.5 + i * 1.1, 11.0 + i * 1.2]):
             rows.append((symbol, f"2023-01-0{day + 2}", close, 1000.0 + i * 100.0))
-    conn.executemany("INSERT INTO daily_cn VALUES (?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO daily_cn_ochl VALUES (?, ?, ?, ?)", rows)
     conn.close()
 
     factors = build_cn3_factors(
@@ -197,13 +197,13 @@ def test_cn_factor_builder_rebuilds_when_fresh_cache_does_not_cover_request(tmp_
 
     db_path = tmp_path / "market_wide.duckdb"
     conn = duckdb.connect(str(db_path))
-    conn.execute("CREATE TABLE daily_cn (symbol VARCHAR, date DATE, close DOUBLE, turnover DOUBLE)")
+    conn.execute("CREATE TABLE daily_cn_ochl (symbol VARCHAR, date DATE, close DOUBLE, turnover DOUBLE)")
     rows = []
     for i, symbol in enumerate(["000001", "000002", "000003", "000004"]):
         for day in range(6):
             close = 10.0 + i + day * (0.1 + i * 0.01)
             rows.append((symbol, f"2023-01-0{day + 2}", close, 1000.0 + i * 100.0))
-    conn.executemany("INSERT INTO daily_cn VALUES (?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO daily_cn_ochl VALUES (?, ?, ?, ?)", rows)
     conn.close()
 
     narrow = build_cn3_factors(

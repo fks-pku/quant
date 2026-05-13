@@ -147,7 +147,7 @@ class FactorValidator:
             data_symbol_count = int(data["symbol"].astype(str).nunique())
         elif data_rows:
             data_symbol_count = min(len(symbols), 1)
-        source = "daily_cn resolved full universe" if len(symbols) > seed_universe_size else "StrategySpec universe"
+        source = "daily_cn_ochl resolved full universe" if len(symbols) > seed_universe_size else "StrategySpec universe"
         return {
             "universe_size": int(len(symbols)),
             "universe_sample": [str(symbol) for symbol in symbols[:10]],

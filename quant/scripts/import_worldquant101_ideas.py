@@ -15,7 +15,7 @@ from quant.infrastructure.research.repository import FileResearchStore
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import WorldQuant 101 alpha ideas into the local research idea bank")
     parser.add_argument("--status", default="factor_library", help="Idea status to write; use discovered to enqueue")
-    parser.add_argument("--ready-only", action="store_true", help="Only import alphas supported by current daily_cn fields")
+    parser.add_argument("--ready-only", action="store_true", help="Only import alphas supported by current daily_cn_ochl fields")
     parser.add_argument("--alpha", action="append", dest="alphas", help="Alpha numbers or ranges, e.g. 1,5,20-25")
     parser.add_argument("--limit", type=int, default=None, help="Maximum imported rows after filtering")
     args = parser.parse_args()
@@ -40,7 +40,7 @@ def main() -> None:
         store.upsert_idea(raw, status=args.status, reason=_reason(metadata))
 
     print(f"Imported: {len(raws)}")
-    print(f"A-share daily_cn ready: {ready}")
+    print(f"A-share daily_cn_ochl ready: {ready}")
     print(f"Needs field/proxy mapping: {blocked}")
     print(f"Status: {args.status}")
     print(f"Idea bank: {var_root / 'idea_bank' / 'idea_bank.json'}")
@@ -64,7 +64,7 @@ def _parse_alpha_args(values: list[str] | None) -> list[int] | None:
 
 def _reason(metadata: dict) -> str:
     if metadata.get("a_share_ready"):
-        return "WorldQuant 101 factor seed; local daily_cn fields available, exact formula implementation pending"
+        return "WorldQuant 101 factor seed; local daily_cn_ochl fields available, exact formula implementation pending"
     missing = ", ".join(metadata.get("missing_daily_cn_fields") or [])
     return f"WorldQuant 101 factor seed; requires field/proxy mapping before validation: {missing}"
 

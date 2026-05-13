@@ -383,7 +383,7 @@ def _data_source_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]
     fallback_used = bool(benchmark.get("fallback_used", False))
     fallback_note = "未使用；000300 已可用" if not fallback_used else "已使用；需说明 000300 缺失原因"
     body = [
-        f"<tr><td>行情表</td><td>DuckDB <code>daily_cn</code></td><td>{escape(str(data_start))} - {escape(str(data_end))}, {escape(str(data_rows))} symbol-date rows, {escape(str(n_obs))} valid IC dates</td></tr>",
+        f"<tr><td>行情表</td><td>DuckDB <code>daily_cn_ochl</code></td><td>{escape(str(data_start))} - {escape(str(data_end))}, {escape(str(data_rows))} symbol-date rows, {escape(str(n_obs))} valid IC dates</td></tr>",
         "<tr><td>价格口径</td><td>HFQ 后复权</td><td>优先 adj_*；缺失时 raw price * adj_factor，不允许静默切换</td></tr>",
         f"<tr><td>Universe</td><td>{escape(_universe_summary(row))}</td><td>当前报告按 A 股 long-only 约束审计；PIT 成分股限制需在后续增强</td></tr>",
         f"<tr><td>Benchmark</td><td>{escape(str(benchmark_symbol))} 沪深 300</td><td>{escape(str(benchmark.get('coverage_start') or '未记录'))} - {escape(str(benchmark.get('coverage_end') or '未记录'))}, {escape(str(benchmark.get('rows') or '未记录'))} rows</td></tr>",
@@ -796,8 +796,8 @@ def _universe_summary(row: Dict[str, Any]) -> str:
         actual = f"，实际取数 {data_symbol_count} 个 symbol" if data_symbol_count else ""
         suffix = f"；样例：{sample_text}" if sample_text else ""
         source_text = f"，来源：{source}" if source else ""
-        return f"全 A 股 daily_cn universe（解析 {size} 个 symbol{actual}{source_text}{suffix}）"
-    return _join_text(spec_universe or "CN A-share full daily_cn universe")
+        return f"全 A 股 daily_cn_ochl universe（解析 {size} 个 symbol{actual}{source_text}{suffix}）"
+    return _join_text(spec_universe or "CN A-share full daily_cn_ochl universe")
 
 
 def _format_decay(value: Any) -> str:
@@ -1390,7 +1390,7 @@ def _data_benchmark_definition(rows: List[Dict[str, Any]]) -> str:
         body.append(
             "<tr>"
             + f"<td>{escape(str(row.get('title', '')))}</td>"
-            + "<td>DuckDB daily_cn</td>"
+            + "<td>DuckDB daily_cn_ochl</td>"
             + "<td>后复权 adj_*；缺失时 raw price × adj_factor</td>"
             + f"<td>{escape(str(data_start))}</td>"
             + f"<td>{escape(str(data_end))}</td>"
@@ -1401,7 +1401,7 @@ def _data_benchmark_definition(rows: List[Dict[str, Any]]) -> str:
             + "</tr>"
         )
     if not body:
-        return "<p>本次没有足够的数据覆盖或 benchmark 记录。完整 A 股报告必须写清 daily_cn 覆盖、后复权口径和 000300/510300 fallback 决策。</p>"
+        return "<p>本次没有足够的数据覆盖或 benchmark 记录。完整 A 股报告必须写清 daily_cn_ochl 覆盖、后复权口径和 000300/510300 fallback 决策。</p>"
     return _table(["Idea", "数据源", "价格口径", "数据起点", "数据终点", "样本数", "Benchmark", "Benchmark覆盖", "Fallback"], body)
 
 
@@ -1909,7 +1909,7 @@ def _requirements_list() -> str:
         "阶段二必须报告信号定义、方向、IC、IC decay、FDR、hit rate、OOS 稳定性和敏感性检查。",
         "A 股报告里 long-short 只能标记为不可部署 alpha 诊断；可部署组合必须是 long-only。",
         "Strict framework backtest report 必须包含 Sharpe、Sortino、CAGR、MaxDD、Win Rate、Profit Factor、成本、拒单、成交和产物链接。",
-        "A 股报告必须优先使用 000300 CSI 300 index 作为 benchmark；只有 daily_cn 缺失 000300 时才 fallback 到 510300，并写清 benchmark 覆盖区间。",
+        "A 股报告必须优先使用 000300 CSI 300 index 作为 benchmark；只有 daily_cn_ochl 缺失 000300 时才 fallback 到 510300，并写清 benchmark 覆盖区间。",
         "最终只给 reject / needs_more_validation / candidate / paper_trading_candidate，不自动进入实盘分配。",
     ]
     return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>"

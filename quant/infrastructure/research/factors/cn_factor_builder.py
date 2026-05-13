@@ -27,7 +27,7 @@ def build_cn3_factors(db_path: str, start: str, end: str, cache_dir: Any = None)
             frame = conn.execute(
                 f"""
                 SELECT *
-                FROM daily_cn
+                FROM daily_cn_ochl
                 WHERE CAST({date_column} AS DATE) BETWEEN ? AND ?
                 ORDER BY CAST({date_column} AS DATE), symbol
                 """,
@@ -54,7 +54,7 @@ def build_cn3_factors(db_path: str, start: str, end: str, cache_dir: Any = None)
 
 def _date_column(conn: Any) -> Optional[str]:
     try:
-        columns = [row[1] for row in conn.execute("PRAGMA table_info('daily_cn')").fetchall()]
+        columns = [row[1] for row in conn.execute("PRAGMA table_info('daily_cn_ochl')").fetchall()]
     except Exception:
         return None
     if "timestamp" in columns:

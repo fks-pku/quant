@@ -39,8 +39,8 @@
 </section>
 <section class="panel">
 <h2>4. 数据来源及benchmark定义</h2>
-<p>研究判断逻辑统一使用 DuckDB <code>daily_cn</code> 中的后复权价格：优先 <code>adj_*</code>，缺失时才使用 raw price × <code>adj_factor</code>。A 股默认 benchmark 是 <code>000300</code> 沪深 300（000300 CSI 300 index）；只有 DB 缺失 000300 时才 fallback 到 <code>510300</code>。</p>
-<div class="table-wrap"><table><thead><tr><th>Idea</th><th>数据源</th><th>价格口径</th><th>数据起点</th><th>数据终点</th><th>样本数</th><th>Benchmark</th><th>Benchmark覆盖</th><th>Fallback</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>DuckDB daily_cn</td><td>后复权 adj_*；缺失时 raw price × adj_factor</td><td>2017-01-03</td><td>2025-12-31</td><td>280</td><td><code>000300</code></td><td>2017-01-03 / 2025-12-31</td><td>False</td></tr></tbody></table></div>
+<p>研究判断逻辑统一使用 DuckDB <code>daily_cn_ochl</code> 中的后复权价格：优先 <code>adj_*</code>，缺失时才使用 raw price × <code>adj_factor</code>。A 股默认 benchmark 是 <code>000300</code> 沪深 300（000300 CSI 300 index）；只有 DB 缺失 000300 时才 fallback 到 <code>510300</code>。</p>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>数据源</th><th>价格口径</th><th>数据起点</th><th>数据终点</th><th>样本数</th><th>Benchmark</th><th>Benchmark覆盖</th><th>Fallback</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td>DuckDB daily_cn_ochl</td><td>后复权 adj_*；缺失时 raw price × adj_factor</td><td>2017-01-03</td><td>2025-12-31</td><td>280</td><td><code>000300</code></td><td>2017-01-03 / 2025-12-31</td><td>False</td></tr></tbody></table></div>
 <div class="table-wrap"><table><thead><tr><th>Idea</th><th>Benchmark</th><th>起点</th><th>终点</th><th>行数</th><th>价格列</th><th>Fallback</th><th>Alpha</th><th>IR</th></tr></thead><tbody><tr><td>A Unified Framework for Anomalies based on Daily Returns</td><td><code>000300</code></td><td>2017-01-03</td><td>2025-12-31</td><td>2186</td><td>adj_close</td><td>False</td><td>7.49%</td><td>0.5099</td></tr></tbody></table></div>
 </section>
 <section class="panel">
