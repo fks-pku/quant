@@ -812,6 +812,9 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
         assert hypothesis["status"] == "rejected"
         assert hypothesis["stage"] == "go_no_go"
         assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
+        assert hypothesis["metrics"]["walkforward"]["aggregate_oos_sharpe"] == pytest.approx(-1.2)
+        assert hypothesis["metrics"]["walkforward"]["worst_oos_sharpe"] == pytest.approx(-4.6)
+        assert hypothesis["metrics"]["walkforward"]["verdict"] == "fail"
         assert idea["status"] == "rejected"
         assert any(entry.phase == "stage2_validation" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "info" for entry in result.log)
@@ -1228,6 +1231,27 @@ def test_walkforward_trade_enrichment_adds_capacity_fields():
     assert trade["avg_daily_volume"] == pytest.approx(20_000.0)
 
 
+def test_research_config_default_backtest_window_spans_2012_to_2025():
+    cfg = ResearchConfig()
+
+    assert cfg.default_backtest_start == "2012-01-01"
+    assert cfg.default_backtest_end == "2025-12-31"
+
+
+def test_api_yearly_returns_from_equity_uses_calendar_years():
+    from quant.api.research_bp import _yearly_returns_from_equity
+
+    equity = pd.Series(
+        [100.0, 110.0, 99.0],
+        index=pd.to_datetime(["2012-01-03", "2012-12-31", "2013-12-31"]),
+    )
+
+    yearly = _yearly_returns_from_equity(equity, initial_cash=100.0)
+
+    assert yearly["2012"] == pytest.approx(0.10)
+    assert yearly["2013"] == pytest.approx(-0.10)
+
+
 def test_api_make_strategy_scout_uses_infrastructure_sources():
     from quant.api import research_bp as research_module
 
@@ -1306,6 +1330,8 @@ def test_api_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._config["min_observations"] == 123
     assert validator._config["min_stocks"] == 17
     assert validator._config["factor_validation_enabled"] is True
+    assert validator._config["start_date"] == "2012-01-01"
+    assert validator._config["end_date"] == "2025-12-31"
 
 
 def test_api_make_validation_components_respects_disabled_flag():
@@ -1415,3 +1441,5 @@ def test_cli_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._factor_data is factor_data
     assert validator._config["min_observations"] == 88
     assert validator._config["sensitivity_enabled"] is True
+    assert validator._config["start_date"] == "2012-01-01"
+    assert validator._config["end_date"] == "2025-12-31"

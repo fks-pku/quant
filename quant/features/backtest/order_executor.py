@@ -108,10 +108,19 @@ def execute_order(
 
     market = get_market(symbol)
 
-    if market == "CN" and prev_bar:
-        prev_close = prev_bar.get('close', 0)
+    if market == "CN":
+        prev_close = prev_bar.get('close', 0) if prev_bar else 0
         fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-        limit_direction = get_price_limit_direction(symbol, raw_open, prev_close, fill_date_val, ipo_dates)
+        limit_direction = get_price_limit_direction(
+            symbol,
+            raw_open,
+            prev_close,
+            fill_date_val,
+            ipo_dates,
+            bar.get("up_limit"),
+            bar.get("down_limit"),
+            bar.get("is_st", False),
+        )
         if (
             (limit_direction == "UP" and order.side == "BUY")
             or (limit_direction == "DOWN" and order.side == "SELL")

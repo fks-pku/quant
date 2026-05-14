@@ -10,14 +10,21 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from quant.domain.ports.data_feed import DataFeed
-from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB
+from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB, _DEFAULT_STATUS_DB
 from quant.shared.utils.logger import setup_logger
 
 
 class DuckDBProvider(DataFeed):
-    def __init__(self, db_path: str = _DEFAULT_DB):
+    def __init__(
+        self,
+        db_path: str = _DEFAULT_DB,
+        use_security_status: bool = True,
+        status_db_path: str = _DEFAULT_STATUS_DB,
+    ):
         self._connected = False
         self._db_path = db_path
+        self._use_security_status = use_security_status
+        self._status_db_path = status_db_path
         self._storage: Optional[DuckDBStorage] = None
         self.logger = setup_logger("DuckDBProvider")
 
@@ -26,7 +33,12 @@ class DuckDBProvider(DataFeed):
         return "DuckDB"
 
     def connect(self) -> None:
-        self._storage = DuckDBStorage(self._db_path, read_only=True)
+        self._storage = DuckDBStorage(
+            self._db_path,
+            read_only=True,
+            use_security_status=self._use_security_status,
+            status_db_path=self._status_db_path,
+        )
         self._connected = True
         tables = self._storage.list_tables()
         self.logger.info(f"Connected to DuckDB (read-only), tables: {tables}")

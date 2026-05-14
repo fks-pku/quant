@@ -67,6 +67,97 @@ class TestDuckDBStorage:
         assert sorted(bars["symbol"].unique().tolist()) == ["AAPL", "MSFT"]
         assert bars.groupby("symbol").size().to_dict() == {"AAPL": 2, "MSFT": 2}
 
+    def test_get_bars_for_symbols_can_use_cn_security_status(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        db_path = tmp_path / "market.duckdb"
+        status_path = tmp_path / "security_status.duckdb"
+        start = datetime(2024, 1, 2)
+
+        storage = DuckDBStorage(str(db_path))
+        try:
+            storage.save_bars(pd.DataFrame([
+                {
+                    "timestamp": start,
+                    "symbol": "600519",
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.8,
+                    "close": 10.0,
+                    "volume": 1000,
+                },
+                {
+                    "timestamp": datetime(2024, 1, 4),
+                    "symbol": "600519",
+                    "open": 10.2,
+                    "high": 10.8,
+                    "low": 10.1,
+                    "close": 10.5,
+                    "volume": 1200,
+                },
+            ]), "1d")
+        finally:
+            storage.close()
+
+        conn = duckdb.connect(str(status_path))
+        conn.execute(
+            """
+            CREATE TABLE cn_security_status_daily (
+                symbol VARCHAR,
+                trade_date DATE,
+                is_st BOOLEAN,
+                st_type VARCHAR,
+                is_suspended BOOLEAN,
+                has_daily_bar BOOLEAN,
+                tradable BOOLEAN,
+                up_limit DOUBLE,
+                down_limit DOUBLE,
+                pre_close DOUBLE,
+                is_listed BOOLEAN,
+                list_status VARCHAR,
+                suspend_type VARCHAR,
+                suspend_timing VARCHAR
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO cn_security_status_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("600519", "2024-01-02", False, "", False, True, True, 11.0, 9.0, None, True, "L", "", ""),
+                ("600519", "2024-01-03", True, "ST", True, False, False, 11.0, 9.0, None, True, "L", "S", ""),
+                ("600519", "2024-01-04", False, "", False, True, True, 11.55, 9.45, 10.0, True, "L", "", ""),
+            ],
+        )
+        conn.close()
+
+        plain = DuckDBStorage(str(db_path), read_only=True)
+        try:
+            plain_bars = plain.get_bars_for_symbols(["600519"], start, datetime(2024, 1, 4), "1d")
+        finally:
+            plain.close()
+
+        enriched = DuckDBStorage(
+            str(db_path),
+            read_only=True,
+            use_security_status=True,
+            status_db_path=str(status_path),
+        )
+        try:
+            bars = enriched.get_bars_for_symbols(["600519"], start, datetime(2024, 1, 4), "1d")
+        finally:
+            enriched.close()
+
+        assert len(plain_bars) == 2
+        assert len(bars) == 3
+        suspended = bars[pd.to_datetime(bars["timestamp"]).dt.date == date(2024, 1, 3)].iloc[0]
+        assert bool(suspended["_suspended"]) is True
+        assert bool(suspended["tradable"]) is False
+        assert bool(suspended["is_st"]) is True
+        assert suspended["st_type"] == "ST"
+        assert suspended["suspend_type"] == "S"
+        assert suspended["volume"] == 0
+        assert suspended["close"] == pytest.approx(10.0)
+        assert suspended["up_limit"] == pytest.approx(11.0)
+
     def test_multiple_subscribers(self):
         bus = EventBus()
         r1, r2 = [], []

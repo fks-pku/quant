@@ -109,8 +109,8 @@ class ResearchConfig:
     evaluation_threshold: float = 6.0
     backtest_sharpe_threshold: float = 0.5
     auto_backtest: bool = True
-    default_backtest_start: str = "2020-01-01"
-    default_backtest_end: str = "2024-12-31"
+    default_backtest_start: str = "2012-01-01"
+    default_backtest_end: str = "2025-12-31"
     default_symbols: List[str] = field(default_factory=lambda: list(DEFAULT_A_SHARE_SYMBOLS))
     llm_provider: str = "minimax"
     llm_model: str = "MiniMax-M2.7"

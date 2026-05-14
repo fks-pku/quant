@@ -46,6 +46,10 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 - Validation signal formulas must match generated strategy signal orientation. A candidate should not pass validation on a negative IC unless the spec/code explicitly encodes an inverse signal.
 - A-share strategy recommendations must be long-only unless the implementation explicitly uses a legal shorting or hedging instrument. Long-short spreads may be reported only as non-tradable alpha diagnostics, not as deployable portfolio results.
 - A-share full reports must benchmark against CSI 300 index symbol `000300` when it is present in `daily_cn_ochl`; fallback to `510300` only when `000300` is missing. Reports must state which benchmark was used and the benchmark data coverage.
+- A-share long-only portfolio diagnostics use fixed Top 20 valid-signal stocks as the default top bucket. Top 1% remains a separate concentration diagnostic, not the default deployable bucket.
+- Research-generated strategy candidates default to `max_position_pct=1.0` so strict Backtester results use full target gross exposure unless a study explicitly overrides sizing.
+- Formal A-share research defaults to strict backtests from `2012-01-01` through `2025-12-31` and reports must include a yearly strategy-return calendar from structured strict Backtester equity results.
+- Full reports must include a lightweight PnL attribution bridge from structured validation outputs to show where signal-only returns degrade before strict Backtester execution.
 - Current research scope is A-share only. Strategy discovery, admission, StrategySpec universe, validation, reports, generated strategy defaults, and research CLI/API defaults must use A-share symbols such as `000300`, `000905`, `600519`, `000001`, and `510300`; do not emit US symbols such as `AAPL`, `MSFT`, `SPY`, or `QQQ` in research artifacts until US-market research is explicitly added.
 
 ## Modification Rules

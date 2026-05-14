@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -71,10 +72,16 @@ def build_full_research_report_html(
         _signal_validation_contract_table(data, rows),
         "<h3>组合诊断</h3>",
         _portfolio_diagnostics_contract_table(data, rows),
+        "<h3>PnL 归因桥</h3>",
+        _pnl_attribution_bridge_contract_table(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>6. 策略回测报告</h2>",
         "<p>正式结论必须来自项目 Backtester：<code>Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio</code>。本节回答真实交易约束下策略是否仍成立。</p>",
+        "<h3>回测 Equity Curve</h3>",
+        _equity_curve_chart(data, rows),
+        "<h3>年度收益日历图</h3>",
+        _yearly_return_calendar(data, rows),
         "<h3>回测配置</h3>",
         _backtest_config_contract_table(data, rows),
         "<h3>核心绩效</h3>",
@@ -88,9 +95,9 @@ def build_full_research_report_html(
         "<h3>方法设置</h3>",
         _walkforward_methodology_contract_table(rows),
         "<h3>结果摘要</h3>",
-        _walkforward_summary_contract_table(data),
+        _walkforward_summary_contract_table(data, rows),
         "<h3>Split 明细</h3>",
-        _walkforward_split_contract_table(data),
+        _walkforward_split_contract_table(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>8. 最终推荐与下一步计划</h2>",
@@ -205,7 +212,7 @@ def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> s
     metrics = row.get("metrics") or {}
     strict = _strict_backtest_for_report(data, row)
     strict_metrics = strict.get("metrics") or {}
-    wf_scores, wf_reason, wf_verdict = _walkforward_scores(data)
+    wf_scores, wf_reason, wf_verdict = _walkforward_scores(row)
     status = str(row.get("status") or "needs_more_validation")
     strategy_id = _row_strategy_id(row)
     rank_ic = _fmt(metrics.get("rank_ic"))
@@ -247,7 +254,7 @@ def _judgement_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     metrics = row.get("metrics") or {}
     strict = _strict_backtest_for_report(data, row)
     strict_metrics = strict.get("metrics") or {}
-    wf_scores, wf_reason, _ = _walkforward_scores(data)
+    wf_scores, wf_reason, _ = _walkforward_scores(row)
     signal_class = _signal_badge_class(metrics)
     strict_class = _strict_badge_class(strict_metrics)
     walk_class = _walkforward_badge_class(wf_scores)
@@ -299,7 +306,7 @@ def _source_quality_score_table(data: Dict[str, Any], rows: List[Dict[str, Any]]
         ("formula_clarity", _first_present(quality, "detail_score", "formula_clarity_score", "formula_clarity"), "是否有明确公式、排序方向、持有期"),
         ("daily_feasibility", _first_present(quality, "daily_data_score", "daily_feasibility_score", "daily_feasibility"), "是否可以用日线 OHLCV / 可得字段实现"),
         ("A 股适配性", _first_present(metrics, "data_availability_score", "cost_capacity_score", "implementation_score"), "是否适合 A 股 long-only、T+1、涨跌停和流动性约束"),
-        ("admission_score", _stage1_score(data, "admission", metrics.get("admission_score")), "低于阈值不得进入正式研究"),
+        ("admission_score", metrics.get("admission_score"), "低于阈值不得进入正式研究"),
     ]
     body = "".join(
         f"<tr><td>{escape(label)}</td><td>{escape(_fmt(value))}</td><td>{escape(note)}</td></tr>"
@@ -342,7 +349,7 @@ def _formula_block(rows: List[Dict[str, Any]]) -> str:
             "returns_i,t = adj_close_i,t / adj_close_i,t-1 - 1",
             "base_i,t = if returns_i,t < 0 then stddev(returns_i,t-19:t, 20) else adj_close_i,t",
             "signal_i,t = rank_cross_section(ts_argmax(signedpower(base_i,t, 2), 5)) - 0.5",
-            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"target_i,t+{lag} = top_20(rank_i,t), long-only only",
             f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
     elif formula == "worldquant_alpha_002":
@@ -351,7 +358,7 @@ def _formula_block(rows: List[Dict[str, Any]]) -> str:
             "y_i,t = rank_cross_section((adj_close_i,t - adj_open_i,t) / adj_open_i,t)",
             f"signal_i,t = -corr_ts(x_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, y_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, {lookback})",
             "rank_i,t = cross_sectional_rank(signal_i,t)",
-            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"target_i,t+{lag} = top_20(rank_i,t), long-only only",
             f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
     elif "mean_reversion" in formula or "reversal" in formula:
@@ -361,14 +368,14 @@ def _formula_block(rows: List[Dict[str, Any]]) -> str:
             "industry_momentum_i,t = mean(industry_return_i,t-lookback ... industry_return_i,t)",
             "signal_i,t = raw_reversal_i,t with industry momentum hedge and cross-sectional winsorization",
             "rank_i,t = cross_sectional_rank(signal_i,t)",
-            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"target_i,t+{lag} = top_20(rank_i,t), long-only only",
             f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
     else:
         lines = [
             f"signal_i,t = {formula or 'StrategySpec declared signal'}",
             "rank_i,t = cross_sectional_rank(signal_i,t)",
-            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"target_i,t+{lag} = top_20(rank_i,t), long-only only",
             f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
     return f'<div class="formula">{escape(chr(10).join(lines))}</div>'
@@ -428,7 +435,7 @@ def _data_quality_contract_list(data: Dict[str, Any], rows: List[Dict[str, Any]]
 def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     metrics = row.get("metrics") or {}
-    wf_scores, _, _ = _walkforward_scores(data)
+    wf_scores, _, _ = _walkforward_scores(row)
     rows_data = [
         ("Rank IC", _fmt(metrics.get("rank_ic")), "横截面秩相关；正负号必须与预测方向一致"),
         ("ICIR", _fmt(metrics.get("rank_ic_ir")), "IC 均值 / IC 波动，衡量稳定性"),
@@ -465,7 +472,7 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
     benchmark = strict.get("benchmark") or {}
     rows_data = [
         (
-            "Top bucket long-only",
+            _top_bucket_label(diag),
             _pct(diag.get("top_bucket_annualized_return")),
             _fmt(_first_present(diag, "top_bucket_after_cost_sharpe", "top_bucket_sharpe")),
             _pct(_first_present(diag, "top_bucket_after_cost_max_drawdown", "top_bucket_max_drawdown") or strict_metrics.get("max_drawdown_pct")),
@@ -517,6 +524,51 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
     return _table(["组合", "年化", "Sharpe", "MaxDD", "Calmar Ratio", "换手", "成本后年化", "用途"], body)
 
 
+def _top_bucket_label(diag: Dict[str, Any]) -> str:
+    if str(diag.get("top_bucket_selection") or "") == "top_n":
+        count = _safe_int(diag.get("top_bucket_target_count"))
+        if count and count > 0:
+            return f"Top {count} long-only"
+    return "Top bucket long-only"
+
+
+def _pnl_attribution_bridge_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    metrics = row.get("metrics") or {}
+    diag = metrics.get("portfolio_diagnostics") or {}
+    bridge = list(diag.get("pnl_attribution_bridge") or [])
+    if not bridge:
+        return _not_run_table(
+            ["层", "年化", "Δ年化", "Sharpe", "ΔSharpe", "MaxDD", "换手", "选股数", "说明"],
+            "本轮未生成 PnL 归因桥",
+            "轻量归因桥来自 signal/price/status 近似矩阵，不替代 strict Backtester。",
+        )
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(str(layer.get('label') or layer.get('key') or ''))}</td>"
+        + f"<td>{escape(_pct(layer.get('annualized_return')))}</td>"
+        + f"<td>{escape(_pct(layer.get('delta_annualized_return')))}</td>"
+        + f"<td>{escape(_fmt(layer.get('sharpe')))}</td>"
+        + f"<td>{escape(_fmt(layer.get('delta_sharpe')))}</td>"
+        + f"<td>{escape(_pct(layer.get('max_drawdown')))}</td>"
+        + f"<td>{escape(_pct(layer.get('turnover')))}</td>"
+        + f"<td>{escape(_selected_count_text(layer))}</td>"
+        + f"<td>{escape(str(layer.get('note') or ''))}</td>"
+        + "</tr>"
+        for layer in bridge
+    )
+    return _table(["层", "年化", "Δ年化", "Sharpe", "ΔSharpe", "MaxDD", "换手", "选股数", "说明"], body)
+
+
+def _selected_count_text(layer: Dict[str, Any]) -> str:
+    mean = layer.get("selected_count_mean")
+    min_count = layer.get("selected_count_min")
+    max_count = layer.get("selected_count_max")
+    if mean is None:
+        return "-"
+    return f"{_fmt(mean)} ({_cell(min_count)}-{_cell(max_count)})"
+
+
 def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     metrics = row.get("metrics") or {}
@@ -531,6 +583,7 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
     rows_data = [
         ("回测区间", strict.get("period") or "未记录", "必须与数据覆盖一致"),
         ("初始资金", strict.get("initial_cash") or metrics.get("initial_cash") or "500000 CNY", "A 股示例默认 500000 CNY"),
+        ("默认目标总仓位", _pct(constraints.get("strategy_max_position_pct")), "研究生成策略默认满仓；按持仓数等权分配"),
         ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
         ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
         ("佣金", _commission_text(constraints.get("commission")), "含最低佣金、印花税等"),
@@ -558,8 +611,13 @@ def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, 
     metrics = strict.get("metrics") or {}
     benchmark = strict.get("benchmark") or {}
     rows_data = [
-        ("CAGR", _pct(metrics.get("cagr")), _pct(benchmark.get("benchmark_cagr")), _pct(benchmark.get("alpha"))),
-        ("Total Return", _pct(metrics.get("total_return")), _pct(benchmark.get("benchmark_return")), _pct(_excess(metrics.get("total_return"), benchmark.get("benchmark_return")))),
+        ("CAGR", _pct(metrics.get("cagr")), _pct(benchmark.get("benchmark_cagr")), _pct(_excess(metrics.get("cagr"), benchmark.get("benchmark_cagr")))),
+        (
+            "Total Return",
+            _pct(metrics.get("total_return")),
+            _pct(_first_present(benchmark, "benchmark_total_return", "benchmark_return")),
+            _pct(_excess(metrics.get("total_return"), _first_present(benchmark, "benchmark_total_return", "benchmark_return"))),
+        ),
         ("Sharpe", _fmt(metrics.get("sharpe")), _fmt(benchmark.get("benchmark_sharpe")), "必须成本后"),
         ("Sortino", _fmt(metrics.get("sortino")), _fmt(benchmark.get("benchmark_sortino")), "下行风险调整"),
         ("Max Drawdown", _pct(metrics.get("max_drawdown_pct")), _pct(benchmark.get("benchmark_max_drawdown_pct")), "风险底线"),
@@ -597,6 +655,7 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
         ("lot_adjusted_trades", str(diagnostics.get("lot_adjusted_trades") or 0), "因 100 股手数调整的交易"),
         ("t1_rejected_sells", str(diagnostics.get("t1_rejected_sells") or 0), "T+1 拒绝卖出"),
         ("limit_rejected_orders", str(diagnostics.get("limit_rejected_orders") or 0), "涨跌停拒单"),
+        ("insufficient_cash_rejected_orders", str(_insufficient_cash_rejected_orders(diagnostics)), "现金不足拒单"),
         ("volume_limited_trades", str(diagnostics.get("volume_limited_trades") or 0), "成交量限制"),
         ("risk_skipped_orders", str(diagnostics.get("risk_skipped_orders") or 0), "风控跳过订单"),
         ("final_suspended_holding_nav", _money(diagnostics.get("final_suspended_holding_nav")), suspended_note),
@@ -606,6 +665,211 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
         for item, value, note in rows_data
     )
     return _table(["诊断项", "数值", "解释"], body)
+
+
+def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    curves = strict.get("equity_curve") or {}
+    strategy = _curve_points(curves.get("strategy"))
+    benchmark = _curve_points(curves.get("benchmark"))
+    if not strategy:
+        return "<p>本轮严格 Backtester 未保存 equity curve，无法渲染曲线图。</p>"
+
+    width = 940
+    height = 360
+    left = 70
+    right = 22
+    top = 26
+    bottom = 52
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    dates = sorted({date for date, _ in strategy}.union({date for date, _ in benchmark}))
+    if len(dates) < 2:
+        return "<p>equity curve 样本点不足，无法渲染曲线图。</p>"
+    date_pos = {date: idx for idx, date in enumerate(dates)}
+
+    values = [value for _, value in strategy + benchmark]
+    y_min = min(values)
+    y_max = max(values)
+    if abs(y_max - y_min) < 1e-12:
+        pad = max(abs(y_max) * 0.05, 1.0)
+    else:
+        pad = (y_max - y_min) * 0.06
+    y_min -= pad
+    y_max += pad
+
+    def x_for(date: str) -> float:
+        return left + plot_width * date_pos[date] / max(1, len(dates) - 1)
+
+    def y_for(value: float) -> float:
+        return top + plot_height * (1.0 - (value - y_min) / (y_max - y_min))
+
+    strategy_path = _svg_path(strategy, x_for, y_for)
+    benchmark_path = _svg_path(benchmark, x_for, y_for)
+    grid = []
+    labels = []
+    for i in range(5):
+        value = y_min + (y_max - y_min) * i / 4
+        y = y_for(value)
+        grid.append(f'<line class="chart-grid" x1="{left:.1f}" y1="{y:.1f}" x2="{width - right:.1f}" y2="{y:.1f}" />')
+        labels.append(
+            f'<text class="chart-label" x="{left - 10:.1f}" y="{y + 4:.1f}" text-anchor="end">{escape(_compact_money(value))}</text>'
+        )
+    x_labels = [
+        f'<text class="chart-label" x="{left:.1f}" y="{height - 16:.1f}" text-anchor="start">{escape(dates[0])}</text>',
+        f'<text class="chart-label" x="{width - right:.1f}" y="{height - 16:.1f}" text-anchor="end">{escape(dates[-1])}</text>',
+    ]
+    benchmark_svg = (
+        f'<path class="benchmark-line" d="{escape(benchmark_path, quote=True)}" />'
+        if benchmark_path
+        else ""
+    )
+    benchmark_legend = (
+        '<span><i class="legend-benchmark"></i>Benchmark</span>'
+        if benchmark_path
+        else '<span class="muted">Benchmark curve unavailable</span>'
+    )
+    return (
+        '<figure class="equity-chart">'
+        '<div class="equity-chart-meta">'
+        '<span><i class="legend-strategy"></i>策略</span>'
+        f"{benchmark_legend}"
+        f"<b>策略期末 {_money(strategy[-1][1])}</b>"
+        + (f"<b>Benchmark 期末 {_money(benchmark[-1][1])}</b>" if benchmark else "")
+        + "</div>"
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Strict backtest equity curve">'
+        + "".join(grid)
+        + "".join(labels)
+        + "".join(x_labels)
+        + f'<line class="chart-axis" x1="{left:.1f}" y1="{top:.1f}" x2="{left:.1f}" y2="{height - bottom:.1f}" />'
+        + f'<line class="chart-axis" x1="{left:.1f}" y1="{height - bottom:.1f}" x2="{width - right:.1f}" y2="{height - bottom:.1f}" />'
+        + benchmark_svg
+        + f'<path class="strategy-line" d="{escape(strategy_path, quote=True)}" />'
+        + "</svg>"
+        + "<figcaption>策略曲线使用 strict Backtester 的账户 NAV；benchmark 曲线按同一初始资金买入并持有 000300。</figcaption>"
+        + "</figure>"
+    )
+
+
+def _yearly_return_calendar(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return "<p>本轮严格 Backtester 未运行，无法生成年度收益日历图。</p>"
+    benchmark = strict.get("benchmark") or {}
+    curves = strict.get("equity_curve") or {}
+    strategy_returns = _yearly_returns_for_report(strict.get("yearly_returns"))
+    benchmark_returns = _yearly_returns_for_report(benchmark.get("benchmark_yearly_returns"))
+    if not strategy_returns:
+        strategy_returns = _yearly_returns_from_curve_points(curves.get("strategy"), strict.get("initial_cash"))
+    if not benchmark_returns:
+        benchmark_returns = _yearly_returns_from_curve_points(curves.get("benchmark"), strict.get("initial_cash"))
+    if not strategy_returns:
+        return "<p>本轮 strict Backtester 未保存足够的年度收益或 equity curve，无法生成年度收益日历图。</p>"
+
+    years = sorted(
+        set(strategy_returns).union(benchmark_returns),
+        key=lambda item: int(item) if str(item).isdigit() else str(item),
+    )
+    benchmark_symbol = str(benchmark.get("symbol") or _report_benchmark(row))
+    cells = []
+    for year in years:
+        strategy_value = strategy_returns.get(year)
+        benchmark_value = benchmark_returns.get(year)
+        excess = _excess(strategy_value, benchmark_value)
+        cells.append(
+            '<div class="return-cell '
+            + _return_calendar_class(strategy_value)
+            + '">'
+            + f"<b>{escape(str(year))}</b>"
+            + f"<strong>{escape(_pct(strategy_value))}</strong>"
+            + f"<span>策略</span>"
+            + f"<small>{escape(benchmark_symbol)} {_pct(benchmark_value)} · 超额 {_pct(excess)}</small>"
+            + "</div>"
+        )
+    return (
+        '<figure class="return-calendar-chart">'
+        '<div class="return-calendar">'
+        + "".join(cells)
+        + "</div>"
+        + f"<figcaption>年度收益按 strict Backtester 的策略账户 NAV 计算；benchmark 使用同一初始资金的 {escape(benchmark_symbol)} equity curve。</figcaption>"
+        + "</figure>"
+    )
+
+
+def _yearly_returns_for_report(value: Any) -> Dict[str, float]:
+    result: Dict[str, float] = {}
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, list):
+        items = []
+        for item in value:
+            if isinstance(item, dict):
+                year = item.get("year") or item.get("date")
+                ret = _first_present(item, "return", "yearly_return", "strategy_return")
+                items.append((year, ret))
+    else:
+        items = []
+    for raw_year, raw_value in items:
+        year = str(raw_year or "")[:4]
+        if not year.isdigit():
+            continue
+        number = _safe_float(raw_value)
+        if number is not None:
+            result[year] = number
+    return result
+
+
+def _yearly_returns_from_curve_points(points: Any, initial_cash: Any = None) -> Dict[str, float]:
+    if not isinstance(points, list):
+        return {}
+    parsed = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        year = str(point.get("date") or "")[:4]
+        value = _safe_float(point.get("value"))
+        if year.isdigit() and value is not None:
+            parsed.append((str(point.get("date") or ""), year, value))
+    parsed.sort(key=lambda item: item[0])
+    if not parsed:
+        return {}
+    result: Dict[str, float] = {}
+    previous_close = _safe_float(initial_cash)
+    current_year = ""
+    first_value = None
+    last_value = None
+    for _, year, value in parsed:
+        if current_year and year != current_year:
+            base = previous_close if previous_close is not None and previous_close > 0 else first_value
+            if base is not None and base > 0 and last_value is not None:
+                result[current_year] = last_value / base - 1.0
+            previous_close = last_value
+            first_value = value
+            last_value = value
+            current_year = year
+            continue
+        if not current_year:
+            current_year = year
+            first_value = value
+        last_value = value
+    base = previous_close if previous_close is not None and previous_close > 0 else first_value
+    if current_year and base is not None and base > 0 and last_value is not None:
+        result[current_year] = last_value / base - 1.0
+    return result
+
+
+def _return_calendar_class(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "neutral"
+    if number > 0.0005:
+        return "positive"
+    if number < -0.0005:
+        return "negative"
+    return "neutral"
 
 
 def _walkforward_methodology_contract_table(rows: List[Dict[str, Any]]) -> str:
@@ -627,8 +891,9 @@ def _walkforward_methodology_contract_table(rows: List[Dict[str, Any]]) -> str:
     return _table(["项目", "取值", "解释"], body)
 
 
-def _walkforward_summary_contract_table(data: Dict[str, Any]) -> str:
-    scores, reason, _ = _walkforward_scores(data)
+def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    scores, reason, _ = _walkforward_scores(row)
     rows_data = [
         ("aggregate_oos_sharpe", _fmt(scores.get("aggregate_oos_sharpe")), "所有 OOS split 聚合表现"),
         ("worst_oos_sharpe", _fmt(scores.get("worst_oos_sharpe")), "最差样本外窗口"),
@@ -644,8 +909,9 @@ def _walkforward_summary_contract_table(data: Dict[str, Any]) -> str:
     return _table(["Metric", "数值", "解释"], body)
 
 
-def _walkforward_split_contract_table(data: Dict[str, Any]) -> str:
-    detail = data.get("walkforward_detail") or data.get("oos") or {}
+def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    detail, reason, verdict = _walkforward_scores(row)
     split_rows = []
     if isinstance(detail, dict):
         raw_splits = detail.get("splits") or detail.get("split_results") or []
@@ -659,14 +925,14 @@ def _walkforward_split_contract_table(data: Dict[str, Any]) -> str:
                         _range_text(split, "train_start", "train_end"),
                         _range_text(split, "test_start", "test_end"),
                         _cell(split.get("params") or split.get("parameters") or "frozen parameters"),
-                        _fmt(split.get("oos_sharpe") or split.get("sharpe")),
+                        _fmt(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe")),
                         _pct(split.get("max_drawdown") or split.get("maxdd")),
                         _pct(split.get("turnover")),
                         _split_verdict(split),
                     )
                 )
     if not split_rows:
-        scores, reason, verdict = _walkforward_scores(data)
+        scores = detail if isinstance(detail, dict) else {}
         split_rows = [
             (
                 "汇总",
@@ -760,14 +1026,6 @@ def _not_run_table(headers: List[str], item: str, reason: str) -> str:
 
 
 def _stage1_score(data: Dict[str, Any], key: str, fallback: Any) -> Any:
-    for entry in data.get("log") or []:
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("phase")) != "stage1_spec":
-            continue
-        scores = entry.get("scores") or {}
-        if key in scores:
-            return scores.get(key)
     return fallback
 
 
@@ -893,28 +1151,15 @@ def _split_verdict(split: Dict[str, Any]) -> str:
     explicit = split.get("verdict") or split.get("result")
     if explicit:
         return str(explicit)
-    sharpe = _safe_float(split.get("oos_sharpe") or split.get("sharpe"))
+    sharpe = _safe_float(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe"))
     return "pass" if sharpe is not None and sharpe > 0 else "fail"
 
 
-def _walkforward_scores(data: Dict[str, Any]) -> tuple[Dict[str, Any], str, str]:
-    fallback: tuple[Dict[str, Any], str, str] | None = None
-    for entry in data.get("log") or []:
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("phase")) not in {"rigor", "walkforward", "purged_walk_forward"}:
-            continue
-        scores = entry.get("scores") or {}
-        current = (scores, str(entry.get("reason") or ""), str(entry.get("verdict") or ""))
-        if scores and any(key in scores for key in ("aggregate_oos_sharpe", "worst_oos_sharpe", "pct_profitable_splits")):
-            fallback = current
-        elif fallback is None:
-            fallback = current
-    if fallback is not None:
-        return fallback
-    detail = data.get("walkforward_detail") or data.get("oos") or {}
+def _walkforward_scores(row: Dict[str, Any]) -> tuple[Dict[str, Any], str, str]:
+    metrics = row.get("metrics") or {}
+    detail = metrics.get("walkforward") or metrics.get("purged_walkforward") or {}
     if isinstance(detail, dict):
-        return detail, "", ""
+        return detail, str(detail.get("reason") or ""), str(detail.get("verdict") or "")
     return {}, "", ""
 
 
@@ -1011,7 +1256,7 @@ def _decision_reasons(data: Dict[str, Any], row: Dict[str, Any]) -> List[str]:
     metrics = row.get("metrics") or {}
     strict = _strict_backtest_for_report(data, row)
     strict_metrics = strict.get("metrics") or {}
-    wf_scores, wf_reason, _ = _walkforward_scores(data)
+    wf_scores, wf_reason, _ = _walkforward_scores(row)
     reasons = [
         _signal_validation_summary(metrics),
         _strict_backtest_summary(strict_metrics),
@@ -1273,7 +1518,7 @@ def _signal_direction(row: Dict[str, Any]) -> str:
     rank_ic = _safe_float(metrics.get("rank_ic"))
     if rank_ic is not None and rank_ic < 0:
         return "信号值越低，预期未来收益越高；若要部署必须显式反向。"
-    return "信号值越高，预期未来收益越高；组合只允许选 top bucket long-only。"
+    return "信号值越高，预期未来收益越高；组合只允许选 Top 20 long-only。"
 
 
 def _signal_construction_steps(row: Dict[str, Any]) -> str:
@@ -1287,7 +1532,7 @@ def _signal_construction_steps(row: Dict[str, Any]) -> str:
             f"1. 用后复权收盘价计算过去 {lookback} 个交易日的日收益序列；"
             "2. 提取日收益序列及分布统计特征；"
             f"3. 用滚动 ridge 模型预测未来 {horizon} 日后复权收益；"
-            "4. 每个截面按预测值排序；5. 只允许买入 top bucket，禁止 A 股 long-short 部署。"
+            "4. 每个截面按预测值排序；5. 只允许买入 Top 20，禁止 A 股 long-short 部署。"
         )
     if "momentum" in formula:
         return f"1. 用后复权价格计算过去 {lookback} 日收益；2. 截面排序；3. 选择高动量标的；4. 下一交易日执行。"
@@ -1356,7 +1601,7 @@ def _signal_validation_metric_explanations() -> str:
         ("ICIR", "Rank IC 的均值除以波动，衡量 IC 稳定性。ICIR 越高，越像可重复的截面预测而不是偶然噪声。"),
         ("FM t-stat", "Fama-MacBeth 风格的截面回归统计量，用来辅助判断信号收益斜率是否稳定大于 0。"),
         ("FDR p", "多重检验校正后的 p 值。大量 idea 扫描时必须用 FDR 控制 data snooping，p 值不显著时不能因组合回测好看就推荐上线。"),
-        ("Hit Rate", "top bucket 或信号方向预测为正的比例。它不等于胜率，但能辅助判断信号方向是否一致。"),
+        ("Hit Rate", "Top 20 或信号方向预测为正的比例。它不等于胜率，但能辅助判断信号方向是否一致。"),
         ("LS诊断", "long-short spread 只用于 alpha 诊断。A 股策略报告不能把它当可部署组合，最终组合必须 long-only。"),
     ]
     body = "".join(f"<tr><td>{escape(k)}</td><td>{escape(v)}</td></tr>" for k, v in rows)
@@ -1397,13 +1642,13 @@ def _read_hit_rate(hit: float | None) -> str:
 
 def _read_portfolio_diagnostic(diag: Dict[str, Any]) -> str:
     if not diag:
-        return "缺少 top bucket long-only 诊断。"
+        return "缺少 Top 20 long-only 诊断。"
     ann = _safe_float(diag.get("top_bucket_annualized_return"))
     excess = _safe_float(diag.get("benchmark_excess_after_cost_mean_return"))
     benchmark = str(diag.get("benchmark_symbol", "") or "")
     parts = []
     if ann is not None:
-        parts.append(f"top bucket 近似年化 {ann:.2%}")
+        parts.append(f"Top 20 近似年化 {ann:.2%}")
     if excess is not None:
         parts.append(f"成本后相对 {benchmark or 'benchmark'} 单期超额 {excess:.4%}")
     parts.append("该诊断不能替代正式 Backtester。")
@@ -1531,11 +1776,12 @@ def _strict_backtest_table(rows: List[Dict[str, Any]]) -> str:
             + f"<td>{escape(str(metrics.get('total_trades', 0)))}</td>"
             + f"<td>{escape(_fmt(diagnostics.get('total_commission')))}</td>"
             + f"<td>{escape(str(diagnostics.get('limit_rejected_orders', 0)))}/{escape(str(diagnostics.get('t1_rejected_sells', 0)))}</td>"
+            + f"<td>{escape(str(_insufficient_cash_rejected_orders(diagnostics)))}</td>"
             + "</tr>"
         )
     if not body:
         return "<p>本次没有记录严格 Backtester 结果；这会阻断 Go / No-Go。</p>"
-    return _table(["Idea", "区间", "Sharpe", "Sortino", "CAGR", "累计", "MaxDD", "Calmar", "胜率", "PF", "成交数", "手续费", "涨跌停/T+1拒单"], body)
+    return _table(["Idea", "区间", "Sharpe", "Sortino", "CAGR", "累计", "MaxDD", "Calmar", "胜率", "PF", "成交数", "手续费", "涨跌停/T+1拒单", "现金不足拒单"], body)
 
 
 def _backtest_return_risk_table(rows: List[Dict[str, Any]]) -> str:
@@ -1587,12 +1833,13 @@ def _backtest_trade_cost_constraints_table(rows: List[Dict[str, Any]]) -> str:
             + f"<td>{escape(str(diagnostics.get('volume_limited_trades', 0)))}</td>"
             + f"<td>{escape(str(diagnostics.get('limit_rejected_orders', 0)))}</td>"
             + f"<td>{escape(str(diagnostics.get('t1_rejected_sells', 0)))}</td>"
+            + f"<td>{escape(str(_insufficient_cash_rejected_orders(diagnostics)))}</td>"
             + f"<td>{escape(str(constraints.get('cn_lot_size', 100)))}</td>"
             + "</tr>"
         )
     if not body:
         return "<p>缺少交易、成本或执行约束诊断。</p>"
-    return _table(["Idea", "成交/Fill数", "Round Trips", "胜率", "Profit Factor", "Payoff", "Expectancy", "总佣金", "成本拖累", "成交量限制", "涨跌停拒单", "T+1拒单", "手数"], body)
+    return _table(["Idea", "成交/Fill数", "Round Trips", "胜率", "Profit Factor", "Payoff", "Expectancy", "总佣金", "成本拖累", "成交量限制", "涨跌停拒单", "T+1拒单", "现金不足拒单", "手数"], body)
 
 
 def _backtest_stat_benchmark_table(rows: List[Dict[str, Any]]) -> str:
@@ -1657,6 +1904,17 @@ def _cost_drag_value(diagnostics: Dict[str, Any]) -> Any:
     return value
 
 
+def _insufficient_cash_rejected_orders(diagnostics: Dict[str, Any]) -> int:
+    value = diagnostics.get("insufficient_cash_rejected_orders")
+    count = _safe_int(value)
+    if count is not None:
+        return count
+    rejection_counts = diagnostics.get("rejection_counts") or {}
+    if isinstance(rejection_counts, dict):
+        return int(rejection_counts.get("insufficient_cash", 0) or 0)
+    return 0
+
+
 def _backtest_requirements_table() -> str:
     rows = [
         ("收益", "CAGR、累计收益、benchmark alpha、information ratio"),
@@ -1718,24 +1976,18 @@ def _go_no_go(rows: List[Dict[str, Any]]) -> str:
 
 
 def _walkforward_table(data: Dict[str, Any]) -> str:
-    log_rows = data.get("log") or []
+    detail = data.get("walkforward_detail") or data.get("oos") or {}
     rows = []
-    for entry in log_rows:
-        if not isinstance(entry, dict):
-            continue
-        phase = str(entry.get("phase", ""))
-        if phase not in {"rigor", "walkforward", "purged_walk_forward"}:
-            continue
-        scores = entry.get("scores") or {}
+    if isinstance(detail, dict) and detail:
         rows.append(
             "<tr>"
-            + f"<td>{escape(str(entry.get('title', '')))}</td>"
-            + f"<td>{escape(str(entry.get('verdict', '')))}</td>"
-            + f"<td>{escape(_fmt(scores.get('aggregate_oos_sharpe')))}</td>"
-            + f"<td>{escape(_fmt(scores.get('worst_oos_sharpe')))}</td>"
-            + f"<td>{escape(_pct(scores.get('pct_profitable_splits')))}</td>"
-            + f"<td>{escape(_fmt(scores.get('deflated_sharpe_ratio')))}</td>"
-            + f"<td>{escape(str(entry.get('reason', '')))}</td>"
+            + f"<td>{escape(str(data.get('run_id') or 'research_pipeline'))}</td>"
+            + f"<td>{escape(str(detail.get('verdict', '')))}</td>"
+            + f"<td>{escape(_fmt(detail.get('aggregate_oos_sharpe')))}</td>"
+            + f"<td>{escape(_fmt(detail.get('worst_oos_sharpe')))}</td>"
+            + f"<td>{escape(_pct(detail.get('pct_profitable_splits')))}</td>"
+            + f"<td>{escape(_fmt(detail.get('deflated_sharpe_ratio')))}</td>"
+            + f"<td>{escape(str(detail.get('reason', '')))}</td>"
             + "</tr>"
         )
     if not rows:
@@ -1761,7 +2013,7 @@ def _walkforward_detail_table(data: Dict[str, Any]) -> str:
         return "<p>本次没有保存 split 级别的 walk-forward 细节。后续正式报告应保存每个 split 的起止日期、样本内/样本外指标、参数和 regime。</p>"
     rows = [
         ("Split 数量", str(detail.get("n_splits", "n/a")), "OOS 分段数量，越少越容易受偶然区间影响。"),
-        ("Top excess avg Sharpe", _fmt(detail.get("top_excess_vs_benchmark_avg_sharpe")), "long-only top bucket 相对 benchmark 的 OOS 平均 Sharpe。"),
+        ("Top excess avg Sharpe", _fmt(detail.get("top_excess_vs_benchmark_avg_sharpe")), "long-only Top 20 相对 benchmark 的 OOS 平均 Sharpe。"),
         ("Top excess positive split", _pct(detail.get("top_excess_vs_benchmark_pct_positive")), "OOS split 中超额收益为正的比例。"),
         ("Long-short avg Sharpe diagnostic", _fmt(detail.get("long_short_avg_sharpe_diagnostic")), "仅用于 alpha 诊断，不作为 A 股可部署组合。"),
         ("Long-short positive split diagnostic", _pct(detail.get("long_short_pct_positive_diagnostic")), "long-short 诊断在 OOS split 中为正的比例。"),
@@ -1997,6 +2249,41 @@ def _money(value: Any) -> str:
         return f"{float(value):,.2f}"
     except (TypeError, ValueError):
         return "n/a"
+
+
+def _compact_money(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "n/a"
+    abs_value = abs(number)
+    if abs_value >= 1_000_000:
+        return f"{number / 1_000_000:.2f}M"
+    if abs_value >= 1_000:
+        return f"{number / 1_000:.0f}K"
+    return f"{number:.0f}"
+
+
+def _curve_points(value: Any) -> List[tuple[str, float]]:
+    if not isinstance(value, list):
+        return []
+    points: List[tuple[str, float]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        date_text = str(item.get("date") or "")[:10]
+        number = _safe_float(item.get("value"))
+        if not date_text or number is None or not math.isfinite(number):
+            continue
+        points.append((date_text, number))
+    return sorted(points, key=lambda item: item[0])
+
+
+def _svg_path(points: List[tuple[str, float]], x_for: Any, y_for: Any) -> str:
+    commands = []
+    for idx, (date_text, value) in enumerate(points):
+        command = "M" if idx == 0 else "L"
+        commands.append(f"{command}{x_for(date_text):.2f},{y_for(value):.2f}")
+    return " ".join(commands)
 
 
 def _safe_float(value: Any) -> float | None:

@@ -236,6 +236,8 @@ def _create_validation_components(config):
 
     validation_cfg = dict(getattr(config, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(config, "validation_min_obs", 252))
+    validation_cfg.setdefault("start_date", getattr(config, "default_backtest_start", "2012-01-01"))
+    validation_cfg.setdefault("end_date", getattr(config, "default_backtest_end", "2025-12-31"))
     market_data = _create_research_market_data(config)
     validation_cfg.setdefault("default_universe", _default_research_universe(market_data))
     return (
@@ -294,8 +296,8 @@ def main():
         validation_enabled=not args.no_validation,
         backtest_sharpe_threshold=0.5,
         default_symbols=list(_CN_RESEARCH_SYMBOLS),
-        default_backtest_start="2020-01-01",
-        default_backtest_end="2024-12-31",
+        default_backtest_start="2012-01-01",
+        default_backtest_end="2025-12-31",
     )
 
     if getattr(config, "tracking_enabled", False) and config.tracking_db_path:

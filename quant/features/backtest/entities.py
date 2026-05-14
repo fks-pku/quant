@@ -114,6 +114,7 @@ class _BacktestOrderManager:
         self._buy_dedup_set: set = set()
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
+        self._tradable_today: Dict[str, bool] = {}
         self._rejected_count: int = 0
 
     def _resolve_price(self, price: Optional[float], symbol: str) -> float:
@@ -128,6 +129,14 @@ class _BacktestOrderManager:
     def _passes_dedup(self, symbol: str, side: str) -> None:
         if side == 'BUY' and symbol in self._buy_dedup_set:
             raise OrderRejectedError(OrderRejectionReason.DUPLICATE_BUY, symbol)
+
+    def _passes_tradability(self, symbol: str) -> None:
+        if self._tradable_today.get(symbol) is False:
+            raise OrderRejectedError(
+                OrderRejectionReason.BAR_UNAVAILABLE,
+                symbol,
+                f"not tradable on {self._current_date}",
+            )
 
     def _passes_risk(self, symbol: str, quantity: float, price: float, side: str) -> None:
         if self._risk_engine is None:
@@ -147,6 +156,7 @@ class _BacktestOrderManager:
             ):
                 raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
                                       f"limit price={price!r}")
+            self._passes_tradability(symbol)
             effective = self._resolve_price(price, symbol)
             self._passes_dedup(symbol, side)
             self._passes_risk(symbol, quantity, effective, side)
@@ -202,9 +212,15 @@ class _BacktestContext:
     def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
         return self.order_manager.submit_order(symbol, quantity, side, order_type, price, strategy_name)
 
-    def prepare_for_trading_day(self, trading_date: date, last_prices: Dict[str, float]):
+    def prepare_for_trading_day(
+        self,
+        trading_date: date,
+        last_prices: Dict[str, float],
+        tradable_today: Optional[Dict[str, bool]] = None,
+    ):
         self.order_manager._current_date = trading_date
         self.order_manager._last_prices = last_prices
+        self.order_manager._tradable_today = tradable_today or {}
 
     def drain_orders(self, signal_date: Optional[date] = None):
         return self.order_manager.drain_pending(signal_date)

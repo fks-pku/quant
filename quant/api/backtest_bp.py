@@ -48,7 +48,7 @@ def run_backtest():
             from quant.features.trading.risk import RiskEngine
             from quant.features.trading.sub_portfolio import SubPortfolio
 
-            db: Storage = DuckDBStorage(read_only=True)
+            db: Storage = DuckDBStorage(read_only=True, use_security_status=True)
             try:
                 start_dt = datetime.strptime(start_date, '%Y-%m-%d')
                 end_dt = datetime.strptime(end_date, '%Y-%m-%d')

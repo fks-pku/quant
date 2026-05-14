@@ -2022,6 +2022,142 @@ class TestCase30CNPriceLimitSide:
 
 
 # ============================================================================
+# CASE-36: CN status table ST/suspension semantics
+# ============================================================================
+
+
+class TestCase36CNStatusSTAndSuspension:
+    def test_c36_01_st_fallback_rejects_buy_at_5pct_limit(self):
+        from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        order = DeferredOrder(
+            symbol="600519", quantity=100, side="BUY", order_type="MARKET",
+            price=10.0, strategy="STLimitBuy", signal_date=datetime(2024, 6, 3),
+            risk_check_price=10.0,
+        )
+        with pytest.raises(OrderRejectedError) as exc:
+            _execute_direct_order(
+                order, "600519",
+                {
+                    "symbol": "600519", "open": 10.50, "high": 10.50,
+                    "low": 10.50, "close": 10.50, "volume": 1_000_000,
+                    "timestamp": datetime(2024, 6, 4), "is_st": True,
+                },
+                Portfolio(initial_cash=100_000, currency="CNY"),
+                prev_bar={"close": 10.0},
+            )
+        assert exc.value.reason == OrderRejectionReason.PRICE_AT_LIMIT
+
+    def test_c36_02_status_limit_overrides_symbol_formula(self):
+        from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        order = DeferredOrder(
+            symbol="600519", quantity=100, side="BUY", order_type="MARKET",
+            price=10.0, strategy="StatusLimitBuy", signal_date=datetime(2024, 6, 3),
+            risk_check_price=10.0,
+        )
+        with pytest.raises(OrderRejectedError) as exc:
+            _execute_direct_order(
+                order, "600519",
+                {
+                    "symbol": "600519", "open": 10.50, "high": 10.50,
+                    "low": 10.50, "close": 10.50, "volume": 1_000_000,
+                    "timestamp": datetime(2024, 6, 4),
+                    "up_limit": 10.50, "down_limit": 9.50,
+                },
+                Portfolio(initial_cash=100_000, currency="CNY"),
+                prev_bar={"close": 10.0},
+            )
+        assert exc.value.reason == OrderRejectionReason.PRICE_AT_LIMIT
+
+    def test_c36_03_synthetic_suspension_discards_due_order_once(self):
+        data = pd.DataFrame([
+            {
+                "symbol": "600519", "timestamp": datetime(2024, 6, 3),
+                "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+                "volume": 1_000_000, "_suspended": False, "tradable": True,
+                "has_daily_bar": True,
+            },
+            {
+                "symbol": "600519", "timestamp": datetime(2024, 6, 4),
+                "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+                "volume": 0, "_suspended": True, "tradable": False,
+                "has_daily_bar": False, "suspend_type": "S",
+            },
+            {
+                "symbol": "600519", "timestamp": datetime(2024, 6, 5),
+                "open": 10.2, "high": 10.3, "low": 10.1, "close": 10.2,
+                "volume": 1_000_000, "_suspended": False, "tradable": True,
+                "has_daily_bar": True,
+            },
+        ])
+        strategy = _signal_strategy("StatusSuspend", "600519", buy_on={0}, sell_on=set(), qty=100)
+        bt = make_backtester(
+            CASE1_CONFIG,
+            lot_sizes={"600519": 100},
+        )
+        result = bt.run(
+            start=datetime(2024, 6, 3),
+            end=datetime(2024, 6, 5),
+            strategies=[strategy],
+            initial_cash=100_000,
+            data_provider=DataFrameProvider(data),
+            symbols=["600519"],
+        )
+
+        assert result.diagnostics.suspended_days == 1
+        assert result.diagnostics.discarded_orders == 1
+        assert result.diagnostics.expired_orders == 0
+        assert result.diagnostics.fill_count == 0
+        assert result.final_nav == pytest.approx(100_000)
+
+    def test_c36_04_suspended_day_submission_rejected_not_deferred(self):
+        data = pd.DataFrame([
+            {
+                "symbol": "600519", "timestamp": datetime(2024, 6, 3),
+                "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+                "volume": 1_000_000, "_suspended": False, "tradable": True,
+                "has_daily_bar": True,
+            },
+            {
+                "symbol": "600519", "timestamp": datetime(2024, 6, 4),
+                "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+                "volume": 0, "_suspended": True, "tradable": False,
+                "has_daily_bar": False, "suspend_type": "S",
+            },
+            {
+                "symbol": "600519", "timestamp": datetime(2024, 6, 5),
+                "open": 10.2, "high": 10.3, "low": 10.1, "close": 10.2,
+                "volume": 1_000_000, "_suspended": False, "tradable": True,
+                "has_daily_bar": True,
+            },
+        ])
+        strategy = _signal_strategy("SuspendSubmit", "600519", buy_on={1}, sell_on=set(), qty=100)
+        bt = make_backtester(
+            CASE1_CONFIG,
+            lot_sizes={"600519": 100},
+        )
+        result = bt.run(
+            start=datetime(2024, 6, 3),
+            end=datetime(2024, 6, 5),
+            strategies=[strategy],
+            initial_cash=100_000,
+            data_provider=DataFrameProvider(data),
+            symbols=["600519"],
+        )
+
+        assert result.diagnostics.suspended_days == 1
+        assert result.diagnostics.submission_rejected == 1
+        assert result.diagnostics.discarded_orders == 0
+        assert result.diagnostics.fill_count == 0
+        assert result.final_nav == pytest.approx(100_000)
+
+
+# ============================================================================
 # CASE-31: Reject mixed currencies
 # ============================================================================
 

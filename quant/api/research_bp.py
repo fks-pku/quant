@@ -106,6 +106,13 @@ def _make_backtest_fn():
             data_provider=data_provider,
             symbols=symbols,
         )
+        benchmark_equity_curve = None
+        if benchmark_provider is not None:
+            try:
+                benchmark_equity_curve = benchmark_provider.get_benchmark_equity(start, end, initial_cash)
+            except Exception:
+                benchmark_equity_curve = None
+
         strict_report = _strict_backtest_report(
             bt_result,
             start,
@@ -114,6 +121,8 @@ def _make_backtest_fn():
             symbols,
             benchmark_meta,
             lot_sizes,
+            strategy,
+            benchmark_equity_curve,
         )
         result.backtested += 1
 
@@ -197,13 +206,25 @@ def _load_cn_benchmark_provider(db_provider, start, end, benchmark_provider_cls)
     return None, {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
 
 
-def _strict_backtest_report(bt_result, start, end, initial_cash, symbols, benchmark_meta, lot_sizes):
+def _strict_backtest_report(
+    bt_result,
+    start,
+    end,
+    initial_cash,
+    symbols,
+    benchmark_meta,
+    lot_sizes,
+    strategy=None,
+    benchmark_equity_curve=None,
+):
     metrics = getattr(bt_result, "metrics", None)
     diagnostics = getattr(bt_result, "diagnostics", None)
     days = max(1, (end - start).days)
     cagr = (float(bt_result.final_nav) / float(initial_cash)) ** (365.25 / days) - 1.0 if initial_cash > 0 else 0.0
     max_drawdown_pct = _metric_float(getattr(bt_result, "max_drawdown_pct", 0.0))
     stat_sig = getattr(metrics, "statistical_significance", {}) if metrics is not None else {}
+    benchmark_metrics = _benchmark_equity_metrics(benchmark_equity_curve, initial_cash, start, end)
+    strategy_equity_curve = getattr(bt_result, "equity_curve", None)
     return {
         "framework": "Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio",
         "period": f"{start.date()}-{end.date()}",
@@ -225,13 +246,20 @@ def _strict_backtest_report(bt_result, start, end, initial_cash, symbols, benchm
         },
         "benchmark": {
             **dict(benchmark_meta or {}),
+            **benchmark_metrics,
             "benchmark_return": _metric_float(getattr(metrics, "benchmark_return", None) if metrics is not None else None),
             "alpha": _metric_float(getattr(metrics, "alpha", None) if metrics is not None else None),
             "beta": _metric_float(getattr(metrics, "beta", None) if metrics is not None else None),
             "information_ratio": _metric_float(getattr(metrics, "information_ratio", None) if metrics is not None else None),
             "tracking_error": _metric_float(getattr(metrics, "tracking_error", None) if metrics is not None else None),
+            "benchmark_yearly_returns": _yearly_returns_from_equity(benchmark_equity_curve, initial_cash),
         },
         "diagnostics": _diagnostics_dict(diagnostics),
+        "equity_curve": {
+            "strategy": _series_to_curve_points(strategy_equity_curve),
+            "benchmark": _series_to_curve_points(benchmark_equity_curve),
+        },
+        "yearly_returns": _yearly_returns_from_equity(strategy_equity_curve, initial_cash),
         "constraints": {
             "hfq_signal_policy": "Strategy helpers use adj_* prices for signal logic; raw close is reserved for order sizing/fill accounting.",
             "long_only": True,
@@ -242,6 +270,8 @@ def _strict_backtest_report(bt_result, start, end, initial_cash, symbols, benchm
             "price_limits": "Backtester execution diagnostics record limit_rejected_orders.",
             "commission": {"CN": "cn_realistic", "HK": "hk_realistic", "US": "per_share"},
             "slippage_bps": 5,
+            "strategy_max_position_pct": _metric_float(getattr(strategy, "max_position_pct", None)),
+            "strategy_max_positions": int(getattr(strategy, "max_positions", 0) or 0),
         },
     }
 
@@ -309,9 +339,91 @@ def _diagnostics_dict(diagnostics):
         "final_suspended_holding_count",
     )
     data = {field: _metric_float(getattr(diagnostics, field, 0.0)) for field in fields}
+    rejection_counts = dict(getattr(diagnostics, "rejection_counts", {}) or {})
+    data["insufficient_cash_rejected_orders"] = int(rejection_counts.get("insufficient_cash", 0) or 0)
     data["final_suspended_symbols"] = list(getattr(diagnostics, "final_suspended_symbols", []) or [])
-    data["rejection_counts"] = dict(getattr(diagnostics, "rejection_counts", {}) or {})
+    data["rejection_counts"] = rejection_counts
     return data
+
+
+def _series_to_curve_points(series):
+    if series is None or not hasattr(series, "empty") or series.empty:
+        return []
+    points = []
+    for idx, value in series.items():
+        number = _metric_float(value)
+        if isinstance(number, str):
+            continue
+        try:
+            date_text = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
+        except Exception:
+            date_text = str(idx)[:10]
+        points.append({"date": date_text, "value": number})
+    return points
+
+
+def _benchmark_equity_metrics(series, initial_cash, start, end):
+    if series is None or not hasattr(series, "empty") or series.empty:
+        return {}
+    try:
+        from quant.features.backtest.analytics import (
+            calculate_max_drawdown,
+            calculate_sharpe,
+            calculate_sortino,
+        )
+
+        equity = series.dropna()
+        if equity.empty:
+            return {}
+        returns = equity.pct_change().dropna()
+        days = max(1, (end - start).days)
+        initial = float(initial_cash)
+        final_value = float(equity.iloc[-1])
+        total_return = (final_value / initial) - 1.0 if initial > 0 else 0.0
+        cagr = (final_value / initial) ** (365.25 / days) - 1.0 if initial > 0 else 0.0
+        _, max_drawdown_pct, _, _ = calculate_max_drawdown(equity)
+        return {
+            "benchmark_total_return": _metric_float(total_return),
+            "benchmark_cagr": _metric_float(cagr),
+            "benchmark_sharpe": _metric_float(calculate_sharpe(returns)),
+            "benchmark_sortino": _metric_float(calculate_sortino(returns)),
+            "benchmark_max_drawdown_pct": _metric_float(max_drawdown_pct),
+            "benchmark_calmar_ratio": _metric_float(_calmar_ratio(cagr, max_drawdown_pct)),
+        }
+    except Exception:
+        return {}
+
+
+def _yearly_returns_from_equity(series, initial_cash=None):
+    if series is None or not hasattr(series, "empty") or series.empty:
+        return {}
+    try:
+        import pandas as pd
+
+        equity = series.dropna().copy()
+        if equity.empty:
+            return {}
+        if not isinstance(equity.index, pd.DatetimeIndex):
+            equity.index = pd.to_datetime(equity.index, errors="coerce")
+            equity = equity[~equity.index.isna()]
+        equity = equity.sort_index()
+        if equity.empty:
+            return {}
+        result = {}
+        previous_close = None
+        for year, group in equity.groupby(equity.index.year):
+            if group.empty:
+                continue
+            base = previous_close
+            if base is None:
+                base = initial_cash if initial_cash is not None and float(initial_cash) > 0 else float(group.iloc[0])
+            final_value = float(group.iloc[-1])
+            if float(base) > 0:
+                result[str(int(year))] = _metric_float(final_value / float(base) - 1.0)
+            previous_close = final_value
+        return result
+    except Exception:
+        return {}
 
 
 def _metric_float(value):
@@ -663,6 +775,8 @@ def _make_factor_data(cfg: ResearchConfig):
 def _validation_config(cfg: ResearchConfig) -> dict:
     validation_cfg = dict(getattr(cfg, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(cfg, "validation_min_obs", 252))
+    validation_cfg.setdefault("start_date", getattr(cfg, "default_backtest_start", "2012-01-01"))
+    validation_cfg.setdefault("end_date", getattr(cfg, "default_backtest_end", "2025-12-31"))
     return validation_cfg
 
 

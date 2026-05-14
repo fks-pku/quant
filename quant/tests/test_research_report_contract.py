@@ -40,6 +40,9 @@ REQUIRED_DETAIL_SECTIONS = [
     "交易解释",
     "数据质量检查",
     "组合诊断",
+    "PnL 归因桥",
+    "回测 Equity Curve",
+    "年度收益日历图",
     "回测配置",
     "核心绩效",
     "成交与成本诊断",
@@ -56,6 +59,11 @@ REQUIRED_TEMPLATE_MARKERS = [
     'class="grid"',
     'class="metric"',
     'class="formula"',
+    'class="equity-chart"',
+    'class="strategy-line"',
+    'class="benchmark-line"',
+    'class="return-calendar"',
+    'class="return-cell',
     'class="decision"',
     'class="decision-mark"',
 ]
@@ -110,10 +118,17 @@ def test_canonical_full_research_report_template_defines_contract():
     assert "full_research_report.html" in html
     assert "000300" in html
     assert "Calmar Ratio" in html
+    assert "Top 20 long-only" in html
     assert "Top 1% long-only" in html
     assert "Rank IC t-stat" in html
     assert "成本后年化" in html
     assert "final_suspended_holding_nav" in html
+    assert "insufficient_cash_rejected_orders" in html
+    assert "回测 Equity Curve" in html
+    assert "年度收益日历图" in html
+    assert "strategy-line" in html
+    assert "benchmark-line" in html
+    assert "return-calendar" in html
 
 
 def test_legacy_golden_full_research_report_has_no_encoding_regression():
@@ -137,20 +152,21 @@ def test_generated_full_research_report_matches_golden_contract():
             "rejected": 1,
             "walkforward_detail": {
                 "n_splits": 3,
-                "top_excess_vs_benchmark_avg_sharpe": 0.7,
-                "top_excess_vs_benchmark_pct_positive": 0.66,
+                "aggregate_oos_sharpe": -9.9,
+                "worst_oos_sharpe": -9.9,
+                "pct_profitable_splits": 0.0,
             },
             "log": [
                 {
                     "phase": "rigor",
                     "verdict": "warn",
                     "title": "contract_check",
-                    "reason": "diagnostic only",
+                    "reason": "log values should not drive report metrics",
                     "scores": {
-                        "aggregate_oos_sharpe": 0.7,
-                        "worst_oos_sharpe": None,
-                        "pct_profitable_splits": 0.66,
-                        "deflated_sharpe_ratio": None,
+                        "aggregate_oos_sharpe": -9.9,
+                        "worst_oos_sharpe": -9.9,
+                        "pct_profitable_splits": 0.0,
+                        "deflated_sharpe_ratio": 0.0,
                     },
                 }
             ],
@@ -195,10 +211,12 @@ def test_generated_full_research_report_matches_golden_contract():
                     "n_observations": 280,
                     "data_start": "2017-01-03",
                     "data_end": "2025-12-31",
-                    "portfolio_diagnostics": {
-                        "kind": "top_bucket_long_only",
-                        "top_bucket_annualized_return": 0.28,
-                        "top_bucket_after_cost_sharpe": 0.62,
+                        "portfolio_diagnostics": {
+                            "kind": "top_bucket_long_only",
+                            "top_bucket_selection": "top_n",
+                            "top_bucket_target_count": 20,
+                            "top_bucket_annualized_return": 0.28,
+                            "top_bucket_after_cost_sharpe": 0.62,
                         "top_bucket_turnover": 0.34,
                         "top_bucket_hit_rate": 0.54,
                         "top_bucket_after_cost_mean_return": 0.003,
@@ -220,9 +238,61 @@ def test_generated_full_research_report_matches_golden_contract():
                         "benchmark_excess_after_cost_annualized_return": 0.14,
                         "benchmark_excess_after_cost_max_drawdown": -0.18,
                         "benchmark_excess_after_cost_calmar_ratio": 0.78,
+                        "pnl_attribution_bridge": [
+                            {
+                                "key": "ideal_top20_close_to_close",
+                                "label": "理想 top20 close-to-close",
+                                "annualized_return": 0.31,
+                                "delta_annualized_return": 0.0,
+                                "sharpe": 0.88,
+                                "delta_sharpe": 0.0,
+                                "max_drawdown": -0.22,
+                                "turnover": 0.45,
+                                "selected_count_mean": 20.0,
+                                "selected_count_min": 20,
+                                "selected_count_max": 20,
+                                "note": "每日信号 top20 等权，下一交易日 close-to-close，不加执行约束。",
+                            },
+                            {
+                                "key": "turnover_cost",
+                                "label": "加入估算换手成本",
+                                "annualized_return": 0.19,
+                                "delta_annualized_return": -0.12,
+                                "sharpe": 0.62,
+                                "delta_sharpe": -0.26,
+                                "max_drawdown": -0.28,
+                                "turnover": 0.34,
+                                "selected_count_mean": 20.0,
+                                "selected_count_min": 19,
+                                "selected_count_max": 20,
+                                "note": "轻量归因桥，不替代 strict Backtester。",
+                            },
+                        ],
+                    },
+                    "walkforward": {
+                        "verdict": "warn",
+                        "reason": "structured walk-forward diagnostic",
+                        "aggregate_oos_sharpe": 0.7,
+                        "worst_oos_sharpe": 0.2,
+                        "pct_profitable_splits": 0.66,
+                        "deflated_sharpe_ratio": None,
+                        "n_splits": 1,
+                        "splits": [
+                            {
+                                "split": 1,
+                                "train_start": "2020-01-01",
+                                "train_end": "2020-06-30",
+                                "test_start": "2020-07-01",
+                                "test_end": "2020-07-31",
+                                "oos_sharpe": 0.7,
+                                "max_drawdown": -0.03,
+                                "turnover": 0.12,
+                                "verdict": "warn",
+                            }
+                        ],
                     },
                     "strict_backtest": {
-                        "period": "2020-01-01 to 2025-12-31",
+                        "period": "2012-01-01 to 2025-12-31",
                         "metrics": {
                             "sharpe": 0.57,
                             "sortino": 0.84,
@@ -244,21 +314,49 @@ def test_generated_full_research_report_matches_golden_contract():
                             "rows": 2186,
                             "price_column": "adj_close",
                             "fallback_used": False,
+                            "benchmark_cagr": 0.05,
+                            "benchmark_total_return": 0.28,
+                            "benchmark_sharpe": 0.4,
+                            "benchmark_sortino": 0.6,
+                            "benchmark_max_drawdown_pct": -0.2,
+                            "benchmark_calmar_ratio": 0.25,
                             "benchmark_return": 0.05,
                             "alpha": 0.07,
                             "beta": 1.06,
                             "information_ratio": 0.5,
                             "tracking_error": 0.14,
+                            "benchmark_yearly_returns": {"2024": 0.04, "2025": 0.06},
                         },
                         "diagnostics": {
                             "total_commission": 1000,
                             "volume_limited_trades": 3,
                             "limit_rejected_orders": 1,
                             "t1_rejected_sells": 0,
+                            "rejection_counts": {"insufficient_cash": 2},
                             "final_suspended_holding_nav": 12345.67,
                             "final_suspended_symbols": ["600519"],
                         },
-                        "yearly_returns": {"2025-12-31": 0.16},
+                        "equity_curve": {
+                            "strategy": [
+                                {"date": "2024-12-31", "value": 500000},
+                                {"date": "2025-01-03", "value": 510000},
+                                {"date": "2025-12-31", "value": 580000},
+                            ],
+                            "benchmark": [
+                                {"date": "2024-12-31", "value": 500000},
+                                {"date": "2025-01-03", "value": 498000},
+                                {"date": "2025-12-31", "value": 530000},
+                            ],
+                        },
+                        "constraints": {
+                            "strategy_max_position_pct": 1.0,
+                            "strategy_max_positions": 20,
+                            "slippage_bps": 5,
+                            "commission": {"CN": "cn_realistic"},
+                            "t_plus_1": True,
+                            "cn_lot_size": 100,
+                        },
+                        "yearly_returns": {"2024": 0.0, "2025-12-31": 0.16},
                     },
                 },
             }
@@ -273,14 +371,31 @@ def test_generated_full_research_report_matches_golden_contract():
     for marker in REQUIRED_TEMPLATE_MARKERS:
         assert marker in html
     assert "Calmar Ratio" in html
+    assert "Top 20 long-only" in html
     assert "Top 1% long-only" in html
     assert "final_suspended_holding_nav" in html
+    assert "<td>默认目标总仓位</td><td>100.00%</td>" in html
+    assert '<figure class="equity-chart">' in html
+    assert '<path class="strategy-line"' in html
+    assert '<path class="benchmark-line"' in html
+    assert "策略期末 580,000.00" in html
+    assert "Benchmark 期末 530,000.00" in html
+    assert '<figure class="return-calendar-chart">' in html
+    assert '<div class="return-cell positive"><b>2025</b><strong>16.00%</strong>' in html
+    assert "000300 6.00% · 超额 10.00%" in html
+    assert "<td>insufficient_cash_rejected_orders</td><td>2</td><td>现金不足拒单</td>" in html
     assert "12,345.67" in html
+    assert "<td>aggregate_oos_sharpe</td><td>0.7000</td>" in html
+    assert "<td>0.7000</td><td>-3.00%</td><td>12.00%</td><td>warn</td>" in html
+    assert "-9.9000" not in html
     assert "<td>Rank IC t-stat</td><td>1.3000</td>" in html
     assert "<td>p-value</td><td>0.1900</td>" in html
     assert "1d=0.0080; 5d=0.0040" in html
-    assert "<td>Top bucket long-only</td><td>28.00%</td><td>0.6200</td>" in html
+    assert "<td>Top 20 long-only</td><td>28.00%</td><td>0.6200</td>" in html
     assert "<td>34.00%</td><td>19.00%</td><td>A 股可交易方向诊断</td>" in html
+    assert "PnL 归因桥" in html
+    assert "<td>理想 top20 close-to-close</td><td>31.00%</td><td>0.00%</td><td>0.8800</td>" in html
+    assert "<td>加入估算换手成本</td><td>19.00%</td><td>-12.00%</td><td>0.6200</td>" in html
     assert "Rejected strategy archive" in html
     for placeholder in ("[strategy_id]", "[Rank IC]", "[000300 coverage]", "[YYYY-MM-DD]"):
         assert placeholder not in html

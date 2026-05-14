@@ -125,6 +125,19 @@ class TestPriceLimit:
     def test_zero_prev_close(self):
         assert is_price_at_limit("600519", 110.0, 0) is False
 
+    def test_explicit_status_limits_take_precedence(self):
+        assert get_price_limit_direction(
+            "600519", 5.0, 100.0, up_limit=5.0, down_limit=4.0
+        ) == "UP"
+        assert get_price_limit_direction(
+            "600519", 4.0, 100.0, up_limit=5.0, down_limit=4.0
+        ) == "DOWN"
+
+    def test_st_fallback_uses_5pct_limit(self):
+        assert get_price_limit_direction("600519", 10.50, 10.0, is_st=True) == "UP"
+        assert get_price_limit_direction("600519", 9.50, 10.0, is_st=True) == "DOWN"
+        assert get_price_limit_direction("600519", 10.60, 10.0, is_st=False) is None
+
 
 class TestSettlement:
     def test_us_t0(self):
@@ -178,6 +191,10 @@ class TestSuspended:
 
     def test_normal_bar(self):
         assert is_suspended({"volume": 1000, "open": 100, "close": 100}) is False
+
+    def test_status_not_tradable(self):
+        assert is_suspended({"volume": 1000, "open": 100, "close": 100, "tradable": False}) is True
+        assert is_suspended({"volume": 1000, "open": 100, "close": 100, "has_daily_bar": False}) is True
 
 
 class TestFIFO:

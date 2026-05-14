@@ -107,7 +107,10 @@ while current_date ≤ end:
 - `_BacktestContext` 和 `_BacktestOrderManager` 定义在 `entities.py`，不要暴露到外部
 - Engine 通过 `_BacktestContext.prepare_for_trading_day()` 和 `drain_orders()` 公开方法与 Context 交互，不要直接访问 `_pending_orders`、`_current_date`、`_last_prices` 等私有属性
 - Market order 无有效价格时（`effective_price <= 0`）直接 reject，不再用 share count 充当 dollar value 绕过风控
-- `is_suspended()` 优先检查 `bar["_suspended"]` 显式标记，其次才用 volume=0 / close=open=0 启发式
+- CN 回测数据应通过 `DuckDBProvider`/`DuckDBStorage(use_security_status=True)` 读取；它会用 `security_status.duckdb::cn_security_status_daily` 给 `daily_cn_ochl` 补 `_suspended`、`tradable`、`is_st`、`up_limit/down_limit`，并为无 OHLC 的停牌日生成 synthetic bar
+- ST 不自动从回测 universe 剔除，也不自动禁止交易；优先用 status 表 `up_limit/down_limit`，缺失时 `is_st=True` 按 5% 涨跌停 fallback
+- `is_suspended()` 优先检查 `bar["_suspended"]` / `tradable=False` / `has_daily_bar=False` 显式状态，其次才用 volume=0 / close=open=0 启发式
+- 当日 `tradable=False` 的标的提交订单应在 `_BacktestOrderManager` submission 阶段拒绝；已有 deferred order 到停牌日则在 Step ④ 丢弃
 - `DataFrameProvider._build_index()` 遇到重复 (symbol, date) 时保留 volume 更高的行，而非先到先得
 - `domain.ports.strategy.Strategy` 是架构端口定义，实际策略必须继承 `features.strategies.base.Strategy`
 - 多策略回测必须使用独立 `SubPortfolio`；未显式传 `strategy_allocations` 时按策略数等权分配初始资金
@@ -124,7 +127,7 @@ while current_date ≤ end:
 - CN 涨跌停拒绝按方向处理：涨停拒绝 BUY、跌停拒绝 SELL；涨停 SELL 和跌停 BUY 不因涨跌停规则拒绝
 - LIMIT 订单必须有正数限价；BUY 仅在 next open <= limit 时成交，SELL 仅在 next open >= limit 时成交，冲击成本后不得穿越限价
 - 一个回测实例不得混合币种；跨 USD/CNY/HKD 标的需要拆成不同回测或引入明确 FX 层
-- 停牌 bar 不更新 `last_prices`/`prev_bars`，避免用停牌填充值重估 NAV 或污染后续涨跌停基准
+- 停牌 synthetic bar 不更新 `last_prices`/`prev_bars`，避免用停牌填充值重估 NAV 或污染后续涨跌停基准
 - 最后一个交易日 after-close 产生的 deferred order 没有真实下一交易日，应过期计入 diagnostics，不得用 synthetic bar 成交
 - `on_stop` 订单不是普通 T+1 deferred order；默认 `backtest.force_close_on_stop=True` 时按最后有效 close 做强制清算，并写入 `forced_closeout_orders/forced_closeout_trades`，设为 `False` 时订单过期丢弃
 - `DataFrameProvider.get_bars()` 基于 `_bar_map` 去重索引返回数据，与 `get_bar_for_date()` 一致

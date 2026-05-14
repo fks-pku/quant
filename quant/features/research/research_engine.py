@@ -837,6 +837,7 @@ class ResearchEngine:
                     )
                     if not wf_result.is_viable:
                         reason = f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
+                        self._attach_walkforward_result(sid, wf_result, "fail", reason)
                         final_status = "rejected"
                         final_reasons.append(reason)
                         result.log.append(ResearchLogEntry(
@@ -857,6 +858,7 @@ class ResearchEngine:
                         dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
                         if final_status != "rejected" and dsr is not None and dsr < 0.95:
                             reason = f"Deflated Sharpe ratio warning: dsr={dsr:.2f} < 0.95"
+                            self._attach_walkforward_result(sid, wf_result, "warn", reason)
                             final_status = "needs_more_validation"
                             final_reasons.append(reason)
                             result.log.append(ResearchLogEntry(
@@ -865,6 +867,7 @@ class ResearchEngine:
                                 scores={"deflated_sharpe_ratio": dsr},
                             ))
                         else:
+                            self._attach_walkforward_result(sid, wf_result, "pass", "Walk-forward passed")
                             result.walkforward_passed += 1
                 rejected_before_backtest = result.rejected
                 result.log.append(ResearchLogEntry(
@@ -1173,6 +1176,58 @@ class ResearchEngine:
         except Exception as e:
             logger.warning(f"Failed to update hypothesis status for {strategy_id}: {e}")
 
+    def _attach_walkforward_result(self, strategy_id: str, wf_result: Any, verdict: str, reason: str) -> None:
+        if self.research_store is None or not hasattr(self.research_store, "list_hypotheses"):
+            return
+        payload = self._walkforward_result_dict(wf_result, verdict, reason)
+        try:
+            for row in self.research_store.list_hypotheses():
+                if row.get("strategy_id") != strategy_id:
+                    continue
+                updated = dict(row)
+                metrics = dict(updated.get("metrics") or {})
+                metrics["walkforward"] = payload
+                updated["metrics"] = metrics
+                self.research_store.upsert_hypothesis(updated)
+        except Exception as e:
+            logger.warning(f"Failed to attach walk-forward result for {strategy_id}: {e}")
+
+    @staticmethod
+    def _walkforward_result_dict(wf_result: Any, verdict: str, reason: str) -> Dict[str, Any]:
+        splits = list(getattr(wf_result, "splits", []) or [])
+        return {
+            "verdict": verdict,
+            "reason": reason,
+            "is_viable": bool(getattr(wf_result, "is_viable", False)),
+            "aggregate_oos_sharpe": _float_or_default(getattr(wf_result, "aggregate_oos_sharpe", 0.0), 0.0),
+            "worst_oos_sharpe": _float_or_default(getattr(wf_result, "worst_oos_sharpe", 0.0), 0.0),
+            "pct_profitable_splits": _float_or_default(getattr(wf_result, "pct_profitable_splits", 0.0), 0.0),
+            "deflated_sharpe_ratio": _optional_float(getattr(wf_result, "deflated_sharpe_ratio", None)),
+            "sharpe_degradation": _float_or_default(getattr(wf_result, "sharpe_degradation", 0.0), 0.0),
+            "regime_breakdown": dict(getattr(wf_result, "regime_breakdown", {}) or {}),
+            "bull_only_warning": bool(getattr(wf_result, "bull_only_warning", False)),
+            "n_splits": len(splits),
+            "splits": [ResearchEngine._walkforward_split_dict(split, idx) for idx, split in enumerate(splits, start=1)],
+        }
+
+    @staticmethod
+    def _walkforward_split_dict(split: Any, idx: int) -> Dict[str, Any]:
+        if not isinstance(split, dict):
+            return {"split": idx}
+        response = split.get("response") if isinstance(split.get("response"), dict) else {}
+        response_metrics = response.get("metrics") if isinstance(response.get("metrics"), dict) else {}
+        return {
+            "split": split.get("split") or idx,
+            "train_start": split.get("train_start_date") or split.get("train_start"),
+            "train_end": split.get("train_end_date") or split.get("train_end"),
+            "test_start": split.get("test_start_date") or split.get("test_start"),
+            "test_end": split.get("test_end_date") or split.get("test_end"),
+            "oos_sharpe": _optional_float(split.get("test_sharpe", response_metrics.get("sharpe"))),
+            "max_drawdown": _optional_float(response_metrics.get("max_drawdown") or response_metrics.get("maxdd")),
+            "turnover": _optional_float(response_metrics.get("turnover")),
+            "regime": split.get("regime", ""),
+        }
+
 
 def _repo_relative_path(path: Path) -> str:
     try:
@@ -1186,6 +1241,13 @@ def _float_or_default(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_a_share_symbol(symbol: str) -> bool:

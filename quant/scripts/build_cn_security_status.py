@@ -257,8 +257,8 @@ def _load_namechange(conn: duckdb.DuckDBPyConnection, client: TushareClient) -> 
         frame["end_date"] = _date_series(frame.get("end_date"))
         frame["name"] = frame["name"].fillna("").astype(str)
         frame["change_reason"] = frame["change_reason"].fillna("").astype(str)
-        frame["is_st"] = frame["name"].str.contains("ST", na=False) | frame["change_reason"].str.contains("ST", na=False)
-        frame["st_type"] = frame["name"].map(_st_type)
+        frame["st_type"] = frame.apply(lambda row: _st_type(row["name"], row["change_reason"]), axis=1)
+        frame["is_st"] = frame["st_type"] != ""
         frame = frame[
             ["symbol", "ts_code", "name", "start_date", "end_date", "change_reason", "is_st", "st_type"]
         ].dropna(subset=["symbol", "start_date"])
@@ -552,11 +552,16 @@ def _symbol_from_ts_code(value: Any) -> str:
     return str(value).split(".")[0].zfill(6)
 
 
-def _st_type(name: Any) -> str:
+def _st_type(name: Any, change_reason: Any = "") -> str:
     value = str(name)
     if "*ST" in value or "＊ST" in value:
         return "*ST"
     if "ST" in value:
+        return "ST"
+    reason = str(change_reason).strip()
+    if reason in ("*ST", "＊ST"):
+        return "*ST"
+    if reason == "ST":
         return "ST"
     return ""
 

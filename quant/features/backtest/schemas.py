@@ -43,3 +43,10 @@ class BacktestBar(TypedDict, total=False):
     close: float
     volume: float
     _suspended: NotRequired[bool]
+    tradable: NotRequired[bool]
+    is_st: NotRequired[bool]
+    st_type: NotRequired[str]
+    up_limit: NotRequired[float]
+    down_limit: NotRequired[float]
+    has_daily_bar: NotRequired[bool]
+    _has_daily_bar: NotRequired[bool]

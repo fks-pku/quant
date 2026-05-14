@@ -25,19 +25,30 @@ from quant.shared.utils.symbol_utils import detect_market as _detect_market
 
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
 _DEFAULT_DB = str(_PKG_DIR / "var" / "duckdb" / "quant.duckdb")
+_DEFAULT_STATUS_DB = str(_PKG_DIR / "var" / "duckdb" / "security_status.duckdb")
+_STATUS_TABLE = "cn_security_status_daily"
 
 BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE"
 BAR_INDEX = "timestamp, symbol"
 
 
 class DuckDBStorage(Storage):
-    def __init__(self, db_path: str = _DEFAULT_DB, read_only: bool = False):
+    def __init__(
+        self,
+        db_path: str = _DEFAULT_DB,
+        read_only: bool = False,
+        use_security_status: bool = False,
+        status_db_path: str = _DEFAULT_STATUS_DB,
+    ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = setup_logger("DuckDBStorage")
         self._lock = threading.RLock()
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._read_only = read_only
+        self._use_security_status = use_security_status
+        self._status_db_path = Path(status_db_path)
+        self._status_attach_failed = False
         self._init_database()
 
     def _init_database(self) -> None:
@@ -193,6 +204,10 @@ class DuckDBStorage(Storage):
         timeframe: str = "1d",
     ) -> pd.DataFrame:
         table_name = self._resolve_table(symbol, timeframe)
+        if table_name == "daily_cn_ochl" and self._is_daily_timeframe(timeframe):
+            status_frame = self._get_status_enriched_cn_bars([symbol], start, end)
+            if status_frame is not None:
+                return status_frame
 
         try:
             tables = self.conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()
@@ -246,6 +261,12 @@ class DuckDBStorage(Storage):
             for table_name, table_symbols in symbols_by_table.items():
                 if table_name not in existing_tables:
                     continue
+                if table_name == "daily_cn_ochl" and self._is_daily_timeframe(timeframe):
+                    frame = self._get_status_enriched_cn_bars(table_symbols, start, end)
+                    if frame is not None:
+                        if not frame.empty:
+                            frames.append(frame)
+                        continue
                 placeholders = ", ".join("?" for _ in table_symbols)
                 query = (
                     "SELECT timestamp, symbol, open, high, low, close, volume, "
@@ -267,6 +288,150 @@ class DuckDBStorage(Storage):
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True)
+
+    @staticmethod
+    def _is_daily_timeframe(timeframe: str) -> bool:
+        return timeframe in ("1d", "day", "daily")
+
+    def _status_available(self) -> bool:
+        if not self._use_security_status or self._status_attach_failed:
+            return False
+        if not self._status_db_path.exists():
+            return False
+        with self._lock:
+            try:
+                attached = {
+                    row[1]
+                    for row in self.conn.execute("PRAGMA database_list").fetchall()
+                    if len(row) > 1
+                }
+                if "security_status" not in attached:
+                    path = str(self._status_db_path).replace("'", "''")
+                    self.conn.execute(f"ATTACH '{path}' AS security_status (READ_ONLY)")
+                exists = self.conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_catalog = 'security_status'
+                      AND table_name = ?
+                    """,
+                    [_STATUS_TABLE],
+                ).fetchone()[0]
+                return bool(exists)
+            except Exception as e:
+                self._status_attach_failed = True
+                self.logger.warning(f"Security status table unavailable: {e}")
+                return False
+
+    def _get_status_enriched_cn_bars(
+        self,
+        symbols: List[str],
+        start: Optional[datetime],
+        end: Optional[datetime],
+    ) -> Optional[pd.DataFrame]:
+        if not self._status_available():
+            return None
+        if not symbols:
+            return pd.DataFrame()
+
+        table_symbols = list(dict.fromkeys(symbols))
+        placeholders = ", ".join("?" for _ in table_symbols)
+        query = f"""
+            SELECT
+                CAST(s.trade_date AS TIMESTAMP) AS timestamp,
+                s.symbol,
+                b.open,
+                b.high,
+                b.low,
+                b.close,
+                b.volume,
+                b.adj_open,
+                b.adj_high,
+                b.adj_low,
+                b.adj_close,
+                b.adj_factor,
+                s.is_st,
+                s.st_type,
+                s.is_suspended AS status_is_suspended,
+                s.has_daily_bar,
+                s.tradable,
+                s.up_limit,
+                s.down_limit,
+                s.pre_close AS status_pre_close,
+                s.is_listed,
+                s.list_status,
+                s.suspend_type,
+                s.suspend_timing
+            FROM security_status.{_STATUS_TABLE} s
+            LEFT JOIN daily_cn_ochl b
+              ON s.symbol = b.symbol
+             AND s.trade_date = CAST(b.timestamp AS DATE)
+            WHERE s.symbol IN ({placeholders})
+        """
+        params: list = list(table_symbols)
+        if start is not None:
+            query += " AND s.trade_date >= CAST(? AS DATE)"
+            params.append(start)
+        if end is not None:
+            query += " AND s.trade_date <= CAST(? AS DATE)"
+            params.append(end)
+        query += " ORDER BY s.symbol ASC, s.trade_date ASC"
+
+        try:
+            with self._lock:
+                frame = self.conn.execute(query, params).fetchdf()
+        except Exception as e:
+            self.logger.warning(f"Security status join failed, falling back to OHLC bars: {e}")
+            return None
+        return self._normalize_status_enriched_bars(frame)
+
+    @staticmethod
+    def _normalize_status_enriched_bars(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return pd.DataFrame()
+
+        result = frame.copy()
+        result["timestamp"] = pd.to_datetime(result["timestamp"])
+        result = result.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+        has_daily_bar = result["has_daily_bar"].fillna(True).astype(bool)
+        tradable = result["tradable"].fillna(has_daily_bar).astype(bool)
+        status_suspended = result["status_is_suspended"].fillna(False).astype(bool)
+        synthetic = ~has_daily_bar
+
+        for col in ("open", "high", "low", "close", "volume", "adj_open", "adj_high", "adj_low", "adj_close", "adj_factor", "up_limit", "down_limit", "status_pre_close"):
+            if col in result.columns:
+                result[col] = pd.to_numeric(result[col], errors="coerce")
+
+        price = result["close"].where(result["close"].notna(), result["status_pre_close"])
+        price = price.groupby(result["symbol"]).ffill()
+        limit_mid = (result["up_limit"] + result["down_limit"]) / 2
+        price = price.where(price.notna(), limit_mid)
+
+        for col in ("open", "high", "low", "close"):
+            result[col] = result[col].where(result[col].notna(), price)
+        result["volume"] = result["volume"].fillna(0)
+
+        adj_pairs = {
+            "adj_open": "open",
+            "adj_high": "high",
+            "adj_low": "low",
+            "adj_close": "close",
+        }
+        for adj_col, price_col in adj_pairs.items():
+            result.loc[synthetic & result[adj_col].isna(), adj_col] = result.loc[synthetic, price_col]
+        result.loc[synthetic & result["adj_factor"].isna(), "adj_factor"] = 1.0
+
+        result["_suspended"] = status_suspended | (~tradable)
+        result["_has_daily_bar"] = has_daily_bar
+        result["is_st"] = result["is_st"].fillna(False).astype(bool)
+        result["tradable"] = tradable
+        result["has_daily_bar"] = has_daily_bar
+        result["st_type"] = result["st_type"].fillna("")
+        result["list_status"] = result["list_status"].fillna("")
+        result["suspend_type"] = result["suspend_type"].fillna("")
+        result["suspend_timing"] = result["suspend_timing"].fillna("")
+        result = result.drop(columns=["status_is_suspended", "status_pre_close"])
+        return result
 
     def get_symbols(self, timeframe: str = "1d", market: str = "hk") -> List[str]:
         freq = timeframe if timeframe in ("daily", "minute") else "daily"

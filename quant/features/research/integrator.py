@@ -9,6 +9,8 @@ from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, RawStrategy,
 
 logger = logging.getLogger(__name__)
 
+RESEARCH_DEFAULT_MAX_POSITION_PCT = 1.0
+
 
 class StrategyIntegrator:
     def __init__(
@@ -120,7 +122,7 @@ class StrategyIntegrator:
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
         formula_key = getattr(spec, "signal_formula_key", "") or ""
         body = self._formula_body(formula_key)
-        rebalance_body = "" if formula_key in {"worldquant_alpha_001", "worldquant_alpha_002"} else self._generic_rebalance_body()
+        rebalance_body = "" if formula_key in {"worldquant_alpha_001", "worldquant_alpha_002", "worldquant_alpha_003"} else self._generic_rebalance_body()
 
         return f'''"""{raw.title}
 
@@ -152,7 +154,7 @@ class {class_name}(DailyBarStrategy):
         symbols: Optional[List[str]] = None,
         lookback: int = {lookback},
         holding_days: int = {horizon},
-        max_position_pct: float = 0.10,
+        max_position_pct: float = {RESEARCH_DEFAULT_MAX_POSITION_PCT:.1f},
         max_positions: int = 20,
     ):
         self._symbols = symbols or {default_symbols_expr}
@@ -429,6 +431,107 @@ class {class_name}(DailyBarStrategy):
                 return signal
         return 0.0
 '''
+        if formula_key == "worldquant_alpha_003":
+            return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        raw_scores = self._worldquant_alpha_003_scores()
+        if not raw_scores:
+            return
+        raw_scores.sort(reverse=True)
+        count = len(raw_scores)
+        top_count = max(1, min(self.max_positions, int(np.ceil(count * 0.01))))
+        selected = [(signal, symbol, price) for signal, symbol, price in raw_scores if signal > 0][:top_count]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        if not selected:
+            for _, symbol, price in raw_scores:
+                current_pos = self._positions.get(symbol, 0)
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+            return
+        slots = len(selected)
+        for signal, symbol, price in raw_scores:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
+            target_qty = self._target_quantity(context, price, slots)
+            delta = target_qty - current_pos
+            if delta > 0:
+                self.buy(symbol, int(delta), "MARKET", price)
+            elif delta < 0:
+                self.sell(symbol, int(abs(delta)), "MARKET", price)
+
+    def _worldquant_alpha_003_scores(self) -> List[tuple[float, str, float]]:
+        corr_window = max(2, int(self.lookback))
+        eligible = {}
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            price = self._get_last_price(symbol)
+            if len(bars) >= corr_window and price > 0:
+                eligible[symbol] = (bars, price)
+        if len(eligible) < 2:
+            return []
+
+        ranked_open: Dict[str, List[float]] = {symbol: [] for symbol in eligible}
+        ranked_volume: Dict[str, List[float]] = {symbol: [] for symbol in eligible}
+        for offset in range(-corr_window, 0):
+            open_values = {}
+            volume_values = {}
+            for symbol, (bars, _) in eligible.items():
+                current_bar = bars[offset]
+                open_price = self._adj(current_bar, "open")
+                volume = self._volume(current_bar)
+                if open_price > 0 and volume > 0:
+                    open_values[symbol] = float(open_price)
+                    volume_values[symbol] = float(volume)
+            open_ranks = self._rank_map(open_values)
+            volume_ranks = self._rank_map(volume_values)
+            for symbol in eligible:
+                ranked_open[symbol].append(open_ranks.get(symbol, float("nan")))
+                ranked_volume[symbol].append(volume_ranks.get(symbol, float("nan")))
+
+        scores = []
+        for symbol, (_, price) in eligible.items():
+            signal = -self._correlation(ranked_open[symbol], ranked_volume[symbol])
+            if np.isfinite(signal):
+                scores.append((float(signal), symbol, price))
+        return scores
+
+    @staticmethod
+    def _rank_map(values: Dict[str, float]) -> Dict[str, float]:
+        items = sorted((value, symbol) for symbol, value in values.items() if np.isfinite(value))
+        count = len(items)
+        if count == 0:
+            return {}
+        return {symbol: (rank_index + 1) / count for rank_index, (_, symbol) in enumerate(items)}
+
+    @staticmethod
+    def _correlation(left: List[float], right: List[float]) -> float:
+        x = np.asarray(left, dtype=float)
+        y = np.asarray(right, dtype=float)
+        mask = np.isfinite(x) & np.isfinite(y)
+        if int(mask.sum()) < 2:
+            return float("nan")
+        x = x[mask]
+        y = y[mask]
+        if float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
+            return float("nan")
+        return float(np.corrcoef(x, y)[0, 1])
+
+    @staticmethod
+    def _volume(bar: Any) -> float:
+        if isinstance(bar, dict):
+            value = bar.get("volume", 0.0)
+        else:
+            value = getattr(bar, "volume", 0.0)
+        return float(value) if value is not None and value == value else 0.0
+
+    def _signal(self, symbol: str) -> float:
+        for signal, score_symbol, _ in self._worldquant_alpha_003_scores():
+            if score_symbol == symbol:
+                return signal
+        return 0.0
+'''
         return '''    def _signal(self, symbol: str) -> float:
         self.logger.warning("Manual implementation required for unsupported formula: %s", symbol)
         return 0.0
@@ -479,7 +582,7 @@ parameters:
   {symbols_yaml}
   lookback: {lookback}
   holding_days: {horizon}
-  max_position_pct: 0.10
+  max_position_pct: {RESEARCH_DEFAULT_MAX_POSITION_PCT:.1f}
   max_positions: 20
 """
 

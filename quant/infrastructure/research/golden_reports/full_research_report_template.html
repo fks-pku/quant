@@ -146,6 +146,104 @@
       font-family: "Cascadia Mono", Consolas, monospace;
       white-space: pre-wrap;
     }
+    .equity-chart {
+      margin: 12px 0 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .equity-chart svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      min-height: 280px;
+    }
+    .equity-chart-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 18px;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .equity-chart-meta b { color: var(--ink); }
+    .equity-chart i {
+      display: inline-block;
+      width: 18px;
+      height: 3px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .legend-strategy { background: #dc2626; }
+    .legend-benchmark { background: #16a34a; }
+    .strategy-line {
+      fill: none;
+      stroke: #dc2626;
+      stroke-width: 2.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .benchmark-line {
+      fill: none;
+      stroke: #16a34a;
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .chart-grid { stroke: #e8ddd0; stroke-width: 1; }
+    .chart-axis { stroke: #9ca3af; stroke-width: 1.2; }
+    .chart-label {
+      fill: #66727e;
+      font-size: 12px;
+      font-family: "Cascadia Mono", Consolas, monospace;
+    }
+    .return-calendar-chart {
+      margin: 12px 0 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .return-calendar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+      gap: 10px;
+    }
+    .return-cell {
+      min-height: 104px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .return-cell b,
+    .return-cell span,
+    .return-cell small {
+      display: block;
+    }
+    .return-cell b {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .return-cell strong {
+      display: block;
+      margin: 5px 0 2px;
+      font-size: 22px;
+      line-height: 1.15;
+    }
+    .return-cell span,
+    .return-cell small {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .return-cell.positive { background: #fff1f2; border-color: #fecdd3; }
+    .return-cell.negative { background: #f0fdf4; border-color: #bbf7d0; }
+    .return-cell.neutral { background: #f8fafc; }
+    figcaption {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
     ul { margin: 0 0 12px; padding-left: 22px; }
     li { margin: 6px 0; }
     .decision {
@@ -321,10 +419,21 @@ forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
       <table>
         <thead><tr><th>组合</th><th>年化</th><th>Sharpe</th><th>MaxDD</th><th>Calmar Ratio</th><th>换手</th><th>成本后年化</th><th>用途</th></tr></thead>
         <tbody>
-          <tr><td>Top bucket long-only</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>A 股可交易方向诊断</td></tr>
+          <tr><td>Top 20 long-only</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>A 股可交易方向诊断</td></tr>
           <tr><td>Top 1% long-only</td><td>[x%]</td><td>-</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>极端头部信号集中度诊断</td></tr>
           <tr><td>Top vs 000300 excess</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>相对沪深 300 诊断</td></tr>
           <tr><td>Long-short diagnostic</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>仅 alpha 诊断，不可部署</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>PnL 归因桥</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>层</th><th>年化</th><th>Δ年化</th><th>Sharpe</th><th>ΔSharpe</th><th>MaxDD</th><th>换手</th><th>选股数</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>理想 top20 close-to-close</td><td>[x%]</td><td>[x%]</td><td>[x.xx]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>[mean]</td><td>每日信号 top20 等权，不加执行约束。</td></tr>
+          <tr><td>真实选股规则</td><td>[x%]</td><td>[x%]</td><td>[x.xx]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>[mean]</td><td>top 1% capped 20 且 signal &gt; 0。</td></tr>
+          <tr><td>加入估算换手成本</td><td>[x%]</td><td>[x%]</td><td>[x.xx]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>[mean]</td><td>轻量归因桥，不替代 strict Backtester。</td></tr>
         </tbody>
       </table>
     </div>
@@ -333,6 +442,33 @@ forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
   <section class="panel">
     <h2>6. 策略回测报告</h2>
     <p>正式结论必须来自项目 Backtester：<code>Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio</code>。本节要能回答真实交易约束下策略是否仍成立。</p>
+    <h3>回测 Equity Curve</h3>
+    <figure class="equity-chart">
+      <div class="equity-chart-meta">
+        <span><i class="legend-strategy"></i>策略</span>
+        <span><i class="legend-benchmark"></i>Benchmark</span>
+        <b>策略期末 [amount]</b>
+        <b>Benchmark 期末 [amount]</b>
+      </div>
+      <svg viewBox="0 0 940 360" role="img" aria-label="Strict backtest equity curve">
+        <line class="chart-grid" x1="70" y1="26" x2="918" y2="26"></line>
+        <line class="chart-grid" x1="70" y1="308" x2="918" y2="308"></line>
+        <line class="chart-axis" x1="70" y1="26" x2="70" y2="308"></line>
+        <line class="chart-axis" x1="70" y1="308" x2="918" y2="308"></line>
+        <path class="benchmark-line" d="M70,250 L918,180"></path>
+        <path class="strategy-line" d="M70,240 L918,210"></path>
+      </svg>
+      <figcaption>策略曲线使用 strict Backtester 的账户 NAV；benchmark 曲线按同一初始资金买入并持有 000300。</figcaption>
+    </figure>
+    <h3>年度收益日历图</h3>
+    <figure class="return-calendar-chart">
+      <div class="return-calendar">
+        <div class="return-cell positive"><b>2012</b><strong>[x%]</strong><span>策略</span><small>000300 [x%] · 超额 [x%]</small></div>
+        <div class="return-cell negative"><b>2013</b><strong>[x%]</strong><span>策略</span><small>000300 [x%] · 超额 [x%]</small></div>
+        <div class="return-cell neutral"><b>...</b><strong>[x%]</strong><span>策略</span><small>000300 [x%] · 超额 [x%]</small></div>
+      </div>
+      <figcaption>年度收益按 strict Backtester 的策略账户 NAV 计算；benchmark 使用同一初始资金的 000300 equity curve。</figcaption>
+    </figure>
     <h3>回测配置</h3>
     <div class="table-wrap">
       <table>
@@ -340,6 +476,7 @@ forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
         <tbody>
           <tr><td>回测区间</td><td>[start] - [end]</td><td>必须与数据覆盖一致</td></tr>
           <tr><td>初始资金</td><td>[cash]</td><td>A 股示例默认 500000 CNY</td></tr>
+          <tr><td>默认目标总仓位</td><td>100.00%</td><td>研究生成策略默认满仓；按持仓数等权分配</td></tr>
           <tr><td>调仓频率</td><td>[frequency]</td><td>影响换手</td></tr>
           <tr><td>滑点</td><td>5 bps</td><td>默认配置</td></tr>
           <tr><td>佣金</td><td>CN realistic</td><td>含最低佣金、印花税等</td></tr>
@@ -379,6 +516,7 @@ forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
           <tr><td>lot_adjusted_trades</td><td>[N]</td><td>因 100 股手数调整的交易</td></tr>
           <tr><td>t1_rejected_sells</td><td>[N]</td><td>T+1 拒绝卖出</td></tr>
           <tr><td>limit_rejected_orders</td><td>[N]</td><td>涨跌停拒单</td></tr>
+          <tr><td>insufficient_cash_rejected_orders</td><td>[N]</td><td>现金不足拒单</td></tr>
           <tr><td>volume_limited_trades</td><td>[N]</td><td>成交量限制</td></tr>
           <tr><td>risk_skipped_orders</td><td>[N]</td><td>风控跳过订单</td></tr>
           <tr><td>final_suspended_holding_nav</td><td>[amount]</td><td>最终停牌/冻结持仓按最后有效价估值的 NAV</td></tr>

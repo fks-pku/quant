@@ -7,7 +7,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 ## 对外契约
 
 - `EventBus` — implements `EventPublisher` port
-- `DuckDBStorage` — implements `Storage` port, supports `read_only=True` and bulk `get_bars_for_symbols()`
+- `DuckDBStorage` — implements `Storage` port, supports `read_only=True`, bulk `get_bars_for_symbols()`, and optional CN security-status enrichment
 - `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
 - `PaperBroker`, `FutuProvider` — implement `BrokerAdapter` port
 
@@ -44,3 +44,9 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `research/sources/SSRNSource` performs polite SSRN discovery and fails closed to `[]`.
 - `research/pit_duckdb.PITDuckDBData` implements point-in-time universe and bar access with read-only DuckDB.
 - Research feature code must receive it through dependency injection; infrastructure must not import from `features/`.
+
+## Security Status Data
+
+- `quant/scripts/build_cn_security_status.py` rebuilds `var/duckdb/security_status.duckdb::cn_security_status_daily` from read-only `daily_cn_ochl` plus Tushare `stock_basic`, `namechange`, `suspend_d`, `stk_limit`, and `trade_cal`.
+- The status table is stored separately from `quant.duckdb`; keep DuckDB market reads `read_only=True` when rebuilding.
+- `DuckDBStorage(use_security_status=True)` attaches the status DB read-only and filters by requested symbols/date range before joining, so backtests do not scan the whole status table unless the requested universe itself is whole-market.

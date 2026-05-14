@@ -1377,6 +1377,32 @@ C35-05  winning_trades/losing_trades 使用完整 round-trip PnL 分类
 
 ---
 
+## CASE-36: CN status 表驱动 ST/停牌语义
+
+验证 `cn_security_status_daily` 接入后，ST 与停牌的含义在回测中保持可交易语义一致。
+
+### 规则
+
+```text
+ST 不自动剔除，也不自动禁止交易；它只改变涨跌停约束。
+若 bar 带 up_limit/down_limit，则使用 status 表精确涨跌停价。
+若没有 up_limit/down_limit 但 is_st=True，则 fallback 到 5% 涨跌停。
+tradable=False、has_daily_bar=False、_suspended=True 任一成立时，视为停牌/不可交易。
+停牌 synthetic bar 只用于让到期订单丢弃与记录 suspended_days，不刷新 last_prices/prev_bars。
+停牌日当日提交该标的订单应在 submission 阶段拒绝，不得顺延到复牌日。
+```
+
+### 断言
+
+```text
+C36-01  is_st=True 且无显式 up/down limit 时，CN BUY 在 +5% 开盘价被 PRICE_AT_LIMIT 拒绝
+C36-02  显式 up_limit/down_limit 优先于 symbol 规则，status limit-up BUY 被 PRICE_AT_LIMIT 拒绝
+C36-03  synthetic 停牌日上的到期订单 discarded_orders += 1，fill_count 保持 0，订单不顺延到复牌日
+C36-04  synthetic 停牌日当日提交订单 submission_rejected += 1，不产生次日 deferred order
+```
+
+---
+
 ## Regression B1: 结束日 deferred order 过期
 
 验证最后一个真实交易日 after-close 产生的订单没有下一交易日时不会用 synthetic bar 成交。
@@ -1453,6 +1479,7 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 |33|US|多策略无 allocation 时默认隔离|
 |34|CN|多策略同标的送股 synthetic fill 只同步对应策略|
 |35|US|round-trip 交易统计包含买入佣金|
+|36|CN|status 表驱动 ST 5% fallback、显式涨跌停、停牌 synthetic bar|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
 |R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

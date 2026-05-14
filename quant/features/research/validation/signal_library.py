@@ -58,6 +58,10 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
         if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
             return _worldquant_alpha_002_panel(data, lookback)
         return _worldquant_alpha_002_raw(data, lookback)
+    if formula_key == "worldquant_alpha_003":
+        if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+            return _worldquant_alpha_003_panel(data, lookback)
+        return _worldquant_alpha_003_raw(data, lookback)
 
     calculators = {
         "momentum_close_return": _momentum_close_return,
@@ -153,6 +157,28 @@ def _worldquant_alpha_002_raw(data: Any, lookback: int) -> Any:
     return -delta_log_volume.rolling(corr_window, min_periods=corr_window).corr(intraday_return)
 
 
+def _worldquant_alpha_003_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    corr_window = max(2, int(lookback or 10))
+    open_ = adjusted_price_matrix(data, "open")
+    volume = field_matrix(data, "volume").astype(float)
+    ranked_open = open_.rank(axis=1, pct=True)
+    ranked_volume = volume.rank(axis=1, pct=True)
+    return -ranked_open.rolling(corr_window, min_periods=corr_window).corr(ranked_volume)
+
+
+def _worldquant_alpha_003_raw(data: Any, lookback: int) -> Any:
+    corr_window = max(2, int(lookback or 10))
+    open_ = adjusted_price_series(data, "open")
+    if not hasattr(open_, "rolling"):
+        return None
+    volume = data["volume"] if isinstance(data, pd.DataFrame) else getattr(data, "volume", None)
+    if volume is None:
+        return None
+    volume = pd.Series(volume, index=getattr(open_, "index", None), dtype=float)
+    open_series = pd.Series(open_, index=getattr(open_, "index", None), dtype=float)
+    return -open_series.rolling(corr_window, min_periods=corr_window).corr(volume)
+
+
 def _coalesce_adjusted(adjusted: Any, raw: Any) -> Any:
     if adjusted is None:
         return raw
@@ -172,4 +198,5 @@ SUPPORTED_FORMULAS = {
     "volatility_breakout_atr",
     "worldquant_alpha_001",
     "worldquant_alpha_002",
+    "worldquant_alpha_003",
 }

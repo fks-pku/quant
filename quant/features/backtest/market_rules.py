@@ -37,15 +37,31 @@ def _as_date(value: date) -> date:
     return value
 
 
+def _optional_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("true", "1"):
+        return True
+    if text in ("false", "0"):
+        return False
+    return None
+
+
 def is_price_at_limit(
     symbol: str,
     open_price: float,
     prev_close: float,
     current_date: Optional[date] = None,
     ipo_dates: Optional[Dict[str, date]] = None,
+    up_limit: Optional[float] = None,
+    down_limit: Optional[float] = None,
+    is_st: Any = False,
 ) -> bool:
     return get_price_limit_direction(
-        symbol, open_price, prev_close, current_date, ipo_dates
+        symbol, open_price, prev_close, current_date, ipo_dates, up_limit, down_limit, is_st
     ) is not None
 
 
@@ -55,10 +71,25 @@ def get_price_limit_direction(
     prev_close: float,
     current_date: Optional[date] = None,
     ipo_dates: Optional[Dict[str, date]] = None,
+    up_limit: Optional[float] = None,
+    down_limit: Optional[float] = None,
+    is_st: Any = False,
 ) -> Optional[str]:
     market = get_market(symbol)
     if market != "CN":
         return None
+    open_rounded = _round_half_up(open_price)
+    if up_limit is not None or down_limit is not None:
+        try:
+            upper = float(up_limit) if up_limit is not None else None
+            lower = float(down_limit) if down_limit is not None else None
+        except (TypeError, ValueError):
+            upper = None
+            lower = None
+        if upper is not None and math.isfinite(upper) and upper > 0 and open_rounded >= _round_half_up(upper):
+            return "UP"
+        if lower is not None and math.isfinite(lower) and lower > 0 and open_rounded <= _round_half_up(lower):
+            return "DOWN"
     if prev_close <= 0:
         return None
     if current_date and ipo_dates and symbol in ipo_dates:
@@ -67,10 +98,9 @@ def get_price_limit_direction(
         calendar_days_since_ipo = (current_d - ipo_d).days
         if calendar_days_since_ipo <= IPO_NO_LIMIT_CALENDAR_DAYS:
             return None
-    limit_pct = cn_price_limit_pct(symbol)
+    limit_pct = 0.05 if _optional_bool(is_st) is True else cn_price_limit_pct(symbol)
     upper = _round_half_up(prev_close * (1 + limit_pct))
     lower = _round_half_up(prev_close * (1 - limit_pct))
-    open_rounded = _round_half_up(open_price)
     if open_rounded >= upper:
         return "UP"
     if open_rounded <= lower:
@@ -98,7 +128,13 @@ def select_currency(symbols: List[str]) -> str:
 
 
 def is_suspended(bar: Dict) -> bool:
-    if bar.get("_suspended", False) is True:
+    if _optional_bool(bar.get("_suspended", False)) is True:
+        return True
+    if _optional_bool(bar.get("tradable")) is False:
+        return True
+    if _optional_bool(bar.get("has_daily_bar")) is False:
+        return True
+    if _optional_bool(bar.get("_has_daily_bar")) is False:
         return True
     if bar.get("volume", 0) == 0:
         return True
