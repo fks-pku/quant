@@ -599,6 +599,8 @@ class ResearchEngine:
             for field in (
                 "rank_ic",
                 "rank_ic_ir",
+                "rank_ic_tstat",
+                "rank_ic_p_value",
                 "fdr_adjusted_p",
                 "fdr_significant",
                 "hit_rate",
@@ -614,6 +616,15 @@ class ResearchEngine:
                 "data_symbol_count",
             ):
                 metrics[field] = getattr(validation_report, field, 0.0)
+            metrics["p_value"] = getattr(
+                validation_report,
+                "p_value",
+                getattr(
+                    validation_report,
+                    "rank_ic_p_value",
+                    getattr(validation_report, "fdr_adjusted_p", 0.0),
+                ),
+            )
             metrics["ic_decay"] = list(getattr(validation_report, "ic_decay", []) or [])
             metrics["data_start"] = getattr(validation_report, "data_start", "")
             metrics["data_end"] = getattr(validation_report, "data_end", "")
@@ -839,6 +850,7 @@ class ResearchEngine:
                                 "aggregate_oos_sharpe": getattr(wf_result, "aggregate_oos_sharpe", 0.0),
                                 "worst_oos_sharpe": getattr(wf_result, "worst_oos_sharpe", 0.0),
                                 "pct_profitable_splits": getattr(wf_result, "pct_profitable_splits", 0.0),
+                                "deflated_sharpe_ratio": getattr(wf_result, "deflated_sharpe_ratio", None),
                             },
                         ))
                     else:
@@ -1164,9 +1176,9 @@ class ResearchEngine:
 
 def _repo_relative_path(path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(Path(__file__).resolve().parents[3]))
+        return path.resolve().relative_to(Path(__file__).resolve().parents[3]).as_posix()
     except Exception:
-        return str(path)
+        return str(path).replace("\\", "/")
 
 
 def _float_or_default(value: Any, default: float) -> float:

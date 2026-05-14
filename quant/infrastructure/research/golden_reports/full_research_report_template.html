@@ -263,8 +263,8 @@
     <h3>信号公式</h3>
     <div class="formula">signal_i,t = [明确公式]
 rank_i,t = cross_sectional_rank(signal_i,t)
-target_i,t+1 = top_bucket(rank_i,t), long-only only
-forward_return_i,t+h = adj_close_i,t+h / adj_close_i,t+1 - 1</div>
+target_i,t+lag = top_bucket(rank_i,t), long-only only
+forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
     <h3>交易解释</h3>
     <ul>
       <li>判断逻辑使用后复权价格：优先 <code>adj_close / adj_open / adj_high / adj_low</code>，缺失时才用 raw price * <code>adj_factor</code>。</li>
@@ -305,8 +305,8 @@ forward_return_i,t+h = adj_close_i,t+h / adj_close_i,t+1 - 1</div>
         <tbody>
           <tr><td>Rank IC</td><td>[0.0000]</td><td>横截面秩相关；正负号必须与预测方向一致</td></tr>
           <tr><td>ICIR</td><td>[0.00]</td><td>IC 均值 / IC 波动，衡量稳定性</td></tr>
-          <tr><td>t-stat</td><td>[0.00]</td><td>统计显著性</td></tr>
-          <tr><td>p-value</td><td>[0.0000]</td><td>单信号显著性</td></tr>
+          <tr><td>Rank IC t-stat</td><td>[0.00]</td><td>每日 IC 均值对 0 的 t 检验</td></tr>
+          <tr><td>p-value</td><td>[0.0000]</td><td>每日 IC 均值 t 检验 p 值</td></tr>
           <tr><td>FDR adjusted p</td><td>[0.0000]</td><td>多重检验控制；不过则不能给强结论</td></tr>
           <tr><td>Hit rate</td><td>[00.00%]</td><td>预测方向命中率</td></tr>
           <tr><td>IC decay</td><td>[1d / 5d / 10d / 21d]</td><td>看 alpha 半衰期与持有期是否匹配</td></tr>
@@ -319,7 +319,7 @@ forward_return_i,t+h = adj_close_i,t+h / adj_close_i,t+1 - 1</div>
     <h3>组合诊断</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>组合</th><th>年化</th><th>Sharpe</th><th>MaxDD</th><th>Calmar Ratio</th><th>换手</th><th>成本后表现</th><th>用途</th></tr></thead>
+        <thead><tr><th>组合</th><th>年化</th><th>Sharpe</th><th>MaxDD</th><th>Calmar Ratio</th><th>换手</th><th>成本后年化</th><th>用途</th></tr></thead>
         <tbody>
           <tr><td>Top bucket long-only</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>A 股可交易方向诊断</td></tr>
           <tr><td>Top 1% long-only</td><td>[x%]</td><td>-</td><td>[x%]</td><td>[x.xx]</td><td>[x%]</td><td>[x%]</td><td>极端头部信号集中度诊断</td></tr>

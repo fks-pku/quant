@@ -100,6 +100,23 @@ class TestStrategySpecBuilder:
         assert spec.required_fields == ["close"]
         assert spec.status == "ready"
 
+    def test_worldquant_alpha_002_maps_to_exact_formula(self):
+        from quant.features.research.discovery.worldquant101 import build_worldquant101_raw_strategies
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_worldquant101_raw_strategies(alpha_numbers=[2])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("momentum", symbols=["600519"]))
+
+        assert spec.strategy_id == "worldquant_101_alpha_002"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == "worldquant_alpha_002"
+        assert spec.required_fields == ["volume", "open", "close"]
+        assert spec.lookback_days == 6
+        assert spec.status == "ready"
+
     def test_unknown_type_returns_unsupported(self):
         from quant.features.research.validation.strategy_spec_builder import (
             StrategySpecBuilder,
@@ -289,6 +306,51 @@ class TestResearchAdjustedPrices:
         assert last.max() <= 0.5
         assert last.min() >= -0.5
         assert last.nunique() > 1
+
+    def test_worldquant_alpha_002_matches_ranked_volume_price_correlation(self):
+        from quant.features.research.validation.signal_library import (
+            adjusted_price_matrix,
+            compute_signal,
+            field_matrix,
+        )
+
+        dates = pd.date_range("2022-01-03", periods=14, freq="B")
+        symbols = ["600001", "600002", "600003", "600004"]
+        rng = np.random.default_rng(23)
+        frames = []
+        for symbol_index, symbol in enumerate(symbols):
+            day_index = np.arange(len(dates), dtype=float)
+            open_price = 10.0 + symbol_index + day_index * (0.05 + 0.01 * symbol_index)
+            intraday_move = rng.normal(0.0, 0.004, len(dates))
+            close = open_price * (1.0 + intraday_move)
+            volume = rng.integers(800000, 1600000, len(dates)).astype(float)
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": open_price,
+                        "close": close,
+                        "adj_open": open_price,
+                        "adj_close": close,
+                        "volume": volume,
+                    }
+                )
+            )
+        frame = pd.concat(frames, ignore_index=True)
+
+        signal = compute_signal("worldquant_alpha_002", frame, lookback=6)
+        open_matrix = adjusted_price_matrix(frame, "open")
+        close_matrix = adjusted_price_matrix(frame, "close")
+        volume_matrix = field_matrix(frame, "volume").astype(float)
+        delta_log_volume = np.log(volume_matrix).diff(2)
+        intraday_return = (close_matrix - open_matrix) / open_matrix
+        expected = -delta_log_volume.rank(axis=1, pct=True).rolling(6, min_periods=6).corr(
+            intraday_return.rank(axis=1, pct=True)
+        )
+
+        pd.testing.assert_frame_equal(signal, expected)
+        assert not signal.dropna(how="all").empty
 
     def test_factor_validator_uses_adjusted_close_for_forward_returns(self):
         from quant.features.research.validation.factor_validator import FactorValidator
@@ -501,10 +563,88 @@ class TestFactorValidator:
         assert isinstance(report.fama_macbeth_tstat, float)
         diagnostics = report.portfolio_diagnostics
         assert "top_bucket_after_cost_calmar_ratio" in diagnostics
+        assert "top_bucket_after_cost_sharpe" in diagnostics
+        assert "top_bucket_turnover" in diagnostics
         assert "top1_pct_annualized_return" in diagnostics
         assert "top1_pct_after_cost_calmar_ratio" in diagnostics
+        assert "top1_pct_after_cost_sharpe" in diagnostics
+        assert "top1_pct_turnover" in diagnostics
         assert np.isfinite(diagnostics["top_bucket_after_cost_calmar_ratio"])
+        assert np.isfinite(diagnostics["top_bucket_after_cost_sharpe"])
+        assert np.isfinite(diagnostics["top_bucket_turnover"])
         assert np.isfinite(diagnostics["top1_pct_after_cost_calmar_ratio"])
+        assert np.isfinite(diagnostics["top1_pct_after_cost_sharpe"])
+        assert np.isfinite(diagnostics["top1_pct_turnover"])
+
+    def test_factor_validator_applies_execution_lag_once(self, monkeypatch):
+        from quant.features.research.validation import signal_library
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2022-01-03", periods=140, freq="B")
+        symbols = [f"A{i:02d}" for i in range(30)]
+        symbol_scores = np.linspace(-1.0, 1.0, len(symbols))
+        signal_values = np.vstack([
+            ((-1.0) ** idx) * symbol_scores
+            for idx in range(len(dates))
+        ])
+        signal_frame = pd.DataFrame(signal_values, index=dates, columns=symbols)
+
+        close_values = np.full((len(dates), len(symbols)), 100.0)
+        for date_idx in range(2, len(dates)):
+            close_values[date_idx] = close_values[date_idx - 1] * (1.0 + 0.001 * signal_values[date_idx - 2])
+
+        frames = []
+        for symbol_idx, symbol in enumerate(symbols):
+            close = close_values[:, symbol_idx]
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": close,
+                        "high": close * 1.01,
+                        "low": close * 0.99,
+                        "close": close,
+                        "volume": 1000000,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+
+        class FakeMarketData:
+            def get_universe_symbols(self, market):
+                return symbols
+
+            def get_daily_bars(self, symbols, start, end):
+                return bars[bars["symbol"].isin(symbols)]
+
+        def fake_compute_signal(formula_key, data, lookback):
+            return signal_frame
+
+        monkeypatch.setattr(signal_library, "compute_signal", fake_compute_signal)
+        validator = FactorValidator(
+            FakeMarketData(),
+            config={"min_observations": 50, "execution_lag_days": 1},
+        )
+        spec = StrategySpec(
+            strategy_id="lag_alignment",
+            strategy_type="factor",
+            signal_formula_key="patched_signal",
+            universe=["A00"],
+            horizon_days=1,
+            lookback_days=1,
+            execution_lag_days=1,
+            required_fields=["close"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert report.status == "validated"
+        assert report.rank_ic > 0.95
+        assert report.rank_ic_tstat > 100
+        assert report.rank_ic_p_value < 1e-20
+        assert report.portfolio_diagnostics["return_frequency"] == "daily portfolio returns"
 
     def test_factor_validator_populates_ff_fields_when_factor_port_available(self):
         from quant.features.research.validation.factor_validator import FactorValidator

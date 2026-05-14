@@ -55,18 +55,37 @@ def _spearmanr(left: Any, right: Any) -> tuple[float, float]:
     return float(corr), _two_sided_p_from_stat(stat)
 
 
-def _ttest_1samp_pvalue(values: pd.Series, target: float = 0.0) -> float:
+def _ttest_1samp_stat_pvalue(values: pd.Series, target: float = 0.0) -> tuple[float, float]:
     clean = pd.Series(values).dropna()
     if len(clean) < 2:
-        return 1.0
+        return 0.0, 1.0
     if _scipy_stats is not None:
         result = _scipy_stats.ttest_1samp(clean, target)
-        return float(result.pvalue) if not pd.isna(result.pvalue) else 1.0
+        statistic = float(result.statistic) if not pd.isna(result.statistic) else 0.0
+        p_value = float(result.pvalue) if not pd.isna(result.pvalue) else 1.0
+        if not np.isfinite(statistic):
+            statistic = float(np.sign(float(clean.mean()) - target) * 1e12)
+        return statistic, p_value
     std = clean.std()
     if pd.isna(std) or std == 0:
-        return 0.0 if float(clean.mean()) != target else 1.0
+        if float(clean.mean()) == target:
+            return 0.0, 1.0
+        return float(np.sign(float(clean.mean()) - target) * 1e12), 0.0
     stat = (float(clean.mean()) - target) / (float(std) / np.sqrt(len(clean)))
-    return _two_sided_p_from_stat(stat)
+    return float(stat), _two_sided_p_from_stat(stat)
+
+
+def _ttest_1samp_pvalue(values: pd.Series, target: float = 0.0) -> float:
+    return _ttest_1samp_stat_pvalue(values, target)[1]
+
+
+def _corr_tstat(corr: float, n_observations: int) -> float:
+    if n_observations < 3 or not np.isfinite(corr):
+        return 0.0
+    if abs(corr) >= 1.0:
+        corr = float(np.sign(corr) * (1.0 - 1e-12))
+    denom = max(1e-12, 1.0 - corr ** 2)
+    return float(corr * np.sqrt((n_observations - 2) / denom))
 
 
 class FactorValidator:
@@ -171,7 +190,6 @@ class FactorValidator:
 
         close = adjusted_price_series(data, "close")
         forward_return = close.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
-        signal = signal.shift(self._exec_lag)
 
         common_idx = signal.dropna().index.intersection(forward_return.dropna().index)
         if len(common_idx) < self._min_obs:
@@ -181,6 +199,7 @@ class FactorValidator:
         fwd = forward_return.loc[common_idx]
 
         rank_ic, rank_ic_p = _spearmanr(sig, fwd)
+        rank_ic_tstat = _corr_tstat(float(rank_ic), len(common_idx))
         rank_ic_ir = rank_ic * np.sqrt(len(common_idx)) if rank_ic != 0 else 0.0
         hit_rate = (sig * fwd > 0).mean()
 
@@ -200,6 +219,8 @@ class FactorValidator:
             data_start=str(data.index[0]),
             data_end=str(data.index[-1]),
             n_observations=len(common_idx),
+            rank_ic_tstat=rank_ic_tstat,
+            rank_ic_p_value=float(rank_ic_p),
             **universe_metadata,
         )
 
@@ -221,7 +242,6 @@ class FactorValidator:
             return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"], universe_metadata)
 
         close_prices = adjusted_price_matrix(frame, "close")
-        signal_matrix = signal_matrix.shift(self._exec_lag)
         forward_returns = close_prices.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
         daily_ic = compute_cross_sectional_ic(
             signal_matrix,
@@ -238,12 +258,13 @@ class FactorValidator:
 
         rank_ic = float(valid_ic.mean())
         rank_ic_ir = compute_icir(valid_ic)
-        rank_ic_p = _ttest_1samp_pvalue(valid_ic, 0.0)
+        rank_ic_tstat, rank_ic_p = _ttest_1samp_stat_pvalue(valid_ic, 0.0)
         long_short_series = self._long_short_series(signal_matrix, forward_returns)
         portfolio_diagnostics = self._portfolio_diagnostics(
             spec,
             signal_matrix,
             forward_returns,
+            close_prices,
             str(close_prices.index[0].date()),
             str(close_prices.index[-1].date()),
         )
@@ -271,6 +292,8 @@ class FactorValidator:
             data_start=str(close_prices.index[0]),
             data_end=str(close_prices.index[-1]),
             n_observations=len(valid_ic),
+            rank_ic_tstat=rank_ic_tstat,
+            rank_ic_p_value=rank_ic_p,
             fama_macbeth_tstat=compute_fama_macbeth_tstat(
                 signal_matrix,
                 forward_returns,
@@ -315,15 +338,31 @@ class FactorValidator:
         spec: StrategySpec,
         signals: pd.DataFrame,
         forward_returns: pd.DataFrame,
+        close_prices: pd.DataFrame,
         start: str,
         end: str,
     ) -> Dict[str, Any]:
-        top_bucket = self._top_bucket_series(signals, forward_returns)
-        top1_pct = self._top_pct_series(signals, forward_returns, 0.01)
         cost_bps = float(self._config.get("portfolio_diagnostic_cost_bps", 10.0) or 0.0)
-        after_cost = top_bucket - cost_bps / 10000.0 if not top_bucket.empty else top_bucket
-        top1_after_cost = top1_pct - cost_bps / 10000.0 if not top1_pct.empty else top1_pct
-        benchmark_symbol, benchmark_returns, benchmark_coverage = self._benchmark_forward_returns(spec, start, end, top_bucket.index)
+        top_bucket, top_bucket_turnover_series = self._top_pct_portfolio_returns(
+            signals,
+            close_prices,
+            0.20,
+            spec.horizon_days,
+        )
+        top1_pct, top1_turnover_series = self._top_pct_portfolio_returns(
+            signals,
+            close_prices,
+            0.01,
+            spec.horizon_days,
+        )
+        after_cost = self._apply_turnover_cost(top_bucket, top_bucket_turnover_series, cost_bps)
+        top1_after_cost = self._apply_turnover_cost(top1_pct, top1_turnover_series, cost_bps)
+        benchmark_symbol, benchmark_returns, benchmark_coverage = self._benchmark_daily_returns(
+            spec,
+            start,
+            end,
+            top_bucket.index,
+        )
         excess = pd.Series(dtype=float)
         excess_after_cost = pd.Series(dtype=float)
         if benchmark_returns is not None and not benchmark_returns.empty and not top_bucket.empty:
@@ -336,25 +375,32 @@ class FactorValidator:
                 excess_after_cost = aligned["after_cost"] - aligned["benchmark"]
         series_for_oos = excess_after_cost if not excess_after_cost.empty else after_cost
         top_bucket_mean = self._safe_mean(top_bucket)
-        top_bucket_annualized = self._annualize_period_return(top_bucket_mean, spec.horizon_days)
+        top_bucket_annualized = self._annualize_period_return(top_bucket_mean, 1)
         after_cost_mean = self._safe_mean(after_cost)
-        after_cost_annualized = self._annualize_period_return(after_cost_mean, spec.horizon_days)
+        after_cost_annualized = self._annualize_period_return(after_cost_mean, 1)
         top1_mean = self._safe_mean(top1_pct)
-        top1_annualized = self._annualize_period_return(top1_mean, spec.horizon_days)
+        top1_annualized = self._annualize_period_return(top1_mean, 1)
         top1_after_cost_mean = self._safe_mean(top1_after_cost)
-        top1_after_cost_annualized = self._annualize_period_return(top1_after_cost_mean, spec.horizon_days)
+        top1_after_cost_annualized = self._annualize_period_return(top1_after_cost_mean, 1)
         excess_mean = self._safe_mean(excess)
-        excess_annualized = self._annualize_period_return(excess_mean, spec.horizon_days)
+        excess_annualized = self._annualize_period_return(excess_mean, 1)
         excess_after_cost_mean = self._safe_mean(excess_after_cost)
-        excess_after_cost_annualized = self._annualize_period_return(excess_after_cost_mean, spec.horizon_days)
+        excess_after_cost_annualized = self._annualize_period_return(excess_after_cost_mean, 1)
+        top_bucket_turnover = self._safe_mean(top_bucket_turnover_series)
+        top1_turnover = self._safe_mean(top1_turnover_series)
         return {
             "kind": "top_bucket_long_only",
             "top_quantile": 0.8,
+            "top_pct": 0.20,
             "holding_horizon_days": spec.horizon_days,
             "rebalance_frequency": "daily signal / holding horizon gate",
             "cost_bps_per_turn": cost_bps,
+            "return_frequency": "daily portfolio returns",
             "top_bucket_mean_return": top_bucket_mean,
             "top_bucket_annualized_return": top_bucket_annualized,
+            "top_bucket_sharpe": self._period_sharpe(top_bucket, 1),
+            "top_bucket_after_cost_sharpe": self._period_sharpe(after_cost, 1),
+            "top_bucket_turnover": top_bucket_turnover,
             "top_bucket_hit_rate": self._hit_rate(top_bucket),
             "top_bucket_after_cost_mean_return": after_cost_mean,
             "top_bucket_after_cost_annualized_return": after_cost_annualized,
@@ -365,6 +411,9 @@ class FactorValidator:
             "top1_pct": 0.01,
             "top1_pct_mean_return": top1_mean,
             "top1_pct_annualized_return": top1_annualized,
+            "top1_pct_sharpe": self._period_sharpe(top1_pct, 1),
+            "top1_pct_after_cost_sharpe": self._period_sharpe(top1_after_cost, 1),
+            "top1_pct_turnover": top1_turnover,
             "top1_pct_hit_rate": self._hit_rate(top1_pct),
             "top1_pct_after_cost_mean_return": top1_after_cost_mean,
             "top1_pct_after_cost_annualized_return": top1_after_cost_annualized,
@@ -376,13 +425,15 @@ class FactorValidator:
             "benchmark_coverage": benchmark_coverage,
             "benchmark_excess_mean_return": excess_mean,
             "benchmark_excess_annualized_return": excess_annualized,
+            "benchmark_excess_sharpe": self._period_sharpe(excess, 1),
+            "benchmark_excess_after_cost_sharpe": self._period_sharpe(excess_after_cost, 1),
             "benchmark_excess_after_cost_mean_return": excess_after_cost_mean,
             "benchmark_excess_after_cost_annualized_return": excess_after_cost_annualized,
             "benchmark_excess_max_drawdown": self._max_drawdown(excess),
             "benchmark_excess_after_cost_max_drawdown": self._max_drawdown(excess_after_cost),
             "benchmark_excess_calmar_ratio": self._calmar_ratio(excess_annualized, excess),
             "benchmark_excess_after_cost_calmar_ratio": self._calmar_ratio(excess_after_cost_annualized, excess_after_cost),
-            "rolling_oos": self._rolling_oos(series_for_oos, spec.horizon_days),
+            "rolling_oos": self._rolling_oos(series_for_oos, 1),
             "long_short_usage": "alpha_diagnostic_only",
         }
 
@@ -413,6 +464,144 @@ class FactorValidator:
             values.append(float(long_returns.mean()))
             dates.append(date)
         return pd.Series(values, index=pd.to_datetime(dates)).sort_index() if values else pd.Series(dtype=float)
+
+    def _top_pct_portfolio_returns(
+        self,
+        signals: pd.DataFrame,
+        prices: pd.DataFrame,
+        top_pct: float,
+        horizon_days: int,
+    ) -> tuple[pd.Series, pd.Series]:
+        if top_pct <= 0.0 or top_pct > 1.0:
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+        daily_returns = prices.pct_change().shift(-self._exec_lag - 1)
+        common_index = signals.index.intersection(daily_returns.index)
+        common_columns = signals.columns.intersection(daily_returns.columns)
+        active: List[Dict[Any, float]] = []
+        previous_weights: Dict[Any, float] | None = None
+        return_values = []
+        return_dates = []
+        turnover_values = []
+        turnover_dates = []
+        for date in common_index:
+            signal = signals.loc[date, common_columns].dropna()
+            if len(signal) >= self._min_stocks:
+                n_top = max(1, int(np.ceil(len(signal) * top_pct)))
+                selected = signal.sort_values(ascending=False).head(n_top).index
+                weight = 1.0 / float(len(selected))
+                active.append({symbol: weight for symbol in selected})
+                active = active[-max(1, int(horizon_days)):]
+            if not active:
+                continue
+            current_weights = self._average_cohort_weights(active)
+            if previous_weights is not None:
+                turnover_values.append(self._one_way_turnover(previous_weights, current_weights))
+                turnover_dates.append(date)
+            next_returns = daily_returns.loc[date, list(current_weights)].dropna()
+            if next_returns.empty:
+                previous_weights = current_weights
+                continue
+            available_weights = {symbol: current_weights[symbol] for symbol in next_returns.index}
+            total_weight = sum(available_weights.values())
+            if total_weight <= 0.0:
+                previous_weights = current_weights
+                continue
+            portfolio_return = sum((weight / total_weight) * float(next_returns[symbol]) for symbol, weight in available_weights.items())
+            return_values.append(float(portfolio_return))
+            return_dates.append(date)
+            previous_weights = current_weights
+        returns = pd.Series(return_values, index=pd.to_datetime(return_dates)).sort_index() if return_values else pd.Series(dtype=float)
+        turnover = pd.Series(turnover_values, index=pd.to_datetime(turnover_dates)).sort_index() if turnover_values else pd.Series(dtype=float)
+        return returns, turnover
+
+    @staticmethod
+    def _average_cohort_weights(cohorts: List[Dict[Any, float]]) -> Dict[Any, float]:
+        weights: Dict[Any, float] = {}
+        if not cohorts:
+            return weights
+        cohort_scale = 1.0 / float(len(cohorts))
+        for cohort in cohorts:
+            for symbol, weight in cohort.items():
+                weights[symbol] = weights.get(symbol, 0.0) + weight * cohort_scale
+        return weights
+
+    @staticmethod
+    def _one_way_turnover(previous: Dict[Any, float], current: Dict[Any, float]) -> float:
+        symbols = set(previous).union(current)
+        if not symbols:
+            return 0.0
+        return float(0.5 * sum(abs(current.get(symbol, 0.0) - previous.get(symbol, 0.0)) for symbol in symbols))
+
+    @staticmethod
+    def _apply_turnover_cost(returns: pd.Series, turnover: pd.Series, cost_bps: float) -> pd.Series:
+        if returns.empty:
+            return returns
+        aligned_turnover = turnover.reindex(returns.index).fillna(0.0)
+        return returns - aligned_turnover * (cost_bps / 10000.0)
+
+    def _top_pct_turnover(self, signals: pd.DataFrame, forward_returns: pd.DataFrame, top_pct: float) -> float:
+        if top_pct <= 0.0 or top_pct > 1.0:
+            return 0.0
+        common_index = signals.index.intersection(forward_returns.index)
+        common_columns = signals.columns.intersection(forward_returns.columns)
+        previous: Dict[Any, float] | None = None
+        turnover = []
+        for date in common_index:
+            paired = pd.concat(
+                [
+                    signals.loc[date, common_columns].rename("signal"),
+                    forward_returns.loc[date, common_columns].rename("return"),
+                ],
+                axis=1,
+            ).dropna()
+            if len(paired) < self._min_stocks:
+                continue
+            n_top = max(1, int(np.ceil(len(paired) * top_pct)))
+            selected = paired.sort_values("signal", ascending=False).head(n_top).index
+            weight = 1.0 / float(len(selected))
+            current = {symbol: weight for symbol in selected}
+            if previous is not None:
+                symbols = set(previous).union(current)
+                turnover.append(0.5 * sum(abs(current.get(symbol, 0.0) - previous.get(symbol, 0.0)) for symbol in symbols))
+            previous = current
+        return float(np.mean(turnover)) if turnover else 0.0
+
+    def _benchmark_daily_returns(
+        self,
+        spec: StrategySpec,
+        start: str,
+        end: str,
+        target_index: pd.Index,
+    ) -> tuple[str, pd.Series, Dict[str, Any]]:
+        if not spec.universe or detect_market(spec.universe[0]) != "cn":
+            return "", pd.Series(dtype=float), {}
+        from quant.features.research.validation.signal_library import adjusted_price_matrix
+
+        for symbol in ("000300", "510300"):
+            try:
+                raw = self._market_data.get_daily_bars([symbol], start, end)
+                frame = raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
+            except Exception as e:
+                logger.warning(f"Benchmark fetch failed for {symbol}: {e}")
+                continue
+            if frame.empty or "date" not in frame.columns:
+                continue
+            frame = frame.copy()
+            frame["date"] = pd.to_datetime(frame["date"])
+            prices = adjusted_price_matrix(frame, "close")
+            if prices.empty:
+                continue
+            column = symbol if symbol in prices.columns else prices.columns[0]
+            forward = prices[column].pct_change().shift(-self._exec_lag - 1)
+            forward = forward.reindex(pd.to_datetime(target_index)).dropna()
+            coverage = {
+                "start": str(prices.index.min().date()),
+                "end": str(prices.index.max().date()),
+                "rows": int(prices[column].dropna().shape[0]),
+                "fallback_used": symbol != "000300",
+            }
+            return symbol, forward, coverage
+        return "", pd.Series(dtype=float), {}
 
     def _benchmark_forward_returns(
         self,
@@ -466,6 +655,18 @@ class FactorValidator:
             return -1.0
         periods = 252.0 / max(1, float(horizon_days))
         return float((1.0 + mean_return) ** periods - 1.0)
+
+    @staticmethod
+    def _period_sharpe(series: pd.Series, horizon_days: int) -> float:
+        clean = series.dropna() if series is not None else pd.Series(dtype=float)
+        clean = clean.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(clean) < 2:
+            return 0.0
+        std = clean.std()
+        if pd.isna(std) or std == 0:
+            return 0.0
+        periods = 252.0 / max(1, float(horizon_days))
+        return float(clean.mean() / std * np.sqrt(periods))
 
     @staticmethod
     def _max_drawdown(series: pd.Series) -> float:

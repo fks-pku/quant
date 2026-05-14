@@ -335,23 +335,41 @@ def _formula_block(rows: List[Dict[str, Any]]) -> str:
     spec = (row.get("evidence") or {}).get("strategy_spec") or {}
     lookback = spec.get("lookback_days") or 20
     horizon = spec.get("horizon_days") or 5
+    lag = spec.get("execution_lag_days") or 1
     formula = str(spec.get("signal_formula_key") or "")
-    if "mean_reversion" in formula or "reversal" in formula:
+    if formula == "worldquant_alpha_001":
+        lines = [
+            "returns_i,t = adj_close_i,t / adj_close_i,t-1 - 1",
+            "base_i,t = if returns_i,t < 0 then stddev(returns_i,t-19:t, 20) else adj_close_i,t",
+            "signal_i,t = rank_cross_section(ts_argmax(signedpower(base_i,t, 2), 5)) - 0.5",
+            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
+        ]
+    elif formula == "worldquant_alpha_002":
+        lines = [
+            "x_i,t = rank_cross_section(delta(log(volume_i,t), 2))",
+            "y_i,t = rank_cross_section((adj_close_i,t - adj_open_i,t) / adj_open_i,t)",
+            f"signal_i,t = -corr_ts(x_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, y_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, {lookback})",
+            "rank_i,t = cross_sectional_rank(signal_i,t)",
+            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
+        ]
+    elif "mean_reversion" in formula or "reversal" in formula:
         lines = [
             f"ma_i,t = mean(adj_close_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback} ... adj_close_i,t)",
             "raw_reversal_i,t = (ma_i,t - adj_close_i,t) / ma_i,t",
             "industry_momentum_i,t = mean(industry_return_i,t-lookback ... industry_return_i,t)",
             "signal_i,t = raw_reversal_i,t with industry momentum hedge and cross-sectional winsorization",
             "rank_i,t = cross_sectional_rank(signal_i,t)",
-            "target_i,t+1 = top_bucket(rank_i,t), long-only only",
-            f"forward_return_i,t+{horizon} = adj_close_i,t+{horizon} / adj_close_i,t+1 - 1",
+            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
     else:
         lines = [
             f"signal_i,t = {formula or 'StrategySpec declared signal'}",
             "rank_i,t = cross_sectional_rank(signal_i,t)",
-            "target_i,t+1 = top_bucket(rank_i,t), long-only only",
-            f"forward_return_i,t+{horizon} = adj_close_i,t+{horizon} / adj_close_i,t+1 - 1",
+            f"target_i,t+{lag} = top_bucket(rank_i,t), long-only only",
+            f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
     return f'<div class="formula">{escape(chr(10).join(lines))}</div>'
 
@@ -414,8 +432,16 @@ def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str,
     rows_data = [
         ("Rank IC", _fmt(metrics.get("rank_ic")), "横截面秩相关；正负号必须与预测方向一致"),
         ("ICIR", _fmt(metrics.get("rank_ic_ir")), "IC 均值 / IC 波动，衡量稳定性"),
-        ("t-stat", _fmt(metrics.get("t_stat") or metrics.get("fama_macbeth_tstat")), "统计显著性"),
-        ("p-value", _fmt(metrics.get("p_value")), "单信号显著性"),
+        (
+            "Rank IC t-stat",
+            _fmt(_first_present(metrics, "rank_ic_tstat", "t_stat")),
+            "每日 IC 均值对 0 的 t 检验",
+        ),
+        (
+            "p-value",
+            _fmt(_first_present(metrics, "rank_ic_p_value", "p_value", "rank_ic_p", "fdr_adjusted_p")),
+            "每日 IC 均值 t 检验 p 值",
+        ),
         ("FDR adjusted p", _fmt(metrics.get("fdr_adjusted_p")), "多重检验控制；不过则不能给强结论"),
         ("Hit rate", _pct(metrics.get("hit_rate")), "预测方向命中率"),
         ("IC decay", _format_decay(metrics.get("ic_decay")), "看 alpha 半衰期与持有期是否匹配"),
@@ -441,34 +467,34 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
         (
             "Top bucket long-only",
             _pct(diag.get("top_bucket_annualized_return")),
-            _fmt(strict_metrics.get("sharpe")),
+            _fmt(_first_present(diag, "top_bucket_after_cost_sharpe", "top_bucket_sharpe")),
             _pct(_first_present(diag, "top_bucket_after_cost_max_drawdown", "top_bucket_max_drawdown") or strict_metrics.get("max_drawdown_pct")),
             _fmt(
                 _first_present(diag, "top_bucket_after_cost_calmar_ratio", "top_bucket_calmar_ratio")
                 or _first_present(strict_metrics, "calmar_ratio", "calmar")
             ),
-            _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
-            _pct(diag.get("top_bucket_after_cost_mean_return")),
+            _pct(_first_present(diag, "top_bucket_turnover", "turnover")),
+            _pct(diag.get("top_bucket_after_cost_annualized_return")),
             "A 股可交易方向诊断",
         ),
         (
             "Top 1% long-only",
             _pct(diag.get("top1_pct_annualized_return")),
-            "-",
+            _fmt(_first_present(diag, "top1_pct_after_cost_sharpe", "top1_pct_sharpe")),
             _pct(_first_present(diag, "top1_pct_after_cost_max_drawdown", "top1_pct_max_drawdown")),
             _fmt(_first_present(diag, "top1_pct_after_cost_calmar_ratio", "top1_pct_calmar_ratio")),
-            _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
-            _pct(diag.get("top1_pct_after_cost_mean_return")),
+            _pct(_first_present(diag, "top1_pct_turnover", "turnover")),
+            _pct(diag.get("top1_pct_after_cost_annualized_return")),
             "极端头部信号集中度诊断",
         ),
         (
             f"Top vs {benchmark.get('symbol') or _report_benchmark(row)} excess",
             _pct(_first_present(diag, "benchmark_excess_after_cost_annualized_return", "benchmark_excess_annualized_return")),
-            _fmt(benchmark.get("information_ratio")),
+            _fmt(_first_present(diag, "benchmark_excess_after_cost_sharpe", "benchmark_excess_sharpe") or benchmark.get("information_ratio")),
             _pct(_first_present(diag, "benchmark_excess_after_cost_max_drawdown", "benchmark_excess_max_drawdown")),
             _fmt(_first_present(diag, "benchmark_excess_after_cost_calmar_ratio", "benchmark_excess_calmar_ratio")),
-            _fmt(diag.get("turnover") or strict_metrics.get("turnover")),
-            _pct(diag.get("benchmark_excess_after_cost_mean_return")),
+            _pct(_first_present(diag, "top_bucket_turnover", "turnover")),
+            _pct(diag.get("benchmark_excess_after_cost_annualized_return")),
             "相对沪深 300 诊断",
         ),
         (
@@ -488,7 +514,7 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
         + f"<td>{escape(calmar)}</td><td>{escape(turnover)}</td><td>{escape(after_cost)}</td><td>{escape(use)}</td></tr>"
         for name, ann, sharpe, maxdd, calmar, turnover, after_cost, use in rows_data
     )
-    return _table(["组合", "年化", "Sharpe", "MaxDD", "Calmar Ratio", "换手", "成本后表现", "用途"], body)
+    return _table(["组合", "年化", "Sharpe", "MaxDD", "Calmar Ratio", "换手", "成本后年化", "用途"], body)
 
 
 def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -804,7 +830,19 @@ def _format_decay(value: Any) -> str:
     if isinstance(value, dict):
         return "; ".join(f"{key}={_fmt(val)}" for key, val in value.items())
     if isinstance(value, (list, tuple)):
-        return "; ".join(_fmt(item) for item in value)
+        parts = []
+        for item in value:
+            if isinstance(item, dict):
+                horizon = _first_present(item, "horizon", "days", "lag")
+                decay_value = _first_present(item, "ic", "rank_ic", "value")
+                parts.append(
+                    f"{horizon}d={_fmt(decay_value)}" if horizon is not None else _fmt(decay_value)
+                )
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                parts.append(f"{item[0]}d={_fmt(item[1])}")
+            else:
+                parts.append(_fmt(item))
+        return "; ".join(parts) if parts else "n/a"
     return _fmt(value)
 
 
@@ -886,7 +924,9 @@ def _signal_badge_class(metrics: Dict[str, Any]) -> str:
     hit = _safe_float(metrics.get("hit_rate"))
     if rank_ic is None:
         return "fail"
-    if rank_ic > 0 and (fdr is None or fdr <= 0.05) and (hit is None or hit >= 0.5):
+    if rank_ic < 0.02:
+        return "fail"
+    if (fdr is None or fdr <= 0.05) and (hit is None or hit >= 0.5):
         return "pass"
     if rank_ic > 0:
         return "warn"
@@ -930,7 +970,8 @@ def _status_badge_class(status: str) -> str:
 def _signal_validation_summary(metrics: Dict[str, Any]) -> str:
     return (
         f"Rank IC={_fmt(metrics.get('rank_ic'))}，FDR={_fmt(metrics.get('fdr_adjusted_p'))}，"
-        f"ICIR={_fmt(metrics.get('rank_ic_ir'))}，hit rate={_pct(metrics.get('hit_rate'))}"
+        f"ICIR={_fmt(metrics.get('rank_ic_ir'))}，hit rate={_pct(metrics.get('hit_rate'))}，"
+        "准入阈值 Rank IC>=0.0200"
     )
 
 

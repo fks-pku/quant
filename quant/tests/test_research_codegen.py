@@ -139,6 +139,28 @@ def test_integrator_generates_worldquant_alpha_001_formula_logic(tmp_path):
     assert strategy.name == "worldquant_101_alpha_001"
 
 
+def test_integrator_generates_worldquant_alpha_002_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("WorldQuant 101 Alpha #002")
+    report = _report("worldquant_factor")
+    spec = _spec("worldquant_factor", "worldquant_alpha_002", strategy_id="worldquant_101_alpha_002")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "worldquant_alpha_002" in code
+    assert "_worldquant_alpha_002_scores" in code
+    assert "delta_values" in code
+    assert code.count("def _execute_rebalance") == 1
+    assert "Manual implementation required" not in code
+    assert "TODO" not in code
+
+    cls = _load_generated_class(strategy_file, "Worldquant101Alpha002Strategy")
+    strategy = cls(symbols=["600001", "600002"], lookback=6)
+    assert strategy.name == "worldquant_101_alpha_002"
+
+
 def test_integrator_uses_ready_spec_strategy_id_for_generated_candidate(tmp_path):
     integrator = StrategyIntegrator(tmp_path)
     raw = _raw("Paper Title With Punctuation!")

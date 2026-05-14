@@ -1,5 +1,6 @@
 from typing import Any, Callable
 
+import numpy as np
 import pandas as pd
 
 
@@ -38,11 +39,25 @@ def adjusted_price_matrix(data: pd.DataFrame, field: str = "close") -> pd.DataFr
     ).sort_index()
 
 
+def field_matrix(data: pd.DataFrame, field: str) -> pd.DataFrame:
+    frame = data.copy()
+    return frame.pivot_table(
+        index="date",
+        columns="symbol",
+        values=field,
+        aggfunc="last",
+    ).sort_index()
+
+
 def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
     if formula_key == "worldquant_alpha_001":
         if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
             return _worldquant_alpha_001_panel(data, lookback)
         return _worldquant_alpha_001_raw(data, lookback)
+    if formula_key == "worldquant_alpha_002":
+        if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+            return _worldquant_alpha_002_panel(data, lookback)
+        return _worldquant_alpha_002_raw(data, lookback)
 
     calculators = {
         "momentum_close_return": _momentum_close_return,
@@ -110,6 +125,34 @@ def _worldquant_alpha_001_raw(data: Any, lookback: int) -> Any:
     return signed_power.rolling(5, min_periods=5).apply(lambda values: float(values.argmax()), raw=True)
 
 
+def _worldquant_alpha_002_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    corr_window = max(2, int(lookback or 6))
+    open_ = adjusted_price_matrix(data, "open")
+    close = adjusted_price_matrix(data, "close")
+    volume = field_matrix(data, "volume").astype(float)
+    log_volume = np.log(volume.where(volume > 0))
+    delta_log_volume = log_volume.diff(2)
+    intraday_return = (close - open_) / open_.where(open_ != 0)
+    ranked_delta_volume = delta_log_volume.rank(axis=1, pct=True)
+    ranked_intraday_return = intraday_return.rank(axis=1, pct=True)
+    return -ranked_delta_volume.rolling(corr_window, min_periods=corr_window).corr(ranked_intraday_return)
+
+
+def _worldquant_alpha_002_raw(data: Any, lookback: int) -> Any:
+    corr_window = max(2, int(lookback or 6))
+    open_ = adjusted_price_series(data, "open")
+    close = adjusted_price_series(data, "close")
+    if not hasattr(open_, "where") or not hasattr(close, "where"):
+        return None
+    volume = data["volume"] if isinstance(data, pd.DataFrame) else getattr(data, "volume", None)
+    if volume is None:
+        return None
+    volume = pd.Series(volume, index=getattr(open_, "index", None), dtype=float)
+    delta_log_volume = np.log(volume.where(volume > 0)).diff(2)
+    intraday_return = (close - open_) / open_.where(open_ != 0)
+    return -delta_log_volume.rolling(corr_window, min_periods=corr_window).corr(intraday_return)
+
+
 def _coalesce_adjusted(adjusted: Any, raw: Any) -> Any:
     if adjusted is None:
         return raw
@@ -128,4 +171,5 @@ SUPPORTED_FORMULAS = {
     "mean_reversion_close_to_ma",
     "volatility_breakout_atr",
     "worldquant_alpha_001",
+    "worldquant_alpha_002",
 }

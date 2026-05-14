@@ -12,6 +12,14 @@ _FORMULA_MAP = {
         "horizon_days": 5,
         "execution_lag_days": 1,
     },
+    "worldquant_alpha_002": {
+        "formula_key": "worldquant_alpha_002",
+        "strategy_type": "worldquant_factor",
+        "required_fields": ["volume", "open", "close"],
+        "lookback_days": 6,
+        "horizon_days": 5,
+        "execution_lag_days": 1,
+    },
     "momentum": {
         "formula_key": "momentum_close_return",
         "strategy_type": "momentum",
@@ -130,4 +138,6 @@ def _worldquant_formula_key(raw: RawStrategy) -> str:
         return ""
     if alpha_number == 1:
         return "worldquant_alpha_001"
+    if alpha_number == 2:
+        return "worldquant_alpha_002"
     return ""

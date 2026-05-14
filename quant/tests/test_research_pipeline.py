@@ -816,6 +816,8 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
         assert any(entry.phase == "stage2_validation" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "fail" for entry in result.log)
+        rigor_fail = next(entry for entry in result.log if entry.phase == "rigor" and entry.verdict == "fail")
+        assert rigor_fail.scores["deflated_sharpe_ratio"] == pytest.approx(0.0)
         assert any(entry.phase == "backtest" and entry.verdict == "info" for entry in result.log)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)

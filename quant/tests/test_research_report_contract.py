@@ -111,6 +111,8 @@ def test_canonical_full_research_report_template_defines_contract():
     assert "000300" in html
     assert "Calmar Ratio" in html
     assert "Top 1% long-only" in html
+    assert "Rank IC t-stat" in html
+    assert "成本后年化" in html
     assert "final_suspended_holding_nav" in html
 
 
@@ -183,8 +185,11 @@ def test_generated_full_research_report_matches_golden_contract():
                     "validation_tests": ["rank_ic", "fdr_control", "purged_walk_forward"],
                     "rank_ic": 0.008,
                     "rank_ic_ir": 0.05,
+                    "rank_ic_tstat": 1.3,
+                    "rank_ic_p_value": 0.19,
                     "fama_macbeth_tstat": 0.8,
                     "fdr_adjusted_p": 0.41,
+                    "ic_decay": [(1, 0.008), (5, 0.004)],
                     "hit_rate": 0.54,
                     "long_short_spread": 0.001,
                     "n_observations": 280,
@@ -193,18 +198,26 @@ def test_generated_full_research_report_matches_golden_contract():
                     "portfolio_diagnostics": {
                         "kind": "top_bucket_long_only",
                         "top_bucket_annualized_return": 0.28,
+                        "top_bucket_after_cost_sharpe": 0.62,
+                        "top_bucket_turnover": 0.34,
                         "top_bucket_hit_rate": 0.54,
                         "top_bucket_after_cost_mean_return": 0.003,
+                        "top_bucket_after_cost_annualized_return": 0.19,
                         "top_bucket_after_cost_max_drawdown": -0.21,
                         "top_bucket_after_cost_calmar_ratio": 1.11,
                         "top1_pct_annualized_return": 0.41,
+                        "top1_pct_after_cost_sharpe": 0.48,
+                        "top1_pct_turnover": 0.71,
                         "top1_pct_hit_rate": 0.52,
                         "top1_pct_after_cost_mean_return": 0.004,
+                        "top1_pct_after_cost_annualized_return": 0.25,
                         "top1_pct_after_cost_max_drawdown": -0.32,
                         "top1_pct_after_cost_calmar_ratio": 1.28,
                         "benchmark_symbol": "000300",
                         "benchmark_excess_after_cost_annualized_return": 0.14,
+                        "benchmark_excess_after_cost_sharpe": 0.31,
                         "benchmark_excess_after_cost_mean_return": 0.003,
+                        "benchmark_excess_after_cost_annualized_return": 0.14,
                         "benchmark_excess_after_cost_max_drawdown": -0.18,
                         "benchmark_excess_after_cost_calmar_ratio": 0.78,
                     },
@@ -263,6 +276,11 @@ def test_generated_full_research_report_matches_golden_contract():
     assert "Top 1% long-only" in html
     assert "final_suspended_holding_nav" in html
     assert "12,345.67" in html
+    assert "<td>Rank IC t-stat</td><td>1.3000</td>" in html
+    assert "<td>p-value</td><td>0.1900</td>" in html
+    assert "1d=0.0080; 5d=0.0040" in html
+    assert "<td>Top bucket long-only</td><td>28.00%</td><td>0.6200</td>" in html
+    assert "<td>34.00%</td><td>19.00%</td><td>A 股可交易方向诊断</td>" in html
     assert "Rejected strategy archive" in html
     for placeholder in ("[strategy_id]", "[Rank IC]", "[000300 coverage]", "[YYYY-MM-DD]"):
         assert placeholder not in html
