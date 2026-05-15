@@ -1,71 +1,19 @@
 from html.parser import HTMLParser
-from pathlib import Path
 
-from quant.infrastructure.research.reporting import build_full_research_report_html
-
-
-REPORT_TEMPLATE = (
-    Path(__file__).resolve().parents[1]
-    / "infrastructure"
-    / "var"
-    / "research"
-    / "report_templates"
-    / "full_research_report_template.html"
-)
-
-LEGACY_GOLDEN_REPORT = (
-    Path(__file__).resolve().parents[1]
-    / "infrastructure"
-    / "research"
-    / "golden_reports"
-    / "full_research_report_golden.html"
-)
+from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 REQUIRED_TOP_LEVEL_SECTIONS = [
-    "1. 结论汇总",
-    "2. idea 来源与初筛",
-    "3. 信号定义",
-    "4. 数据来源及 benchmark 定义",
-    "5. 信号验证",
-    "6. 策略回测报告",
-    "7. purged walk-forward",
-    "8. 最终推荐与下一步计划",
-]
-
-REQUIRED_DETAIL_SECTIONS = [
-    "一句话结论",
-    "来源质量与准入评分",
-    "初筛风险旗标",
-    "信号公式",
-    "交易解释",
-    "数据质量检查",
-    "组合诊断",
-    "PnL 归因桥",
-    "回测 Equity Curve",
-    "年度收益日历图",
-    "回测配置",
-    "核心绩效",
-    "成交与成本诊断",
-    "方法设置",
-    "结果摘要",
-    "Split 明细",
-    "推荐理由",
-    "下一步计划",
-    "产物链接",
+    "1. 本阶段结论",
+    "2. 快研究证据",
+    "3. 报告导航",
 ]
 
 REQUIRED_TEMPLATE_MARKERS = [
-    'class="template-note"',
-    'class="grid"',
-    'class="metric"',
+    'class="badge',
     'class="formula"',
-    'class="equity-chart"',
-    'class="strategy-line"',
-    'class="benchmark-line"',
-    'class="return-calendar"',
-    'class="return-cell',
-    'class="decision"',
-    'class="decision-mark"',
+    "fast_research_report.html",
+    "strict_backtest_report.html",
+    "walkforward_audit_report.html",
 ]
 
 
@@ -105,41 +53,8 @@ def _assert_clean_html(html: str):
     assert "\ufffd" not in html
 
 
-def test_canonical_full_research_report_template_defines_contract():
-    html = REPORT_TEMPLATE.read_text(encoding="utf-8")
-
-    _assert_clean_html(html)
-    assert _headings(html, "h2") == REQUIRED_TOP_LEVEL_SECTIONS
-    template_h3 = _headings(html, "h3")
-    for heading in REQUIRED_DETAIL_SECTIONS:
-        assert heading in template_h3
-    for marker in REQUIRED_TEMPLATE_MARKERS:
-        assert marker in html
-    assert "full_research_report.html" in html
-    assert "000300" in html
-    assert "Calmar Ratio" in html
-    assert "Top 20 long-only" in html
-    assert "Top 1% long-only" in html
-    assert "Rank IC t-stat" in html
-    assert "成本后年化" in html
-    assert "final_suspended_holding_nav" in html
-    assert "insufficient_cash_rejected_orders" in html
-    assert "回测 Equity Curve" in html
-    assert "年度收益日历图" in html
-    assert "首日=100" in html
-    assert "strategy-line" in html
-    assert "benchmark-line" in html
-    assert "return-calendar" in html
-
-
-def test_legacy_golden_full_research_report_has_no_encoding_regression():
-    html = LEGACY_GOLDEN_REPORT.read_text(encoding="utf-8")
-
-    _assert_clean_html(html)
-
-
-def test_generated_full_research_report_matches_golden_contract():
-    html = build_full_research_report_html(
+def test_generated_stage_reports_match_contract():
+    fixture = (
         {
             "run_id": "contract_check",
             "discovered": 1,
@@ -212,6 +127,32 @@ def test_generated_full_research_report_matches_golden_contract():
                     "n_observations": 280,
                     "data_start": "2017-01-03",
                     "data_end": "2025-12-31",
+                    "research_stage_conclusions": {
+                        "fast_research": {
+                            "label": "快研究",
+                            "verdict": "fail",
+                            "conclusion": "fast fixture 结论",
+                            "method": "fixture fast",
+                        },
+                        "strict_backtest": {
+                            "label": "严格回测",
+                            "verdict": "warn",
+                            "conclusion": "strict fixture 结论",
+                            "method": "fixture strict",
+                        },
+                        "walkforward_strict_audit": {
+                            "label": "Walk-forward strict audit",
+                            "verdict": "warn",
+                            "conclusion": "wf fixture 结论",
+                            "method": "fixture wf",
+                        },
+                        "final_decision": {
+                            "label": "最终 Go / No-Go",
+                            "verdict": "fail",
+                            "conclusion": "final fixture 结论",
+                            "method": "fixture final",
+                        },
+                    },
                         "portfolio_diagnostics": {
                             "kind": "top_bucket_long_only",
                             "top_bucket_selection": "top_n",
@@ -363,48 +304,66 @@ def test_generated_full_research_report_matches_golden_contract():
             }
         ],
     )
+    fast_html = build_research_stage_report_html("fast_research", *fixture)
+    strict_html = build_research_stage_report_html("strict_backtest", *fixture)
+    wf_html = build_research_stage_report_html("walkforward_strict_audit", *fixture)
 
-    _assert_clean_html(html)
-    assert _headings(html, "h2") == _headings(REPORT_TEMPLATE.read_text(encoding="utf-8"), "h2")
-    generated_h3 = _headings(html, "h3")
-    for heading in REQUIRED_DETAIL_SECTIONS:
-        assert heading in generated_h3
+    _assert_clean_html(fast_html)
+    _assert_clean_html(strict_html)
+    _assert_clean_html(wf_html)
+    assert _headings(fast_html, "h2") == REQUIRED_TOP_LEVEL_SECTIONS
+    assert _headings(strict_html, "h2") == ["1. 本阶段结论", "2. 严格回测证据", "3. 报告导航"]
+    assert _headings(wf_html, "h2") == ["1. 本阶段结论", "2. Walk-forward Audit 证据", "3. 报告导航"]
     for marker in REQUIRED_TEMPLATE_MARKERS:
-        assert marker in html
-    assert "Calmar Ratio" in html
-    assert "Top 20 long-only" in html
-    assert "Top 1% long-only" in html
-    assert "final_suspended_holding_nav" in html
-    assert "<td>默认目标总仓位</td><td>100.00%</td>" in html
-    assert '<figure class="equity-chart">' in html
-    assert '<path class="strategy-line"' in html
-    assert '<path class="benchmark-line"' in html
-    assert "策略期末 580,000.00（指数 116）" in html
-    assert "Benchmark 期末 530,000.00（指数 106）" in html
-    assert "首日=100 的归一化指数" in html
-    assert '<figure class="return-calendar-chart">' in html
-    assert '<div class="return-cell positive"><b>2025</b><strong>16.00%</strong>' in html
-    assert "000300 6.00% · 超额 10.00%" in html
-    assert "<td>insufficient_cash_rejected_orders</td><td>2</td><td>现金不足拒单</td>" in html
-    assert "12,345.67" in html
-    assert "<td>aggregate_oos_sharpe</td><td>0.7000</td>" in html
-    assert "<td>0.7000</td><td>-3.00%</td><td>12.00%</td><td>warn</td>" in html
-    assert "-9.9000" not in html
-    assert "<td>Rank IC t-stat</td><td>1.3000</td>" in html
-    assert "<td>p-value</td><td>0.1900</td>" in html
-    assert "1d=0.0080; 5d=0.0040" in html
-    assert "<td>Top 20 long-only</td><td>28.00%</td><td>0.6200</td>" in html
-    assert "<td>34.00%</td><td>19.00%</td><td>A 股可交易方向诊断</td>" in html
-    assert "PnL 归因桥" in html
-    assert "<td>理想 top20 close-to-close</td><td>31.00%</td><td>0.00%</td><td>0.8800</td>" in html
-    assert "<td>加入估算换手成本</td><td>19.00%</td><td>-12.00%</td><td>0.6200</td>" in html
-    assert "Rejected strategy archive" in html
+        assert marker in fast_html
+    assert "full_research_report.html" not in fast_html
+    assert "full_research_report.html" not in strict_html
+    assert "full_research_report.html" not in wf_html
+    assert "fast_research_report.html" in strict_html
+    assert "strict_backtest_report.html" in fast_html
+    assert "walkforward_audit_report.html" in fast_html
+    assert "6. 策略回测报告" not in fast_html
+    assert "<td>快研究（当前）</td>" in fast_html
+    assert "Walk-forward strict audit" in wf_html
+    assert "fast fixture 结论" in fast_html
+    assert "strict fixture 结论" in strict_html
+    assert "wf fixture 结论" in wf_html
+    assert "final fixture 结论" not in fast_html
+    assert "Calmar Ratio" in strict_html
+    assert "final_suspended_holding_nav" in strict_html
+    assert "<td>默认目标总仓位</td><td>100.00%</td>" in strict_html
+    assert '<figure class="equity-chart">' in strict_html
+    assert '<path class="strategy-line"' in strict_html
+    assert '<path class="benchmark-line"' in strict_html
+    assert "策略期末 580,000.00（指数 116）" in strict_html
+    assert "Benchmark 期末 530,000.00（指数 106）" in strict_html
+    assert "首日=100 的归一化指数" in strict_html
+    assert '<figure class="return-calendar-chart">' in strict_html
+    assert '<div class="return-cell positive"><b>2025</b><strong>16.00%</strong>' in strict_html
+    assert "000300 6.00% · 超额 10.00%" in strict_html
+    assert "<td>insufficient_cash_rejected_orders</td><td>2</td><td>现金不足拒单</td>" in strict_html
+    assert "12,345.67" in strict_html
+    assert "<td>Rank IC t-stat</td><td>1.3000</td>" in fast_html
+    assert "<td>p-value</td><td>0.1900</td>" in fast_html
+    assert "1d=0.0080; 5d=0.0040" in fast_html
+    assert "<td>Top 20 long-only</td><td>28.00%</td><td>0.6200</td>" in fast_html
+    assert "<td>34.00%</td><td>19.00%</td><td>A 股可交易方向诊断</td>" in fast_html
+    assert "PnL 归因桥" in fast_html
+    assert "<td>理想 top20 close-to-close</td><td>31.00%</td><td>0.00%</td><td>0.8800</td>" in fast_html
+    assert "<td>加入估算换手成本</td><td>19.00%</td><td>-12.00%</td><td>0.6200</td>" in fast_html
+    assert "<td>aggregate_oos_sharpe</td><td>0.7000</td>" in wf_html
+    assert "<td>0.7000</td><td>-3.00%</td><td>12.00%</td><td>warn</td>" in wf_html
+    assert "-9.9000" not in fast_html
+    assert "-9.9000" not in wf_html
     for placeholder in ("[strategy_id]", "[Rank IC]", "[000300 coverage]", "[YYYY-MM-DD]"):
-        assert placeholder not in html
+        assert placeholder not in fast_html
+        assert placeholder not in strict_html
+        assert placeholder not in wf_html
 
 
 def test_signal_oos_validation_uses_structured_walkforward_verdict():
-    html = build_full_research_report_html(
+    html = build_research_stage_report_html(
+        "fast_research",
         {"run_id": "oos_contract", "rejected": 1},
         [
             {

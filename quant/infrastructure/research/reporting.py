@@ -3,18 +3,9 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 from html import escape
-from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-
-_REPORT_TEMPLATE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "var"
-    / "research"
-    / "report_templates"
-    / "full_research_report_template.html"
-)
-_FALLBACK_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent / "golden_reports" / "full_research_report_template.html"
+from quant.infrastructure.research.asset_paths import STAGE_REPORT_HTML
 
 _REQUIRED_CHART_STYLE = """
 .equity-chart {
@@ -114,141 +105,62 @@ _REQUIRED_CHART_STYLE = """
 """.strip()
 
 
-def build_full_research_report_html(
+_STAGE_REPORT_META = {
+    "fast_research": {
+        "label": "快研究",
+        "eyebrow": "Fast Research",
+        "description": "来源/admission、StrategySpec、HFQ 信号验证、向量化组合诊断。",
+    },
+    "strict_backtest": {
+        "label": "严格回测",
+        "eyebrow": "Strict Backtest",
+        "description": "项目 Backtester，含 T+1、停牌、涨跌停、手数、佣金、滑点、现金和成交约束。",
+    },
+    "walkforward_strict_audit": {
+        "label": "Walk-forward strict audit",
+        "eyebrow": "Walk-forward Strict Audit",
+        "description": "滚动 OOS split 重放 strict Backtester，用于最终稳定性审计。",
+    },
+}
+
+
+def build_research_stage_report_html(
+    stage_key: str,
     result: Any,
     hypotheses: Iterable[Dict[str, Any]],
     generated_at: str | None = None,
 ) -> str:
+    if stage_key not in _STAGE_REPORT_META:
+        raise ValueError(f"Unknown research report stage: {stage_key}")
     data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
     rows = list(hypotheses or [])
     generated = generated_at or datetime.now(timezone.utc).isoformat()
-    run_id = str(data.get("run_id") or "research_pipeline")
-    report_title = _report_title(rows)
+    meta = _STAGE_REPORT_META[stage_key]
+    title = f"{_report_subject(rows)} {meta['label']}报告"
     body = [
         '<section class="hero">',
-        '<p class="eyebrow">Two-Stage Quant Research Pipeline</p>',
-        f"<h1>{escape(report_title)}</h1>",
-        f"<p>生成时间 {escape(generated)}，Run ID <code>{escape(run_id)}</code>。本报告按 <code>quant/infrastructure/var/research/report_templates/full_research_report_template.html</code> 渲染，区分 idea 初筛、信号验证、组合诊断、严格 Backtester、purged walk-forward 和最终 Go / No-Go。</p>",
-        '<div class="template-note">模板字段已替换为本次研究的实际数据；报告不得保留方括号占位符，也不得用轻量组合诊断替代正式结论。</div>',
+        f"<p class=\"eyebrow\">{escape(meta['eyebrow'])}</p>",
+        f"<h1>{escape(title)}</h1>",
+        f"<p>生成时间 {escape(generated)}。本报告只回答 <b>{escape(meta['label'])}</b> 的执行口径、阶段证据和当前结论；其他阶段请打开对应独立报告。</p>",
         "</section>",
         '<section class="panel">',
-        "<h2>1. 结论汇总</h2>",
-        _report_metric_grid(rows, generated),
-        "<h3>一句话结论</h3>",
-        _conclusion_paragraph(data, rows),
-        _judgement_table(data, rows),
+        "<h2>1. 本阶段结论</h2>",
+        _single_stage_conclusion_table(data, rows, stage_key),
         "</section>",
+        *_stage_specific_sections(stage_key, data, rows),
         '<section class="panel">',
-        "<h2>2. idea 来源与初筛</h2>",
-        "<p>本节回答：这个 idea 从哪里来，是否足够可信，为什么值得进入正式研究。第一阶段只做搜集、来源质量评分、admission 评估和 StrategySpec 草拟，不跑正式验证。</p>",
-        _idea_source_overview_table(rows),
-        "<h3>来源质量与准入评分</h3>",
-        _source_quality_score_table(data, rows),
-        "<h3>初筛风险旗标</h3>",
-        _risk_flags_list(rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>3. 信号定义</h2>",
-        "<p>本节必须把 idea 翻译成可审计的 StrategySpec。这里要足够详细，让别人不读代码也能复现信号方向和调仓逻辑。</p>",
-        _strategy_spec_contract_table(rows),
-        "<h3>信号公式</h3>",
-        _formula_block(rows),
-        "<h3>交易解释</h3>",
-        _trade_explanation_list(rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>4. 数据来源及 benchmark 定义</h2>",
-        "<p>本节回答：用了什么数据、覆盖期是什么、后复权处理是否严格、benchmark 是否为 A 股默认的沪深 300。</p>",
-        _data_source_contract_table(data, rows),
-        "<h3>数据质量检查</h3>",
-        _data_quality_contract_list(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>5. 信号验证</h2>",
-        "<p>本节验证信号本身是否有统计研究价值，不等同于正式回测。核心是横截面预测能力、稳健性、显著性和方向一致性。</p>",
-        _signal_validation_contract_table(data, rows),
-        "<h3>组合诊断</h3>",
-        _portfolio_diagnostics_contract_table(data, rows),
-        "<h3>PnL 归因桥</h3>",
-        _pnl_attribution_bridge_contract_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>6. 策略回测报告</h2>",
-        "<p>正式结论必须来自项目 Backtester：<code>Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio</code>。本节回答真实交易约束下策略是否仍成立。</p>",
-        "<h3>回测 Equity Curve</h3>",
-        _equity_curve_chart(data, rows),
-        "<h3>年度收益日历图</h3>",
-        _yearly_return_calendar(data, rows),
-        "<h3>回测配置</h3>",
-        _backtest_config_contract_table(data, rows),
-        "<h3>核心绩效</h3>",
-        _core_performance_contract_table(data, rows),
-        "<h3>成交与成本诊断</h3>",
-        _trade_cost_contract_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>7. purged walk-forward</h2>",
-        "<p>Purged walk-forward 用来检查参数和信号是否在滚动样本外稳定。这里的“训练”不是机器学习训练的必要含义，而是指每个窗口内用于确定参数、阈值或组合规则的历史区间；即使策略没有 ML，也要防止未来信息泄露。</p>",
-        "<h3>方法设置</h3>",
-        _walkforward_methodology_contract_table(rows),
-        "<h3>结果摘要</h3>",
-        _walkforward_summary_contract_table(data, rows),
-        "<h3>Split 明细</h3>",
-        _walkforward_split_contract_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>8. 最终推荐与下一步计划</h2>",
-        _decision_contract(data, rows),
-        "<h3>下一步计划</h3>",
-        _next_steps_contract_table(rows),
-        "<h3>产物链接</h3>",
-        _artifact_links(rows),
+        "<h2>3. 报告导航</h2>",
+        _stage_report_link_table(data, rows, current_stage=stage_key),
         "</section>",
     ]
-    return _html_document(report_title, "\n".join(body))
+    return _html_document(title, "\n".join(body))
 
 
-def build_full_research_report_index(
-    result: Any,
-    html_filename: str,
-    generated_at: str | None = None,
-) -> str:
-    data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
-    generated = generated_at or datetime.now(timezone.utc).isoformat()
-    run_id = data.get("run_id") or "research_pipeline"
-    return "\n".join(
-        [
-            "# 完整研究报告",
-            "",
-            f"详细报告：[{html_filename}]({html_filename})",
-            "",
-            f"- 生成时间：{generated}",
-            f"- Run ID: `{run_id}`",
-            f"- 已搜集 idea：{data.get('discovered', 0)}",
-            f"- 已评估 idea：{data.get('evaluated', 0)}",
-            f"- 已集成策略：{data.get('integrated', 0)}",
-            f"- 已拒绝：{data.get('rejected', 0)}",
-            "",
-            "复杂研究报告统一使用 HTML 呈现。轻量说明和 AGENTS 文件可继续使用 Markdown。",
-            "",
-        ]
-    )
-
-
-def build_full_research_report(
-    result: Any,
-    hypotheses: Iterable[Dict[str, Any]],
-    generated_at: str | None = None,
-) -> str:
-    return build_full_research_report_html(result, hypotheses, generated_at=generated_at)
-
-
-def _report_title(rows: List[Dict[str, Any]]) -> str:
+def _report_subject(rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     title = str(row.get("title") or "").strip()
     strategy_id = _row_strategy_id(row)
-    subject = title or strategy_id or "策略"
-    return f"{subject} 完整策略研究报告"
+    return title or strategy_id or "策略"
 
 
 def _primary_row(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -371,6 +283,191 @@ def _judgement_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
         + f"<td>{escape(_deployment_summary(row))}</td></tr>",
     ]
     return _table(["判断项", "结果", "解释"], body)
+
+
+def _stage_conclusion_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    if not row:
+        return "<p>本次没有可展示的研究阶段结论。</p>"
+    stages = _stage_conclusions_for_report(data, row)
+    body = []
+    for key in ("fast_research", "strict_backtest", "walkforward_strict_audit", "final_decision"):
+        stage = stages.get(key) or {}
+        verdict = str(stage.get("verdict") or "not_run")
+        label = str(stage.get("label") or key)
+        method = str(stage.get("method") or "")
+        conclusion = str(stage.get("conclusion") or "")
+        body.append(
+            "<tr>"
+            + f"<td>{escape(label)}</td>"
+            + f"<td>{_badge(verdict, _stage_badge_class(verdict))}</td>"
+            + f"<td>{escape(conclusion)}</td>"
+            + f"<td>{escape(method)}</td>"
+            + "</tr>"
+        )
+    return _table(["功能", "结论", "当前研究判断", "执行口径"], body)
+
+
+def _single_stage_conclusion_table(data: Dict[str, Any], rows: List[Dict[str, Any]], stage_key: str) -> str:
+    row = _primary_row(rows)
+    if not row:
+        return "<p>本次没有可展示的研究阶段结论。</p>"
+    stage = _stage_conclusions_for_report(data, row).get(stage_key) or {}
+    verdict = str(stage.get("verdict") or "not_run")
+    method = str(stage.get("method") or _STAGE_REPORT_META[stage_key]["description"])
+    conclusion = str(stage.get("conclusion") or "本阶段尚未形成结构化结论。")
+    body = [
+        f"<tr><td>研究对象</td><td>{escape(_row_strategy_id(row))}</td></tr>",
+        f"<tr><td>阶段</td><td>{escape(str(stage.get('label') or _STAGE_REPORT_META[stage_key]['label']))}</td></tr>",
+        f"<tr><td>结论</td><td>{_badge(verdict, _stage_badge_class(verdict))}</td></tr>",
+        f"<tr><td>当前研究判断</td><td>{escape(conclusion)}</td></tr>",
+        f"<tr><td>执行口径</td><td>{escape(method)}</td></tr>",
+    ]
+    return _table(["字段", "内容"], body)
+
+
+def _stage_report_link_table(
+    data: Dict[str, Any],
+    rows: List[Dict[str, Any]],
+    current_stage: str | None = None,
+) -> str:
+    row = _primary_row(rows)
+    stages = _stage_conclusions_for_report(data, row) if row else {}
+    body = []
+    for key, path in STAGE_REPORT_HTML.items():
+        meta = _STAGE_REPORT_META[key]
+        stage = stages.get(key) or {}
+        verdict = str(stage.get("verdict") or "not_run")
+        label = str(stage.get("label") or meta["label"])
+        current = "（当前）" if key == current_stage else ""
+        href = escape(path.as_posix())
+        body.append(
+            "<tr>"
+            + f"<td>{escape(label)}{current}</td>"
+            + f"<td>{_badge(verdict, _stage_badge_class(verdict))}</td>"
+            + f'<td><a href="{href}">{escape(path.as_posix())}</a></td>'
+            + f"<td>{escape(str(stage.get('conclusion') or '尚未运行'))}</td>"
+            + "</tr>"
+        )
+    return _table(["阶段", "结论", "HTML", "摘要"], body)
+
+
+def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[str]:
+    if stage_key == "fast_research":
+        return [
+            '<section class="panel">',
+            "<h2>2. 快研究证据</h2>",
+            "<h3>idea 来源与初筛</h3>",
+            _idea_source_overview_table(rows),
+            "<h3>来源质量与准入评分</h3>",
+            _source_quality_score_table(data, rows),
+            "<h3>信号定义</h3>",
+            _strategy_spec_contract_table(rows),
+            "<h3>信号公式</h3>",
+            _formula_block(rows),
+            "<h3>信号验证</h3>",
+            _signal_validation_contract_table(data, rows),
+            "<h3>组合诊断</h3>",
+            _portfolio_diagnostics_contract_table(data, rows),
+            "<h3>PnL 归因桥</h3>",
+            _pnl_attribution_bridge_contract_table(data, rows),
+            "</section>",
+        ]
+    if stage_key == "strict_backtest":
+        return [
+            '<section class="panel">',
+            "<h2>2. 严格回测证据</h2>",
+            "<h3>回测 Equity Curve</h3>",
+            _equity_curve_chart(data, rows),
+            "<h3>年度收益日历图</h3>",
+            _yearly_return_calendar(data, rows),
+            "<h3>回测配置</h3>",
+            _backtest_config_contract_table(data, rows),
+            "<h3>核心绩效</h3>",
+            _core_performance_contract_table(data, rows),
+            "<h3>成交与成本诊断</h3>",
+            _trade_cost_contract_table(data, rows),
+            "</section>",
+        ]
+    return [
+        '<section class="panel">',
+        "<h2>2. Walk-forward Audit 证据</h2>",
+        "<h3>方法设置</h3>",
+        _walkforward_methodology_contract_table(rows),
+        "<h3>结果摘要</h3>",
+        _walkforward_summary_contract_table(data, rows),
+        "<h3>Split 明细</h3>",
+        _walkforward_split_contract_table(data, rows),
+        "</section>",
+    ]
+
+
+def _stage_conclusions_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    metrics = row.get("metrics") or {}
+    raw = metrics.get("research_stage_conclusions") or {}
+    stages = {key: dict(value) for key, value in raw.items() if isinstance(value, dict)}
+    strict = _strict_backtest_for_report(data, row)
+    strict_metrics = strict.get("metrics") or {}
+    wf_scores, wf_reason, wf_verdict = _walkforward_scores(row)
+
+    stages.setdefault(
+        "fast_research",
+        {
+            "label": "快研究",
+            "verdict": _signal_badge_class(metrics) if metrics.get("rank_ic") is not None else "warn",
+            "conclusion": (
+                _signal_validation_summary(metrics)
+                if metrics.get("rank_ic") is not None
+                else "快研究未保存结构化 HFQ 信号验证结果；不能形成独立通过结论。"
+            ),
+            "method": "来源/admission、StrategySpec、HFQ 信号验证和向量化组合诊断。",
+        },
+    )
+    stages.setdefault(
+        "strict_backtest",
+        {
+            "label": "严格回测",
+            "verdict": _strict_badge_class(strict_metrics) if strict_metrics else "not_run",
+            "conclusion": (
+                _strict_backtest_summary(strict_metrics)
+                if strict_metrics
+                else "本轮未运行 strict Backtester；不能形成严格回测通过结论。"
+            ),
+            "method": "项目 Backtester，含真实执行约束、成本和持仓 accounting。",
+        },
+    )
+    stages.setdefault(
+        "walkforward_strict_audit",
+        {
+            "label": "Walk-forward strict audit",
+            "verdict": wf_verdict or (_walkforward_badge_class(wf_scores) if wf_scores else "not_run"),
+            "conclusion": (
+                _walkforward_summary_sentence(wf_scores, wf_reason)
+                if wf_scores
+                else "本轮未运行 walk-forward strict audit；不能形成样本外稳定性通过结论。"
+            ),
+            "method": "滚动 OOS split 重放 strict Backtester，作为最终稳定性审计。",
+        },
+    )
+    stages.setdefault(
+        "final_decision",
+        {
+            "label": "最终 Go / No-Go",
+            "verdict": _report_status([row]),
+            "conclusion": _deployment_summary(row),
+            "method": "汇总快研究、strict 回测和 walk-forward strict audit。",
+        },
+    )
+    return stages
+
+
+def _stage_badge_class(verdict: str) -> str:
+    value = str(verdict or "").lower()
+    if value in {"pass", "candidate", "paper_trading_candidate"}:
+        return "pass"
+    if value in {"warn", "warning", "needs_more_validation", "validated", "idea_candidate", "not_run"}:
+        return "warn"
+    return "fail"
 
 
 def _idea_source_overview_table(rows: List[Dict[str, Any]]) -> str:
@@ -1096,18 +1193,6 @@ def _next_steps_contract_table(rows: List[Dict[str, Any]]) -> str:
 
 
 def _template_style() -> str:
-    for path in (_REPORT_TEMPLATE_PATH, _FALLBACK_REPORT_TEMPLATE_PATH):
-        try:
-            html = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        start = html.find("<style>")
-        end = html.find("</style>", start)
-        if start >= 0 and end > start:
-            style = html[start + len("<style>") : end].strip()
-            if ".equity-chart" not in style or ".return-calendar" not in style:
-                style = style + "\n" + _REQUIRED_CHART_STYLE
-            return style
     base_style = (
         ":root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}"
         "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}"
@@ -2163,12 +2248,16 @@ def _artifact_links(rows: List[Dict[str, Any]]) -> str:
     if not rows:
         return (
             "<ul>"
-            "<li>Report: <code>quant/infrastructure/var/research/reports/latest/full_research_report.html</code></li>"
+            "<li>Fast research report: <code>quant/infrastructure/var/research/reports/latest/fast_research_report.html</code></li>"
+            "<li>Strict backtest report: <code>quant/infrastructure/var/research/reports/latest/strict_backtest_report.html</code></li>"
+            "<li>Walk-forward audit report: <code>quant/infrastructure/var/research/reports/latest/walkforward_audit_report.html</code></li>"
             "<li>Idea bank: <code>quant/infrastructure/var/research/idea_bank/idea_bank.json</code></li>"
             "</ul>"
         )
     items = [
-        "<li>Latest report: <code>quant/infrastructure/var/research/reports/latest/full_research_report.html</code></li>",
+        "<li>Latest fast research report: <code>quant/infrastructure/var/research/reports/latest/fast_research_report.html</code></li>",
+        "<li>Latest strict backtest report: <code>quant/infrastructure/var/research/reports/latest/strict_backtest_report.html</code></li>",
+        "<li>Latest walk-forward audit report: <code>quant/infrastructure/var/research/reports/latest/walkforward_audit_report.html</code></li>",
         "<li>Idea bank: <code>quant/infrastructure/var/research/idea_bank/idea_bank.json</code></li>",
     ]
     seen = set()
@@ -2192,7 +2281,13 @@ def _artifact_links(rows: List[Dict[str, Any]]) -> str:
                     f"<li>Config: <code>quant/features/strategies/{escape(strategy_id)}/config.yaml</code></li>",
                 ]
             )
-        items.append(f"<li>Report: <code>quant/infrastructure/var/research/reports/{escape(strategy_id)}/full_research_report.html</code></li>")
+        items.extend(
+            [
+                f"<li>Fast research report: <code>quant/infrastructure/var/research/reports/{escape(strategy_id)}/fast_research_report.html</code></li>",
+                f"<li>Strict backtest report: <code>quant/infrastructure/var/research/reports/{escape(strategy_id)}/strict_backtest_report.html</code></li>",
+                f"<li>Walk-forward audit report: <code>quant/infrastructure/var/research/reports/{escape(strategy_id)}/walkforward_audit_report.html</code></li>",
+            ]
+        )
     return "<ul>" + "".join(items) + "</ul>"
 
 

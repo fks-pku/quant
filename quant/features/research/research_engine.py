@@ -135,6 +135,82 @@ class ResearchEngine:
         )
         return result
 
+    def run_fast_research_from_idea_bank(
+        self,
+        statuses: Optional[List[str]] = None,
+        max_ideas: Optional[int] = None,
+        idea_ids: Optional[List[str]] = None,
+        result: Optional[ResearchResult] = None,
+    ) -> ResearchResult:
+        auto_backtest = self.config.auto_backtest
+        rigor_enabled = self.config.rigor_enabled
+        self.config.auto_backtest = False
+        self.config.rigor_enabled = False
+        try:
+            return self.run_formal_research_from_idea_bank(
+                statuses=statuses,
+                max_ideas=max_ideas,
+                idea_ids=idea_ids,
+                result=result,
+            )
+        finally:
+            self.config.auto_backtest = auto_backtest
+            self.config.rigor_enabled = rigor_enabled
+
+    def run_strict_backtest_stage(
+        self,
+        strategy_ids: Optional[List[str]] = None,
+        statuses: Optional[List[str]] = None,
+        max_strategies: Optional[int] = None,
+        result: Optional[ResearchResult] = None,
+    ) -> ResearchResult:
+        if result is None:
+            result = ResearchResult()
+        items = self._stage_strategy_items(strategy_ids=strategy_ids, statuses=statuses, max_strategies=max_strategies)
+        result.log.append(ResearchLogEntry(
+            phase="strict_backtest_stage",
+            title=f"Loaded {len(items)} strategies for strict backtest",
+            source="",
+            source_url="",
+            verdict="info" if items else "skip",
+            reason="Standalone strict backtest stage.",
+            scores={"loaded": len(items)},
+        ))
+        if not items:
+            self.research_store.save_run_result(result)
+            return result
+        self._run_backtests(items, result, run_walkforward=False)
+        self.research_store.save_run_result(result)
+        self._write_candidate_scorecard(result.run_id)
+        return result
+
+    def run_walkforward_audit_stage(
+        self,
+        strategy_ids: Optional[List[str]] = None,
+        statuses: Optional[List[str]] = None,
+        max_strategies: Optional[int] = None,
+        result: Optional[ResearchResult] = None,
+    ) -> ResearchResult:
+        if result is None:
+            result = ResearchResult()
+        items = self._stage_strategy_items(strategy_ids=strategy_ids, statuses=statuses, max_strategies=max_strategies)
+        result.log.append(ResearchLogEntry(
+            phase="walkforward_audit_stage",
+            title=f"Loaded {len(items)} strategies for walk-forward audit",
+            source="",
+            source_url="",
+            verdict="info" if items else "skip",
+            reason="Standalone walk-forward strict audit stage.",
+            scores={"loaded": len(items)},
+        ))
+        if not items:
+            self.research_store.save_run_result(result)
+            return result
+        self._run_walkforward_audits(items, result)
+        self.research_store.save_run_result(result)
+        self._write_candidate_scorecard(result.run_id)
+        return result
+
     def _tracking_enabled(self) -> bool:
         return getattr(self.config, "tracking_enabled", False) and self._experiment_store is not None
 
@@ -469,6 +545,7 @@ class ResearchEngine:
                 validation_report=validation_report,
                 strategy_spec=strategy_spec,
             )
+            self._attach_fast_research_conclusion(strategy_id, report, validation_report)
             self._write_promotion_dossier(strategy_id, raw, report, validation_report, result.run_id, strategy_spec)
             self._upsert_idea(raw, "candidate", f"Integrated as {strategy_id}")
             return strategy_id
@@ -789,7 +866,52 @@ class ResearchEngine:
             "max_discovery_score": round(max(scores), 2) if scores else 0.0,
         }
 
-    def _run_backtests(self, strategy_items: List[Any], result: ResearchResult, benchmark_data: Any = None) -> None:
+    def _stage_strategy_items(
+        self,
+        strategy_ids: Optional[List[str]] = None,
+        statuses: Optional[List[str]] = None,
+        max_strategies: Optional[int] = None,
+    ) -> List[Tuple[str, None]]:
+        if strategy_ids:
+            ordered = []
+            seen = set()
+            for sid in strategy_ids:
+                text = str(sid).strip()
+                if text and text not in seen:
+                    ordered.append((text, None))
+                    seen.add(text)
+            return ordered[: int(max_strategies)] if max_strategies is not None else ordered
+
+        statuses = statuses or ["candidate"]
+        selected = []
+        seen = set()
+        if self.research_store is not None and hasattr(self.research_store, "list_by_status"):
+            for status in statuses:
+                for row in self.research_store.list_by_status(status):
+                    sid = str(row.get("id") or "").strip()
+                    if sid and sid not in seen:
+                        selected.append((sid, None))
+                        seen.add(sid)
+        if not selected and self.research_store is not None and hasattr(self.research_store, "list_hypotheses"):
+            allowed_statuses = set(statuses)
+            for row in self.research_store.list_hypotheses():
+                if str(row.get("status") or "") not in allowed_statuses:
+                    continue
+                sid = str(row.get("strategy_id") or "").strip()
+                if sid and sid not in seen:
+                    selected.append((sid, None))
+                    seen.add(sid)
+        if max_strategies is not None:
+            selected = selected[: int(max_strategies)]
+        return selected
+
+    def _run_backtests(
+        self,
+        strategy_items: List[Any],
+        result: ResearchResult,
+        benchmark_data: Any = None,
+        run_walkforward: bool = True,
+    ) -> None:
         if self._backtest_fn is None:
             logger.warning("No backtest function injected — skipping backtests")
             return
@@ -807,7 +929,26 @@ class ResearchEngine:
                 if validation_failure:
                     final_status = "rejected"
                     final_reasons.append(validation_failure)
-                if self._rigor_hub is not None and self.config.rigor_enabled:
+                rejected_before_backtest = result.rejected
+                result.log.append(ResearchLogEntry(
+                    phase="backtest",
+                    title=sid,
+                    source="",
+                    source_url="",
+                    verdict="info",
+                    reason="Running strict project Backtester with execution constraints.",
+                    scores={
+                        "start": self.config.default_backtest_start,
+                        "end": self.config.default_backtest_end,
+                    },
+                ))
+                self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
+                strict_verdict, strict_reason = self._attach_strict_backtest_conclusion(sid)
+                if strict_verdict == "fail":
+                    final_status = "rejected"
+                    final_reasons.append(strict_reason)
+
+                if run_walkforward and self._rigor_hub is not None and self.config.rigor_enabled:
                     split_benchmark_data = benchmark_data
                     if split_benchmark_data is None:
                         split_benchmark_data = self._load_benchmark_data(
@@ -821,7 +962,7 @@ class ResearchEngine:
                         source="",
                         source_url="",
                         verdict="info",
-                        reason="Running purged walk-forward validation.",
+                        reason="Running walk-forward strict audit.",
                         scores={
                             "symbols": len(symbols),
                             "start": self.config.default_backtest_start,
@@ -836,8 +977,9 @@ class ResearchEngine:
                         split_benchmark_data,
                     )
                     if not wf_result.is_viable:
-                        reason = f"Walk-forward failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
+                        reason = f"Walk-forward strict audit failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
                         self._attach_walkforward_result(sid, wf_result, "fail", reason)
+                        self._attach_walkforward_audit_conclusion(sid, wf_result, "fail", reason)
                         final_status = "rejected"
                         final_reasons.append(reason)
                         result.log.append(ResearchLogEntry(
@@ -856,33 +998,33 @@ class ResearchEngine:
                         ))
                     else:
                         dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
-                        if final_status != "rejected" and dsr is not None and dsr < 0.95:
-                            reason = f"Deflated Sharpe ratio warning: dsr={dsr:.2f} < 0.95"
+                        if dsr is not None and dsr < 0.95:
+                            reason = f"Walk-forward strict audit warning: dsr={dsr:.2f} < 0.95"
                             self._attach_walkforward_result(sid, wf_result, "warn", reason)
-                            final_status = "needs_more_validation"
-                            final_reasons.append(reason)
+                            self._attach_walkforward_audit_conclusion(sid, wf_result, "warn", reason)
+                            if final_status != "rejected":
+                                final_status = "needs_more_validation"
+                                final_reasons.append(reason)
                             result.log.append(ResearchLogEntry(
                                 phase="rigor", title=sid, source="", source_url="",
                                 verdict="warning", reason=reason,
                                 scores={"deflated_sharpe_ratio": dsr},
                             ))
                         else:
-                            self._attach_walkforward_result(sid, wf_result, "pass", "Walk-forward passed")
+                            reason = "Walk-forward strict audit passed"
+                            self._attach_walkforward_result(sid, wf_result, "pass", reason)
+                            self._attach_walkforward_audit_conclusion(sid, wf_result, "pass", reason)
                             result.walkforward_passed += 1
-                rejected_before_backtest = result.rejected
-                result.log.append(ResearchLogEntry(
-                    phase="backtest",
-                    title=sid,
-                    source="",
-                    source_url="",
-                    verdict="info",
-                    reason="Running strict project Backtester with execution constraints.",
-                    scores={
-                        "start": self.config.default_backtest_start,
-                        "end": self.config.default_backtest_end,
-                    },
-                ))
-                self._backtest_fn(sid, result, self.config, self.integrator, self.pool)
+                elif run_walkforward:
+                    self._attach_research_stage_conclusion(
+                        sid,
+                        "walkforward_strict_audit",
+                        "Walk-forward strict audit",
+                        "not_run",
+                        "本轮未运行 walk-forward strict audit；不能形成样本外稳定性通过结论。",
+                        {},
+                        "滚动 OOS split 重放 strict Backtester，用于最终稳定性审计。",
+                    )
                 final_reason = "; ".join(final_reasons)
                 if final_status == "rejected":
                     if self._candidate_status(sid) != "rejected":
@@ -904,15 +1046,144 @@ class ResearchEngine:
                     except (TypeError, ValueError):
                         dsr_value = 0.0
                     self._mark_needs_more_validation(sid, dsr_value, final_reason)
+                self._attach_final_research_conclusion(sid, self._candidate_status(sid) or final_status or "candidate", final_reason)
             except Exception as e:
                 logger.error(f"Backtest failed for {sid}: {e}")
                 result.errors.append(f"Backtest error for {sid}: {e}")
                 self.pool.reject(sid, reason=f"Backtest exception: {e}")
                 self._archive_rejected_strategy(sid, f"Backtest exception: {e}")
                 self._update_hypothesis_status_for_strategy(sid, "rejected", "backtest", f"Backtest exception: {e}")
+                self._attach_final_research_conclusion(sid, "rejected", f"Backtest exception: {e}")
                 if raw is not None:
                     self._upsert_idea(raw, "rejected", f"Backtest exception: {e}")
                 result.rejected += 1
+
+    def _run_walkforward_audits(self, strategy_items: List[Any], result: ResearchResult, benchmark_data: Any = None) -> None:
+        if self._rigor_hub is None or not self.config.rigor_enabled:
+            for item in strategy_items:
+                sid = item[0] if isinstance(item, tuple) else item
+                self._attach_research_stage_conclusion(
+                    sid,
+                    "walkforward_strict_audit",
+                    "Walk-forward strict audit",
+                    "not_run",
+                    "本轮未配置 walk-forward strict audit runner；不能形成样本外稳定性通过结论。",
+                    {},
+                    "滚动 OOS split 重放 strict Backtester，用于最终稳定性审计。",
+                )
+            result.errors.append("Walk-forward audit runner is not configured")
+            return
+
+        for item in strategy_items:
+            if isinstance(item, tuple):
+                sid, raw = item
+            else:
+                sid, raw = item, None
+            try:
+                symbols = self._strategy_symbols(sid)
+                split_benchmark_data = benchmark_data
+                if split_benchmark_data is None:
+                    split_benchmark_data = self._load_benchmark_data(
+                        symbols,
+                        self.config.default_backtest_start,
+                        self.config.default_backtest_end,
+                    )
+                result.log.append(ResearchLogEntry(
+                    phase="rigor",
+                    title=sid,
+                    source="",
+                    source_url="",
+                    verdict="info",
+                    reason="Running standalone walk-forward strict audit.",
+                    scores={
+                        "symbols": len(symbols),
+                        "start": self.config.default_backtest_start,
+                        "end": self.config.default_backtest_end,
+                    },
+                ))
+                wf_result = self._run_walkforward(
+                    sid,
+                    symbols,
+                    self.config.default_backtest_start,
+                    self.config.default_backtest_end,
+                    split_benchmark_data,
+                )
+                final_status = ""
+                final_reasons = []
+                rejected_before = result.rejected
+                if not wf_result.is_viable:
+                    reason = f"Walk-forward strict audit failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
+                    self._attach_walkforward_result(sid, wf_result, "fail", reason)
+                    self._attach_walkforward_audit_conclusion(sid, wf_result, "fail", reason)
+                    final_status = "rejected"
+                    final_reasons.append(reason)
+                    result.log.append(ResearchLogEntry(
+                        phase="rigor",
+                        title=sid,
+                        source="",
+                        source_url="",
+                        verdict="fail",
+                        reason=reason,
+                        scores={
+                            "aggregate_oos_sharpe": getattr(wf_result, "aggregate_oos_sharpe", 0.0),
+                            "worst_oos_sharpe": getattr(wf_result, "worst_oos_sharpe", 0.0),
+                            "pct_profitable_splits": getattr(wf_result, "pct_profitable_splits", 0.0),
+                            "deflated_sharpe_ratio": getattr(wf_result, "deflated_sharpe_ratio", None),
+                        },
+                    ))
+                else:
+                    dsr = getattr(wf_result, "deflated_sharpe_ratio", None)
+                    if dsr is not None and dsr < 0.95:
+                        reason = f"Walk-forward strict audit warning: dsr={dsr:.2f} < 0.95"
+                        self._attach_walkforward_result(sid, wf_result, "warn", reason)
+                        self._attach_walkforward_audit_conclusion(sid, wf_result, "warn", reason)
+                        if self._candidate_status(sid) == "candidate":
+                            final_status = "needs_more_validation"
+                            final_reasons.append(reason)
+                        result.log.append(ResearchLogEntry(
+                            phase="rigor", title=sid, source="", source_url="",
+                            verdict="warning", reason=reason,
+                            scores={"deflated_sharpe_ratio": dsr},
+                        ))
+                    else:
+                        reason = "Walk-forward strict audit passed"
+                        self._attach_walkforward_result(sid, wf_result, "pass", reason)
+                        self._attach_walkforward_audit_conclusion(sid, wf_result, "pass", reason)
+                        result.walkforward_passed += 1
+
+                final_reason = "; ".join(final_reasons)
+                if final_status == "rejected":
+                    if self._candidate_status(sid) != "rejected":
+                        if self.pool.reject(sid, reason=final_reason) and result.rejected == rejected_before:
+                            result.rejected += 1
+                    self._archive_rejected_strategy(sid, final_reason)
+                    self._update_hypothesis_status_for_strategy(sid, "rejected", "go_no_go", final_reason)
+                    if raw is not None:
+                        self._upsert_idea(raw, "rejected", final_reason)
+                elif final_status == "needs_more_validation":
+                    dsr_value = 0.0
+                    try:
+                        dsr_value = float(getattr(wf_result, "deflated_sharpe_ratio", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        dsr_value = 0.0
+                    self._mark_needs_more_validation(sid, dsr_value, final_reason)
+                self._attach_final_research_conclusion(sid, self._candidate_status(sid) or final_status or "candidate", final_reason)
+            except Exception as e:
+                logger.error(f"Walk-forward audit failed for {sid}: {e}")
+                result.errors.append(f"Walk-forward audit error for {sid}: {e}")
+                self._attach_walkforward_audit_conclusion(
+                    sid,
+                    type("WalkForwardError", (), {
+                        "aggregate_oos_sharpe": 0.0,
+                        "worst_oos_sharpe": 0.0,
+                        "pct_profitable_splits": 0.0,
+                        "deflated_sharpe_ratio": None,
+                        "splits": [],
+                    })(),
+                    "fail",
+                    f"Walk-forward audit exception: {e}",
+                )
+                self._attach_final_research_conclusion(sid, "rejected", f"Walk-forward audit exception: {e}")
 
     def _candidate_status(self, strategy_id: str) -> str:
         if self.research_store is not None:
@@ -926,6 +1197,194 @@ class ResearchEngine:
             if entry.get("id") == strategy_id:
                 return str(entry.get("status", ""))
         return ""
+
+    def _attach_fast_research_conclusion(self, strategy_id: str, report: Any, validation_report: Any = None) -> None:
+        evaluation_score = self._evaluation_score(report)
+        metrics = {
+            "admission_score": evaluation_score,
+            "signal_quality_score": getattr(report, "signal_quality_score", 0.0),
+            "research_confidence_score": getattr(report, "research_confidence_score", 0.0),
+        }
+        if validation_report is None:
+            verdict = "warn"
+            conclusion = (
+                f"快研究完成 admission={evaluation_score:.2f}，但本轮未运行 HFQ 信号验证；"
+                "只能进入 strict 回测做执行层审计，不能作为独立通过结论。"
+            )
+        else:
+            rank_ic = _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0)
+            fdr = _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0)
+            hit_rate = _float_or_default(getattr(validation_report, "hit_rate", 0.0), 0.0)
+            metrics.update({"rank_ic": rank_ic, "fdr_adjusted_p": fdr, "hit_rate": hit_rate})
+            if getattr(validation_report, "status", "") == "error" or not bool(getattr(validation_report, "fdr_significant", False)) or rank_ic < 0.02:
+                verdict = "fail"
+                conclusion = (
+                    f"快研究未通过：Rank IC={rank_ic:.4f}、FDR={fdr:.4f}、hit_rate={hit_rate:.2%}；"
+                    "继续 strict 回测和 walk-forward audit 仅用于审计，不作为上线依据。"
+                )
+            else:
+                verdict = "pass"
+                conclusion = (
+                    f"快研究通过：Rank IC={rank_ic:.4f}、FDR={fdr:.4f}、hit_rate={hit_rate:.2%}；"
+                    "可以进入 strict 回测检查真实交易约束。"
+                )
+        self._attach_research_stage_conclusion(
+            strategy_id,
+            "fast_research",
+            "快研究",
+            verdict,
+            conclusion,
+            metrics,
+            "来源/admission、StrategySpec、HFQ 信号验证和向量化组合诊断。",
+        )
+
+    def _attach_strict_backtest_conclusion(self, strategy_id: str) -> Tuple[str, str]:
+        strict = self._strict_backtest_for_strategy(strategy_id)
+        metrics = strict.get("metrics") or {}
+        diagnostics = strict.get("diagnostics") or {}
+        sharpe = _optional_float(metrics.get("sharpe"))
+        cagr = _optional_float(metrics.get("cagr"))
+        max_dd = _optional_float(metrics.get("max_drawdown_pct"))
+        trades = metrics.get("total_trades")
+        threshold = float(getattr(self.config, "backtest_sharpe_threshold", 0.5) or 0.5)
+        payload = {
+            "sharpe": sharpe,
+            "cagr": cagr,
+            "max_drawdown_pct": max_dd,
+            "total_trades": trades,
+            "total_commission": diagnostics.get("total_commission"),
+            "insufficient_cash_rejected_orders": (diagnostics.get("rejection_counts") or {}).get("insufficient_cash", 0),
+        }
+        if not strict or sharpe is None:
+            verdict = "warn"
+            conclusion = "strict Backtester 未返回结构化结果；本阶段不能形成通过结论。"
+        elif sharpe < threshold:
+            verdict = "fail"
+            conclusion = (
+                f"strict 回测未通过：Sharpe={sharpe:.2f} < {threshold:.2f}，"
+                f"CAGR={_percent_text(cagr)}，MaxDD={_percent_text(max_dd)}；策略不进入候选池。"
+            )
+        elif cagr is not None and cagr <= 0:
+            verdict = "warn"
+            conclusion = (
+                f"strict 回测边际：Sharpe={sharpe:.2f} 达标但 CAGR={_percent_text(cagr)}，"
+                "需要 walk-forward audit 再确认稳定性。"
+            )
+        else:
+            verdict = "pass"
+            conclusion = (
+                f"strict 回测通过：Sharpe={sharpe:.2f}，CAGR={_percent_text(cagr)}，"
+                f"MaxDD={_percent_text(max_dd)}；进入 walk-forward strict audit。"
+            )
+        self._attach_research_stage_conclusion(
+            strategy_id,
+            "strict_backtest",
+            "严格回测",
+            verdict,
+            conclusion,
+            payload,
+            "项目 Backtester，含 T+1、停牌、涨跌停、手数、佣金、滑点、现金和成交约束。",
+        )
+        return verdict, conclusion
+
+    def _attach_walkforward_audit_conclusion(self, strategy_id: str, wf_result: Any, verdict: str, reason: str) -> None:
+        aggregate = _float_or_default(getattr(wf_result, "aggregate_oos_sharpe", 0.0), 0.0)
+        worst = _float_or_default(getattr(wf_result, "worst_oos_sharpe", 0.0), 0.0)
+        pct_profitable = _float_or_default(getattr(wf_result, "pct_profitable_splits", 0.0), 0.0)
+        dsr = _optional_float(getattr(wf_result, "deflated_sharpe_ratio", None))
+        if verdict == "pass":
+            conclusion = (
+                f"walk-forward strict audit 通过：aggregate OOS Sharpe={aggregate:.2f}，"
+                f"worst={worst:.2f}，盈利 split={pct_profitable:.0%}。"
+            )
+        elif verdict == "warn":
+            dsr_text = f"{dsr:.2f}" if dsr is not None else "n/a"
+            conclusion = (
+                f"walk-forward strict audit 仅警告：aggregate OOS Sharpe={aggregate:.2f}，"
+                f"worst={worst:.2f}，DSR={dsr_text}；需要更多验证。"
+            )
+        else:
+            conclusion = (
+                f"walk-forward strict audit 未通过：aggregate OOS Sharpe={aggregate:.2f}，"
+                f"worst={worst:.2f}，盈利 split={pct_profitable:.0%}；{reason}"
+            )
+        self._attach_research_stage_conclusion(
+            strategy_id,
+            "walkforward_strict_audit",
+            "Walk-forward strict audit",
+            verdict,
+            conclusion,
+            {
+                "aggregate_oos_sharpe": aggregate,
+                "worst_oos_sharpe": worst,
+                "pct_profitable_splits": pct_profitable,
+                "deflated_sharpe_ratio": dsr,
+                "n_splits": len(list(getattr(wf_result, "splits", []) or [])),
+            },
+            "滚动 OOS split 重放 strict Backtester，用于最终稳定性审计。",
+        )
+
+    def _attach_final_research_conclusion(self, strategy_id: str, status: str, reason: str = "") -> None:
+        verdict = "pass" if status in {"candidate", "paper_trading_candidate"} else "warn" if status == "needs_more_validation" else "fail"
+        if status == "rejected":
+            conclusion = f"最终 No-Go：{reason or '至少一个正式阶段未通过'}。"
+        elif status == "needs_more_validation":
+            conclusion = f"最终结论：需要更多验证；{reason or 'walk-forward 或 DSR 未达到上线阈值'}。"
+        else:
+            conclusion = f"最终状态为 {status}；可进入下一层人工复核、容量和 paper trading 审批。"
+        self._attach_research_stage_conclusion(
+            strategy_id,
+            "final_decision",
+            "最终 Go / No-Go",
+            verdict,
+            conclusion,
+            {"status": status, "reason": reason},
+            "汇总快研究、strict 回测和 walk-forward strict audit 的结构化结论。",
+        )
+
+    def _attach_research_stage_conclusion(
+        self,
+        strategy_id: str,
+        stage_key: str,
+        label: str,
+        verdict: str,
+        conclusion: str,
+        scores: Optional[Dict[str, Any]] = None,
+        method: str = "",
+    ) -> None:
+        if self.research_store is None or not hasattr(self.research_store, "list_hypotheses"):
+            return
+        try:
+            for row in self.research_store.list_hypotheses():
+                if row.get("strategy_id") != strategy_id:
+                    continue
+                updated = dict(row)
+                metrics = dict(updated.get("metrics") or {})
+                stages = dict(metrics.get("research_stage_conclusions") or {})
+                stages[stage_key] = {
+                    "label": label,
+                    "verdict": verdict,
+                    "conclusion": conclusion,
+                    "method": method,
+                    "scores": dict(scores or {}),
+                }
+                metrics["research_stage_conclusions"] = stages
+                updated["metrics"] = metrics
+                self.research_store.upsert_hypothesis(updated)
+        except Exception as e:
+            logger.warning(f"Failed to attach stage conclusion for {strategy_id}/{stage_key}: {e}")
+
+    def _strict_backtest_for_strategy(self, strategy_id: str) -> Dict[str, Any]:
+        if self.research_store is None or not hasattr(self.research_store, "list_hypotheses"):
+            return {}
+        try:
+            for row in self.research_store.list_hypotheses():
+                if row.get("strategy_id") == strategy_id:
+                    strict = (row.get("metrics") or {}).get("strict_backtest")
+                    return dict(strict or {}) if isinstance(strict, dict) else {}
+        except Exception:
+            return {}
+        return {}
 
     def _attach_validation_gate(self, strategy_id: str, validation_report: Any = None) -> None:
         if validation_report is None:
@@ -1248,6 +1707,13 @@ def _optional_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _percent_text(value: Any) -> str:
+    number = _optional_float(value)
+    if number is None:
+        return "n/a"
+    return f"{number:.2%}"
 
 
 def _is_a_share_symbol(symbol: str) -> bool:

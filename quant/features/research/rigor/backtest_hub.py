@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -32,6 +33,8 @@ class RigorHub:
         self._purge_days = wf.get("purge_days", 5)
         self._embargo_days = wf.get("embargo_days", 21)
         self._min_train = wf.get("min_train_observations", 126)
+        self._parallel_workers = self._resolve_parallel_workers(wf.get("parallel_workers", 1))
+        self._prefetch_data = bool(wf.get("prefetch_data", False))
 
         thresholds = self._config.get("thresholds", {})
         self._min_worst_oos_sharpe = thresholds.get("min_worst_oos_sharpe", 0.3)
@@ -67,50 +70,19 @@ class RigorHub:
 
         split_results = []
         return_series = []
-        for split in splits:
-            dated_split = self._attach_split_dates(split, calendar)
-            request = {
-                "start": dated_split["test_start_date"],
-                "end": dated_split["test_end_date"],
-                "train_start": split["train_start"],
-                "train_end": split["train_end"],
-                "test_start": split["test_start"],
-                "test_end": split["test_end"],
-                "train_start_date": dated_split["train_start_date"],
-                "train_end_date": dated_split["train_end_date"],
-                "test_start_date": dated_split["test_start_date"],
-                "test_end_date": dated_split["test_end_date"],
-                "symbols": symbols,
-                "initial_cash": initial_cash,
-                "cost_config": self._config.get("cost_model", {}),
-                "run_label": f"{strategy_id}_split_{dated_split['train_start_date']}_{dated_split['test_end_date']}",
-            }
-            try:
-                response = self._runner(strategy_id, request)
-                if isinstance(response, dict) and "returns" in response:
-                    response = dict(response)
-                    returns = self._extract_oos_returns(
-                        response["returns"],
-                        dated_split["test_start_date"],
-                        dated_split["test_end_date"],
-                    )
-                    response["returns"] = returns
-                    if not returns.empty:
-                        return_series.append(returns)
-                split.update(dated_split)
-                split["response"] = response
-                test_sharpe = response.get("metrics", {}).get("sharpe", 0.0) if isinstance(response, dict) else 0.0
-                split["test_sharpe"] = test_sharpe
-                self._attach_regime_label(split, benchmark_data)
-                split_results.append(split)
-            except TypeError:
-                raise
-            except Exception as e:
-                logger.warning(f"Walk-forward split failed: {e}")
-                split.update(dated_split)
-                split["test_sharpe"] = 0.0
-                self._attach_regime_label(split, benchmark_data)
-                split_results.append(split)
+        for split_result, returns in self._run_split_jobs(
+            strategy_id=strategy_id,
+            symbols=symbols,
+            initial_cash=initial_cash,
+            splits=splits,
+            calendar=calendar,
+            benchmark_data=benchmark_data,
+            run_start=str(start),
+            run_end=str(end),
+        ):
+            split_results.append(split_result)
+            if returns is not None and not returns.empty:
+                return_series.append(returns)
 
         test_sharpes = [s["test_sharpe"] for s in split_results]
         worst_oos = min(test_sharpes) if test_sharpes else 0.0
@@ -145,6 +117,87 @@ class RigorHub:
             bull_only_warning=bull_only_warning,
         )
 
+    def _run_split_jobs(
+        self,
+        strategy_id: str,
+        symbols: List[str],
+        initial_cash: float,
+        splits: List[Dict[str, Any]],
+        calendar: pd.DatetimeIndex,
+        benchmark_data: Any,
+        run_start: str,
+        run_end: str,
+    ) -> List[Tuple[Dict[str, Any], Optional[pd.Series]]]:
+        jobs = [
+            (
+                strategy_id,
+                symbols,
+                initial_cash,
+                dict(split),
+                self._attach_split_dates(split, calendar),
+                benchmark_data,
+                run_start,
+                run_end,
+                self._prefetch_data,
+            )
+            for split in splits
+        ]
+        workers = min(self._parallel_workers, len(jobs))
+        if workers <= 1:
+            return [self._run_split_job(job) for job in jobs]
+        logger.info("Running purged walk-forward with %d parallel workers across %d splits", workers, len(jobs))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            return list(executor.map(self._run_split_job, jobs))
+
+    def _run_split_job(
+        self,
+        job: Tuple[str, List[str], float, Dict[str, Any], Dict[str, str], Any, str, str, bool],
+    ) -> Tuple[Dict[str, Any], Optional[pd.Series]]:
+        strategy_id, symbols, initial_cash, split, dated_split, benchmark_data, run_start, run_end, prefetch_data = job
+        request = {
+            "start": dated_split["test_start_date"],
+            "end": dated_split["test_end_date"],
+            "walkforward_start_date": run_start,
+            "walkforward_end_date": run_end,
+            "walkforward_prefetch_data": prefetch_data,
+            "train_start": split["train_start"],
+            "train_end": split["train_end"],
+            "test_start": split["test_start"],
+            "test_end": split["test_end"],
+            "train_start_date": dated_split["train_start_date"],
+            "train_end_date": dated_split["train_end_date"],
+            "test_start_date": dated_split["test_start_date"],
+            "test_end_date": dated_split["test_end_date"],
+            "symbols": symbols,
+            "initial_cash": initial_cash,
+            "cost_config": self._config.get("cost_model", {}),
+            "run_label": f"{strategy_id}_split_{dated_split['train_start_date']}_{dated_split['test_end_date']}",
+        }
+        try:
+            response = self._runner(strategy_id, request)
+            returns = None
+            if isinstance(response, dict) and "returns" in response:
+                response = dict(response)
+                returns = self._extract_oos_returns(
+                    response["returns"],
+                    dated_split["test_start_date"],
+                    dated_split["test_end_date"],
+                )
+                response["returns"] = returns
+            split.update(dated_split)
+            split["response"] = response
+            split["test_sharpe"] = response.get("metrics", {}).get("sharpe", 0.0) if isinstance(response, dict) else 0.0
+            self._attach_regime_label(split, benchmark_data)
+            return split, returns
+        except TypeError:
+            raise
+        except Exception as e:
+            logger.warning(f"Walk-forward split failed: {e}")
+            split.update(dated_split)
+            split["test_sharpe"] = 0.0
+            self._attach_regime_label(split, benchmark_data)
+            return split, None
+
     def _n_trials(self) -> int:
         if self._experiment_store is None or not hasattr(self._experiment_store, "list_runs"):
             return 1
@@ -153,6 +206,14 @@ class RigorHub:
         except Exception as e:
             logger.warning(f"Experiment run count unavailable: {e}")
             return 1
+
+    @staticmethod
+    def _resolve_parallel_workers(value: Any) -> int:
+        try:
+            workers = int(value)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, workers)
 
     def _check_capacity(self, split_results: List[Dict[str, Any]]) -> bool:
         saw_trades = False

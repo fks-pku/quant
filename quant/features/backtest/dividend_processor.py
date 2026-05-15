@@ -24,8 +24,12 @@ def process_dividends(
     stock_dividends: List[Dict[str, Any]] = []
     if not data_provider or not hasattr(data_provider, 'get_dividend_for_date'):
         return stock_dividends
-    for symbol in symbols:
-        pos = portfolio.get_position(symbol)
+    positions = getattr(portfolio, "positions", None)
+    if isinstance(positions, dict):
+        position_items = [(symbol, pos) for symbol, pos in positions.items() if getattr(pos, "quantity", 0) > 0]
+    else:
+        position_items = [(symbol, portfolio.get_position(symbol)) for symbol in symbols]
+    for symbol, pos in position_items:
         if not pos or pos.quantity <= 0:
             continue
         try:

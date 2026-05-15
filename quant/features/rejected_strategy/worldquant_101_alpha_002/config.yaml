@@ -5197,5 +5197,5 @@ parameters:
     - "689009"
   lookback: 6
   holding_days: 5
-  max_position_pct: 0.10
+  max_position_pct: 1.0
   max_positions: 20

@@ -15,8 +15,11 @@ DISCOVERED_STRATEGIES_MD = IDEA_BANK_DIR / "discovered_strategies.md"
 LEGACY_IDEA_BANK_JSON = Path("idea_bank.json")
 LEGACY_IDEA_BANK_MD = Path("idea_bank.md")
 
-REPORT_HTML = Path("full_research_report.html")
-REPORT_MD = Path("full_research_report.md")
+STAGE_REPORT_HTML = {
+    "fast_research": Path("fast_research_report.html"),
+    "strict_backtest": Path("strict_backtest_report.html"),
+    "walkforward_strict_audit": Path("walkforward_audit_report.html"),
+}
 LAST_RESULT_JSON = Path("last_result.json")
 STRATEGY_EVALUATION_MD = Path("strategy_evaluation.md")
 LATEST_REPORT_METADATA = LATEST_REPORT_DIR / "metadata.json"
@@ -26,8 +29,8 @@ def report_dir(report_id: str) -> Path:
     return REPORTS_DIR / safe_asset_key(report_id)
 
 
-def latest_report_html_path() -> Path:
-    return LATEST_REPORT_DIR / REPORT_HTML
+def latest_stage_report_html_path(stage_key: str) -> Path:
+    return LATEST_REPORT_DIR / STAGE_REPORT_HTML[stage_key]
 
 
 def report_id_for_result(data: Dict[str, Any], hypotheses: Iterable[Dict[str, Any]]) -> str:

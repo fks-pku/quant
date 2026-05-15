@@ -18,6 +18,10 @@ research:
     - "600519"
     - "000001"
     - "510300"
+  rigor_config:
+    purged_walkforward:
+      parallel_workers: 4
+      prefetch_data: false
   validation_config:
     sensitivity_enabled: false
     sensitivity_lookback_grid: [10, 15, 20, 25, 30]

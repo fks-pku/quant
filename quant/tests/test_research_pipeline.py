@@ -2,6 +2,7 @@ import json
 import shutil
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pandas as pd
@@ -197,24 +198,23 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         assert (tmp_path / "research" / "reports" / "latest" / "last_result.json").exists()
         assert "Daily Momentum Breakout" in (tmp_path / "research" / "idea_bank" / "discovered_strategies.md").read_text(encoding="utf-8")
         assert "economic_rationale" in (tmp_path / "research" / "reports" / "latest" / "strategy_evaluation.md").read_text(encoding="utf-8")
-        report = (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").read_text(encoding="utf-8")
-        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
-        assert (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+        fast_report = (tmp_path / "research" / "reports" / "latest" / "fast_research_report.html").read_text(encoding="utf-8")
+        strict_report = (tmp_path / "research" / "reports" / "latest" / "strict_backtest_report.html").read_text(encoding="utf-8")
+        wf_report = (tmp_path / "research" / "reports" / "latest" / "walkforward_audit_report.html").read_text(encoding="utf-8")
+        assert not (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "fast_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "strict_backtest_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
+        assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+        assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.md").exists()
         assert (tmp_path / "research" / "reports" / "latest" / "metadata.json").exists()
-        assert "完整策略研究报告" in report
-        assert "1. 结论汇总" in report
-        assert "2. idea 来源与初筛" in report
-        assert "信号公式" in report
-        assert 'class="grid"' in report
-        assert 'class="formula"' in report
-        assert "6. 策略回测报告" in report
-        assert "7. purged walk-forward" in report
-        assert "Split 明细" in report
-        assert "Daily Momentum Breakout" in report
-        assert "000300" in report
-        index = (tmp_path / "research" / "reports" / "latest" / "full_research_report.md").read_text(encoding="utf-8")
-        assert "[full_research_report.html](full_research_report.html)" in index
-        assert "复杂研究报告统一使用 HTML" in index
+        assert "信号公式" in fast_report
+        assert "full_research_report.html" not in fast_report
+        assert 'class="formula"' in fast_report
+        assert "严格回测证据" in strict_report
+        assert "Split 明细" in wf_report
+        assert "Daily Momentum Breakout" in fast_report
+        assert "000300" in fast_report
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -288,8 +288,11 @@ def test_research_engine_formal_research_loads_local_idea_bank_without_scouting(
         assert ideas[0]["title"] == "Daily Momentum Breakout"
         assert (tmp_path / "research" / "reports" / "latest" / "strategy_evaluation.md").exists()
         assert not (tmp_path / "research" / "full_research_report.html").exists()
-        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
-        assert (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+        assert not (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "fast_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "strict_backtest_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
+        assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -336,10 +339,128 @@ def test_research_engine_formal_research_filters_by_idea_id():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
-def test_full_research_report_replaces_corrupt_decision_reason():
-    from quant.infrastructure.research.reporting import build_full_research_report_html
+def test_research_engine_strict_stage_runs_without_fast_or_walkforward():
+    tmp_path = _test_root()
+    events = []
 
-    report = build_full_research_report_html(
+    def record_backtest(sid, result, config, integrator, pool):
+        events.append(sid)
+        result.backtested += 1
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate({
+            "id": "daily_momentum_breakout",
+            "name": "Daily Momentum Breakout",
+            "status": "candidate",
+            "research_meta": {},
+        })
+        research_store.upsert_hypothesis({
+            "hypothesis_id": "h1",
+            "strategy_id": "daily_momentum_breakout",
+            "title": "Daily Momentum Breakout",
+            "status": "candidate",
+            "stage": "stage2_integrate",
+            "source": "fixture",
+            "source_url": "https://example.test",
+            "thesis": "fixture",
+            "decision_reason": "",
+            "metrics": {"rank_ic": 0.03, "fdr_adjusted_p": 0.01, "hit_rate": 0.55},
+            "evidence": {"strategy_spec": {"strategy_id": "daily_momentum_breakout", "universe": ["000300"]}},
+        })
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=True, rigor_enabled=True),
+            research_store=research_store,
+            backtest_fn=record_backtest,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_strict_backtest_stage(strategy_ids=["daily_momentum_breakout"])
+        hypothesis = research_store.list_hypotheses()[0]
+        stages = hypothesis["metrics"]["research_stage_conclusions"]
+
+        assert events == ["daily_momentum_breakout"]
+        assert result.backtested == 1
+        assert stages["strict_backtest"]["verdict"] == "warn"
+        assert "walkforward_strict_audit" not in stages
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "strict_backtest_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "fast_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_walkforward_stage_runs_without_strict_backtest():
+    tmp_path = _test_root()
+    calls = []
+
+    class FixedRigorHub:
+        def run_walkforward(self, strategy_id, symbols, start, end):
+            calls.append((strategy_id, tuple(symbols), start, end))
+            return type(
+                "WalkForward",
+                (),
+                {
+                    "is_viable": True,
+                    "aggregate_oos_sharpe": 1.2,
+                    "worst_oos_sharpe": 0.4,
+                    "pct_profitable_splits": 0.8,
+                    "deflated_sharpe_ratio": 0.98,
+                    "splits": [],
+                },
+            )()
+
+    def fail_backtest(*args, **kwargs):
+        raise AssertionError("walkforward stage must not run strict backtest")
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate({
+            "id": "daily_momentum_breakout",
+            "name": "Daily Momentum Breakout",
+            "status": "candidate",
+            "research_meta": {"strategy_spec": {"universe": ["000300"]}},
+        })
+        research_store.upsert_hypothesis({
+            "hypothesis_id": "h1",
+            "strategy_id": "daily_momentum_breakout",
+            "title": "Daily Momentum Breakout",
+            "status": "candidate",
+            "stage": "stage2_integrate",
+            "source": "fixture",
+            "source_url": "https://example.test",
+            "thesis": "fixture",
+            "decision_reason": "",
+            "metrics": {"rank_ic": 0.03, "fdr_adjusted_p": 0.01, "hit_rate": 0.55},
+            "evidence": {"strategy_spec": {"strategy_id": "daily_momentum_breakout", "universe": ["000300"]}},
+        })
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, rigor_enabled=True),
+            research_store=research_store,
+            backtest_fn=fail_backtest,
+            rigor_hub=FixedRigorHub(),
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        result = engine.run_walkforward_audit_stage(strategy_ids=["daily_momentum_breakout"])
+        hypothesis = research_store.list_hypotheses()[0]
+        stages = hypothesis["metrics"]["research_stage_conclusions"]
+
+        assert calls and calls[0][0] == "daily_momentum_breakout"
+        assert result.backtested == 0
+        assert result.walkforward_passed == 1
+        assert stages["walkforward_strict_audit"]["verdict"] == "pass"
+        assert "strict_backtest" not in stages
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_stage_report_replaces_corrupt_decision_reason():
+    from quant.infrastructure.research.reporting import build_research_stage_report_html
+
+    report = build_research_stage_report_html(
+        "fast_research",
         {"run_id": "encoding_guard", "backtested": 1, "walkforward_passed": 0},
         [
             {
@@ -673,6 +794,7 @@ def test_candidate_pool_updates_persistent_status():
 
 def test_research_engine_runs_strict_backtest_before_pausing_low_dsr_candidate():
     tmp_path = _test_root()
+    events = []
 
     class FixedScout:
         def search(self, sources=None, max_results=10):
@@ -684,6 +806,7 @@ def test_research_engine_runs_strict_backtest_before_pausing_low_dsr_candidate()
 
     class LowDsrRigorHub:
         def run_walkforward(self, strategy_id, symbols, start, end):
+            events.append("walkforward")
             return type(
                 "WalkForward",
                 (),
@@ -695,6 +818,7 @@ def test_research_engine_runs_strict_backtest_before_pausing_low_dsr_candidate()
             )()
 
     def record_backtest(sid, result, config, integrator, pool):
+        events.append("strict")
         result.backtested += 1
 
     try:
@@ -712,12 +836,19 @@ def test_research_engine_runs_strict_backtest_before_pausing_low_dsr_candidate()
         result = engine.run_full_pipeline()
 
         candidate = research_store.get_candidate("daily_momentum_breakout")
+        hypothesis = research_store.list_hypotheses()[0]
+        stages = hypothesis["metrics"]["research_stage_conclusions"]
+        assert events == ["strict", "walkforward"]
         assert result.rejected == 0
         assert result.backtested == 1
         assert result.walkforward_passed == 0
         assert result.errors == []
         assert candidate["status"] == "needs_more_validation"
         assert candidate["research_meta"]["dsr_warning"] == pytest.approx(0.5)
+        assert stages["fast_research"]["verdict"] == "warn"
+        assert stages["strict_backtest"]["verdict"] == "warn"
+        assert stages["walkforward_strict_audit"]["verdict"] == "warn"
+        assert stages["final_decision"]["verdict"] == "warn"
         assert any(entry.phase == "rigor" and entry.verdict == "warning" for entry in result.log)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -815,6 +946,11 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
         assert hypothesis["metrics"]["walkforward"]["aggregate_oos_sharpe"] == pytest.approx(-1.2)
         assert hypothesis["metrics"]["walkforward"]["worst_oos_sharpe"] == pytest.approx(-4.6)
         assert hypothesis["metrics"]["walkforward"]["verdict"] == "fail"
+        stages = hypothesis["metrics"]["research_stage_conclusions"]
+        assert stages["fast_research"]["verdict"] == "pass"
+        assert stages["strict_backtest"]["verdict"] == "warn"
+        assert stages["walkforward_strict_audit"]["verdict"] == "fail"
+        assert stages["final_decision"]["verdict"] == "fail"
         assert idea["status"] == "rejected"
         assert any(entry.phase == "stage2_validation" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "info" for entry in result.log)
@@ -1115,6 +1251,11 @@ def test_validation_failed_strategy_runs_backtest_then_archives_to_rejected_stra
         assert hypothesis["stage"] == "go_no_go"
         assert "Validation failed" in hypothesis["decision_reason"]
         assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
+        stages = hypothesis["metrics"]["research_stage_conclusions"]
+        assert stages["fast_research"]["verdict"] == "fail"
+        assert stages["strict_backtest"]["verdict"] == "warn"
+        assert stages["walkforward_strict_audit"]["verdict"] == "not_run"
+        assert stages["final_decision"]["verdict"] == "fail"
         assert idea["status"] == "rejected"
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -1334,6 +1475,121 @@ def test_api_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._config["end_date"] == "2025-12-31"
 
 
+def test_walkforward_runner_reuses_prefetched_data(monkeypatch):
+    from quant.api import research_bp as research_module
+    import quant.features.backtest.engine as engine_module
+    import quant.features.strategies.registry as registry_module
+    import quant.infrastructure.data.providers.duckdb_provider as duckdb_module
+
+    fetches = []
+    seen_windows = []
+
+    class FakeStorage:
+        def get_lot_size(self, symbol):
+            return 100
+
+    class FakeDuckDBProvider:
+        def __init__(self):
+            self.storage = FakeStorage()
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def get_bars_for_symbols(self, symbols, start, end, timeframe):
+            fetches.append((tuple(symbols), start, end, timeframe))
+            dates = pd.date_range(start, end, freq="D")
+            rows = []
+            for date in dates:
+                rows.append({
+                    "timestamp": date,
+                    "symbol": symbols[0],
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.5,
+                    "close": 10.0,
+                    "volume": 100000,
+                })
+            return pd.DataFrame(rows)
+
+    class FakeStrategy:
+        def __init__(self, symbols):
+            self.symbols = symbols
+
+    class FakeRegistry:
+        def get(self, sid):
+            return FakeStrategy
+
+    class FakeBacktester:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def run(self, start, end, strategies, initial_cash, data_provider, symbols):
+            seen_windows.append((start, end, data_provider.data["timestamp"].min(), data_provider.data["timestamp"].max()))
+            return SimpleNamespace(
+                equity_curve=pd.Series([initial_cash, initial_cash * 1.01], index=pd.to_datetime([start, end])),
+                trades=[],
+                sharpe_ratio=1.0,
+                max_drawdown_pct=-0.01,
+                total_return=0.01,
+                win_rate=0.5,
+            )
+
+    monkeypatch.setattr(duckdb_module, "DuckDBProvider", FakeDuckDBProvider)
+    monkeypatch.setattr(registry_module, "StrategyRegistry", FakeRegistry)
+    monkeypatch.setattr(engine_module, "Backtester", FakeBacktester)
+
+    runner = research_module._make_walkforward_runner()
+    base_request = {
+        "symbols": ["000001"],
+        "initial_cash": 100000,
+        "walkforward_start_date": "2020-01-01",
+        "walkforward_end_date": "2020-01-10",
+        "walkforward_prefetch_data": True,
+    }
+
+    first = runner("test_strategy", {**base_request, "start": "2020-01-03", "end": "2020-01-05"})
+    second = runner("test_strategy", {**base_request, "start": "2020-01-06", "end": "2020-01-08"})
+
+    assert len(fetches) == 1
+    assert fetches[0][1].strftime("%Y-%m-%d") == "2020-01-01"
+    assert fetches[0][2].strftime("%Y-%m-%d") == "2020-01-10"
+    assert seen_windows[0][2] == pd.Timestamp("2020-01-03")
+    assert seen_windows[0][3] == pd.Timestamp("2020-01-05")
+    assert seen_windows[1][2] == pd.Timestamp("2020-01-06")
+    assert seen_windows[1][3] == pd.Timestamp("2020-01-08")
+    assert first["metrics"]["sharpe"] == 1.0
+    assert second["metrics"]["sharpe"] == 1.0
+
+
+def test_api_load_lot_sizes_uses_bulk_instrument_meta():
+    from quant.api.research_bp import _load_lot_sizes
+
+    class FakeStorage:
+        def __init__(self):
+            self.single_calls = 0
+
+        def get_lot_size(self, symbol):
+            self.single_calls += 1
+            return 100
+
+        def get_all_instrument_meta(self):
+            return pd.DataFrame([
+                {"symbol": "000001", "lot_size": 100},
+                {"symbol": "600519", "lot_size": 200},
+                {"symbol": "AAPL", "lot_size": 1},
+            ])
+
+    storage = FakeStorage()
+    db_provider = SimpleNamespace(storage=storage)
+    lot_sizes = _load_lot_sizes(db_provider, ["000001", "600519", "000002", "AAPL"], lambda sym: sym.isdigit())
+
+    assert lot_sizes == {"000001": 100, "600519": 200, "000002": 100, "AAPL": 1}
+    assert storage.single_calls == 0
+
+
 def test_api_make_validation_components_respects_disabled_flag():
     from quant.api import research_bp as research_module
 
@@ -1350,24 +1606,26 @@ def test_api_candidate_symbols_prefer_strategy_spec_universe():
     assert research_module._candidate_symbols({}, ["000300"]) == ["000300"]
 
 
-def test_api_latest_report_payload_points_to_full_html_report(tmp_path):
+def test_api_latest_report_payload_points_to_stage_reports(tmp_path):
     from quant.api import research_bp as research_module
 
     report_dir = tmp_path / "research"
     (report_dir / "reports" / "latest").mkdir(parents=True)
-    report_path = report_dir / "reports" / "latest" / "full_research_report.html"
-    report_path.write_text("<html><body>report</body></html>", encoding="utf-8")
+    fast_path = report_dir / "reports" / "latest" / "fast_research_report.html"
+    fast_path.write_text("<html></html>", encoding="utf-8")
 
     payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
 
     assert payload["available"] is True
-    assert payload["url"] == "/api/research/report/latest"
-    assert payload["path"] == str(report_path)
     assert payload["reports_root"] == str(report_dir / "reports")
+    assert payload["stage_reports"]["fast_research"]["available"] is True
+    assert payload["stage_reports"]["fast_research"]["path"] == str(fast_path)
+    assert payload["stage_reports"]["fast_research"]["url"] == "/api/research/report/stage/fast_research"
+    assert payload["stage_reports"]["strict_backtest"]["available"] is False
     assert "updated_at" in payload
 
 
-def test_api_latest_report_payload_falls_back_to_legacy_report(tmp_path):
+def test_api_latest_report_payload_ignores_legacy_full_report(tmp_path):
     from quant.api import research_bp as research_module
 
     report_dir = tmp_path / "research"
@@ -1377,8 +1635,8 @@ def test_api_latest_report_payload_falls_back_to_legacy_report(tmp_path):
 
     payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
 
-    assert payload["available"] is True
-    assert payload["path"] == str(report_path)
+    assert payload["available"] is False
+    assert "path" not in payload
 
 
 def test_api_parse_research_idea_statuses():

@@ -307,7 +307,7 @@ class DuckDBStorage(Storage):
                 }
                 if "security_status" not in attached:
                     path = str(self._status_db_path).replace("'", "''")
-                    self.conn.execute(f"ATTACH '{path}' AS security_status (READ_ONLY)")
+                    self.conn.execute(f"ATTACH IF NOT EXISTS '{path}' AS security_status (READ_ONLY)")
                 exists = self.conn.execute(
                     """
                     SELECT COUNT(*)

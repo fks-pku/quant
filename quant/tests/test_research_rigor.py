@@ -1,3 +1,5 @@
+import time
+
 import pytest
 import pandas as pd
 
@@ -289,12 +291,47 @@ class TestRigorHub:
         seen_lengths.append(len(first_split_returns))
         assert first_request["start"] == first_request["test_start_date"]
         assert first_request["end"] == first_request["test_end_date"]
+        assert first_request["walkforward_start_date"] == "2020-01-01"
+        assert first_request["walkforward_end_date"] == "2021-01-01"
+        assert first_request["walkforward_prefetch_data"] is False
         assert first_request["train_start_date"] < first_request["test_start_date"]
         assert first_split_returns.index.min() >= pd.Timestamp(first_request["test_start_date"])
         assert first_split_returns.index.max() <= pd.Timestamp(first_request["test_end_date"])
         assert first_split_returns.index.is_unique
         assert seen_lengths[0] == 30
         assert result.deflated_sharpe_ratio is not None
+
+    def test_parallel_walkforward_preserves_split_order(self):
+        def fake_runner(strategy_id, request):
+            time.sleep(0.01 * (3 - request["test_start"] % 3))
+            return {"metrics": {"sharpe": float(request["test_start"])}}
+
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                    "parallel_workers": 3,
+                },
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+        )
+
+        test_starts = [split["test_start"] for split in result.splits]
+        assert len(test_starts) > 1
+        assert test_starts == sorted(test_starts)
+        assert [split["test_sharpe"] for split in result.splits] == [float(start) for start in test_starts]
 
     def test_walkforward_runner_type_error_is_not_swallowed(self):
         def mismatched_runner(strategy_id, result, config, integrator, pool):

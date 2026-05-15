@@ -19,8 +19,8 @@ from quant.infrastructure.research.asset_paths import (
     LATEST_REPORT_METADATA,
     LEGACY_IDEA_BANK_JSON,
     LEGACY_IDEA_BANK_MD,
-    REPORT_HTML,
-    latest_report_html_path,
+    STAGE_REPORT_HTML,
+    latest_stage_report_html_path,
 )
 
 
@@ -62,11 +62,7 @@ def _make_backtest_fn():
         benchmark_meta = {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
         try:
             data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
-            for sym in symbols:
-                try:
-                    lot_sizes[sym] = db_provider.storage.get_lot_size(sym) if is_cn_symbol(sym) else 1
-                except Exception:
-                    lot_sizes[sym] = 100 if is_cn_symbol(sym) else 1
+            lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
             if is_cn:
                 benchmark_provider, benchmark_meta = _load_cn_benchmark_provider(db_provider, start, end, BenchmarkProvider)
         finally:
@@ -204,6 +200,29 @@ def _load_cn_benchmark_provider(db_provider, start, end, benchmark_provider_cls)
         }
         return provider, meta
     return None, {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
+
+
+def _load_lot_sizes(db_provider, symbols, is_cn_symbol):
+    lot_sizes = {sym: 100 if is_cn_symbol(sym) else 1 for sym in symbols}
+    try:
+        meta = db_provider.storage.get_all_instrument_meta()
+    except Exception:
+        return lot_sizes
+    if meta is None or meta.empty or "symbol" not in meta.columns or "lot_size" not in meta.columns:
+        return lot_sizes
+
+    wanted = set(symbols)
+    for row in meta[["symbol", "lot_size"]].itertuples(index=False):
+        sym = str(row.symbol)
+        if sym not in wanted:
+            continue
+        try:
+            size = int(row.lot_size)
+        except (TypeError, ValueError):
+            continue
+        if size > 0:
+            lot_sizes[sym] = size
+    return lot_sizes
 
 
 def _strict_backtest_report(
@@ -546,32 +565,85 @@ def _make_walkforward_runner():
     from quant.domain.models.market import is_cn_symbol
     import pandas as pd
 
+    data_cache = {}
+    cache_lock = threading.RLock()
+    thread_data = threading.local()
+
+    def _empty_walkforward_response():
+        return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
+
+    def _cache_key(symbols, start, end):
+        return (tuple(symbols), start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+
+    def _thread_db_provider():
+        db_provider = getattr(thread_data, "db_provider", None)
+        if db_provider is not None:
+            if not hasattr(db_provider, "is_connected") or db_provider.is_connected():
+                return db_provider
+        db_provider = DuckDBProvider()
+        db_provider.connect()
+        thread_data.db_provider = db_provider
+        return db_provider
+
+    def _load_uncached_data_bundle(symbols, fetch_start, fetch_end):
+        db_provider = _thread_db_provider()
+        data_df = db_provider.get_bars_for_symbols(symbols, fetch_start, fetch_end, "1d")
+        if not data_df.empty and "timestamp" in data_df.columns and not pd.api.types.is_datetime64_any_dtype(data_df["timestamp"]):
+            data_df = data_df.copy()
+            data_df["timestamp"] = pd.to_datetime(data_df["timestamp"])
+        if not data_df.empty and "timestamp" in data_df.columns:
+            data_df = data_df.sort_values(["timestamp", "symbol"]).set_index("timestamp", drop=False)
+        lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
+        return {"data": data_df, "lot_sizes": lot_sizes}
+
+    def _load_data_bundle(symbols, fetch_start, fetch_end, cache_enabled=False):
+        if not cache_enabled:
+            return _load_uncached_data_bundle(symbols, fetch_start, fetch_end)
+
+        key = _cache_key(symbols, fetch_start, fetch_end)
+        with cache_lock:
+            cached = data_cache.get(key)
+            if cached is not None:
+                return cached
+            bundle = _load_uncached_data_bundle(symbols, fetch_start, fetch_end)
+            if len(data_cache) >= 2:
+                data_cache.clear()
+            data_cache[key] = bundle
+            return bundle
+
+    def _slice_data_frame(data_df, start, end):
+        if data_df.empty or "timestamp" not in data_df.columns:
+            return data_df
+        if isinstance(data_df.index, pd.DatetimeIndex) and data_df.index.is_monotonic_increasing:
+            return data_df.loc[pd.Timestamp(start):pd.Timestamp(end)].copy()
+        timestamps = data_df["timestamp"]
+        if not pd.api.types.is_datetime64_any_dtype(timestamps):
+            timestamps = pd.to_datetime(timestamps)
+        mask = (timestamps >= pd.Timestamp(start)) & (timestamps <= pd.Timestamp(end))
+        return data_df.loc[mask].copy()
+
     def _run_walkforward_backtest(sid, request):
         registry = StrategyRegistry()
         strategy_class = registry.get(sid)
         if strategy_class is None:
-            return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
+            return _empty_walkforward_response()
 
         symbols = request.get("symbols") or []
         start = datetime.strptime(str(request["start"]), "%Y-%m-%d")
         end = datetime.strptime(str(request["end"]), "%Y-%m-%d")
+        prefetch_enabled = bool(request.get("walkforward_prefetch_data", False))
+        fetch_start_value = request.get("walkforward_start_date") if prefetch_enabled else request["start"]
+        fetch_end_value = request.get("walkforward_end_date") if prefetch_enabled else request["end"]
+        fetch_start = datetime.strptime(str(fetch_start_value), "%Y-%m-%d")
+        fetch_end = datetime.strptime(str(fetch_end_value), "%Y-%m-%d")
         initial_cash = float(request.get("initial_cash", 100000))
 
-        db_provider = DuckDBProvider()
-        db_provider.connect()
-        lot_sizes = {}
-        try:
-            data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
-            for sym in symbols:
-                try:
-                    lot_sizes[sym] = db_provider.storage.get_lot_size(sym) if is_cn_symbol(sym) else 1
-                except Exception:
-                    lot_sizes[sym] = 100 if is_cn_symbol(sym) else 1
-        finally:
-            db_provider.disconnect()
+        bundle = _load_data_bundle(symbols, fetch_start, fetch_end, cache_enabled=prefetch_enabled)
+        data_df = _slice_data_frame(bundle["data"], start, end)
+        lot_sizes = bundle["lot_sizes"]
 
         if data_df.empty:
-            return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
+            return _empty_walkforward_response()
 
         data_provider = DataFrameProvider(data_df)
         strategy = strategy_class(symbols=symbols)
@@ -645,23 +717,25 @@ def _research_artifact_root(cfg: ResearchConfig) -> Path:
     return Path(cfg.research_dir or Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research")
 
 
-def _latest_report_path(cfg: ResearchConfig) -> Path:
-    root = _research_artifact_root(cfg)
-    primary = root / latest_report_html_path()
-    legacy = root / REPORT_HTML
-    if primary.exists() or not legacy.exists():
-        return primary
-    return legacy
-
-
 def _latest_report_payload(cfg: ResearchConfig) -> dict:
     root = _research_artifact_root(cfg)
-    path = _latest_report_path(cfg)
+    stage_reports = {}
+    latest_mtime = None
+    for stage_key, filename in STAGE_REPORT_HTML.items():
+        stage_path = root / latest_stage_report_html_path(stage_key)
+        if stage_path.exists():
+            mtime = stage_path.stat().st_mtime
+            latest_mtime = mtime if latest_mtime is None else max(latest_mtime, mtime)
+        stage_reports[stage_key] = {
+            "available": stage_path.exists(),
+            "url": f"/api/research/report/stage/{stage_key}",
+            "path": str(stage_path),
+            "filename": filename.as_posix(),
+        }
     payload = {
-        "available": path.exists(),
-        "url": "/api/research/report/latest",
-        "path": str(path),
+        "available": any(item["available"] for item in stage_reports.values()),
         "reports_root": str(root / "reports"),
+        "stage_reports": stage_reports,
     }
     metadata_path = root / LATEST_REPORT_METADATA
     if metadata_path.exists():
@@ -670,8 +744,8 @@ def _latest_report_payload(cfg: ResearchConfig) -> dict:
                 payload["metadata"] = json.load(f)
         except Exception:
             payload["metadata"] = {}
-    if path.exists():
-        payload["updated_at"] = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    if latest_mtime is not None:
+        payload["updated_at"] = datetime.fromtimestamp(latest_mtime).isoformat()
     return payload
 
 
@@ -967,7 +1041,9 @@ def run_research():
     mode = str(data.get("mode", "full")).lower().replace("-", "_")
     idea_statuses = _parse_statuses(data.get("idea_statuses") or data.get("statuses"))
     idea_ids = _parse_idea_ids(data.get("idea_ids") or data.get("idea_id"))
+    strategy_ids = _parse_idea_ids(data.get("strategy_ids") or data.get("strategy_id"))
     max_ideas = data.get("max_ideas")
+    max_strategies = data.get("max_strategies") or max_ideas
     job_id = str(uuid.uuid4())[:8]
 
     cfg = _load_research_config()
@@ -975,6 +1051,15 @@ def run_research():
         cfg.sources = sources
     if max_results is not None:
         cfg.max_results_per_source = int(max_results)
+    if mode in {"fast", "fast_research", "quick", "quick_research"}:
+        cfg.auto_backtest = False
+        cfg.rigor_enabled = False
+    elif mode in {"strict", "strict_backtest"}:
+        cfg.auto_backtest = True
+        cfg.rigor_enabled = False
+    elif mode in {"walkforward", "walkforward_audit", "walkforward_strict_audit"}:
+        cfg.auto_backtest = False
+        cfg.rigor_enabled = True
 
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator
@@ -1004,6 +1089,27 @@ def run_research():
         try:
             if mode in {"discover", "discovery", "discovery_only"}:
                 engine.run_discovery_only(sources=sources, result=result_obj)
+            elif mode in {"fast", "fast_research", "quick", "quick_research"}:
+                engine.run_fast_research_from_idea_bank(
+                    statuses=idea_statuses,
+                    idea_ids=idea_ids,
+                    max_ideas=int(max_ideas) if max_ideas is not None else None,
+                    result=result_obj,
+                )
+            elif mode in {"strict", "strict_backtest"}:
+                engine.run_strict_backtest_stage(
+                    strategy_ids=strategy_ids,
+                    statuses=idea_statuses,
+                    max_strategies=int(max_strategies) if max_strategies is not None else None,
+                    result=result_obj,
+                )
+            elif mode in {"walkforward", "walkforward_audit", "walkforward_strict_audit"}:
+                engine.run_walkforward_audit_stage(
+                    strategy_ids=strategy_ids,
+                    statuses=idea_statuses,
+                    max_strategies=int(max_strategies) if max_strategies is not None else None,
+                    result=result_obj,
+                )
             elif mode in {"formal", "research", "from_bank", "formal_research"}:
                 engine.run_formal_research_from_idea_bank(
                     statuses=idea_statuses,
@@ -1088,9 +1194,20 @@ def get_latest_report_info():
 
 @research_bp.route("/api/research/report/latest")
 def get_latest_report():
-    path = _latest_report_path(_load_research_config())
+    return jsonify({
+        "error": "Full research report has been removed; use /api/research/report/stage/<stage_key>.",
+        "stage_reports": _latest_report_payload(_load_research_config()).get("stage_reports", {}),
+    }), 410
+
+
+@research_bp.route("/api/research/report/stage/<stage_key>")
+def get_latest_stage_report(stage_key):
+    if stage_key not in STAGE_REPORT_HTML:
+        return jsonify({"error": "Unknown research report stage"}), 404
+    cfg = _load_research_config()
+    path = _research_artifact_root(cfg) / latest_stage_report_html_path(stage_key)
     if not path.exists():
-        return jsonify({"error": "Full research report not found"}), 404
+        return jsonify({"error": "Stage research report not found"}), 404
     return send_file(str(path), mimetype="text/html")
 
 

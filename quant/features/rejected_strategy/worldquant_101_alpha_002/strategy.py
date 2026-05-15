@@ -5221,7 +5221,7 @@ class Worldquant101Alpha002Strategy(DailyBarStrategy):
         symbols: Optional[List[str]] = None,
         lookback: int = 6,
         holding_days: int = 5,
-        max_position_pct: float = 0.10,
+        max_position_pct: float = 1.0,
         max_positions: int = 20,
     ):
         self._symbols = symbols or DEFAULT_SYMBOLS

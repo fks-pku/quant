@@ -16,6 +16,7 @@ class DataFrameProvider:
         self.data = data
         self.dividends = dividends if dividends is not None else pd.DataFrame()
         self._bar_map: Dict[Tuple, Dict] = {}
+        self._bars_by_date: Dict[object, List[Dict]] = {}
         self._trading_dates: set = set()
         self._dividend_map: Dict[Tuple, Dict] = {}
         self._build_index()
@@ -49,6 +50,10 @@ class DataFrameProvider:
                     buf[dict_key] = rec
         dup_count = len(records) - len(buf)
         self._bar_map = buf
+        bars_by_date: Dict[object, List[Dict]] = {}
+        for (_, dt), rec in buf.items():
+            bars_by_date.setdefault(dt, []).append(rec)
+        self._bars_by_date = bars_by_date
         for ts in timestamps:
             dt = ts.date() if hasattr(ts, 'date') else ts
             self._trading_dates.add(dt)
@@ -93,6 +98,11 @@ class DataFrameProvider:
         """O(1) lookup for a single bar by symbol + date."""
         key = date.date() if hasattr(date, 'date') else date
         return self._bar_map.get((symbol, key))
+
+    def get_bars_for_date(self, date) -> List[Dict]:
+        """Return all indexed bars for one trading date."""
+        key = date.date() if hasattr(date, 'date') else date
+        return self._bars_by_date.get(key, [])
 
     def get_dividend_for_date(self, symbol: str, date) -> Optional[Dict]:
         """O(1) lookup for dividend by symbol + ex_date."""

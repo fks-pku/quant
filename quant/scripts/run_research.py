@@ -266,14 +266,26 @@ def _default_research_universe(market_data):
 
 def main():
     parser = argparse.ArgumentParser(description="Run quant strategy research pipeline")
-    parser.add_argument("--mode", default="full", choices=["full", "discover", "formal"], help="Pipeline mode")
+    parser.add_argument(
+        "--mode",
+        default="full",
+        choices=["full", "discover", "formal", "fast", "strict", "walkforward"],
+        help="Pipeline mode",
+    )
     parser.add_argument("--source", default="arxiv", help="Source (arxiv, ssrn, all)")
     parser.add_argument("--max", type=int, default=5, dest="max_results", help="Max results per source")
     parser.add_argument("--max-ideas", type=int, default=None, help="Max local ideas to research in formal mode")
     parser.add_argument("--idea-id", action="append", dest="idea_ids", help="Specific idea_bank id to research in formal mode")
+    parser.add_argument("--strategy-id", action="append", dest="strategy_ids", help="Specific strategy id for strict/walkforward modes")
     parser.add_argument("--idea-status", action="append", dest="idea_statuses", help="Idea bank status to load in formal mode")
     parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
     parser.add_argument("--backtest", action="store_true", help="Run backtests (requires DuckDB data)")
+    parser.add_argument(
+        "--walkforward-workers",
+        type=int,
+        default=min(4, os.cpu_count() or 1),
+        help="Parallel workers for purged walk-forward splits when --backtest is enabled",
+    )
     parser.add_argument("--no-validation", action="store_true", help="Disable statistical validation gate")
     parser.add_argument("--no-heuristic", action="store_true", help="Use LLM evaluator instead of heuristic")
     parser.add_argument("--llm", default=None, choices=["minimax", "openai", "claude", "ollama", "deepseek", "glm"],
@@ -288,17 +300,28 @@ def main():
     var_root = Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research"
     var_root.mkdir(parents=True, exist_ok=True)
 
+    needs_backtest_runner = args.backtest or args.mode in {"strict", "walkforward"}
     config = ResearchConfig(
         sources=["arxiv"] if args.source != "all" else ["arxiv"],
         max_results_per_source=args.max_results,
         evaluation_threshold=args.threshold,
-        auto_backtest=args.backtest,
+        auto_backtest=args.backtest or args.mode == "strict",
         validation_enabled=not args.no_validation,
         backtest_sharpe_threshold=0.5,
         default_symbols=list(_CN_RESEARCH_SYMBOLS),
         default_backtest_start="2012-01-01",
         default_backtest_end="2025-12-31",
+        rigor_config={
+            "purged_walkforward": {
+                "parallel_workers": max(1, args.walkforward_workers),
+            },
+        },
     )
+    if args.mode == "fast":
+        config.auto_backtest = False
+        config.rigor_enabled = False
+    elif args.mode == "strict":
+        config.rigor_enabled = False
 
     if getattr(config, "tracking_enabled", False) and config.tracking_db_path:
         from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
@@ -319,7 +342,7 @@ def main():
 
     backtest_fn = None
     walkforward_runner = None
-    if args.backtest:
+    if needs_backtest_runner:
         from quant.api.research_bp import _make_backtest_fn, _make_walkforward_runner
         backtest_fn = _make_backtest_fn()
         walkforward_runner = _make_walkforward_runner()
@@ -348,11 +371,19 @@ def main():
     print(f"  Mode: {args.mode}")
     print(f"  Source: arXiv (keyword search, 6 queries) | Max/query: {args.max_results}")
     print(f"  Threshold: {args.threshold} | Evaluator: {'heuristic' if not args.no_heuristic else 'LLM'}")
-    print(f"  Backtest: {'ON' if args.backtest else 'OFF'}")
+    print(f"  Backtest runner: {'ON' if needs_backtest_runner else 'OFF'}")
+    if needs_backtest_runner:
+        print(f"  Walk-forward workers: {max(1, args.walkforward_workers)}")
     print("=" * 70)
 
     if args.mode == "discover":
         result = engine.run_discovery_only()
+    elif args.mode == "fast":
+        result = engine.run_fast_research_from_idea_bank(statuses=args.idea_statuses, idea_ids=args.idea_ids, max_ideas=args.max_ideas)
+    elif args.mode == "strict":
+        result = engine.run_strict_backtest_stage(strategy_ids=args.strategy_ids, statuses=args.idea_statuses, max_strategies=args.max_ideas)
+    elif args.mode == "walkforward":
+        result = engine.run_walkforward_audit_stage(strategy_ids=args.strategy_ids, statuses=args.idea_statuses, max_strategies=args.max_ideas)
     elif args.mode == "formal":
         result = engine.run_formal_research_from_idea_bank(statuses=args.idea_statuses, idea_ids=args.idea_ids, max_ideas=args.max_ideas)
     else:

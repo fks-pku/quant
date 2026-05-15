@@ -35,7 +35,7 @@ Blueprints:
 
 - Add route: add to appropriate `*_bp.py`
 - Change state management: edit `api/state/runtime.py`
-- Change research report access: edit `api/research_bp.py` helpers around `full_research_report.html`
+- Change research report access: edit `api/research_bp.py` helpers around the three stage reports.
 
 ## Known Pitfalls
 
@@ -45,5 +45,7 @@ Blueprints:
 
 ## Research Report Endpoints
 
-- `/api/research/report` returns latest full-report metadata.
-- `/api/research/report/latest` serves `full_research_report.html`.
+- `/api/research/run` accepts `mode=fast|strict|walkforward` for independently runnable research stages.
+- `/api/research/report` returns latest report metadata, including stage report URLs.
+- `/api/research/report/latest` intentionally returns 410; full reports are no longer generated.
+- `/api/research/report/stage/<stage_key>` serves `fast_research`, `strict_backtest`, or `walkforward_strict_audit` stage HTML.

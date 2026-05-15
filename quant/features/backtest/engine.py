@@ -87,6 +87,7 @@ class Backtester:
         symbols = symbols or []
         if not symbols:
             raise ValueError("At least one symbol is required")
+        symbol_lookup = set(symbols)
         currency = select_currency(symbols)
         diag = BacktestDiagnostics()
 
@@ -154,6 +155,7 @@ class Backtester:
             prev_close_bars: "Dict[str, BacktestBar]" = dict(prev_bars)
             today_bars, any_suspended_today = self._load_daily_bars(
                 data_provider, symbols, current_date, last_prices, last_price_times, prev_bars, latest_bars,
+                symbol_lookup,
             )
             if any_suspended_today:
                 diag.suspended_days += 1
@@ -449,12 +451,35 @@ class Backtester:
             open_positions=open_positions,
         )
 
-    def _load_daily_bars(self, data_provider, symbols, current_date, last_prices, last_price_times, prev_bars, latest_bars):
+    def _load_daily_bars(self, data_provider, symbols, current_date, last_prices, last_price_times, prev_bars, latest_bars, symbol_lookup=None):
         today_bars: Dict[str, Dict] = {}
         any_suspended = False
 
         if not data_provider:
             return today_bars, any_suspended
+
+        if hasattr(data_provider, 'get_bars_for_date'):
+            try:
+                for raw_bar in data_provider.get_bars_for_date(current_date):
+                    symbol = raw_bar.get('symbol') if isinstance(raw_bar, dict) else getattr(raw_bar, 'symbol', None)
+                    if not symbol or (symbol_lookup is not None and symbol not in symbol_lookup):
+                        continue
+                    bar_data = dict(raw_bar)
+                    bar_data['symbol'] = symbol
+                    bar_data['_suspended'] = is_suspended(bar_data)
+                    today_bars[symbol] = bar_data
+                    latest_bars[symbol] = bar_data
+                    if bar_data['_suspended']:
+                        any_suspended = True
+                    else:
+                        bar_close = bar_data.get('close', 0)
+                        if bar_close > 0:
+                            last_prices[symbol] = bar_close
+                            last_price_times[symbol] = self._bar_timestamp(bar_data, current_date)
+                        prev_bars[symbol] = bar_data
+                return today_bars, any_suspended
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Error loading daily bar batch for %s: %s", current_date, e)
 
         has_fast_lookup = hasattr(data_provider, 'get_bar_for_date')
         for symbol in symbols:

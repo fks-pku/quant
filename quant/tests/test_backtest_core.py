@@ -295,6 +295,12 @@ class TestDataFrameProvider:
         assert bar is not None
         assert bar["symbol"] == "AAPL"
 
+    def test_get_bars_for_date(self):
+        data = make_us_bars(["AAPL", "MSFT"], START, 10, {"AAPL": 150.0, "MSFT": 250.0})
+        provider = DataFrameProvider(data)
+        bars = provider.get_bars_for_date(START)
+        assert [bar["symbol"] for bar in bars] == ["AAPL", "MSFT"]
+
     def test_get_bar_for_date_missing(self):
         data = make_us_bars(["AAPL"], START, 10, {"AAPL": 150.0})
         provider = DataFrameProvider(data)
