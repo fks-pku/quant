@@ -126,6 +126,7 @@ def test_canonical_full_research_report_template_defines_contract():
     assert "insufficient_cash_rejected_orders" in html
     assert "回测 Equity Curve" in html
     assert "年度收益日历图" in html
+    assert "首日=100" in html
     assert "strategy-line" in html
     assert "benchmark-line" in html
     assert "return-calendar" in html
@@ -378,8 +379,9 @@ def test_generated_full_research_report_matches_golden_contract():
     assert '<figure class="equity-chart">' in html
     assert '<path class="strategy-line"' in html
     assert '<path class="benchmark-line"' in html
-    assert "策略期末 580,000.00" in html
-    assert "Benchmark 期末 530,000.00" in html
+    assert "策略期末 580,000.00（指数 116）" in html
+    assert "Benchmark 期末 530,000.00（指数 106）" in html
+    assert "首日=100 的归一化指数" in html
     assert '<figure class="return-calendar-chart">' in html
     assert '<div class="return-cell positive"><b>2025</b><strong>16.00%</strong>' in html
     assert "000300 6.00% · 超额 10.00%" in html
@@ -399,3 +401,31 @@ def test_generated_full_research_report_matches_golden_contract():
     assert "Rejected strategy archive" in html
     for placeholder in ("[strategy_id]", "[Rank IC]", "[000300 coverage]", "[YYYY-MM-DD]"):
         assert placeholder not in html
+
+
+def test_signal_oos_validation_uses_structured_walkforward_verdict():
+    html = build_full_research_report_html(
+        {"run_id": "oos_contract", "rejected": 1},
+        [
+            {
+                "title": "OOS Contract",
+                "source": "fixture",
+                "source_url": "https://example.test",
+                "status": "rejected",
+                "metrics": {
+                    "rank_ic": -0.05,
+                    "rank_ic_ir": -0.3,
+                    "fdr_adjusted_p": 0.01,
+                    "hit_rate": 0.36,
+                    "walkforward": {
+                        "verdict": "fail",
+                        "aggregate_oos_sharpe": 0.1,
+                        "worst_oos_sharpe": -2.0,
+                        "pct_profitable_splits": 0.1,
+                    },
+                },
+            }
+        ],
+    )
+
+    assert "<td>OOS validation</td><td>fail</td>" in html

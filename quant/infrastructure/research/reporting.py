@@ -16,6 +16,103 @@ _REPORT_TEMPLATE_PATH = (
 )
 _FALLBACK_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent / "golden_reports" / "full_research_report_template.html"
 
+_REQUIRED_CHART_STYLE = """
+.equity-chart {
+  margin: 12px 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.equity-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 280px;
+}
+.equity-chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.equity-chart-meta b { color: var(--ink); }
+.equity-chart i {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.legend-strategy { background: #dc2626; }
+.legend-benchmark { background: #16a34a; }
+.strategy-line {
+  fill: none;
+  stroke: #dc2626;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.benchmark-line {
+  fill: none;
+  stroke: #16a34a;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chart-grid { stroke: #e8ddd0; stroke-width: 1; }
+.chart-axis { stroke: #9ca3af; stroke-width: 1.2; }
+.chart-label {
+  fill: #66727e;
+  font-size: 12px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+.return-calendar-chart {
+  margin: 12px 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.return-calendar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 10px;
+}
+.return-cell {
+  min-height: 104px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.return-cell b,
+.return-cell span,
+.return-cell small {
+  display: block;
+}
+.return-cell b {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.return-cell strong {
+  display: block;
+  margin: 5px 0 2px;
+  font-size: 22px;
+  line-height: 1.15;
+}
+.return-cell span,
+.return-cell small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.return-cell.positive { background: #fff1f2; border-color: #fecdd3; }
+.return-cell.negative { background: #f0fdf4; border-color: #bbf7d0; }
+.return-cell.neutral { background: #f8fafc; }
+""".strip()
+
 
 def build_full_research_report_html(
     result: Any,
@@ -435,7 +532,7 @@ def _data_quality_contract_list(data: Dict[str, Any], rows: List[Dict[str, Any]]
 def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     metrics = row.get("metrics") or {}
-    wf_scores, _, _ = _walkforward_scores(row)
+    wf_scores, _, wf_verdict = _walkforward_scores(row)
     rows_data = [
         ("Rank IC", _fmt(metrics.get("rank_ic")), "横截面秩相关；正负号必须与预测方向一致"),
         ("ICIR", _fmt(metrics.get("rank_ic_ir")), "IC 均值 / IC 波动，衡量稳定性"),
@@ -454,7 +551,7 @@ def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str,
         ("IC decay", _format_decay(metrics.get("ic_decay")), "看 alpha 半衰期与持有期是否匹配"),
         ("Fama-MacBeth t-stat", _fmt(metrics.get("fama_macbeth_tstat")), "横截面回归显著性"),
         ("Factor exposure", _factor_exposure_text(metrics), "是否只是已知风险因子暴露"),
-        ("OOS validation", _signal_oos_text(metrics, wf_scores), "滚动样本外是否保持方向和显著性"),
+        ("OOS validation", _signal_oos_text(metrics, wf_scores, wf_verdict), "滚动样本外是否保持方向和显著性"),
     ]
     body = "".join(
         f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(note)}</td></tr>"
@@ -671,8 +768,10 @@ def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str
     row = _primary_row(rows)
     strict = _strict_backtest_for_report(data, row)
     curves = strict.get("equity_curve") or {}
-    strategy = _curve_points(curves.get("strategy"))
-    benchmark = _curve_points(curves.get("benchmark"))
+    raw_strategy = _curve_points(curves.get("strategy"))
+    raw_benchmark = _curve_points(curves.get("benchmark"))
+    strategy = _downsample_curve_points(_normalize_curve_points(raw_strategy))
+    benchmark = _downsample_curve_points(_normalize_curve_points(raw_benchmark))
     if not strategy:
         return "<p>本轮严格 Backtester 未保存 equity curve，无法渲染曲线图。</p>"
 
@@ -715,14 +814,14 @@ def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str
         y = y_for(value)
         grid.append(f'<line class="chart-grid" x1="{left:.1f}" y1="{y:.1f}" x2="{width - right:.1f}" y2="{y:.1f}" />')
         labels.append(
-            f'<text class="chart-label" x="{left - 10:.1f}" y="{y + 4:.1f}" text-anchor="end">{escape(_compact_money(value))}</text>'
+            f'<text class="chart-label" x="{left - 10:.1f}" y="{y + 4:.1f}" text-anchor="end">{escape(_compact_number(value))}</text>'
         )
     x_labels = [
         f'<text class="chart-label" x="{left:.1f}" y="{height - 16:.1f}" text-anchor="start">{escape(dates[0])}</text>',
         f'<text class="chart-label" x="{width - right:.1f}" y="{height - 16:.1f}" text-anchor="end">{escape(dates[-1])}</text>',
     ]
     benchmark_svg = (
-        f'<path class="benchmark-line" d="{escape(benchmark_path, quote=True)}" />'
+        f'<path class="benchmark-line" fill="none" stroke="#16a34a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="{escape(benchmark_path, quote=True)}" />'
         if benchmark_path
         else ""
     )
@@ -736,8 +835,8 @@ def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str
         '<div class="equity-chart-meta">'
         '<span><i class="legend-strategy"></i>策略</span>'
         f"{benchmark_legend}"
-        f"<b>策略期末 {_money(strategy[-1][1])}</b>"
-        + (f"<b>Benchmark 期末 {_money(benchmark[-1][1])}</b>" if benchmark else "")
+        f"<b>策略期末 {_money(raw_strategy[-1][1])}（指数 {_compact_number(strategy[-1][1])}）</b>"
+        + (f"<b>Benchmark 期末 {_money(raw_benchmark[-1][1])}（指数 {_compact_number(benchmark[-1][1])}）</b>" if benchmark and raw_benchmark else "")
         + "</div>"
         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Strict backtest equity curve">'
         + "".join(grid)
@@ -746,9 +845,9 @@ def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str
         + f'<line class="chart-axis" x1="{left:.1f}" y1="{top:.1f}" x2="{left:.1f}" y2="{height - bottom:.1f}" />'
         + f'<line class="chart-axis" x1="{left:.1f}" y1="{height - bottom:.1f}" x2="{width - right:.1f}" y2="{height - bottom:.1f}" />'
         + benchmark_svg
-        + f'<path class="strategy-line" d="{escape(strategy_path, quote=True)}" />'
+        + f'<path class="strategy-line" fill="none" stroke="#dc2626" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" d="{escape(strategy_path, quote=True)}" />'
         + "</svg>"
-        + "<figcaption>策略曲线使用 strict Backtester 的账户 NAV；benchmark 曲线按同一初始资金买入并持有 000300。</figcaption>"
+        + "<figcaption>曲线按首日=100 的归一化指数绘制，避免原始金额尺度差压缩线形；期末金额仍来自 strict Backtester 原始账户 NAV，benchmark 按同一初始资金买入并持有 000300。</figcaption>"
         + "</figure>"
     )
 
@@ -1005,11 +1104,15 @@ def _template_style() -> str:
         start = html.find("<style>")
         end = html.find("</style>", start)
         if start >= 0 and end > start:
-            return html[start + len("<style>") : end].strip()
-    return (
+            style = html[start + len("<style>") : end].strip()
+            if ".equity-chart" not in style or ".return-calendar" not in style:
+                style = style + "\n" + _REQUIRED_CHART_STYLE
+            return style
+    base_style = (
         ":root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}"
         "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}"
     )
+    return base_style + "\n" + _REQUIRED_CHART_STYLE
 
 
 def _strict_backtest_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1115,13 +1218,16 @@ def _factor_exposure_text(metrics: Dict[str, Any]) -> str:
     return "; ".join(parts) if parts else "未保存独立因子暴露明细"
 
 
-def _signal_oos_text(metrics: Dict[str, Any], wf_scores: Dict[str, Any]) -> str:
+def _signal_oos_text(metrics: Dict[str, Any], wf_scores: Dict[str, Any], wf_verdict: str = "") -> str:
     if metrics.get("oos_validation"):
         return _join_text(metrics.get("oos_validation"))
+    verdict = str(wf_verdict or "").strip().lower()
+    if verdict in {"pass", "warn", "fail"}:
+        return verdict
     aggregate = _safe_float(wf_scores.get("aggregate_oos_sharpe"))
     if aggregate is None:
         return "需结合 purged walk-forward 结果"
-    return "pass" if aggregate > 0 else "fail"
+    return _walkforward_badge_class(wf_scores)
 
 
 def _commission_text(value: Any) -> str:
@@ -2263,6 +2369,18 @@ def _compact_money(value: Any) -> str:
     return f"{number:.0f}"
 
 
+def _compact_number(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "n/a"
+    abs_value = abs(number)
+    if abs_value >= 100:
+        return f"{number:.0f}"
+    if abs_value >= 10:
+        return f"{number:.1f}"
+    return f"{number:.2f}"
+
+
 def _curve_points(value: Any) -> List[tuple[str, float]]:
     if not isinstance(value, list):
         return []
@@ -2276,6 +2394,30 @@ def _curve_points(value: Any) -> List[tuple[str, float]]:
             continue
         points.append((date_text, number))
     return sorted(points, key=lambda item: item[0])
+
+
+def _normalize_curve_points(points: List[tuple[str, float]]) -> List[tuple[str, float]]:
+    base = next((value for _, value in points if value > 0 and math.isfinite(value)), None)
+    if base is None:
+        return []
+    normalized = []
+    for date_text, value in points:
+        if math.isfinite(value):
+            normalized.append((date_text, value / base * 100.0))
+    return normalized
+
+
+def _downsample_curve_points(points: List[tuple[str, float]], max_points: int = 620) -> List[tuple[str, float]]:
+    if len(points) <= max_points or max_points < 2:
+        return points
+    sampled: List[tuple[str, float]] = []
+    previous_idx = -1
+    for position in range(max_points):
+        idx = round(position * (len(points) - 1) / (max_points - 1))
+        if idx != previous_idx:
+            sampled.append(points[idx])
+            previous_idx = idx
+    return sampled
 
 
 def _svg_path(points: List[tuple[str, float]], x_for: Any, y_for: Any) -> str:

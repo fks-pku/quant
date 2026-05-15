@@ -72,6 +72,14 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
     if calculator is None:
         return None
     if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+        panel_calculators = {
+            "momentum_close_return": _momentum_close_return_panel,
+            "mean_reversion_close_to_ma": _mean_reversion_close_to_ma_panel,
+            "volatility_breakout_atr": _volatility_breakout_atr_panel,
+        }
+        panel_calculator = panel_calculators.get(formula_key)
+        if panel_calculator is not None:
+            return panel_calculator(data, lookback)
         return _compute_panel_signal(data, lookback, calculator)
     return calculator(data, lookback)
 
@@ -87,11 +95,22 @@ def _compute_panel_signal(data: pd.DataFrame, lookback: int, calculator: Callabl
 
 def _momentum_close_return(data: Any, lookback: int) -> Any:
     close = adjusted_price_series(data, "close")
-    return close.pct_change(lookback)
+    return close.pct_change(lookback, fill_method=None)
+
+
+def _momentum_close_return_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    return close.pct_change(lookback, fill_method=None)
 
 
 def _mean_reversion_close_to_ma(data: Any, lookback: int) -> Any:
     close = adjusted_price_series(data, "close")
+    ma = close.rolling(lookback).mean()
+    return (ma - close) / ma
+
+
+def _mean_reversion_close_to_ma_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
     ma = close.rolling(lookback).mean()
     return (ma - close) / ma
 
@@ -105,6 +124,24 @@ def _volatility_breakout_atr(data: Any, lookback: int) -> Any:
         (high - close.shift(1)).abs(),
         (low - close.shift(1)).abs(),
     ], axis=1).max(axis=1)
+    atr = tr.rolling(lookback).mean()
+    previous_high = high.shift(1).rolling(lookback).max()
+    return (close - previous_high) / atr
+
+
+def _volatility_breakout_atr_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    high = adjusted_price_matrix(data, "high")
+    low = adjusted_price_matrix(data, "low")
+    close = adjusted_price_matrix(data, "close")
+    tr_arrays = np.stack(
+        [
+            (high - low).to_numpy(dtype=float),
+            (high - close.shift(1)).abs().to_numpy(dtype=float),
+            (low - close.shift(1)).abs().to_numpy(dtype=float),
+        ],
+        axis=0,
+    )
+    tr = pd.DataFrame(np.nanmax(tr_arrays, axis=0), index=high.index, columns=high.columns)
     atr = tr.rolling(lookback).mean()
     previous_high = high.shift(1).rolling(lookback).max()
     return (close - previous_high) / atr

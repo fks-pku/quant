@@ -104,6 +104,19 @@ def test_integrator_generates_executable_momentum_strategy_from_spec(tmp_path):
     assert context.orders[-1]["strategy_name"] == strategy_id
 
 
+def test_integrator_prefixes_generated_class_name_when_title_starts_with_number(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("2026 Trend Following Momentum")
+    report = _report("momentum")
+    spec = _spec("momentum", "momentum_close_return", strategy_id="2026_trend_following_momentum")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+
+    assert "class Strategy2026TrendFollowingMomentumStrategy" in strategy_file.read_text(encoding="utf-8")
+    _load_generated_class(strategy_file, "Strategy2026TrendFollowingMomentumStrategy")
+
+
 def test_integrator_generates_mean_reversion_formula_logic(tmp_path):
     integrator = StrategyIntegrator(tmp_path)
     raw = _raw("Daily Mean Reversion")

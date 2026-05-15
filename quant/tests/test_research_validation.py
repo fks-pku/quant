@@ -260,6 +260,24 @@ class TestResearchAdjustedPrices:
 
         assert signal.dropna().abs().max() == pytest.approx(0.0)
 
+    def test_panel_momentum_signal_matches_adjusted_price_matrix(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=3, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 2,
+                "symbol": ["600001"] * 3 + ["600002"] * 3,
+                "close": [100.0, 50.0, 25.0, 10.0, 11.0, 12.1],
+                "adj_close": [100.0, 100.0, 100.0, 10.0, 11.0, 12.1],
+            }
+        )
+
+        signal = compute_signal("momentum_close_return", frame, lookback=1)
+
+        assert signal.loc[dates[1], "600001"] == pytest.approx(0.0)
+        assert signal.loc[dates[2], "600002"] == pytest.approx(0.1)
+
     def test_mean_reversion_signal_is_positive_when_adjusted_close_is_below_ma(self):
         from quant.features.research.validation.signal_library import compute_signal
 

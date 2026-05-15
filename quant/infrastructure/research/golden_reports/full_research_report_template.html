@@ -214,6 +214,7 @@
       padding: 11px;
       border: 1px solid var(--line);
       background: #fff;
+      overflow-wrap: anywhere;
     }
     .return-cell b,
     .return-cell span,
@@ -447,8 +448,8 @@ forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
       <div class="equity-chart-meta">
         <span><i class="legend-strategy"></i>策略</span>
         <span><i class="legend-benchmark"></i>Benchmark</span>
-        <b>策略期末 [amount]</b>
-        <b>Benchmark 期末 [amount]</b>
+        <b>策略期末 [amount]（指数 [index]）</b>
+        <b>Benchmark 期末 [amount]（指数 [index]）</b>
       </div>
       <svg viewBox="0 0 940 360" role="img" aria-label="Strict backtest equity curve">
         <line class="chart-grid" x1="70" y1="26" x2="918" y2="26"></line>
@@ -458,7 +459,7 @@ forward_return_i,t = adj_close_i,t+lag+h / adj_close_i,t+lag - 1</div>
         <path class="benchmark-line" d="M70,250 L918,180"></path>
         <path class="strategy-line" d="M70,240 L918,210"></path>
       </svg>
-      <figcaption>策略曲线使用 strict Backtester 的账户 NAV；benchmark 曲线按同一初始资金买入并持有 000300。</figcaption>
+      <figcaption>曲线按首日=100 的归一化指数绘制，避免原始金额尺度差压缩线形；期末金额仍来自 strict Backtester 原始账户 NAV，benchmark 按同一初始资金买入并持有 000300。</figcaption>
     </figure>
     <h3>年度收益日历图</h3>
     <figure class="return-calendar-chart">

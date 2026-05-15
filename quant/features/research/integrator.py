@@ -104,7 +104,10 @@ class StrategyIntegrator:
     @staticmethod
     def _to_class_name(title: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9\s]", "", title)
-        return "".join(word.capitalize() for word in cleaned.strip().split()) + "Strategy"
+        class_name = "".join(word.capitalize() for word in cleaned.strip().split()) + "Strategy"
+        if not class_name or not class_name[0].isalpha():
+            return f"Strategy{class_name}"
+        return class_name
 
     def _generate_strategy_code(
         self,
