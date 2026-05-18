@@ -21,6 +21,7 @@
 - 策略 ID 唯一，不区分大小写
 - 策略目录结构: `strategies/<name>/strategy.py`
 - 研究生成策略默认保持 `enabled: false` / `status: candidate`
+- A 股低价小市值类策略必须显式处理退市风险：买入过滤 ST/停牌/非上市/list_status、价格下限和流动性下限，持仓触发风险时每日尝试退出
 
 ## 修改守则
 

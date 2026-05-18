@@ -1403,6 +1403,55 @@ C36-04  synthetic 停牌日当日提交订单 submission_rejected += 1，不产�
 
 ---
 
+## CASE-37: 小市值低价策略退市风险护栏
+
+验证研究生成的小市值低价策略在 strict Backtester 中执行同一套退市风险护栏，而不是只在报告或 fast validation 中过滤。
+
+### 规则
+
+```text
+买入候选必须满足：
+  2 <= close <= 20
+  近 liquidity_lookback 日平均 turnover >= min_avg_turnover
+  is_st=False
+  tradable=True
+  is_listed=True
+  list_status == 'L'
+  近期停牌天数 <= max_recent_suspended_days
+  market_cap/total_mv/circ_mv 等 point-in-time 市值字段有效
+
+信号：
+  signal = 1 / market_cap
+  信号越高，市值越小，优先级越高
+
+正常调仓：
+  holding_days=5
+  Top 20 或 max_positions 内等权目标
+
+退市风险退出：
+  持仓触发价格下限、ST、停牌、不可交易、非上市、流动性不足时，每日先尝试 SELL
+  风险退出不得被 holding_days 调仓门控阻挡
+  SELL 仍走普通 Backtester T+1、涨跌停、成交量、现金/持仓、佣金滑点路径
+```
+
+### 行情
+
+| Date       | Day | Open | Close | Turnover | 状态 |
+| ---------- | --- | ---- | ----- | -------- | ---- |
+| 2024-06-03 | D0  | 3.00 | 3.00  | 30000    | 正常，可买 |
+| 2024-06-04 | D1  | 3.00 | 1.80  | 30000    | 先按 D0 信号买入，收盘跌破价格下限 |
+| 2024-06-05 | D2  | 1.80 | 1.80  | 30000    | 执行 D1 风险退出卖单 |
+
+### 断言
+
+```text
+C37-01  D1 收盘风险退出提交 SELL，D2 开盘成交；不等待 holding_days=5
+C37-02  风险退出后 open_positions 为空，final_suspended_holding_nav/count 为 0
+C37-03  close<2、turnover 不足、is_st=True、is_listed=False、list_status='D' 均不产生 BUY
+```
+
+---
+
 ## Regression B1: 结束日 deferred order 过期
 
 验证最后一个真实交易日 after-close 产生的订单没有下一交易日时不会用 synthetic bar 成交。
@@ -1480,6 +1529,7 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 |34|CN|多策略同标的送股 synthetic fill 只同步对应策略|
 |35|US|round-trip 交易统计包含买入佣金|
 |36|CN|status 表驱动 ST 5% fallback、显式涨跌停、停牌 synthetic bar|
+|37|CN|小市值低价策略退市风险护栏：价格/流动性/status 买入过滤 + 每日风险退出|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
 |R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

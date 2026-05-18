@@ -1,5 +1,7 @@
-"""Invariant-driven tests based on backtest-invariants.md (CASE-1 through CASE-8)."""
+"""Invariant-driven tests based on backtest-invariants.md."""
+import importlib.util
 from datetime import datetime, date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -76,6 +78,20 @@ def _signal_strategy(name, symbol, buy_on, sell_on, qty=100):
     S.on_stop = on_stop
     S.get_position = get_position
     return S()
+
+
+def _load_rejected_strategy_class(strategy_id: str, class_name: str):
+    strategy_file = (
+        Path(__file__).resolve().parents[1]
+        / "features"
+        / "rejected_strategy"
+        / strategy_id
+        / "strategy.py"
+    )
+    spec = importlib.util.spec_from_file_location(f"test_rejected_{strategy_id}", strategy_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, class_name)
 
 
 # ---------------------------------------------------------------------------
@@ -2155,6 +2171,134 @@ class TestCase36CNStatusSTAndSuspension:
         assert result.diagnostics.discarded_orders == 0
         assert result.diagnostics.fill_count == 0
         assert result.final_nav == pytest.approx(100_000)
+
+
+# ============================================================================
+# CASE-37: Low-price small-cap delisting risk guard
+# ============================================================================
+
+CASE37_CONFIG = {
+    "backtest": {"slippage_bps": 0, "force_close_on_stop": False},
+    "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+def _case37_bar(
+    offset: int,
+    close: float = 3.0,
+    open_price: float = None,
+    turnover: float = 30000.0,
+    total_mv: float = 100.0,
+    **status,
+):
+    open_value = close if open_price is None else open_price
+    row = {
+        "symbol": "600001",
+        "timestamp": START + timedelta(days=offset),
+        "open": open_value,
+        "high": max(open_value, close) + 0.1,
+        "low": max(0.01, min(open_value, close) - 0.1),
+        "close": close,
+        "volume": 10_000_000,
+        "turnover": turnover,
+        "adj_open": open_value,
+        "adj_high": max(open_value, close) + 0.1,
+        "adj_low": max(0.01, min(open_value, close) - 0.1),
+        "adj_close": close,
+        "adj_factor": 1.0,
+        "total_mv": total_mv,
+        "circ_mv": total_mv,
+        "is_st": False,
+        "_suspended": False,
+        "tradable": True,
+        "has_daily_bar": True,
+        "is_listed": True,
+        "list_status": "L",
+    }
+    row.update(status)
+    return row
+
+
+def _case37_strategy(**kwargs):
+    cls = _load_rejected_strategy_class(
+        "joinquant_small_cap_low_price",
+        "JoinquantSmallCapLowPriceStrategy",
+    )
+    return cls(
+        symbols=["600001"],
+        holding_days=5,
+        max_position_pct=0.5,
+        max_positions=1,
+        min_trade_price=2.0,
+        min_avg_turnover=20000.0,
+        liquidity_lookback=2,
+        max_recent_suspended_days=0,
+        **kwargs,
+    )
+
+
+@pytest.fixture
+def case37_exit_result():
+    data = pd.DataFrame([
+        _case37_bar(0, close=3.0),
+        _case37_bar(1, open_price=3.0, close=1.8),
+        _case37_bar(2, close=1.8),
+        _case37_bar(3, close=1.8),
+    ])
+    bt = make_backtester(CASE37_CONFIG, lot_sizes={"600001": 100})
+    return bt.run(
+        start=data["timestamp"].min(),
+        end=data["timestamp"].max(),
+        strategies=[_case37_strategy()],
+        initial_cash=100_000,
+        data_provider=DataFrameProvider(data),
+        symbols=["600001"],
+    )
+
+
+class TestCase37LowPriceSmallCapDelistingRiskGuard:
+    def test_c37_01_risk_exit_bypasses_holding_days_gate(self, case37_exit_result):
+        trades = list(case37_exit_result.trades)
+        assert [trade.side for trade in trades] == ["BUY", "SELL"]
+        sell = trades[1]
+        assert sell.signal_date.date() == (START + timedelta(days=1)).date()
+        assert sell.fill_date.date() == (START + timedelta(days=2)).date()
+
+    def test_c37_02_risk_exit_leaves_no_frozen_position(self, case37_exit_result):
+        assert case37_exit_result.open_positions == []
+        assert case37_exit_result.diagnostics.final_suspended_holding_count == 0
+        assert case37_exit_result.diagnostics.final_suspended_holding_nav == pytest.approx(0.0)
+
+    @pytest.mark.parametrize(
+        "blocked_overrides",
+        [
+            {"close": 1.8},
+            {"turnover": 1000.0},
+            {"is_st": True},
+            {"is_listed": False},
+            {"list_status": "D"},
+        ],
+    )
+    def test_c37_03_entry_guard_blocks_delisting_risk_names(self, blocked_overrides):
+        day0 = _case37_bar(0)
+        day1 = _case37_bar(1)
+        day0.update(blocked_overrides)
+        day1.update(blocked_overrides)
+        data = pd.DataFrame([day0, day1])
+        bt = make_backtester(CASE37_CONFIG, lot_sizes={"600001": 100})
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[_case37_strategy()],
+            initial_cash=100_000,
+            data_provider=DataFrameProvider(data),
+            symbols=["600001"],
+        )
+
+        assert result.trades == []
+        assert result.diagnostics.fill_count == 0
+        assert result.open_positions == []
 
 
 # ============================================================================

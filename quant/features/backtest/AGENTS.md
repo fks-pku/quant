@@ -110,6 +110,7 @@ while current_date ≤ end:
 - CN 回测数据应通过 `DuckDBProvider`/`DuckDBStorage(use_security_status=True)` 读取；它会用 `security_status.duckdb::cn_security_status_daily` 给 `daily_cn_ochl` 补 `_suspended`、`tradable`、`is_st`、`up_limit/down_limit`，并为无 OHLC 的停牌日生成 synthetic bar
 - ST 不自动从回测 universe 剔除，也不自动禁止交易；优先用 status 表 `up_limit/down_limit`，缺失时 `is_st=True` 按 5% 涨跌停 fallback
 - `is_suspended()` 优先检查 `bar["_suspended"]` / `tradable=False` / `has_daily_bar=False` 显式状态，其次才用 volume=0 / close=open=0 启发式
+- 研究生成的小市值低价策略通过策略层 `delisting_risk_guard` 过滤退市风险：`close >= 2`、流动性下限、ST/停牌/非上市/list_status 过滤，并在持仓触发风险时每日尝试 SELL；该退出不能被 `holding_days` 调仓门控阻挡，见 `test_backtest_invariants.py` CASE-37
 - 当日 `tradable=False` 的标的提交订单应在 `_BacktestOrderManager` submission 阶段拒绝；已有 deferred order 到停牌日则在 Step ④ 丢弃
 - `DataFrameProvider._build_index()` 遇到重复 (symbol, date) 时保留 volume 更高的行，而非先到先得
 - `domain.ports.strategy.Strategy` 是架构端口定义，实际策略必须继承 `features.strategies.base.Strategy`

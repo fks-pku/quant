@@ -20,3 +20,17 @@
 
 ## Summary
 factor idea triaged by deterministic professional rubric
+
+## Execution Flow
+
+- Universe: A-share daily bars from the research/backtest data provider.
+- Eligibility: `2 <= close <= 20`, trailing 20-day average `turnover >= 20000`, valid point-in-time market cap, `is_st=False`, `tradable=True`, `is_listed=True`, and `list_status == "L"`.
+- Signal: `1 / market_cap`; smaller market cap ranks higher.
+- Portfolio: long-only Top 20, target gross exposure `1.0`, equal target value per selected name.
+- Normal rebalance: controlled by `holding_days=5`.
+- Delisting risk exit: before the normal rebalance gate, existing holdings are checked daily; if price, liquidity, ST, suspension, tradability, listing, or list-status guard fails, the strategy submits a SELL immediately.
+- Strict execution: submitted orders still go through Backtester T+1, 100-share CN lot sizing, price-limit checks, volume caps, cash/position checks, commission, and slippage.
+
+## Invariant Coverage
+
+- `quant/tests/test_backtest_invariants.py` CASE-37 verifies that entry guards block risky names and that daily delisting-risk exits are not blocked by `holding_days`.

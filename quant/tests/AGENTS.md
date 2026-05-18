@@ -11,6 +11,7 @@ quant/tests/
 ├── test_hk_market.py          # 港股集成测试 (~5 tests)
 ├── test_us_market.py          # 美股集成测试 (~8 tests)
 ├── test_backtest_core.py      # 回测引擎核心集成测试 (~32 tests)
+├── test_backtest_invariants.py # 回测不变量 CASE 套件
 ├── test_strategies.py         # 策略注册与单元测试 (~25 tests)
 ├── test_analytics.py          # 分析指标测试 (~41 tests)
 ├── test_infrastructure.py     # 基础设施测试 (~25 tests)
@@ -119,6 +120,7 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 - 新增佣金单元测试 → `test_commission.py`
 - 新增市场集成测试 → 对应 `test_<market>_market.py`
 - 新增通用引擎功能 → `test_backtest_core.py`
+- 新增回测不变量/跨模块执行语义 → `test_backtest_invariants.py`，并同步 `quant/features/backtest/docs/backtest-invariants.md`
 - 新增分析指标 → `test_analytics.py`
 - 新增回归测试 → 对应功能测试文件（如 `test_backtest_core.py`、`test_analytics.py`）
 - 共享数据生成逻辑 → `conftest.py`
