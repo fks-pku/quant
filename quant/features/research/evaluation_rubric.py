@@ -9,7 +9,7 @@ _TYPE_PATTERNS = [
     (r"mean reversion|reversal|contrarian", "mean_reversion"),
     (r"momentum|trend following", "momentum"),
     (r"breakout|channel", "breakout"),
-    (r"factor|value|quality|low volatility|fama", "factor"),
+    (r"factor|value|quality|low volatility|lottery|skewness|liquidity|turnover|market cap|small cap|size|fama", "factor"),
     (r"pairs|cointegration|statistical arbitrage|stat.?arb", "stat_arb"),
     (r"regime|volatility", "regime"),
 ]
@@ -169,6 +169,8 @@ def _required_data_fields(raw: RawStrategy, report: EvaluationReport) -> List[st
         fields.update({"high", "low"})
     if _has_any(text, ("volume", "liquid", "turnover", "capacity")):
         fields.add("volume")
+    if _has_any(text, ("market cap", "market capitalization", "small cap", "size factor", "total_mv", "circ_mv")):
+        fields.add("point_in_time_market_cap")
     if _has_any(text, ("fundamental", "earnings", "book value", "book-to-market", "book to market")):
         fields.add("point_in_time_fundamentals")
     if report.data_requirement == "high-frequency":

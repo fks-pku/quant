@@ -555,6 +555,23 @@ def _formula_block(rows: List[Dict[str, Any]]) -> str:
             f"target_i,t+{lag} = top_20(rank_i,t), long-only only",
             f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
+    elif formula == "worldquant_alpha_003":
+        lines = [
+            "x_i,t = rank_cross_section(adj_open_i,t)",
+            "y_i,t = rank_cross_section(volume_i,t)",
+            f"signal_i,t = -corr_ts(x_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, y_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, {lookback})",
+            "rank_i,t = cross_sectional_rank(signal_i,t)",
+            f"target_i,t+{lag} = top_20(rank_i,t), long-only only",
+            f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
+        ]
+    elif formula == "worldquant_alpha_004":
+        lines = [
+            "low_rank_i,t = rank_cross_section(adj_low_i,t)",
+            f"signal_i,t = -ts_rank(low_rank_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback}:t, {lookback})",
+            "rank_i,t = cross_sectional_rank(signal_i,t)",
+            f"target_i,t+{lag} = top_20(rank_i,t), long-only; no signal > 0 filter because signal <= 0",
+            f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
+        ]
     elif "mean_reversion" in formula or "reversal" in formula:
         lines = [
             f"ma_i,t = mean(adj_close_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback} ... adj_close_i,t)",

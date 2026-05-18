@@ -26,10 +26,40 @@ from quant.shared.utils.symbol_utils import detect_market as _detect_market
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
 _DEFAULT_DB = str(_PKG_DIR / "var" / "duckdb" / "quant.duckdb")
 _DEFAULT_STATUS_DB = str(_PKG_DIR / "var" / "duckdb" / "security_status.duckdb")
+_DEFAULT_DAILY_BASIC_DB = str(_PKG_DIR / "var" / "duckdb" / "cn_daily_basic.duckdb")
 _STATUS_TABLE = "cn_security_status_daily"
+_DAILY_BASIC_TABLE = "cn_daily_basic"
 
 BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE"
 BAR_INDEX = "timestamp, symbol"
+_BASE_READ_BAR_COLUMNS = (
+    "timestamp",
+    "symbol",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "adj_open",
+    "adj_high",
+    "adj_low",
+    "adj_close",
+    "adj_factor",
+)
+_OPTIONAL_READ_BAR_COLUMNS = (
+    "turnover",
+    "turnover_rate",
+    "turnover_rate_f",
+    "market_cap",
+    "total_market_cap",
+    "total_mv",
+    "circ_mv",
+    "float_market_cap",
+    "circulating_market_cap",
+    "total_share",
+    "float_share",
+    "free_share",
+)
 
 
 class DuckDBStorage(Storage):
@@ -39,6 +69,7 @@ class DuckDBStorage(Storage):
         read_only: bool = False,
         use_security_status: bool = False,
         status_db_path: str = _DEFAULT_STATUS_DB,
+        daily_basic_db_path: str = _DEFAULT_DAILY_BASIC_DB,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +80,8 @@ class DuckDBStorage(Storage):
         self._use_security_status = use_security_status
         self._status_db_path = Path(status_db_path)
         self._status_attach_failed = False
+        self._daily_basic_db_path = Path(daily_basic_db_path)
+        self._daily_basic_attach_failed = False
         self._init_database()
 
     def _init_database(self) -> None:
@@ -208,6 +241,9 @@ class DuckDBStorage(Storage):
             status_frame = self._get_status_enriched_cn_bars([symbol], start, end)
             if status_frame is not None:
                 return status_frame
+            sidecar_frame = self._get_daily_basic_enriched_cn_bars([symbol], start, end)
+            if sidecar_frame is not None:
+                return sidecar_frame
 
         try:
             tables = self.conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()
@@ -216,7 +252,8 @@ class DuckDBStorage(Storage):
         except Exception:
             return pd.DataFrame()
 
-        query = f"SELECT timestamp, symbol, open, high, low, close, volume, adj_open, adj_high, adj_low, adj_close, adj_factor FROM {table_name} WHERE symbol = ?"
+        select_cols = ", ".join(self._read_bar_columns(table_name))
+        query = f"SELECT {select_cols} FROM {table_name} WHERE symbol = ?"
         params: list = [symbol]
 
         if start is not None:
@@ -267,12 +304,14 @@ class DuckDBStorage(Storage):
                         if not frame.empty:
                             frames.append(frame)
                         continue
+                    frame = self._get_daily_basic_enriched_cn_bars(table_symbols, start, end)
+                    if frame is not None:
+                        if not frame.empty:
+                            frames.append(frame)
+                        continue
                 placeholders = ", ".join("?" for _ in table_symbols)
-                query = (
-                    "SELECT timestamp, symbol, open, high, low, close, volume, "
-                    f"adj_open, adj_high, adj_low, adj_close, adj_factor FROM {table_name} "
-                    f"WHERE symbol IN ({placeholders})"
-                )
+                select_cols = ", ".join(self._read_bar_columns(table_name))
+                query = f"SELECT {select_cols} FROM {table_name} WHERE symbol IN ({placeholders})"
                 params: list = list(table_symbols)
                 if start is not None:
                     query += " AND timestamp >= ?"
@@ -292,6 +331,126 @@ class DuckDBStorage(Storage):
     @staticmethod
     def _is_daily_timeframe(timeframe: str) -> bool:
         return timeframe in ("1d", "day", "daily")
+
+    def _read_bar_columns(self, table_name: str) -> List[str]:
+        cols = list(_BASE_READ_BAR_COLUMNS)
+        cols.extend(self._available_columns(table_name, _OPTIONAL_READ_BAR_COLUMNS))
+        return cols
+
+    def _available_columns(self, table_name: str, candidates: tuple[str, ...]) -> List[str]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'main'
+                  AND table_name = ?
+                """,
+                [table_name],
+            ).fetchall()
+        except Exception:
+            return []
+        existing = {str(row[0]) for row in rows}
+        return [col for col in candidates if col in existing and col not in _BASE_READ_BAR_COLUMNS]
+
+    def _daily_basic_available(self) -> bool:
+        if self._daily_basic_attach_failed:
+            return False
+        if not self._daily_basic_db_path.exists():
+            return False
+        with self._lock:
+            try:
+                attached = {
+                    row[1]
+                    for row in self.conn.execute("PRAGMA database_list").fetchall()
+                    if len(row) > 1
+                }
+                if "daily_basic" not in attached:
+                    path = str(self._daily_basic_db_path).replace("'", "''")
+                    self.conn.execute(f"ATTACH IF NOT EXISTS '{path}' AS daily_basic (READ_ONLY)")
+                exists = self.conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_catalog = 'daily_basic'
+                      AND table_name = ?
+                    """,
+                    [_DAILY_BASIC_TABLE],
+                ).fetchone()[0]
+                return bool(exists)
+            except Exception as e:
+                self._daily_basic_attach_failed = True
+                self.logger.warning(f"Daily basic sidecar unavailable: {e}")
+                return False
+
+    def _daily_basic_columns(self) -> set:
+        if not self._daily_basic_available():
+            return set()
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_catalog = 'daily_basic'
+                  AND table_name = ?
+                """,
+                [_DAILY_BASIC_TABLE],
+            ).fetchall()
+        except Exception:
+            return set()
+        return {str(row[0]) for row in rows}
+
+    def _daily_basic_sidecar_columns(self, existing_bar_columns: List[str]) -> List[str]:
+        existing = set(existing_bar_columns)
+        daily_basic_columns = self._daily_basic_columns()
+        return [
+            col
+            for col in _OPTIONAL_READ_BAR_COLUMNS
+            if col in daily_basic_columns and col not in existing
+        ]
+
+    def _get_daily_basic_enriched_cn_bars(
+        self,
+        symbols: List[str],
+        start: Optional[datetime],
+        end: Optional[datetime],
+    ) -> Optional[pd.DataFrame]:
+        if not symbols or not self._daily_basic_available():
+            return None
+        table_symbols = list(dict.fromkeys(symbols))
+        placeholders = ", ".join("?" for _ in table_symbols)
+        bar_columns = list(_BASE_READ_BAR_COLUMNS[2:]) + self._available_columns("daily_cn_ochl", _OPTIONAL_READ_BAR_COLUMNS)
+        sidecar_columns = self._daily_basic_sidecar_columns(bar_columns)
+        if not sidecar_columns:
+            return None
+        select_columns = [
+            "b.timestamp",
+            "b.symbol",
+            *[f"b.{col}" for col in bar_columns],
+            *[f"db.{col}" for col in sidecar_columns],
+        ]
+        query = f"""
+            SELECT {", ".join(select_columns)}
+            FROM daily_cn_ochl b
+            LEFT JOIN daily_basic.{_DAILY_BASIC_TABLE} db
+              ON b.symbol = db.symbol
+             AND CAST(b.timestamp AS DATE) = db.trade_date
+            WHERE b.symbol IN ({placeholders})
+        """
+        params: list = list(table_symbols)
+        if start is not None:
+            query += " AND b.timestamp >= ?"
+            params.append(start)
+        if end is not None:
+            query += " AND b.timestamp <= ?"
+            params.append(end)
+        query += " ORDER BY b.symbol ASC, b.timestamp ASC"
+        try:
+            with self._lock:
+                return self.conn.execute(query, params).fetchdf()
+        except Exception as e:
+            self.logger.warning(f"Daily basic sidecar join failed, falling back to OHLC bars: {e}")
+            return None
 
     def _status_available(self) -> bool:
         if not self._use_security_status or self._status_attach_failed:
@@ -336,20 +495,23 @@ class DuckDBStorage(Storage):
 
         table_symbols = list(dict.fromkeys(symbols))
         placeholders = ", ".join("?" for _ in table_symbols)
+        bar_columns = list(_BASE_READ_BAR_COLUMNS[2:]) + self._available_columns("daily_cn_ochl", _OPTIONAL_READ_BAR_COLUMNS)
+        bar_select = ",\n                ".join(f"b.{col}" for col in bar_columns)
+        sidecar_columns = self._daily_basic_sidecar_columns(bar_columns)
+        sidecar_select = ""
+        sidecar_join = ""
+        if sidecar_columns:
+            sidecar_select = ",\n                " + ",\n                ".join(f"db.{col}" for col in sidecar_columns)
+            sidecar_join = f"""
+            LEFT JOIN daily_basic.{_DAILY_BASIC_TABLE} db
+              ON s.symbol = db.symbol
+             AND s.trade_date = db.trade_date
+            """
         query = f"""
             SELECT
                 CAST(s.trade_date AS TIMESTAMP) AS timestamp,
                 s.symbol,
-                b.open,
-                b.high,
-                b.low,
-                b.close,
-                b.volume,
-                b.adj_open,
-                b.adj_high,
-                b.adj_low,
-                b.adj_close,
-                b.adj_factor,
+                {bar_select}{sidecar_select},
                 s.is_st,
                 s.st_type,
                 s.is_suspended AS status_is_suspended,
@@ -366,6 +528,7 @@ class DuckDBStorage(Storage):
             LEFT JOIN daily_cn_ochl b
               ON s.symbol = b.symbol
              AND s.trade_date = CAST(b.timestamp AS DATE)
+            {sidecar_join}
             WHERE s.symbol IN ({placeholders})
         """
         params: list = list(table_symbols)
@@ -398,7 +561,23 @@ class DuckDBStorage(Storage):
         status_suspended = result["status_is_suspended"].fillna(False).astype(bool)
         synthetic = ~has_daily_bar
 
-        for col in ("open", "high", "low", "close", "volume", "adj_open", "adj_high", "adj_low", "adj_close", "adj_factor", "up_limit", "down_limit", "status_pre_close"):
+        numeric_cols = (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "adj_open",
+            "adj_high",
+            "adj_low",
+            "adj_close",
+            "adj_factor",
+            "up_limit",
+            "down_limit",
+            "status_pre_close",
+            *_OPTIONAL_READ_BAR_COLUMNS,
+        )
+        for col in numeric_cols:
             if col in result.columns:
                 result[col] = pd.to_numeric(result[col], errors="coerce")
 

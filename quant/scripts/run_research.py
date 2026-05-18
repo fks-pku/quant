@@ -92,6 +92,11 @@ _SYMBOL_MAP = {
 
 class HeuristicEvaluator:
     def evaluate(self, raw):
+        from quant.features.research.evaluation_rubric import heuristic_evaluation
+
+        return heuristic_evaluation(raw, config={"default_symbols": list(_CN_RESEARCH_SYMBOLS)})
+
+    def _legacy_evaluate(self, raw):
         from quant.features.research.models import EvaluationReport
         text = f"{raw.title.lower()} {raw.description.lower()[:2000]}"
         normalized = re.sub(r"[^a-z0-9\s.]", " ", text)

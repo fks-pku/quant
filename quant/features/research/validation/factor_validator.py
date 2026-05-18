@@ -88,6 +88,12 @@ def _corr_tstat(corr: float, n_observations: int) -> float:
     return float(corr * np.sqrt((n_observations - 2) / denom))
 
 
+def _signal_error(formula_key: str) -> str:
+    if formula_key == "joinquant_small_cap_size_factor":
+        return "Missing point-in-time market cap field: expected one of total_mv, circ_mv, market_cap, total_market_cap"
+    return f"Unsupported formula: {formula_key}"
+
+
 class FactorValidator:
     def __init__(
         self,
@@ -125,11 +131,27 @@ class FactorValidator:
 
         symbols = self._resolve_universe(spec)
         seed_universe_size = len(list(spec.universe or []))
-        raw_data = self._market_data.get_daily_bars(
-            symbols=symbols,
-            start=self._start_date,
-            end=self._end_date,
-        )
+        missing_field_error = self._preflight_required_fields(spec, symbols)
+        if missing_field_error:
+            return self._error_report(
+                spec,
+                [missing_field_error],
+                self._universe_metadata(symbols, None, seed_universe_size),
+            )
+        requested_fields = self._requested_market_data_fields(spec)
+        try:
+            raw_data = self._market_data.get_daily_bars(
+                symbols=symbols,
+                start=self._start_date,
+                end=self._end_date,
+                fields=requested_fields,
+            )
+        except TypeError:
+            raw_data = self._market_data.get_daily_bars(
+                symbols=symbols,
+                start=self._start_date,
+                end=self._end_date,
+            )
         if raw_data is None:
             return self._error_report(
                 spec,
@@ -178,6 +200,33 @@ class FactorValidator:
             "data_symbol_count": int(data_symbol_count),
         }
 
+    def _preflight_required_fields(self, spec: StrategySpec, symbols: List[str]) -> str:
+        if spec.signal_formula_key != "joinquant_small_cap_size_factor":
+            return ""
+        if not symbols or not hasattr(self._market_data, "available_fields"):
+            return ""
+        fields = set(self._market_data.available_fields(detect_market(symbols[0])) or [])
+        market_cap_fields = {"total_mv", "circ_mv", "market_cap", "total_market_cap", "float_market_cap", "circulating_market_cap"}
+        if fields.intersection(market_cap_fields):
+            return ""
+        return _signal_error(spec.signal_formula_key)
+
+    def _requested_market_data_fields(self, spec: StrategySpec) -> Optional[List[str]]:
+        if spec.signal_formula_key == "joinquant_small_cap_size_factor":
+            return [
+                "close",
+                "adj_close",
+                "adj_factor",
+                "volume",
+                "total_mv",
+                "circ_mv",
+                "market_cap",
+                "total_market_cap",
+                "float_market_cap",
+                "circulating_market_cap",
+            ]
+        return None
+
     def _validate_single_symbol(
         self,
         spec: StrategySpec,
@@ -189,7 +238,7 @@ class FactorValidator:
 
         signal = compute_signal(spec.signal_formula_key, data, spec.lookback_days)
         if signal is None:
-            return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"], universe_metadata)
+            return self._error_report(spec, [_signal_error(spec.signal_formula_key)], universe_metadata)
 
         close = adjusted_price_series(data, "close")
         forward_return = close.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
@@ -242,7 +291,7 @@ class FactorValidator:
 
         signal_matrix = compute_signal(spec.signal_formula_key, frame, spec.lookback_days)
         if signal_matrix is None:
-            return self._error_report(spec, [f"Unsupported formula: {spec.signal_formula_key}"], universe_metadata)
+            return self._error_report(spec, [_signal_error(spec.signal_formula_key)], universe_metadata)
 
         close_prices = adjusted_price_matrix(frame, "close")
         forward_returns = close_prices.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
@@ -315,27 +364,17 @@ class FactorValidator:
     def _long_short_series(self, signals: pd.DataFrame, forward_returns: pd.DataFrame) -> pd.Series:
         common_index = signals.index.intersection(forward_returns.index)
         common_columns = signals.columns.intersection(forward_returns.columns)
-        spreads = []
-        dates = []
-        for date in common_index:
-            paired = pd.concat(
-                [
-                    signals.loc[date, common_columns].rename("signal"),
-                    forward_returns.loc[date, common_columns].rename("return"),
-                ],
-                axis=1,
-            ).dropna()
-            if len(paired) < self._min_stocks:
-                continue
-            high = paired["signal"].quantile(0.8)
-            low = paired["signal"].quantile(0.2)
-            long_returns = paired.loc[paired["signal"] >= high, "return"]
-            short_returns = paired.loc[paired["signal"] <= low, "return"]
-            if long_returns.empty or short_returns.empty:
-                continue
-            spreads.append(float(long_returns.mean() - short_returns.mean()))
-            dates.append(date)
-        return pd.Series(spreads, index=pd.to_datetime(dates)).sort_index() if spreads else pd.Series(dtype=float)
+        if len(common_index) == 0 or len(common_columns) == 0:
+            return pd.Series(dtype=float)
+        signal = signals.loc[common_index, common_columns]
+        returns = forward_returns.loc[common_index, common_columns]
+        valid = signal.notna() & returns.notna()
+        counts = valid.sum(axis=1)
+        ranks = signal.where(valid).rank(axis=1, pct=True)
+        long_returns = returns.where(ranks >= 0.8).mean(axis=1)
+        short_returns = returns.where(ranks <= 0.2).mean(axis=1)
+        spreads = (long_returns - short_returns).where(counts >= self._min_stocks).dropna()
+        return spreads.astype(float).sort_index()
 
     def _portfolio_diagnostics(
         self,
@@ -516,42 +555,15 @@ class FactorValidator:
         daily_returns = prices.pct_change(fill_method=None).shift(-self._exec_lag - 1)
         common_index = signals.index.intersection(daily_returns.index)
         common_columns = signals.columns.intersection(daily_returns.columns)
-        active: List[Dict[Any, float]] = []
-        previous_weights: Dict[Any, float] | None = None
-        return_values = []
-        return_dates = []
-        turnover_values = []
-        turnover_dates = []
-        for date in common_index:
-            signal = signals.loc[date, common_columns].dropna()
-            if len(signal) >= self._min_stocks:
-                n_top = max(1, int(np.ceil(len(signal) * top_pct)))
-                selected = signal.sort_values(ascending=False).head(n_top).index
-                weight = 1.0 / float(len(selected))
-                active.append({symbol: weight for symbol in selected})
-                active = active[-max(1, int(horizon_days)):]
-            if not active:
-                continue
-            current_weights = self._average_cohort_weights(active)
-            if previous_weights is not None:
-                turnover_values.append(self._one_way_turnover(previous_weights, current_weights))
-                turnover_dates.append(date)
-            next_returns = daily_returns.loc[date, list(current_weights)].dropna()
-            if next_returns.empty:
-                previous_weights = current_weights
-                continue
-            available_weights = {symbol: current_weights[symbol] for symbol in next_returns.index}
-            total_weight = sum(available_weights.values())
-            if total_weight <= 0.0:
-                previous_weights = current_weights
-                continue
-            portfolio_return = sum((weight / total_weight) * float(next_returns[symbol]) for symbol, weight in available_weights.items())
-            return_values.append(float(portfolio_return))
-            return_dates.append(date)
-            previous_weights = current_weights
-        returns = pd.Series(return_values, index=pd.to_datetime(return_dates)).sort_index() if return_values else pd.Series(dtype=float)
-        turnover = pd.Series(turnover_values, index=pd.to_datetime(turnover_dates)).sort_index() if turnover_values else pd.Series(dtype=float)
-        return returns, turnover
+        if len(common_index) == 0 or len(common_columns) == 0:
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+        signal = signals.loc[common_index, common_columns]
+        returns = daily_returns.loc[common_index, common_columns]
+        valid_counts = signal.notna().sum(axis=1)
+        n_top = np.ceil(valid_counts.astype(float) * top_pct).clip(lower=1)
+        ranks = signal.rank(axis=1, method="first", ascending=False)
+        selected = ranks.le(n_top, axis=0) & signal.notna() & valid_counts.ge(self._min_stocks).to_numpy()[:, None]
+        return self._portfolio_returns_from_selection(selected, returns, horizon_days)
 
     def _top_n_portfolio_returns(
         self,
@@ -565,46 +577,34 @@ class FactorValidator:
         daily_returns = prices.pct_change(fill_method=None).shift(-self._exec_lag - 1)
         common_index = signals.index.intersection(daily_returns.index)
         common_columns = signals.columns.intersection(daily_returns.columns)
-        active: List[Dict[Any, float]] = []
-        previous_weights: Dict[Any, float] | None = None
-        return_values = []
-        return_dates = []
-        turnover_values = []
-        turnover_dates = []
-        selected_count_values = []
-        selected_count_dates = []
-        for date in common_index:
-            signal = signals.loc[date, common_columns].dropna()
-            if len(signal) >= self._min_stocks:
-                selected = signal.sort_values(ascending=False).head(min(int(top_n), len(signal))).index
-                weight = 1.0 / float(len(selected))
-                active.append({symbol: weight for symbol in selected})
-                active = active[-max(1, int(horizon_days)):]
-                selected_count_values.append(float(len(selected)))
-                selected_count_dates.append(date)
-            if not active:
-                continue
-            current_weights = self._average_cohort_weights(active)
-            if previous_weights is not None:
-                turnover_values.append(self._one_way_turnover(previous_weights, current_weights))
-                turnover_dates.append(date)
-            next_returns = daily_returns.loc[date, list(current_weights)].dropna()
-            if next_returns.empty:
-                previous_weights = current_weights
-                continue
-            available_weights = {symbol: current_weights[symbol] for symbol in next_returns.index}
-            total_weight = sum(available_weights.values())
-            if total_weight <= 0.0:
-                previous_weights = current_weights
-                continue
-            portfolio_return = sum((weight / total_weight) * float(next_returns[symbol]) for symbol, weight in available_weights.items())
-            return_values.append(float(portfolio_return))
-            return_dates.append(date)
-            previous_weights = current_weights
-        returns = pd.Series(return_values, index=pd.to_datetime(return_dates)).sort_index() if return_values else pd.Series(dtype=float)
-        turnover = pd.Series(turnover_values, index=pd.to_datetime(turnover_dates)).sort_index() if turnover_values else pd.Series(dtype=float)
-        counts = pd.Series(selected_count_values, index=pd.to_datetime(selected_count_dates)).sort_index() if selected_count_values else pd.Series(dtype=float)
-        return returns, turnover, counts
+        if len(common_index) == 0 or len(common_columns) == 0:
+            return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+        signal = signals.loc[common_index, common_columns]
+        returns = daily_returns.loc[common_index, common_columns]
+        valid_counts = signal.notna().sum(axis=1)
+        ranks = signal.rank(axis=1, method="first", ascending=False)
+        selected = ranks.le(int(top_n)) & signal.notna() & valid_counts.ge(self._min_stocks).to_numpy()[:, None]
+        portfolio_returns, turnover = self._portfolio_returns_from_selection(selected, returns, horizon_days)
+        counts = selected.sum(axis=1).where(selected.sum(axis=1) > 0).dropna().astype(float)
+        return portfolio_returns, turnover, counts
+
+    def _portfolio_returns_from_selection(
+        self,
+        selected: pd.DataFrame,
+        returns: pd.DataFrame,
+        horizon_days: int,
+    ) -> tuple[pd.Series, pd.Series]:
+        selected_counts = selected.sum(axis=1).replace(0, np.nan)
+        cohort_weights = selected.astype(float).div(selected_counts, axis=0).fillna(0.0)
+        horizon = max(1, int(horizon_days))
+        active_counts = selected_counts.notna().astype(float).rolling(horizon, min_periods=1).sum().replace(0, np.nan)
+        active_weights = cohort_weights.rolling(horizon, min_periods=1).sum().div(active_counts, axis=0).fillna(0.0)
+        aligned_returns = returns.reindex(index=active_weights.index, columns=active_weights.columns)
+        available_weights = active_weights.where(aligned_returns.notna(), 0.0)
+        total_weight = available_weights.sum(axis=1).replace(0, np.nan)
+        portfolio_returns = (available_weights * aligned_returns.fillna(0.0)).sum(axis=1).div(total_weight).dropna()
+        turnover = (active_weights.diff().abs().sum(axis=1) * 0.5).iloc[1:].dropna()
+        return portfolio_returns.astype(float).sort_index(), turnover.astype(float).sort_index()
 
     def _pnl_attribution_bridge(
         self,
@@ -615,6 +615,12 @@ class FactorValidator:
         cost_bps: float,
     ) -> List[Dict[str, Any]]:
         layers: List[Dict[str, Any]] = []
+        strategy_positive_only = str(spec.signal_formula_key) not in {"worldquant_alpha_004"}
+        strategy_selection_note = (
+            "使用策略生成器规则：top 1% capped 20，且 signal > 0。"
+            if strategy_positive_only
+            else "使用策略生成器规则：top 1% capped 20；该公式信号整体为非正，按信号从高到低选股。"
+        )
         layer_specs = [
             (
                 "ideal_top20_close_to_close",
@@ -625,26 +631,26 @@ class FactorValidator:
             (
                 "strategy_selection_rule",
                 "真实选股规则",
-                "使用策略生成器规则：top 1% capped 20，且 signal > 0。",
-                {"selector": "strategy_top_pct", "positive_only": True, "execution_lag_days": 0, "holding_days": 1, "require_volume": False},
+                strategy_selection_note,
+                {"selector": "strategy_top_pct", "positive_only": strategy_positive_only, "execution_lag_days": 0, "holding_days": 1, "require_volume": False},
             ),
             (
                 "execution_lag",
                 "加入执行滞后",
                 f"信号生成后等待 {self._exec_lag} 个交易日再计算可实现收益。",
-                {"selector": "strategy_top_pct", "positive_only": True, "execution_lag_days": self._exec_lag, "holding_days": 1, "require_volume": False},
+                {"selector": "strategy_top_pct", "positive_only": strategy_positive_only, "execution_lag_days": self._exec_lag, "holding_days": 1, "require_volume": False},
             ),
             (
                 "holding_cohort",
                 "加入持有期 cohort",
                 f"按 {spec.horizon_days} 日持有期滚动叠加 cohort，近似策略持仓节奏。",
-                {"selector": "strategy_top_pct", "positive_only": True, "execution_lag_days": self._exec_lag, "holding_days": spec.horizon_days, "require_volume": False},
+                {"selector": "strategy_top_pct", "positive_only": strategy_positive_only, "execution_lag_days": self._exec_lag, "holding_days": spec.horizon_days, "require_volume": False},
             ),
             (
                 "volume_tradeable_proxy",
                 "加入成交量可交易近似",
                 "过滤当日 volume<=0 或价格缺失的标的；不是订单级成交量限制。",
-                {"selector": "strategy_top_pct", "positive_only": True, "execution_lag_days": self._exec_lag, "holding_days": spec.horizon_days, "require_volume": True},
+                {"selector": "strategy_top_pct", "positive_only": strategy_positive_only, "execution_lag_days": self._exec_lag, "holding_days": spec.horizon_days, "require_volume": True},
             ),
         ]
         previous_ann = None

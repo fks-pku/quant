@@ -485,42 +485,45 @@ class ResearchEngine:
             result.validated += 1
             vreport = self._append_ic_decay_warning(result, raw, vreport)
             validation_report = vreport
-            if vreport.status == "error" or not vreport.fdr_significant or vreport.rank_ic < 0.02:
+            gate = self._fast_validation_gate(vreport)
+            gate_reason = str(gate.get("reason") or "")
+            gate_metrics = dict(gate.get("metrics") or {})
+            if not bool(gate.get("passed")):
                 result.log.append(ResearchLogEntry(
                     phase="stage2_validation", title=raw.title, source=raw.source,
                     source_url=raw.source_url, verdict="fail",
-                    reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                    scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+                    reason=gate_reason,
+                    scores=gate_metrics,
                 ))
-                evaluation_rows.append((raw, report, "validation_failed", f"Validation failed: IC={vreport.rank_ic:.4f}"))
+                evaluation_rows.append((raw, report, "validation_failed", gate_reason))
                 self._record_hypothesis(
                     raw,
                     status="validation_failed",
                     stage="stage2_validation",
-                    reason=f"Validation failed but continuing full research: IC={vreport.rank_ic:.4f}",
+                    reason=f"{gate_reason}; continuing full research for audit",
                     report=report,
                     validation_report=vreport,
                     strategy_spec=strategy_spec,
                 )
-                self._upsert_idea(raw, "validation_failed", f"Validation failed but continuing full research: IC={vreport.rank_ic:.4f}")
+                self._upsert_idea(raw, "validation_failed", f"{gate_reason}; continuing full research for audit")
             else:
                 result.validated_passed += 1
                 result.log.append(ResearchLogEntry(
                     phase="stage2_validation", title=raw.title, source=raw.source,
                     source_url=raw.source_url, verdict="pass",
-                    reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
-                    scores={"rank_ic": vreport.rank_ic, "hit_rate": vreport.hit_rate},
+                    reason=gate_reason,
+                    scores=gate_metrics,
                 ))
                 self._record_hypothesis(
                     raw,
                     status="validated",
                     stage="stage2_validation",
-                    reason=f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}",
+                    reason=gate_reason,
                     report=report,
                     validation_report=vreport,
                     strategy_spec=strategy_spec,
                 )
-                self._upsert_idea(raw, "validated", f"IC={vreport.rank_ic:.4f}, FDR={vreport.fdr_adjusted_p:.4f}")
+                self._upsert_idea(raw, "validated", gate_reason)
 
         strategy_id = self.integrator.integrate(raw, report, spec=strategy_spec)
         if strategy_id:
@@ -1198,6 +1201,116 @@ class ResearchEngine:
                 return str(entry.get("status", ""))
         return ""
 
+    def _fast_validation_gate(self, validation_report: Any) -> Dict[str, Any]:
+        cfg = dict(getattr(self.config, "validation_config", {}) or {})
+        min_rank_ic = float(cfg.get("fast_gate_min_rank_ic", cfg.get("min_rank_ic", 0.02)))
+        min_top_sharpe = float(cfg.get("fast_gate_min_top_bucket_after_cost_sharpe", 0.5))
+        min_top_return = float(cfg.get("fast_gate_min_top_bucket_after_cost_annualized_return", 0.08))
+        max_top_drawdown = abs(float(cfg.get("fast_gate_max_top_bucket_after_cost_drawdown", 0.50)))
+        min_excess_sharpe = float(cfg.get("fast_gate_min_benchmark_excess_after_cost_sharpe", 0.0))
+        min_excess_return = float(cfg.get("fast_gate_min_benchmark_excess_after_cost_annualized_return", 0.0))
+        max_turnover_raw = cfg.get("fast_gate_max_top_bucket_turnover", 0.35)
+        max_turnover = None if max_turnover_raw is None else abs(float(max_turnover_raw))
+        min_oos_positive_pct = float(cfg.get("fast_gate_min_rolling_oos_positive_pct", 0.55))
+        min_oos_periods = int(cfg.get("fast_gate_min_rolling_oos_periods", 3))
+        fail_on_high_ic_decay = bool(cfg.get("fast_gate_fail_on_high_ic_decay", False))
+
+        if validation_report is None:
+            return {
+                "passed": False,
+                "status": "failed",
+                "reason": "Validation failed: no validation report",
+                "metrics": {},
+                "failures": ["no_validation_report"],
+            }
+
+        rank_ic = _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0)
+        fdr = _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0)
+        hit_rate = _float_or_default(getattr(validation_report, "hit_rate", 0.0), 0.0)
+        metrics: Dict[str, Any] = {
+            "rank_ic": rank_ic,
+            "rank_ic_ir": _float_or_default(getattr(validation_report, "rank_ic_ir", 0.0), 0.0),
+            "fdr_adjusted_p": fdr,
+            "fdr_significant": bool(getattr(validation_report, "fdr_significant", False)),
+            "hit_rate": hit_rate,
+        }
+        failures: List[str] = []
+
+        if getattr(validation_report, "status", "") == "error":
+            errors = "; ".join(str(item) for item in getattr(validation_report, "errors", []) or [])
+            failures.append(f"validation_error={errors or 'unknown'}")
+        if not bool(getattr(validation_report, "fdr_significant", False)):
+            failures.append(f"fdr_adjusted_p={fdr:.4f} > threshold")
+        if rank_ic < min_rank_ic:
+            failures.append(f"rank_ic={rank_ic:.4f} < {min_rank_ic:.4f}")
+        if fail_on_high_ic_decay and "high_ic_decay" in set(getattr(validation_report, "errors", []) or []):
+            failures.append("high_ic_decay")
+
+        diagnostics = getattr(validation_report, "portfolio_diagnostics", {}) or {}
+        if isinstance(diagnostics, dict) and diagnostics:
+            top_sharpe = _optional_float(diagnostics.get("top_bucket_after_cost_sharpe"))
+            top_return = _optional_float(diagnostics.get("top_bucket_after_cost_annualized_return"))
+            top_drawdown = _optional_float(diagnostics.get("top_bucket_after_cost_max_drawdown"))
+            turnover = _optional_float(diagnostics.get("top_bucket_turnover"))
+            excess_sharpe = _optional_float(diagnostics.get("benchmark_excess_after_cost_sharpe"))
+            excess_return = _optional_float(diagnostics.get("benchmark_excess_after_cost_annualized_return"))
+            for key, value in {
+                "top_bucket_after_cost_sharpe": top_sharpe,
+                "top_bucket_after_cost_annualized_return": top_return,
+                "top_bucket_after_cost_max_drawdown": top_drawdown,
+                "top_bucket_turnover": turnover,
+                "benchmark_excess_after_cost_sharpe": excess_sharpe,
+                "benchmark_excess_after_cost_annualized_return": excess_return,
+            }.items():
+                if value is not None:
+                    metrics[key] = value
+            if top_sharpe is not None and top_sharpe < min_top_sharpe:
+                failures.append(f"top_bucket_after_cost_sharpe={top_sharpe:.2f} < {min_top_sharpe:.2f}")
+            if top_return is not None and top_return < min_top_return:
+                failures.append(f"top_bucket_after_cost_annualized_return={top_return:.2%} < {min_top_return:.2%}")
+            if top_drawdown is not None and abs(top_drawdown) > max_top_drawdown:
+                failures.append(f"top_bucket_after_cost_max_drawdown={top_drawdown:.2%} beyond {max_top_drawdown:.2%}")
+            if excess_sharpe is not None and excess_sharpe < min_excess_sharpe:
+                failures.append(f"benchmark_excess_after_cost_sharpe={excess_sharpe:.2f} < {min_excess_sharpe:.2f}")
+            if excess_return is not None and excess_return < min_excess_return:
+                failures.append(f"benchmark_excess_after_cost_annualized_return={excess_return:.2%} < {min_excess_return:.2%}")
+            if max_turnover is not None and turnover is not None and turnover > max_turnover:
+                failures.append(f"top_bucket_turnover={turnover:.2%} > {max_turnover:.2%}")
+
+            rolling_oos = diagnostics.get("rolling_oos") or []
+            if isinstance(rolling_oos, list) and rolling_oos:
+                returns = [
+                    _optional_float(row.get("annualized_return"))
+                    for row in rolling_oos
+                    if isinstance(row, dict)
+                ]
+                returns = [value for value in returns if value is not None]
+                if returns:
+                    positive_pct = sum(1 for value in returns if value > 0.0) / len(returns)
+                    metrics["rolling_oos_periods"] = len(returns)
+                    metrics["rolling_oos_positive_pct"] = positive_pct
+                    if len(returns) >= min_oos_periods and positive_pct < min_oos_positive_pct:
+                        failures.append(f"rolling_oos_positive_pct={positive_pct:.0%} < {min_oos_positive_pct:.0%}")
+
+        passed = not failures
+        if passed:
+            if "top_bucket_after_cost_sharpe" in metrics:
+                reason = (
+                    f"Validation passed: IC={rank_ic:.4f}, FDR={fdr:.4f}, "
+                    f"Top20 after-cost Sharpe={metrics['top_bucket_after_cost_sharpe']:.2f}"
+                )
+            else:
+                reason = f"Validation passed: IC={rank_ic:.4f}, FDR={fdr:.4f}"
+        else:
+            reason = "Validation failed: " + "; ".join(failures)
+        return {
+            "passed": passed,
+            "status": "passed" if passed else "failed",
+            "reason": reason,
+            "metrics": metrics,
+            "failures": failures,
+        }
+
     def _attach_fast_research_conclusion(self, strategy_id: str, report: Any, validation_report: Any = None) -> None:
         evaluation_score = self._evaluation_score(report)
         metrics = {
@@ -1205,6 +1318,35 @@ class ResearchEngine:
             "signal_quality_score": getattr(report, "signal_quality_score", 0.0),
             "research_confidence_score": getattr(report, "research_confidence_score", 0.0),
         }
+        if validation_report is not None:
+            gate = self._fast_validation_gate(validation_report)
+            metrics.update(dict(gate.get("metrics") or {}))
+            metrics["validation_failures"] = list(gate.get("failures") or [])
+            rank_ic = _float_or_default(metrics.get("rank_ic"), 0.0)
+            fdr = _float_or_default(metrics.get("fdr_adjusted_p"), 1.0)
+            hit_rate = _float_or_default(metrics.get("hit_rate"), 0.0)
+            if bool(gate.get("passed")):
+                verdict = "pass"
+                conclusion = (
+                    f"快研究通过：Rank IC={rank_ic:.4f}、FDR={fdr:.4f}、hit_rate={hit_rate:.2%}；"
+                    "可进入 strict 回测检查真实交易约束。"
+                )
+            else:
+                verdict = "fail"
+                conclusion = (
+                    f"快研究未通过：{gate.get('reason', '')}；"
+                    "后续 strict 回测和 walk-forward 仅作为审计，不作为上线依据。"
+                )
+            self._attach_research_stage_conclusion(
+                strategy_id,
+                "fast_research",
+                "快研究",
+                verdict,
+                conclusion,
+                metrics,
+                "来源/admission、StrategySpec、HFQ 信号验证和扣费组合诊断。",
+            )
+            return
         if validation_report is None:
             verdict = "warn"
             conclusion = (
@@ -1389,14 +1531,17 @@ class ResearchEngine:
     def _attach_validation_gate(self, strategy_id: str, validation_report: Any = None) -> None:
         if validation_report is None:
             return
-        gate_status = self._validation_gate_status(validation_report)
+        gate_result = self._fast_validation_gate(validation_report)
+        gate_metrics = dict(gate_result.get("metrics") or {})
         gate = {
-            "status": gate_status,
-            "rank_ic": _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0),
-            "rank_ic_ir": _float_or_default(getattr(validation_report, "rank_ic_ir", 0.0), 0.0),
-            "fdr_adjusted_p": _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0),
-            "hit_rate": _float_or_default(getattr(validation_report, "hit_rate", 0.0), 0.0),
-            "reason": self._validation_gate_reason(validation_report),
+            "status": str(gate_result.get("status") or self._validation_gate_status(validation_report)),
+            "rank_ic": _float_or_default(gate_metrics.get("rank_ic"), 0.0),
+            "rank_ic_ir": _float_or_default(gate_metrics.get("rank_ic_ir"), 0.0),
+            "fdr_adjusted_p": _float_or_default(gate_metrics.get("fdr_adjusted_p"), 1.0),
+            "hit_rate": _float_or_default(gate_metrics.get("hit_rate"), 0.0),
+            "reason": str(gate_result.get("reason") or self._validation_gate_reason(validation_report)),
+            "metrics": gate_metrics,
+            "failures": list(gate_result.get("failures") or []),
         }
         if self.research_store is not None:
             try:
@@ -1412,31 +1557,11 @@ class ResearchEngine:
                 entry.setdefault("research_meta", {})["validation_gate"] = gate
                 break
 
-    @staticmethod
-    def _validation_gate_status(validation_report: Any) -> str:
-        if getattr(validation_report, "status", "") == "error":
-            return "failed"
-        if not bool(getattr(validation_report, "fdr_significant", False)):
-            return "failed"
-        try:
-            if float(getattr(validation_report, "rank_ic", 0.0) or 0.0) < 0.02:
-                return "failed"
-        except (TypeError, ValueError):
-            return "failed"
-        return "passed"
+    def _validation_gate_status(self, validation_report: Any) -> str:
+        return str(self._fast_validation_gate(validation_report).get("status") or "failed")
 
-    @staticmethod
-    def _validation_gate_reason(validation_report: Any) -> str:
-        rank_ic = _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0)
-        fdr = _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0)
-        if getattr(validation_report, "status", "") == "error":
-            errors = "; ".join(str(item) for item in getattr(validation_report, "errors", []) or [])
-            return f"Validation error: {errors or 'unknown'}"
-        if not bool(getattr(validation_report, "fdr_significant", False)):
-            return f"Validation failed: FDR={fdr:.4f}"
-        if rank_ic < 0.02:
-            return f"Validation failed: IC={rank_ic:.4f}"
-        return f"Validation passed: IC={rank_ic:.4f}, FDR={fdr:.4f}"
+    def _validation_gate_reason(self, validation_report: Any) -> str:
+        return str(self._fast_validation_gate(validation_report).get("reason") or "Validation gate failed")
 
     def _validation_failure_reason(self, strategy_id: str) -> str:
         gate = self._candidate_validation_gate(strategy_id)
@@ -1458,6 +1583,8 @@ class ResearchEngine:
         return {}
 
     def _archive_rejected_strategy(self, strategy_id: str, reason: str = "") -> None:
+        if "Missing point-in-time market cap field" in str(reason):
+            return
         strategies_dir_value = getattr(self.integrator, "strategies_dir", None)
         if strategies_dir_value is None:
             return
@@ -1523,13 +1650,42 @@ class ResearchEngine:
                 break
 
     def _strategy_symbols(self, strategy_id: str) -> List[str]:
-        entry = self.integrator.get_registry_entry(strategy_id) if hasattr(self.integrator, "get_registry_entry") else None
-        meta = dict((entry or {}).get("research_meta") or {})
+        meta = self._strategy_research_meta(strategy_id)
         spec = dict(meta.get("strategy_spec") or {})
         universe = spec.get("universe") or []
         symbols = [str(symbol) for symbol in universe if _is_a_share_symbol(str(symbol))]
         fallback = [str(symbol) for symbol in self.config.default_symbols if _is_a_share_symbol(str(symbol))]
         return symbols or fallback or list(DEFAULT_A_SHARE_SYMBOLS)
+
+    def _strategy_archive_dir(self, strategy_id: str) -> str:
+        meta = self._strategy_research_meta(strategy_id)
+        return str(meta.get("rejected_strategy_dir") or "")
+
+    def _strategy_research_meta(self, strategy_id: str) -> Dict[str, Any]:
+        entry = self.integrator.get_registry_entry(strategy_id) if hasattr(self.integrator, "get_registry_entry") else None
+        meta = dict((entry or {}).get("research_meta") or {})
+        if meta:
+            return meta
+        if self.research_store is not None and hasattr(self.research_store, "get_candidate"):
+            try:
+                candidate = self.research_store.get_candidate(strategy_id)
+                meta = dict((candidate or {}).get("research_meta") or {})
+                if meta:
+                    return meta
+            except Exception:
+                pass
+        if self.research_store is not None and hasattr(self.research_store, "list_hypotheses"):
+            try:
+                for row in self.research_store.list_hypotheses():
+                    if row.get("strategy_id") != strategy_id:
+                        continue
+                    evidence = dict(row.get("evidence") or {})
+                    spec = dict(evidence.get("strategy_spec") or {})
+                    if spec:
+                        return {"strategy_spec": spec}
+            except Exception:
+                pass
+        return {}
 
     def _append_ic_decay_warning(self, result: ResearchResult, raw: RawStrategy, vreport: Any) -> Any:
         decay_values = self._ic_decay_values(getattr(vreport, "ic_decay", []))
@@ -1587,16 +1743,22 @@ class ResearchEngine:
             "start": start,
             "end": end,
         }
+        archive_dir = self._strategy_archive_dir(strategy_id)
+        if archive_dir and self._walkforward_accepts_parameter("strategy_archive_dir"):
+            kwargs["strategy_archive_dir"] = archive_dir
         if benchmark_data is not None and self._walkforward_accepts_benchmark_data():
             kwargs["benchmark_data"] = benchmark_data
         return self._rigor_hub.run_walkforward(**kwargs)
 
     def _walkforward_accepts_benchmark_data(self) -> bool:
+        return self._walkforward_accepts_parameter("benchmark_data")
+
+    def _walkforward_accepts_parameter(self, name: str) -> bool:
         try:
             parameters = inspect.signature(self._rigor_hub.run_walkforward).parameters
         except (TypeError, ValueError):
             return False
-        return "benchmark_data" in parameters or any(
+        return name in parameters or any(
             parameter.kind == inspect.Parameter.VAR_KEYWORD
             for parameter in parameters.values()
         )

@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import threading
@@ -48,7 +49,7 @@ def _make_backtest_fn():
             result.errors.append(f"Strategy {sid} not in registry for backtest")
             return
 
-        info = integrator.get_registry_entry(sid)
+        info = _candidate_info_for_backtest(sid, integrator, pool)
         symbols = _candidate_symbols(info, config.default_symbols)
         start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
         end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
@@ -61,18 +62,58 @@ def _make_backtest_fn():
         benchmark_provider = None
         benchmark_meta = {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
         try:
-            data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
+            if _candidate_requires_market_cap(info):
+                market_cap_cols = _available_market_cap_columns(db_provider)
+                if not market_cap_cols:
+                    strict_report = _strict_backtest_blocked_report(
+                        sid,
+                        start,
+                        end,
+                        initial_cash,
+                        symbols,
+                        reason="Missing point-in-time market cap field: expected one of total_mv, circ_mv, market_cap, total_market_cap",
+                    )
+                    result.backtested += 1
+                    if info is not None:
+                        info["backtest"] = strict_report
+                        meta = info.setdefault("research_meta", {})
+                        meta["backtest_result"] = strict_report
+                        meta["strict_backtest_result"] = strict_report
+                        _persist_candidate_backtest(pool, sid, info, strict_report)
+                    _update_hypothesis_backtest(
+                        pool,
+                        sid,
+                        strict_report,
+                        "rejected",
+                        "backtest",
+                        strict_report["data_blocked"]["reason"],
+                    )
+                    result.rejected += 1
+                    result.log.append(ResearchLogEntry(
+                        phase="backtest", title=sid,
+                        source="", source_url="", verdict="fail",
+                        reason=strict_report["data_blocked"]["reason"],
+                        scores={"sharpe": 0.0, "trades": 0, "data_blocked": True},
+                    ))
+                    return
+            use_streaming_provider = is_cn and len(symbols) > 1000
+            data_df = None
+            streaming_provider = None
+            if use_streaming_provider:
+                streaming_provider = _DuckDBDailyDateProvider(symbols, start, end)
+            else:
+                data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
             lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
             if is_cn:
                 benchmark_provider, benchmark_meta = _load_cn_benchmark_provider(db_provider, start, end, BenchmarkProvider)
         finally:
             db_provider.disconnect()
 
-        if data_df.empty:
+        if streaming_provider is None and (data_df is None or data_df.empty):
             result.errors.append(f"No data for {sid}")
             return
 
-        data_provider = DataFrameProvider(data_df)
+        data_provider = streaming_provider or DataFrameProvider(data_df)
         strategy = strategy_class(symbols=symbols)
 
         bt_config = {
@@ -94,14 +135,18 @@ def _make_backtest_fn():
             lot_sizes=lot_sizes,
             benchmark_provider=benchmark_provider,
         )
-        bt_result = backtester.run(
-            start=start,
-            end=end,
-            strategies=[strategy],
-            initial_cash=initial_cash,
-            data_provider=data_provider,
-            symbols=symbols,
-        )
+        try:
+            bt_result = backtester.run(
+                start=start,
+                end=end,
+                strategies=[strategy],
+                initial_cash=initial_cash,
+                data_provider=data_provider,
+                symbols=symbols,
+            )
+        finally:
+            if hasattr(data_provider, "close"):
+                data_provider.close()
         benchmark_equity_curve = None
         if benchmark_provider is not None:
             try:
@@ -178,6 +223,111 @@ def _make_backtest_fn():
                 ))
 
     return _run_backtest
+
+
+def _candidate_requires_market_cap(info):
+    meta = dict((info or {}).get("research_meta") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    required = {str(field) for field in spec.get("required_fields") or []}
+    formula = str(spec.get("signal_formula_key") or "")
+    return "market_cap" in required or formula == "joinquant_small_cap_size_factor"
+
+
+def _available_market_cap_columns(db_provider):
+    wanted = {"total_mv", "circ_mv", "market_cap", "total_market_cap", "float_market_cap", "circulating_market_cap"}
+    columns = set()
+    try:
+        rows = db_provider.storage.conn.execute("PRAGMA table_info('daily_cn_ochl')").fetchall()
+    except Exception:
+        rows = []
+    columns.update(str(row[1]) for row in rows)
+    daily_basic_columns = getattr(db_provider.storage, "_daily_basic_columns", None)
+    if callable(daily_basic_columns):
+        try:
+            columns.update(str(column) for column in daily_basic_columns())
+        except Exception:
+            pass
+    return [column for column in sorted(columns) if column in wanted]
+
+
+def _candidate_info_for_backtest(sid, integrator, pool):
+    info = None
+    if integrator is not None and hasattr(integrator, "get_registry_entry"):
+        try:
+            info = integrator.get_registry_entry(sid)
+        except Exception:
+            info = None
+    if info is not None:
+        return info
+    store = getattr(pool, "research_store", None)
+    if store is not None and hasattr(store, "get_candidate"):
+        try:
+            info = store.get_candidate(sid)
+        except Exception:
+            info = None
+    return info
+
+
+class _DuckDBDailyDateProvider:
+    def __init__(self, symbols, start, end):
+        import pandas as pd
+        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+
+        self.symbols = list(dict.fromkeys(str(symbol) for symbol in symbols))
+        self._symbol_lookup = set(self.symbols)
+        self._storage = DuckDBStorage(read_only=True, use_security_status=False)
+        rows = self._storage.conn.execute(
+            """
+            SELECT DISTINCT CAST(timestamp AS DATE) AS trade_date
+            FROM daily_cn_ochl
+            WHERE CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY trade_date
+            """,
+            [start, end],
+        ).fetchall()
+        self.trading_dates = {pd.Timestamp(row[0]).date() for row in rows}
+
+    def get_bars_for_date(self, trading_date):
+        import pandas as pd
+
+        day = pd.Timestamp(trading_date).date()
+        if self._storage._daily_basic_available():
+            frame = self._storage.conn.execute(
+                """
+                SELECT
+                    b.timestamp,
+                    b.symbol,
+                    b.open,
+                    b.high,
+                    b.low,
+                    b.close,
+                    b.volume,
+                    b.turnover,
+                    b.adj_open,
+                    b.adj_high,
+                    b.adj_low,
+                    b.adj_close,
+                    b.adj_factor,
+                    db.total_mv,
+                    db.circ_mv
+                FROM daily_cn_ochl b
+                LEFT JOIN daily_basic.cn_daily_basic db
+                  ON b.symbol = db.symbol
+                 AND CAST(b.timestamp AS DATE) = db.trade_date
+                WHERE CAST(b.timestamp AS DATE) = ?
+                """,
+                [day],
+            ).fetchdf()
+        else:
+            frame = self._storage.get_bars_for_symbols(self.symbols, pd.Timestamp(day).to_pydatetime(), pd.Timestamp(day).to_pydatetime(), "1d")
+        if frame.empty:
+            return []
+        if "symbol" in frame.columns:
+            frame = frame[frame["symbol"].astype(str).isin(self._symbol_lookup)]
+        return frame.to_dict("records")
+
+    def close(self):
+        self._storage.close()
 
 
 def _load_cn_benchmark_provider(db_provider, start, end, benchmark_provider_cls):
@@ -291,6 +441,71 @@ def _strict_backtest_report(
             "slippage_bps": 5,
             "strategy_max_position_pct": _metric_float(getattr(strategy, "max_position_pct", None)),
             "strategy_max_positions": int(getattr(strategy, "max_positions", 0) or 0),
+        },
+    }
+
+
+def _strict_backtest_blocked_report(sid, start, end, initial_cash, symbols, reason):
+    return {
+        "framework": "Backtester preflight",
+        "period": f"{start.date()}-{end.date()}",
+        "initial_cash": float(initial_cash),
+        "symbols": list(symbols),
+        "metrics": {
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "cagr": 0.0,
+            "total_return": 0.0,
+            "max_drawdown_pct": 0.0,
+            "calmar_ratio": 0.0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
+            "total_trades": 0,
+            "round_trip_trades": 0,
+            "t_stat": 0.0,
+            "p_value": 1.0,
+        },
+        "benchmark": {
+            "symbol": "",
+            "coverage_start": "",
+            "coverage_end": "",
+            "rows": 0,
+            "fallback_used": False,
+            "benchmark_return": 0.0,
+            "alpha": 0.0,
+            "beta": 0.0,
+            "information_ratio": 0.0,
+            "tracking_error": 0.0,
+            "benchmark_yearly_returns": {},
+        },
+        "diagnostics": {
+            "fill_count": 0,
+            "total_commission": 0.0,
+            "cost_drag_pct": 0.0,
+            "volume_limited_trades": 0,
+            "lot_adjusted_trades": 0,
+            "t1_rejected_sells": 0,
+            "limit_rejected_orders": 0,
+            "discarded_orders": 0,
+            "expired_orders": 0,
+            "submission_rejected": 0,
+            "data_blocked": 1,
+        },
+        "equity_curve": {"strategy": [], "benchmark": []},
+        "yearly_returns": {},
+        "constraints": {
+            "hfq_signal_policy": "Strategy helpers use adj_* prices for signal logic; raw close is reserved for order sizing/fill accounting.",
+            "long_only": True,
+            "t_plus_1": True,
+            "cn_lot_size": 100,
+            "commission": {"CN": "cn_realistic", "HK": "hk_realistic", "US": "per_share"},
+            "slippage_bps": 5,
+            "required_point_in_time_market_cap": True,
+        },
+        "data_blocked": {
+            "strategy_id": sid,
+            "reason": reason,
+            "required_fields": ["total_mv", "circ_mv", "market_cap", "total_market_cap"],
         },
     }
 
@@ -624,7 +839,7 @@ def _make_walkforward_runner():
 
     def _run_walkforward_backtest(sid, request):
         registry = StrategyRegistry()
-        strategy_class = registry.get(sid)
+        strategy_class = _walkforward_strategy_class(sid, registry, request.get("strategy_archive_dir"))
         if strategy_class is None:
             return _empty_walkforward_response()
 
@@ -680,6 +895,36 @@ def _make_walkforward_runner():
         }
 
     return _run_walkforward_backtest
+
+
+def _walkforward_strategy_class(sid, registry, strategy_archive_dir=None):
+    strategy_class = registry.get(sid)
+    if strategy_class is not None:
+        return strategy_class
+    return _load_archived_strategy_class(sid, strategy_archive_dir)
+
+
+def _load_archived_strategy_class(sid, strategy_archive_dir=None):
+    archive_dir = Path(strategy_archive_dir) if strategy_archive_dir else Path(__file__).resolve().parent.parent / "features" / "rejected_strategy" / str(sid)
+    strategy_file = archive_dir / "strategy.py"
+    if not strategy_file.exists():
+        return None
+    try:
+        module_name = f"quant.rejected_strategies.{str(sid).lower()}.strategy"
+        spec = importlib.util.spec_from_file_location(module_name, strategy_file)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        target = str(sid).lower()
+        for attr_name in dir(module):
+            cls = getattr(module, attr_name)
+            registry_name = str(getattr(cls, "_registry_name", "")).lower()
+            if isinstance(cls, type) and registry_name == target:
+                return cls
+    except Exception:
+        return None
+    return None
 
 
 research_bp = Blueprint("research", __name__)

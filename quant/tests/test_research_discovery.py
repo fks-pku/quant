@@ -97,6 +97,26 @@ class TestSourceHubExceptionHandling:
         assert results[0].title == "Good"
 
 
+class TestAShareStructuralSource:
+    def test_builds_a_share_structural_ideas_for_daily_cn_ochl(self):
+        from quant.features.research.discovery.ashare_structural import (
+            build_ashare_structural_raw_strategies,
+        )
+        from quant.features.research.discovery.quality import attach_discovery_quality
+
+        ideas = build_ashare_structural_raw_strategies()
+
+        assert len(ideas) >= 12
+        assert {idea.source for idea in ideas} == {"ashare_structural"}
+        assert all((idea.metadata or {}).get("data_table") == "daily_cn_ochl" for idea in ideas)
+        assert all((idea.metadata or {}).get("formula_key") for idea in ideas)
+        assert all((idea.metadata or {}).get("a_share_ready") is True for idea in ideas)
+        assert "ashare_low_volatility_momentum" in {(idea.metadata or {}).get("formula_key") for idea in ideas}
+
+        scored = [attach_discovery_quality(idea) for idea in ideas]
+        assert min((idea.metadata or {})["discovery_quality"]["score"] for idea in scored) >= 5.5
+
+
 class TestSourceHubDefaultSources:
     def test_search_all_sources_when_none_specified(self):
         s1 = MagicMock()

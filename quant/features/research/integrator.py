@@ -125,7 +125,14 @@ class StrategyIntegrator:
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
         formula_key = getattr(spec, "signal_formula_key", "") or ""
         body = self._formula_body(formula_key)
-        rebalance_body = "" if formula_key in {"worldquant_alpha_001", "worldquant_alpha_002", "worldquant_alpha_003"} else self._generic_rebalance_body()
+        rebalance_body = "" if formula_key in {
+            "worldquant_alpha_001",
+            "worldquant_alpha_002",
+            "worldquant_alpha_003",
+            "worldquant_alpha_004",
+            "worldquant_alpha_006",
+            "worldquant_alpha_010",
+        } else self._generic_rebalance_body()
 
         return f'''"""{raw.title}
 
@@ -182,6 +189,17 @@ class {class_name}(DailyBarStrategy):
             return 0
         return int((nav * self.max_position_pct / max(1, slots)) / price)
 
+    @staticmethod
+    def _bar_volume(bar: Any) -> float:
+        value = bar.get("volume", 0.0) if isinstance(bar, dict) else getattr(bar, "volume", 0.0)
+        return float(value) if value is not None and value == value else 0.0
+
+    def _bar_turnover(self, bar: Any) -> float:
+        value = bar.get("turnover", None) if isinstance(bar, dict) else getattr(bar, "turnover", None)
+        if value is not None and value == value:
+            return float(value)
+        return self._bar_volume(bar) * self._adj(bar, "close")
+
 {body}
 
     def _get_parameters(self) -> Dict[str, Any]:
@@ -208,8 +226,15 @@ class {class_name}(DailyBarStrategy):
         if not candidates:
             return
         candidates.sort(reverse=True)
-        slots = max(1, len(candidates))
+        selected = candidates[:max(1, min(self.max_positions, len(candidates)))]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        slots = len(selected)
         for _, symbol, price in candidates:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
             target_qty = self._target_quantity(context, price, slots)
             current_pos = self._positions.get(symbol, 0)
             delta = target_qty - current_pos
@@ -266,6 +291,194 @@ class {class_name}(DailyBarStrategy):
             prev_close = self._adj(bars[index - 1], "close")
             ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
         return float(np.mean(ranges)) if ranges else 0.0
+'''
+        if formula_key == "ashare_short_reversal_5d":
+            return '''    def _signal(self, symbol: str) -> float:
+        closes = self._get_closes(symbol)
+        lookback = max(1, int(self.lookback))
+        if len(closes) < lookback + 1:
+            return 0.0
+        past = closes[-lookback - 1]
+        current = closes[-1]
+        if past <= 0:
+            return 0.0
+        return float(-(current / past - 1.0))
+'''
+        if formula_key == "ashare_volume_exhaustion_reversal":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        window = max(10, int(self.lookback))
+        if len(bars) < window + 1:
+            return 0.0
+        closes = np.asarray([self._adj(bar, "close") for bar in bars], dtype=float)
+        if closes.size < 6 or closes[-6] <= 0:
+            return 0.0
+        recent_return = float(closes[-1] / closes[-6] - 1.0)
+        if recent_return >= 0.0:
+            return 0.0
+        volumes = np.asarray([self._bar_volume(bar) for bar in bars[-window:]], dtype=float)
+        avg_volume = float(np.mean(volumes)) if volumes.size else 0.0
+        current_volume = float(volumes[-1]) if volumes.size else 0.0
+        if avg_volume <= 0 or current_volume <= 0:
+            return 0.0
+        return float((-recent_return) * np.log1p(current_volume / avg_volume))
+'''
+        if formula_key == "ashare_volume_dryup_pullback":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        window = max(10, int(self.lookback))
+        if len(bars) < window + 1:
+            return 0.0
+        closes = np.asarray([self._adj(bar, "close") for bar in bars], dtype=float)
+        if closes.size < 6 or closes[-6] <= 0:
+            return 0.0
+        recent_return = float(closes[-1] / closes[-6] - 1.0)
+        if recent_return >= 0.0:
+            return 0.0
+        volumes = np.asarray([self._bar_volume(bar) for bar in bars[-window:]], dtype=float)
+        avg_volume = float(np.mean(volumes)) if volumes.size else 0.0
+        current_volume = float(volumes[-1]) if volumes.size else 0.0
+        if avg_volume <= 0 or current_volume <= 0:
+            return 0.0
+        dryup = max(0.0, 1.0 - current_volume / avg_volume)
+        return float((-recent_return) * dryup)
+'''
+        if formula_key == "ashare_lottery_demand_avoidance":
+            return '''    def _signal(self, symbol: str) -> float:
+        closes = np.asarray(self._get_closes(symbol), dtype=float)
+        window = max(5, int(self.lookback))
+        if closes.size < window + 1 or np.any(closes[-window - 1:] <= 0):
+            return 0.0
+        returns = closes[-window:] / closes[-window - 1:-1] - 1.0
+        if not np.isfinite(returns).all():
+            return 0.0
+        max_return = max(0.0, float(np.max(returns)))
+        volatility = max(0.0, float(np.std(returns, ddof=1))) if returns.size > 1 else 0.0
+        return float(1.0 / (1.0 + max_return + volatility * np.sqrt(252.0)))
+'''
+        if formula_key == "ashare_low_volatility_defensive":
+            return '''    def _signal(self, symbol: str) -> float:
+        closes = np.asarray(self._get_closes(symbol), dtype=float)
+        window = max(5, int(self.lookback))
+        if closes.size < window + 1 or np.any(closes[-window - 1:] <= 0):
+            return 0.0
+        returns = closes[-window:] / closes[-window - 1:-1] - 1.0
+        if not np.isfinite(returns).all():
+            return 0.0
+        volatility = max(0.0, float(np.std(returns, ddof=1))) if returns.size > 1 else 0.0
+        return float(1.0 / (1.0 + volatility * np.sqrt(252.0)))
+'''
+        if formula_key == "ashare_gap_down_reversal":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        if len(bars) < 2:
+            return 0.0
+        previous_close = self._adj(bars[-2], "close")
+        current_open = self._adj(bars[-1], "open")
+        if previous_close <= 0 or current_open <= 0:
+            return 0.0
+        return float(-(current_open / previous_close - 1.0))
+'''
+        if formula_key == "ashare_volatility_scaled_reversal":
+            return '''    def _signal(self, symbol: str) -> float:
+        closes = np.asarray(self._get_closes(symbol), dtype=float)
+        window = max(10, int(self.lookback))
+        if closes.size < window + 1 or np.any(closes[-window - 1:] <= 0):
+            return 0.0
+        recent_return = float(closes[-1] / closes[-6] - 1.0) if closes.size >= 6 and closes[-6] > 0 else 0.0
+        if recent_return >= 0.0:
+            return 0.0
+        returns = closes[-window:] / closes[-window - 1:-1] - 1.0
+        volatility = float(np.std(returns, ddof=1)) if returns.size > 1 and np.isfinite(returns).all() else 0.0
+        if volatility <= 0.0:
+            return 0.0
+        return float((-recent_return) / volatility)
+'''
+        if formula_key == "ashare_liquidity_weighted_low_volatility":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        window = max(10, int(self.lookback))
+        if len(bars) < window + 1:
+            return 0.0
+        closes = np.asarray([self._adj(bar, "close") for bar in bars[-window - 1:]], dtype=float)
+        if closes.size < window + 1 or np.any(closes <= 0):
+            return 0.0
+        returns = closes[1:] / closes[:-1] - 1.0
+        volatility = float(np.std(returns, ddof=1)) * np.sqrt(252.0) if returns.size > 1 else 0.0
+        turnovers = np.asarray([self._bar_turnover(bar) for bar in bars[-window:]], dtype=float)
+        avg_turnover = float(np.mean(turnovers)) if turnovers.size else 0.0
+        if avg_turnover <= 0.0:
+            return 0.0
+        return float(np.log1p(avg_turnover) / (1.0 + max(0.0, volatility)))
+'''
+        if formula_key == "ashare_low_volatility_momentum":
+            return '''    def _signal(self, symbol: str) -> float:
+        closes = np.asarray(self._get_closes(symbol), dtype=float)
+        window = max(10, int(self.lookback))
+        if closes.size < window + 1 or np.any(closes[-window - 1:] <= 0):
+            return 0.0
+        momentum = float(closes[-1] / closes[-window - 1] - 1.0)
+        if momentum <= 0.0:
+            return 0.0
+        returns = closes[-window:] / closes[-window - 1:-1] - 1.0
+        volatility = float(np.std(returns, ddof=1)) * np.sqrt(252.0) if returns.size > 1 and np.isfinite(returns).all() else 0.0
+        return float(momentum / (1.0 + max(0.0, volatility)))
+'''
+        if formula_key == "ashare_range_contraction_breakout":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        window = max(10, int(self.lookback))
+        if len(bars) < window:
+            return 0.0
+        highs = np.asarray([self._adj(bar, "high") for bar in bars[-window:]], dtype=float)
+        lows = np.asarray([self._adj(bar, "low") for bar in bars[-window:]], dtype=float)
+        closes = np.asarray([self._adj(bar, "close") for bar in bars[-window:]], dtype=float)
+        if not (np.isfinite(highs).all() and np.isfinite(lows).all() and np.isfinite(closes).all()):
+            return 0.0
+        high_roll = float(np.max(highs))
+        low_roll = float(np.min(lows))
+        current = float(closes[-1])
+        if high_roll <= low_roll or current <= 0.0:
+            return 0.0
+        range_position = max(0.0, min(1.0, (current - low_roll) / (high_roll - low_roll)))
+        daily_range = np.divide(highs - lows, closes, out=np.zeros_like(closes), where=closes > 0)
+        range_vol = max(0.0, float(np.mean(daily_range))) if daily_range.size else 0.0
+        return float(range_position / (1.0 + range_vol * 100.0))
+'''
+        if formula_key == "ashare_gap_down_liquid_reversal":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        window = max(10, int(self.lookback))
+        if len(bars) < window + 1:
+            return 0.0
+        previous_close = self._adj(bars[-2], "close")
+        current_open = self._adj(bars[-1], "open")
+        if previous_close <= 0 or current_open <= 0:
+            return 0.0
+        gap_signal = -(current_open / previous_close - 1.0)
+        if gap_signal <= 0.0:
+            return 0.0
+        turnovers = np.asarray([self._bar_turnover(bar) for bar in bars[-window:]], dtype=float)
+        avg_turnover = float(np.mean(turnovers)) if turnovers.size else 0.0
+        if avg_turnover <= 0.0:
+            return 0.0
+        return float(gap_signal * np.log1p(avg_turnover))
+'''
+        if formula_key == "ashare_turnover_stability_factor":
+            return '''    def _signal(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])
+        window = max(10, int(self.lookback))
+        if len(bars) < window:
+            return 0.0
+        turnovers = np.asarray([self._bar_turnover(bar) for bar in bars[-window:]], dtype=float)
+        turnovers = turnovers[np.isfinite(turnovers) & (turnovers > 0.0)]
+        if turnovers.size < 2:
+            return 0.0
+        avg_turnover = float(np.mean(turnovers))
+        turnover_vol = float(np.std(turnovers, ddof=1))
+        if avg_turnover <= 0.0 or turnover_vol <= 0.0:
+            return 0.0
+        return float(np.log1p(avg_turnover) * avg_turnover / turnover_vol)
 '''
         if formula_key == "worldquant_alpha_001":
             return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
@@ -531,6 +744,247 @@ class {class_name}(DailyBarStrategy):
 
     def _signal(self, symbol: str) -> float:
         for signal, score_symbol, _ in self._worldquant_alpha_003_scores():
+            if score_symbol == symbol:
+                return signal
+        return 0.0
+'''
+        if formula_key == "worldquant_alpha_004":
+            return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        raw_scores = self._worldquant_alpha_004_scores()
+        if not raw_scores:
+            return
+        raw_scores.sort(reverse=True)
+        count = len(raw_scores)
+        top_count = max(1, min(self.max_positions, int(np.ceil(count * 0.01))))
+        selected = raw_scores[:top_count]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        slots = len(selected)
+        for _, symbol, price in raw_scores:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
+            target_qty = self._target_quantity(context, price, slots)
+            delta = target_qty - current_pos
+            if delta > 0:
+                self.buy(symbol, int(delta), "MARKET", price)
+            elif delta < 0:
+                self.sell(symbol, int(abs(delta)), "MARKET", price)
+
+    def _worldquant_alpha_004_scores(self) -> List[tuple[float, str, float]]:
+        rank_window = max(2, int(self.lookback))
+        eligible = {}
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            price = self._get_last_price(symbol)
+            if len(bars) >= rank_window and price > 0:
+                eligible[symbol] = (bars, price)
+        if len(eligible) < 2:
+            return []
+
+        ranked_low_history: Dict[str, List[float]] = {symbol: [] for symbol in eligible}
+        for offset in range(-rank_window, 0):
+            low_values = {}
+            for symbol, (bars, _) in eligible.items():
+                low_price = self._adj(bars[offset], "low")
+                if low_price > 0:
+                    low_values[symbol] = float(low_price)
+            low_ranks = self._rank_map(low_values)
+            for symbol in eligible:
+                ranked_low_history[symbol].append(low_ranks.get(symbol, float("nan")))
+
+        scores = []
+        for symbol, (_, price) in eligible.items():
+            ts_rank = self._time_series_rank_last(ranked_low_history[symbol])
+            signal = -ts_rank
+            if np.isfinite(signal):
+                scores.append((float(signal), symbol, price))
+        return scores
+
+    @staticmethod
+    def _rank_map(values: Dict[str, float]) -> Dict[str, float]:
+        items = sorted((value, symbol) for symbol, value in values.items() if np.isfinite(value))
+        count = len(items)
+        if count == 0:
+            return {}
+        ranked = {}
+        index = 0
+        while index < count:
+            end = index + 1
+            while end < count and items[end][0] == items[index][0]:
+                end += 1
+            rank_value = float(((index + 1) + end) / 2.0 / count)
+            for _, symbol in items[index:end]:
+                ranked[symbol] = rank_value
+            index = end
+        return ranked
+
+    @staticmethod
+    def _time_series_rank_last(values: List[float]) -> float:
+        clean = np.asarray(values, dtype=float)
+        if clean.size == 0 or not np.isfinite(clean).all():
+            return float("nan")
+        current = clean[-1]
+        less = float(np.sum(clean < current))
+        equal = float(np.sum(clean == current))
+        return float((less + (equal + 1.0) / 2.0) / len(clean))
+
+    def _signal(self, symbol: str) -> float:
+        for signal, score_symbol, _ in self._worldquant_alpha_004_scores():
+            if score_symbol == symbol:
+                return signal
+        return 0.0
+'''
+        if formula_key == "worldquant_alpha_006":
+            return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        raw_scores = self._worldquant_alpha_006_scores()
+        if not raw_scores:
+            return
+        raw_scores.sort(reverse=True)
+        count = len(raw_scores)
+        top_count = max(1, min(self.max_positions, int(np.ceil(count * 0.01))))
+        selected = [(signal, symbol, price) for signal, symbol, price in raw_scores if signal > 0][:top_count]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        if not selected:
+            for _, symbol, price in raw_scores:
+                current_pos = self._positions.get(symbol, 0)
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+            return
+        slots = len(selected)
+        for signal, symbol, price in raw_scores:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
+            target_qty = self._target_quantity(context, price, slots)
+            delta = target_qty - current_pos
+            if delta > 0:
+                self.buy(symbol, int(delta), "MARKET", price)
+            elif delta < 0:
+                self.sell(symbol, int(abs(delta)), "MARKET", price)
+
+    def _worldquant_alpha_006_scores(self) -> List[tuple[float, str, float]]:
+        corr_window = max(2, int(self.lookback))
+        scores = []
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            price = self._get_last_price(symbol)
+            if len(bars) < corr_window or price <= 0:
+                continue
+            open_values = []
+            volume_values = []
+            for bar in bars[-corr_window:]:
+                open_price = self._adj(bar, "open")
+                volume = self._volume(bar)
+                open_values.append(float(open_price) if open_price > 0 else float("nan"))
+                volume_values.append(float(volume) if volume > 0 else float("nan"))
+            signal = -self._correlation(open_values, volume_values)
+            if np.isfinite(signal):
+                scores.append((float(signal), symbol, price))
+        return scores
+
+    @staticmethod
+    def _correlation(left: List[float], right: List[float]) -> float:
+        x = np.asarray(left, dtype=float)
+        y = np.asarray(right, dtype=float)
+        mask = np.isfinite(x) & np.isfinite(y)
+        if int(mask.sum()) < 2:
+            return float("nan")
+        x = x[mask]
+        y = y[mask]
+        if float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
+            return float("nan")
+        return float(np.corrcoef(x, y)[0, 1])
+
+    @staticmethod
+    def _volume(bar: Any) -> float:
+        if isinstance(bar, dict):
+            value = bar.get("volume", 0.0)
+        else:
+            value = getattr(bar, "volume", 0.0)
+        return float(value) if value is not None and value == value else 0.0
+
+    def _signal(self, symbol: str) -> float:
+        for signal, score_symbol, _ in self._worldquant_alpha_006_scores():
+            if score_symbol == symbol:
+                return signal
+        return 0.0
+'''
+        if formula_key == "worldquant_alpha_010":
+            return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        raw_scores = self._worldquant_alpha_010_scores()
+        if not raw_scores:
+            return
+        raw_scores.sort(reverse=True)
+        count = len(raw_scores)
+        top_count = max(1, min(self.max_positions, int(np.ceil(count * 0.01))))
+        selected = raw_scores[:top_count]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        slots = len(selected)
+        for _, symbol, price in raw_scores:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
+            target_qty = self._target_quantity(context, price, slots)
+            delta = target_qty - current_pos
+            if delta > 0:
+                self.buy(symbol, int(delta), "MARKET", price)
+            elif delta < 0:
+                self.sell(symbol, int(abs(delta)), "MARKET", price)
+
+    def _worldquant_alpha_010_scores(self) -> List[tuple[float, str, float]]:
+        delta_window = max(2, int(self.lookback))
+        raw_values = {}
+        prices = {}
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            price = self._get_last_price(symbol)
+            if len(bars) < delta_window + 1 or price <= 0:
+                continue
+            closes = np.asarray([self._adj(bar, "close") for bar in bars[-delta_window - 1:]], dtype=float)
+            if closes.size < delta_window + 1 or not np.isfinite(closes).all():
+                continue
+            deltas = np.diff(closes)
+            if deltas.size < delta_window or not np.isfinite(deltas).all():
+                continue
+            current_delta = float(deltas[-1])
+            if float(np.min(deltas)) > 0.0 or float(np.max(deltas)) < 0.0:
+                raw_values[symbol] = current_delta
+            else:
+                raw_values[symbol] = -current_delta
+            prices[symbol] = price
+        ranks = self._rank_map(raw_values)
+        return [
+            (float(signal), symbol, prices[symbol])
+            for symbol, signal in ranks.items()
+            if np.isfinite(signal) and symbol in prices
+        ]
+
+    @staticmethod
+    def _rank_map(values: Dict[str, float]) -> Dict[str, float]:
+        items = sorted((value, symbol) for symbol, value in values.items() if np.isfinite(value))
+        count = len(items)
+        if count == 0:
+            return {}
+        ranked = {}
+        index = 0
+        while index < count:
+            end = index + 1
+            while end < count and items[end][0] == items[index][0]:
+                end += 1
+            rank_value = float(((index + 1) + end) / 2.0 / count)
+            for _, symbol in items[index:end]:
+                ranked[symbol] = rank_value
+            index = end
+        return ranked
+
+    def _signal(self, symbol: str) -> float:
+        for signal, score_symbol, _ in self._worldquant_alpha_010_scores():
             if score_symbol == symbol:
                 return signal
         return 0.0

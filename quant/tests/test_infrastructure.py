@@ -67,6 +67,51 @@ class TestDuckDBStorage:
         assert sorted(bars["symbol"].unique().tolist()) == ["AAPL", "MSFT"]
         assert bars.groupby("symbol").size().to_dict() == {"AAPL": 2, "MSFT": 2}
 
+    def test_get_bars_preserves_optional_cn_market_cap_columns(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        db_path = tmp_path / "market_cap.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            """
+            CREATE TABLE daily_cn_ochl (
+                timestamp TIMESTAMP,
+                symbol VARCHAR,
+                open DOUBLE,
+                high DOUBLE,
+                low DOUBLE,
+                close DOUBLE,
+                volume BIGINT,
+                turnover DOUBLE,
+                adj_open DOUBLE,
+                adj_high DOUBLE,
+                adj_low DOUBLE,
+                adj_close DOUBLE,
+                adj_factor DOUBLE,
+                total_mv DOUBLE,
+                circ_mv DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            ('2024-01-02', '600001', 10, 11, 9, 10.5, 1000, 10500, 10, 11, 9, 10.5, 1, 12345, 6789)
+            """
+        )
+        conn.close()
+
+        storage = DuckDBStorage(str(db_path), read_only=True, use_security_status=False)
+        try:
+            bars = storage.get_bars("600001", datetime(2024, 1, 2), datetime(2024, 1, 2), "1d")
+            bulk = storage.get_bars_for_symbols(["600001"], datetime(2024, 1, 2), datetime(2024, 1, 2), "1d")
+        finally:
+            storage.close()
+
+        assert bars["turnover"].iloc[0] == pytest.approx(10500)
+        assert bars["total_mv"].iloc[0] == pytest.approx(12345)
+        assert bars["circ_mv"].iloc[0] == pytest.approx(6789)
+        assert bulk["total_mv"].iloc[0] == pytest.approx(12345)
+
     def test_get_bars_for_symbols_can_use_cn_security_status(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")
         db_path = tmp_path / "market.duckdb"

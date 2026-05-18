@@ -34,21 +34,21 @@ def compute_cross_sectional_ic(
 ) -> pd.Series:
     common_index = signals.index.intersection(forward_returns.index)
     common_columns = signals.columns.intersection(forward_returns.columns)
-    values = []
-    dates = []
-    for date in common_index:
-        paired = pd.concat(
-            [
-                signals.loc[date, common_columns].rename("signal"),
-                forward_returns.loc[date, common_columns].rename("return"),
-            ],
-            axis=1,
-        ).dropna()
-        if len(paired) < min_stocks:
-            continue
-        dates.append(date)
-        values.append(_spearman_corr(paired["signal"], paired["return"]))
-    return pd.Series(values, index=pd.Index(dates, name=signals.index.name), dtype=float)
+    if len(common_index) == 0 or len(common_columns) == 0:
+        return pd.Series(dtype=float)
+    left = signals.loc[common_index, common_columns].rank(axis=1, method="average")
+    right = forward_returns.loc[common_index, common_columns].rank(axis=1, method="average")
+    mask = left.notna() & right.notna()
+    counts = mask.sum(axis=1)
+    left = left.where(mask)
+    right = right.where(mask)
+    left_centered = left.sub(left.mean(axis=1), axis=0)
+    right_centered = right.sub(right.mean(axis=1), axis=0)
+    numerator = (left_centered * right_centered).sum(axis=1)
+    denominator = ((left_centered.pow(2).sum(axis=1) * right_centered.pow(2).sum(axis=1)) ** 0.5)
+    corr = numerator / denominator.replace(0, np.nan)
+    corr = corr.where(counts >= min_stocks).dropna()
+    return corr.astype(float)
 
 
 def compute_icir(daily_ic: pd.Series) -> float:
@@ -84,23 +84,20 @@ def compute_fama_macbeth_tstat(
 ) -> float:
     common_index = signals.index.intersection(forward_returns.index)
     common_columns = signals.columns.intersection(forward_returns.columns)
-    betas = []
-    for date in common_index:
-        paired = pd.concat(
-            [
-                signals.loc[date, common_columns].rename("signal"),
-                forward_returns.loc[date, common_columns].rename("return"),
-            ],
-            axis=1,
-        ).dropna()
-        if len(paired) < min_stocks:
-            continue
-        x = paired["signal"].to_numpy(dtype=float)
-        y = paired["return"].to_numpy(dtype=float)
-        var_x = np.var(x)
-        if var_x == 0:
-            continue
-        betas.append(float(np.cov(x, y, ddof=0)[0, 1] / var_x))
+    if len(common_index) == 0 or len(common_columns) == 0:
+        return 0.0
+    x = signals.loc[common_index, common_columns].astype(float)
+    y = forward_returns.loc[common_index, common_columns].astype(float)
+    mask = x.notna() & y.notna()
+    counts = mask.sum(axis=1)
+    x = x.where(mask)
+    y = y.where(mask)
+    x_centered = x.sub(x.mean(axis=1), axis=0)
+    y_centered = y.sub(y.mean(axis=1), axis=0)
+    var_x = x_centered.pow(2).mean(axis=1)
+    cov_xy = (x_centered * y_centered).mean(axis=1)
+    beta_series = (cov_xy / var_x.replace(0, np.nan)).where(counts >= min_stocks).dropna()
+    betas = beta_series.tolist()
     if len(betas) < 100:
         return 0.0
     beta_series = pd.Series(betas, dtype=float)

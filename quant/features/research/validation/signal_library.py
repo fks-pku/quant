@@ -62,8 +62,33 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
         if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
             return _worldquant_alpha_003_panel(data, lookback)
         return _worldquant_alpha_003_raw(data, lookback)
+    if formula_key == "worldquant_alpha_004":
+        if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+            return _worldquant_alpha_004_panel(data, lookback)
+        return _worldquant_alpha_004_raw(data, lookback)
+    if formula_key == "worldquant_alpha_006":
+        if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+            return _worldquant_alpha_006_panel(data, lookback)
+        return _worldquant_alpha_006_raw(data, lookback)
+    if formula_key == "worldquant_alpha_010":
+        if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
+            return _worldquant_alpha_010_panel(data, lookback)
+        return _worldquant_alpha_010_raw(data, lookback)
 
     calculators = {
+        "ashare_short_reversal_5d": _ashare_short_reversal,
+        "ashare_volume_exhaustion_reversal": _ashare_volume_exhaustion_reversal,
+        "ashare_volume_dryup_pullback": _ashare_volume_dryup_pullback,
+        "ashare_lottery_demand_avoidance": _ashare_lottery_demand_avoidance,
+        "ashare_low_volatility_defensive": _ashare_low_volatility_defensive,
+        "ashare_gap_down_reversal": _ashare_gap_down_reversal,
+        "ashare_volatility_scaled_reversal": _ashare_volatility_scaled_reversal,
+        "ashare_liquidity_weighted_low_volatility": _ashare_liquidity_weighted_low_volatility,
+        "ashare_low_volatility_momentum": _ashare_low_volatility_momentum,
+        "ashare_range_contraction_breakout": _ashare_range_contraction_breakout,
+        "ashare_gap_down_liquid_reversal": _ashare_gap_down_liquid_reversal,
+        "ashare_turnover_stability_factor": _ashare_turnover_stability_factor,
+        "joinquant_small_cap_size_factor": _joinquant_small_cap_size_factor,
         "momentum_close_return": _momentum_close_return,
         "mean_reversion_close_to_ma": _mean_reversion_close_to_ma,
         "volatility_breakout_atr": _volatility_breakout_atr,
@@ -73,6 +98,19 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
         return None
     if isinstance(data, pd.DataFrame) and {"symbol", "date"}.issubset(data.columns):
         panel_calculators = {
+            "ashare_short_reversal_5d": _ashare_short_reversal_panel,
+            "ashare_volume_exhaustion_reversal": _ashare_volume_exhaustion_reversal_panel,
+            "ashare_volume_dryup_pullback": _ashare_volume_dryup_pullback_panel,
+            "ashare_lottery_demand_avoidance": _ashare_lottery_demand_avoidance_panel,
+            "ashare_low_volatility_defensive": _ashare_low_volatility_defensive_panel,
+            "ashare_gap_down_reversal": _ashare_gap_down_reversal_panel,
+            "ashare_volatility_scaled_reversal": _ashare_volatility_scaled_reversal_panel,
+            "ashare_liquidity_weighted_low_volatility": _ashare_liquidity_weighted_low_volatility_panel,
+            "ashare_low_volatility_momentum": _ashare_low_volatility_momentum_panel,
+            "ashare_range_contraction_breakout": _ashare_range_contraction_breakout_panel,
+            "ashare_gap_down_liquid_reversal": _ashare_gap_down_liquid_reversal_panel,
+            "ashare_turnover_stability_factor": _ashare_turnover_stability_factor_panel,
+            "joinquant_small_cap_size_factor": _joinquant_small_cap_size_factor_panel,
             "momentum_close_return": _momentum_close_return_panel,
             "mean_reversion_close_to_ma": _mean_reversion_close_to_ma_panel,
             "volatility_breakout_atr": _volatility_breakout_atr_panel,
@@ -101,6 +139,259 @@ def _momentum_close_return(data: Any, lookback: int) -> Any:
 def _momentum_close_return_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
     close = adjusted_price_matrix(data, "close")
     return close.pct_change(lookback, fill_method=None)
+
+
+def _ashare_short_reversal(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    return -close.pct_change(max(1, int(lookback or 5)), fill_method=None)
+
+
+def _ashare_short_reversal_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    return -close.pct_change(max(1, int(lookback or 5)), fill_method=None)
+
+
+def _ashare_volume_exhaustion_reversal(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    volume = data["volume"] if isinstance(data, pd.DataFrame) else getattr(data, "volume", None)
+    if volume is None:
+        return None
+    volume = pd.Series(volume, index=getattr(close, "index", None), dtype=float)
+    close_series = pd.Series(close, index=getattr(close, "index", None), dtype=float)
+    ret = close_series.pct_change(5, fill_method=None)
+    volume_ratio = volume / volume.rolling(max(10, int(lookback or 20)), min_periods=max(10, int(lookback or 20))).mean()
+    return (-ret.where(ret < 0.0, 0.0)) * np.log1p(volume_ratio.clip(lower=0.0))
+
+
+def _ashare_volume_exhaustion_reversal_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    window = max(10, int(lookback or 20))
+    close = adjusted_price_matrix(data, "close")
+    volume = field_matrix(data, "volume").astype(float)
+    ret = close.pct_change(5, fill_method=None)
+    volume_ratio = volume / volume.rolling(window, min_periods=window).mean()
+    return (-ret.where(ret < 0.0, 0.0)) * np.log1p(volume_ratio.clip(lower=0.0))
+
+
+def _ashare_volume_dryup_pullback(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    volume = data["volume"] if isinstance(data, pd.DataFrame) else getattr(data, "volume", None)
+    if volume is None:
+        return None
+    volume = pd.Series(volume, index=getattr(close, "index", None), dtype=float)
+    close_series = pd.Series(close, index=getattr(close, "index", None), dtype=float)
+    ret = close_series.pct_change(5, fill_method=None)
+    volume_ratio = volume / volume.rolling(max(10, int(lookback or 20)), min_periods=max(10, int(lookback or 20))).mean()
+    dryup = (1.0 - volume_ratio).clip(lower=0.0)
+    return (-ret.where(ret < 0.0, 0.0)) * dryup
+
+
+def _ashare_volume_dryup_pullback_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    window = max(10, int(lookback or 20))
+    close = adjusted_price_matrix(data, "close")
+    volume = field_matrix(data, "volume").astype(float)
+    ret = close.pct_change(5, fill_method=None)
+    volume_ratio = volume / volume.rolling(window, min_periods=window).mean()
+    dryup = (1.0 - volume_ratio).clip(lower=0.0)
+    return (-ret.where(ret < 0.0, 0.0)) * dryup
+
+
+def _ashare_lottery_demand_avoidance(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    returns = close.pct_change(fill_method=None)
+    window = max(5, int(lookback or 20))
+    max_return = returns.rolling(window, min_periods=window).max().clip(lower=0.0)
+    volatility = returns.rolling(window, min_periods=window).std().clip(lower=0.0)
+    return 1.0 / (1.0 + max_return + volatility * np.sqrt(252.0))
+
+
+def _ashare_lottery_demand_avoidance_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    returns = close.pct_change(fill_method=None)
+    window = max(5, int(lookback or 20))
+    max_return = returns.rolling(window, min_periods=window).max().clip(lower=0.0)
+    volatility = returns.rolling(window, min_periods=window).std().clip(lower=0.0)
+    return 1.0 / (1.0 + max_return + volatility * np.sqrt(252.0))
+
+
+def _ashare_low_volatility_defensive(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    returns = close.pct_change(fill_method=None)
+    volatility = returns.rolling(max(5, int(lookback or 20)), min_periods=max(5, int(lookback or 20))).std()
+    return 1.0 / (1.0 + volatility.clip(lower=0.0) * np.sqrt(252.0))
+
+
+def _ashare_low_volatility_defensive_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    returns = close.pct_change(fill_method=None)
+    window = max(5, int(lookback or 20))
+    volatility = returns.rolling(window, min_periods=window).std()
+    return 1.0 / (1.0 + volatility.clip(lower=0.0) * np.sqrt(252.0))
+
+
+def _ashare_gap_down_reversal(data: Any, lookback: int) -> Any:
+    open_ = adjusted_price_series(data, "open")
+    close = adjusted_price_series(data, "close")
+    if not hasattr(open_, "shift") or not hasattr(close, "shift"):
+        return None
+    previous_close = close.shift(1)
+    gap = open_ / previous_close.where(previous_close != 0.0) - 1.0
+    return -gap
+
+
+def _ashare_gap_down_reversal_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    open_ = adjusted_price_matrix(data, "open")
+    close = adjusted_price_matrix(data, "close")
+    previous_close = close.shift(1)
+    gap = open_ / previous_close.where(previous_close != 0.0) - 1.0
+    return -gap
+
+
+def _ashare_volatility_scaled_reversal(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    close_series = pd.Series(close, index=getattr(close, "index", None), dtype=float)
+    window = max(10, int(lookback or 20))
+    ret = close_series.pct_change(5, fill_method=None)
+    vol = close_series.pct_change(fill_method=None).rolling(window, min_periods=window).std()
+    return (-ret.where(ret < 0.0, 0.0)) / vol.where(vol > 0.0)
+
+
+def _ashare_volatility_scaled_reversal_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    window = max(10, int(lookback or 20))
+    ret = close.pct_change(5, fill_method=None)
+    vol = close.pct_change(fill_method=None).rolling(window, min_periods=window).std()
+    return (-ret.where(ret < 0.0, 0.0)) / vol.where(vol > 0.0)
+
+
+def _ashare_liquidity_weighted_low_volatility(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    returns = close.pct_change(fill_method=None)
+    window = max(10, int(lookback or 20))
+    vol = returns.rolling(window, min_periods=window).std().clip(lower=0.0) * np.sqrt(252.0)
+    turnover = _turnover_series(data, close).rolling(window, min_periods=window).mean()
+    return np.log1p(turnover.clip(lower=0.0)) / (1.0 + vol)
+
+
+def _ashare_liquidity_weighted_low_volatility_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    returns = close.pct_change(fill_method=None)
+    window = max(10, int(lookback or 20))
+    vol = returns.rolling(window, min_periods=window).std().clip(lower=0.0) * np.sqrt(252.0)
+    turnover = _turnover_matrix(data, close).rolling(window, min_periods=window).mean()
+    return np.log1p(turnover.clip(lower=0.0)) / (1.0 + vol)
+
+
+def _ashare_low_volatility_momentum(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    window = max(10, int(lookback or 20))
+    momentum = close.pct_change(window, fill_method=None)
+    vol = close.pct_change(fill_method=None).rolling(window, min_periods=window).std().clip(lower=0.0) * np.sqrt(252.0)
+    return momentum.where(momentum > 0.0, 0.0) / (1.0 + vol)
+
+
+def _ashare_low_volatility_momentum_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    window = max(10, int(lookback or 20))
+    momentum = close.pct_change(window, fill_method=None)
+    vol = close.pct_change(fill_method=None).rolling(window, min_periods=window).std().clip(lower=0.0) * np.sqrt(252.0)
+    return momentum.where(momentum > 0.0, 0.0) / (1.0 + vol)
+
+
+def _ashare_range_contraction_breakout(data: Any, lookback: int) -> Any:
+    high = adjusted_price_series(data, "high")
+    low = adjusted_price_series(data, "low")
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    window = max(10, int(lookback or 20))
+    high_roll = high.rolling(window, min_periods=window).max()
+    low_roll = low.rolling(window, min_periods=window).min()
+    range_position = (close - low_roll) / (high_roll - low_roll).where((high_roll - low_roll) > 0.0)
+    daily_range = (high - low) / close.where(close > 0.0)
+    range_vol = daily_range.rolling(window, min_periods=window).mean().clip(lower=0.0)
+    return range_position.clip(lower=0.0, upper=1.0) / (1.0 + range_vol * 100.0)
+
+
+def _ashare_range_contraction_breakout_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    high = adjusted_price_matrix(data, "high")
+    low = adjusted_price_matrix(data, "low")
+    close = adjusted_price_matrix(data, "close")
+    window = max(10, int(lookback or 20))
+    high_roll = high.rolling(window, min_periods=window).max()
+    low_roll = low.rolling(window, min_periods=window).min()
+    width = high_roll - low_roll
+    range_position = (close - low_roll) / width.where(width > 0.0)
+    daily_range = (high - low) / close.where(close > 0.0)
+    range_vol = daily_range.rolling(window, min_periods=window).mean().clip(lower=0.0)
+    return range_position.clip(lower=0.0, upper=1.0) / (1.0 + range_vol * 100.0)
+
+
+def _ashare_gap_down_liquid_reversal(data: Any, lookback: int) -> Any:
+    gap_signal = _ashare_gap_down_reversal(data, lookback)
+    if gap_signal is None:
+        return None
+    close = adjusted_price_series(data, "close")
+    window = max(10, int(lookback or 20))
+    turnover = _turnover_series(data, close).rolling(window, min_periods=window).mean()
+    return gap_signal.where(gap_signal > 0.0, 0.0) * np.log1p(turnover.clip(lower=0.0))
+
+
+def _ashare_gap_down_liquid_reversal_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    gap_signal = _ashare_gap_down_reversal_panel(data, lookback)
+    close = adjusted_price_matrix(data, "close")
+    window = max(10, int(lookback or 20))
+    turnover = _turnover_matrix(data, close).rolling(window, min_periods=window).mean()
+    return gap_signal.where(gap_signal > 0.0, 0.0) * np.log1p(turnover.clip(lower=0.0))
+
+
+def _ashare_turnover_stability_factor(data: Any, lookback: int) -> Any:
+    close = adjusted_price_series(data, "close")
+    window = max(10, int(lookback or 20))
+    turnover = _turnover_series(data, close)
+    avg_turnover = turnover.rolling(window, min_periods=window).mean()
+    turnover_vol = turnover.rolling(window, min_periods=window).std()
+    stability = avg_turnover / turnover_vol.where(turnover_vol > 0.0)
+    return np.log1p(avg_turnover.clip(lower=0.0)) * stability.clip(lower=0.0)
+
+
+def _ashare_turnover_stability_factor_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    close = adjusted_price_matrix(data, "close")
+    window = max(10, int(lookback or 20))
+    turnover = _turnover_matrix(data, close)
+    avg_turnover = turnover.rolling(window, min_periods=window).mean()
+    turnover_vol = turnover.rolling(window, min_periods=window).std()
+    stability = avg_turnover / turnover_vol.where(turnover_vol > 0.0)
+    return np.log1p(avg_turnover.clip(lower=0.0)) * stability.clip(lower=0.0)
+
+
+def _joinquant_small_cap_size_factor(data: Any, lookback: int) -> Any:
+    if not isinstance(data, pd.DataFrame):
+        return None
+    market_cap = _market_cap_series(data)
+    if market_cap is None:
+        return None
+    return -market_cap.astype(float)
+
+
+def _joinquant_small_cap_size_factor_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    market_cap = _market_cap_matrix(data)
+    if market_cap is None:
+        return None
+    return -market_cap.astype(float)
 
 
 def _mean_reversion_close_to_ma(data: Any, lookback: int) -> Any:
@@ -216,6 +507,83 @@ def _worldquant_alpha_003_raw(data: Any, lookback: int) -> Any:
     return -open_series.rolling(corr_window, min_periods=corr_window).corr(volume)
 
 
+def _worldquant_alpha_004_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    rank_window = max(2, int(lookback or 9))
+    low = adjusted_price_matrix(data, "low")
+    ranked_low = low.rank(axis=1, pct=True)
+    return -_time_series_rank_last_pct(ranked_low, rank_window)
+
+
+def _worldquant_alpha_004_raw(data: Any, lookback: int) -> Any:
+    rank_window = max(2, int(lookback or 9))
+    low = adjusted_price_series(data, "low")
+    if not hasattr(low, "rolling"):
+        return None
+    low_series = pd.Series(low, index=getattr(low, "index", None), dtype=float)
+    return -_time_series_rank_last_pct(low_series, rank_window)
+
+
+def _worldquant_alpha_006_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    corr_window = max(2, int(lookback or 10))
+    open_ = adjusted_price_matrix(data, "open")
+    volume = field_matrix(data, "volume").astype(float)
+    return -open_.rolling(corr_window, min_periods=corr_window).corr(volume)
+
+
+def _worldquant_alpha_006_raw(data: Any, lookback: int) -> Any:
+    corr_window = max(2, int(lookback or 10))
+    open_ = adjusted_price_series(data, "open")
+    if not hasattr(open_, "rolling"):
+        return None
+    volume = data["volume"] if isinstance(data, pd.DataFrame) else getattr(data, "volume", None)
+    if volume is None:
+        return None
+    volume = pd.Series(volume, index=getattr(open_, "index", None), dtype=float)
+    open_series = pd.Series(open_, index=getattr(open_, "index", None), dtype=float)
+    return -open_series.rolling(corr_window, min_periods=corr_window).corr(volume)
+
+
+def _worldquant_alpha_010_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    delta_window = max(2, int(lookback or 4))
+    close = adjusted_price_matrix(data, "close")
+    delta = close.diff(1)
+    ts_min = delta.rolling(delta_window, min_periods=delta_window).min()
+    ts_max = delta.rolling(delta_window, min_periods=delta_window).max()
+    raw = delta.where((ts_min > 0) | (ts_max < 0), -delta)
+    return raw.rank(axis=1, pct=True)
+
+
+def _worldquant_alpha_010_raw(data: Any, lookback: int) -> Any:
+    delta_window = max(2, int(lookback or 4))
+    close = adjusted_price_series(data, "close")
+    if not hasattr(close, "rolling"):
+        return None
+    close_series = pd.Series(close, index=getattr(close, "index", None), dtype=float)
+    delta = close_series.diff(1)
+    ts_min = delta.rolling(delta_window, min_periods=delta_window).min()
+    ts_max = delta.rolling(delta_window, min_periods=delta_window).max()
+    return delta.where((ts_min > 0) | (ts_max < 0), -delta)
+
+
+def _time_series_rank_last_pct(values: pd.Series | pd.DataFrame, lookback: int) -> pd.Series | pd.DataFrame:
+    current = values
+    less = None
+    equal = None
+    valid = None
+    for offset in range(max(1, int(lookback))):
+        shifted = values.shift(offset)
+        valid_mask = shifted.notna() & current.notna()
+        less_part = (shifted < current).where(valid_mask, False).astype(float)
+        equal_part = (shifted == current).where(valid_mask, False).astype(float)
+        valid_part = valid_mask.astype(float)
+        less = less_part if less is None else less + less_part
+        equal = equal_part if equal is None else equal + equal_part
+        valid = valid_part if valid is None else valid + valid_part
+    rank = less + (equal + 1.0) / 2.0
+    ranked = rank / valid.where(valid != 0)
+    return ranked.where(valid >= max(1, int(lookback)))
+
+
 def _coalesce_adjusted(adjusted: Any, raw: Any) -> Any:
     if adjusted is None:
         return raw
@@ -229,11 +597,85 @@ def _coalesce_adjusted(adjusted: Any, raw: Any) -> Any:
         return adjusted
 
 
+def _turnover_series(data: Any, close: Any) -> pd.Series:
+    if isinstance(data, pd.DataFrame) and "turnover" in data.columns:
+        return pd.Series(data["turnover"], index=getattr(close, "index", None), dtype=float)
+    if isinstance(data, pd.DataFrame) and "volume" in data.columns:
+        volume = pd.Series(data["volume"], index=getattr(close, "index", None), dtype=float)
+        return volume * pd.Series(close, index=getattr(close, "index", None), dtype=float)
+    if isinstance(data, dict):
+        turnover = data.get("turnover")
+        if turnover is not None:
+            return pd.Series([float(turnover)])
+        return pd.Series([float(data.get("volume", 0.0) or 0.0) * float(data.get("close", 0.0) or 0.0)])
+    turnover = getattr(data, "turnover", None)
+    if turnover is not None:
+        return pd.Series(turnover, index=getattr(close, "index", None), dtype=float)
+    volume = getattr(data, "volume", None)
+    if volume is not None:
+        return pd.Series(volume, index=getattr(close, "index", None), dtype=float) * pd.Series(close, index=getattr(close, "index", None), dtype=float)
+    return pd.Series(0.0, index=getattr(close, "index", None), dtype=float)
+
+
+def _turnover_matrix(data: pd.DataFrame, close: pd.DataFrame) -> pd.DataFrame:
+    if "turnover" in data.columns:
+        return field_matrix(data, "turnover").astype(float)
+    if "volume" in data.columns:
+        return field_matrix(data, "volume").astype(float) * close
+    return pd.DataFrame(0.0, index=close.index, columns=close.columns)
+
+
+_MARKET_CAP_FIELDS = (
+    "total_mv",
+    "circ_mv",
+    "market_cap",
+    "total_market_cap",
+    "float_market_cap",
+    "circulating_market_cap",
+)
+
+
+def _market_cap_series(data: pd.DataFrame) -> pd.Series:
+    for field in _MARKET_CAP_FIELDS:
+        if field not in data.columns:
+            continue
+        series = pd.to_numeric(data[field], errors="coerce")
+        if series.notna().any():
+            return series
+    return None
+
+
+def _market_cap_matrix(data: pd.DataFrame) -> pd.DataFrame:
+    for field in _MARKET_CAP_FIELDS:
+        if field not in data.columns:
+            continue
+        matrix = field_matrix(data, field).astype(float)
+        if matrix.notna().any().any():
+            return matrix
+    return None
+
+
 SUPPORTED_FORMULAS = {
+    "ashare_short_reversal_5d",
+    "ashare_volume_exhaustion_reversal",
+    "ashare_volume_dryup_pullback",
+    "ashare_lottery_demand_avoidance",
+    "ashare_low_volatility_defensive",
+    "ashare_gap_down_reversal",
+    "ashare_volatility_scaled_reversal",
+    "ashare_liquidity_weighted_low_volatility",
+    "ashare_low_volatility_momentum",
+    "ashare_range_contraction_breakout",
+    "ashare_gap_down_liquid_reversal",
+    "ashare_turnover_stability_factor",
+    "joinquant_small_cap_size_factor",
     "momentum_close_return",
     "mean_reversion_close_to_ma",
     "volatility_breakout_atr",
     "worldquant_alpha_001",
     "worldquant_alpha_002",
     "worldquant_alpha_003",
+    "worldquant_alpha_004",
+    "worldquant_alpha_006",
+    "worldquant_alpha_010",
 }

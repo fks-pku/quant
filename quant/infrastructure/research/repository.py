@@ -274,14 +274,27 @@ class FileResearchStore(ResearchStore):
 
     def _hypotheses_for_result(self, result: Any) -> List[Dict[str, Any]]:
         rows = self.list_hypotheses()
-        titles = {
-            getattr(entry, "title", "")
-            for entry in getattr(result, "log", []) or []
-            if getattr(entry, "title", "") and getattr(entry, "phase", "") not in {"stage1_queue", "local_idea_bank"}
-        }
-        if not titles:
+        ignored_phases = {"stage1_queue", "local_idea_bank", "strict_backtest_stage", "walkforward_audit_stage"}
+        titles = set()
+        strategy_ids = set()
+        for entry in getattr(result, "log", []) or []:
+            phase = getattr(entry, "phase", "")
+            if phase in ignored_phases:
+                continue
+            title = str(getattr(entry, "title", "") or "").strip()
+            if title:
+                titles.add(title)
+                strategy_ids.add(title)
+            scores = getattr(entry, "scores", {}) or {}
+            strategy_id = str(scores.get("strategy_id", "") or "").strip() if isinstance(scores, dict) else ""
+            if strategy_id:
+                strategy_ids.add(strategy_id)
+        if not titles and not strategy_ids:
             return rows
-        selected = [row for row in rows if row.get("title") in titles]
+        selected = [
+            row for row in rows
+            if row.get("title") in titles or str(row.get("strategy_id", "") or "").strip() in strategy_ids
+        ]
         return selected or rows
 
     def _write_idea_bank_artifacts(self, ideas: Iterable[Dict[str, Any]]) -> None:

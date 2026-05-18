@@ -48,6 +48,7 @@ class RigorHub:
         end: str,
         initial_cash: float = 100000,
         benchmark_data: Any = None,
+        strategy_archive_dir: str = "",
     ) -> PurgedWalkForwardResult:
         calendar = pd.bdate_range(start=start, end=end)
         n_obs = len(calendar)
@@ -79,6 +80,7 @@ class RigorHub:
             benchmark_data=benchmark_data,
             run_start=str(start),
             run_end=str(end),
+            strategy_archive_dir=strategy_archive_dir,
         ):
             split_results.append(split_result)
             if returns is not None and not returns.empty:
@@ -127,6 +129,7 @@ class RigorHub:
         benchmark_data: Any,
         run_start: str,
         run_end: str,
+        strategy_archive_dir: str = "",
     ) -> List[Tuple[Dict[str, Any], Optional[pd.Series]]]:
         jobs = [
             (
@@ -139,6 +142,7 @@ class RigorHub:
                 run_start,
                 run_end,
                 self._prefetch_data,
+                strategy_archive_dir,
             )
             for split in splits
         ]
@@ -151,9 +155,9 @@ class RigorHub:
 
     def _run_split_job(
         self,
-        job: Tuple[str, List[str], float, Dict[str, Any], Dict[str, str], Any, str, str, bool],
+        job: Tuple[str, List[str], float, Dict[str, Any], Dict[str, str], Any, str, str, bool, str],
     ) -> Tuple[Dict[str, Any], Optional[pd.Series]]:
-        strategy_id, symbols, initial_cash, split, dated_split, benchmark_data, run_start, run_end, prefetch_data = job
+        strategy_id, symbols, initial_cash, split, dated_split, benchmark_data, run_start, run_end, prefetch_data, strategy_archive_dir = job
         request = {
             "start": dated_split["test_start_date"],
             "end": dated_split["test_end_date"],
@@ -170,6 +174,7 @@ class RigorHub:
             "test_end_date": dated_split["test_end_date"],
             "symbols": symbols,
             "initial_cash": initial_cash,
+            "strategy_archive_dir": strategy_archive_dir,
             "cost_config": self._config.get("cost_model", {}),
             "run_label": f"{strategy_id}_split_{dated_split['train_start_date']}_{dated_split['test_end_date']}",
         }

@@ -10,12 +10,13 @@ from quant.features.research.models import (
 )
 
 
-def _raw(title="Test Strategy") -> RawStrategy:
+def _raw(title="Test Strategy", metadata=None) -> RawStrategy:
     return RawStrategy(
         title=title,
         description="desc",
         source="test",
         source_url="https://example.test",
+        metadata=metadata or {},
     )
 
 
@@ -132,6 +133,132 @@ class TestStrategySpecBuilder:
         assert spec.signal_formula_key == "worldquant_alpha_003"
         assert spec.required_fields == ["open", "volume"]
         assert spec.lookback_days == 10
+        assert spec.status == "ready"
+
+    def test_worldquant_alpha_004_maps_to_exact_formula(self):
+        from quant.features.research.discovery.worldquant101 import build_worldquant101_raw_strategies
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_worldquant101_raw_strategies(alpha_numbers=[4])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("momentum", symbols=["600519"]))
+
+        assert spec.strategy_id == "worldquant_101_alpha_004"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == "worldquant_alpha_004"
+        assert spec.required_fields == ["low"]
+        assert spec.lookback_days == 9
+        assert spec.status == "ready"
+
+    def test_worldquant_alpha_006_maps_to_exact_formula(self):
+        from quant.features.research.discovery.worldquant101 import build_worldquant101_raw_strategies
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_worldquant101_raw_strategies(alpha_numbers=[6])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("momentum", symbols=["600519"]))
+
+        assert spec.strategy_id == "worldquant_101_alpha_006"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == "worldquant_alpha_006"
+        assert spec.required_fields == ["open", "volume"]
+        assert spec.lookback_days == 10
+        assert spec.status == "ready"
+
+    def test_worldquant_alpha_010_maps_to_exact_formula(self):
+        from quant.features.research.discovery.worldquant101 import build_worldquant101_raw_strategies
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_worldquant101_raw_strategies(alpha_numbers=[10])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("momentum", symbols=["600519"]))
+
+        assert spec.strategy_id == "worldquant_101_alpha_010"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == "worldquant_alpha_010"
+        assert spec.required_fields == ["close"]
+        assert spec.lookback_days == 4
+        assert spec.status == "ready"
+
+    def test_worldquant_alpha_without_local_formula_does_not_fallback(self):
+        from quant.features.research.discovery.worldquant101 import build_worldquant101_raw_strategies
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_worldquant101_raw_strategies(alpha_numbers=[5])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("momentum", symbols=["600519"]))
+
+        assert spec.strategy_id == "worldquant_101_alpha_005"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == ""
+        assert spec.status == "missing_formula"
+        assert "worldquant_alpha_005" in spec.reason
+
+    def test_a_share_structural_metadata_formula_maps_to_ready_spec(self):
+        from quant.features.research.discovery.ashare_structural import (
+            build_ashare_structural_raw_strategies,
+        )
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_ashare_structural_raw_strategies(["ashare_short_reversal_5d"])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.strategy_id == "a_share_short_term_reversal_5d"
+        assert spec.strategy_type == "mean_reversion"
+        assert spec.signal_formula_key == "ashare_short_reversal_5d"
+        assert spec.required_fields == ["close"]
+        assert spec.lookback_days == 5
+        assert spec.horizon_days == 5
+        assert spec.universe == ["600519"]
+        assert spec.status == "ready"
+
+    def test_a_share_structural_extended_formula_maps_to_ready_spec(self):
+        from quant.features.research.discovery.ashare_structural import (
+            build_ashare_structural_raw_strategies,
+        )
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = build_ashare_structural_raw_strategies(["ashare_liquidity_weighted_low_volatility"])[0]
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.strategy_type == "factor"
+        assert spec.signal_formula_key == "ashare_liquidity_weighted_low_volatility"
+        assert spec.required_fields == ["close", "turnover"]
+        assert spec.lookback_days == 20
+        assert spec.horizon_days == 10
+        assert spec.status == "ready"
+
+    def test_joinquant_small_cap_formula_maps_to_ready_spec(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = _raw(
+            "JoinQuant Small Cap MA Stop",
+            metadata={"formula_key": "joinquant_small_cap_ma_stop"},
+        )
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.strategy_type == "factor"
+        assert spec.signal_formula_key == "joinquant_small_cap_size_factor"
+        assert spec.required_fields == ["close", "market_cap"]
+        assert spec.lookback_days == 50
+        assert spec.horizon_days == 5
         assert spec.status == "ready"
 
     def test_unknown_type_returns_unsupported(self):
@@ -310,6 +437,108 @@ class TestResearchAdjustedPrices:
 
         assert signal.iloc[-1] > 0
 
+    def test_a_share_short_reversal_is_positive_for_recent_loser(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        frame = pd.DataFrame({"close": [100.0, 96.0, 90.0], "adj_close": [100.0, 96.0, 90.0]})
+
+        signal = compute_signal("ashare_short_reversal_5d", frame, lookback=2)
+
+        assert signal.iloc[-1] == pytest.approx(0.10)
+
+    def test_a_share_volume_exhaustion_requires_down_move_and_high_volume(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        close = [100.0] * 15 + [98.0, 96.0, 94.0, 92.0, 90.0]
+        volume = [100.0] * 19 + [500.0]
+        frame = pd.DataFrame({"close": close, "adj_close": close, "volume": volume})
+
+        signal = compute_signal("ashare_volume_exhaustion_reversal", frame, lookback=10)
+
+        assert signal.iloc[-1] > 0
+
+    def test_a_share_lottery_avoidance_prefers_lower_volatility_panel(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=8, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 2,
+                "symbol": ["600001"] * 8 + ["600002"] * 8,
+                "close": [100.0, 100.2, 100.1, 100.3, 100.2, 100.4, 100.3, 100.5, 100.0, 106.0, 94.0, 110.0, 90.0, 112.0, 88.0, 115.0],
+                "adj_close": [100.0, 100.2, 100.1, 100.3, 100.2, 100.4, 100.3, 100.5, 100.0, 106.0, 94.0, 110.0, 90.0, 112.0, 88.0, 115.0],
+            }
+        )
+
+        signal = compute_signal("ashare_lottery_demand_avoidance", frame, lookback=5)
+
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600002"]
+
+    def test_a_share_gap_down_reversal_is_positive_for_negative_gap(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        frame = pd.DataFrame(
+            {
+                "open": [100.0, 95.0],
+                "close": [100.0, 96.0],
+                "adj_open": [100.0, 95.0],
+                "adj_close": [100.0, 96.0],
+            }
+        )
+
+        signal = compute_signal("ashare_gap_down_reversal", frame, lookback=2)
+
+        assert signal.iloc[-1] == pytest.approx(0.05)
+
+    def test_a_share_low_volatility_momentum_prefers_smoother_trend(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=25, freq="B")
+        smooth = np.linspace(100.0, 112.0, len(dates))
+        choppy = np.array([100, 110, 95, 115, 96, 116, 98, 118, 99, 120, 100, 122, 101, 124, 102, 126, 103, 128, 104, 130, 105, 131, 106, 132, 112], dtype=float)
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 2,
+                "symbol": ["600001"] * len(dates) + ["600002"] * len(dates),
+                "close": list(smooth) + list(choppy),
+                "adj_close": list(smooth) + list(choppy),
+            }
+        )
+
+        signal = compute_signal("ashare_low_volatility_momentum", frame, lookback=20)
+
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600002"]
+
+    def test_a_share_liquidity_weighted_low_volatility_uses_turnover(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        close = np.linspace(100.0, 101.0, 25)
+        high_turnover = pd.DataFrame({"close": close, "adj_close": close, "turnover": [1000000.0] * 25})
+        low_turnover = pd.DataFrame({"close": close, "adj_close": close, "turnover": [1000.0] * 25})
+
+        high_signal = compute_signal("ashare_liquidity_weighted_low_volatility", high_turnover, lookback=20)
+        low_signal = compute_signal("ashare_liquidity_weighted_low_volatility", low_turnover, lookback=20)
+
+        assert high_signal.iloc[-1] > low_signal.iloc[-1]
+
+    def test_joinquant_small_cap_size_factor_prefers_lower_market_cap(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=3, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 2,
+                "symbol": ["600001"] * 3 + ["600002"] * 3,
+                "close": [10.0, 10.0, 10.0, 20.0, 20.0, 20.0],
+                "adj_close": [10.0, 10.0, 10.0, 20.0, 20.0, 20.0],
+                "total_mv": [100.0, 100.0, 100.0, 500.0, 500.0, 500.0],
+            }
+        )
+
+        signal = compute_signal("joinquant_small_cap_size_factor", frame, lookback=1)
+
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600002"]
+
     def test_worldquant_alpha_001_returns_cross_sectional_rank_signal(self):
         from quant.features.research.validation.signal_library import compute_signal
 
@@ -424,6 +653,100 @@ class TestResearchAdjustedPrices:
 
         pd.testing.assert_frame_equal(signal, expected)
         assert not signal.dropna(how="all").empty
+
+    def test_worldquant_alpha_004_matches_low_rank_ts_rank(self):
+        from quant.features.research.validation.signal_library import adjusted_price_matrix, compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=16, freq="B")
+        symbols = ["600001", "600002", "600003", "600004"]
+        rng = np.random.default_rng(37)
+        frames = []
+        for symbol_index, symbol in enumerate(symbols):
+            day_index = np.arange(len(dates), dtype=float)
+            adjusted_low = 8.0 + symbol_index * 0.4 + day_index * (0.03 + symbol_index * 0.01)
+            adjusted_low = adjusted_low + rng.normal(0.0, 0.08, len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "low": adjusted_low / 2.0,
+                        "adj_low": adjusted_low,
+                    }
+                )
+            )
+        frame = pd.concat(frames, ignore_index=True)
+
+        signal = compute_signal("worldquant_alpha_004", frame, lookback=9)
+        low_matrix = adjusted_price_matrix(frame, "low")
+        ranked_low = low_matrix.rank(axis=1, pct=True)
+
+        def ts_rank_last(values):
+            return pd.Series(values).rank(method="average", pct=True).iloc[-1]
+
+        expected = -ranked_low.rolling(9, min_periods=9).apply(ts_rank_last, raw=False)
+
+        pd.testing.assert_frame_equal(signal, expected)
+        assert not signal.dropna(how="all").empty
+        assert signal.dropna(how="all").max().max() <= 0
+
+    def test_worldquant_alpha_006_matches_open_volume_correlation(self):
+        from quant.features.research.validation.signal_library import adjusted_price_matrix, compute_signal, field_matrix
+
+        dates = pd.date_range("2022-01-03", periods=16, freq="B")
+        symbols = ["600001", "600002", "600003", "600004"]
+        rng = np.random.default_rng(41)
+        frames = []
+        for symbol_index, symbol in enumerate(symbols):
+            day_index = np.arange(len(dates), dtype=float)
+            adjusted_open = 10.0 + symbol_index * 0.3 + day_index * (0.01 + symbol_index * 0.003)
+            adjusted_open = adjusted_open + rng.normal(0.0, 0.1, len(dates))
+            volume = 800000.0 + symbol_index * 50000.0 + rng.normal(0.0, 50000.0, len(dates))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "date": dates,
+                        "symbol": symbol,
+                        "open": adjusted_open / 2.0,
+                        "adj_open": adjusted_open,
+                        "volume": volume,
+                    }
+                )
+            )
+        frame = pd.concat(frames, ignore_index=True)
+
+        signal = compute_signal("worldquant_alpha_006", frame, lookback=10)
+        open_matrix = adjusted_price_matrix(frame, "open")
+        volume_matrix = field_matrix(frame, "volume").astype(float)
+        expected = -open_matrix.rolling(10, min_periods=10).corr(volume_matrix)
+
+        pd.testing.assert_frame_equal(signal, expected)
+        assert not signal.dropna(how="all").empty
+
+    def test_worldquant_alpha_010_matches_conditional_delta_rank(self):
+        from quant.features.research.validation.signal_library import adjusted_price_matrix, compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=5, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 3,
+                "symbol": ["600001"] * 5 + ["600002"] * 5 + ["600003"] * 5,
+                "close": [5.0, 5.5, 6.0, 6.5, 7.0, 5.0, 4.5, 4.0, 3.5, 3.0, 5.0, 5.5, 5.0, 5.5, 5.0],
+                "adj_close": [10.0, 11.0, 12.0, 13.0, 14.0, 10.0, 9.0, 8.0, 7.0, 6.0, 10.0, 11.0, 10.0, 11.0, 10.0],
+            }
+        )
+
+        signal = compute_signal("worldquant_alpha_010", frame, lookback=4)
+        close = adjusted_price_matrix(frame, "close")
+        delta = close.diff(1)
+        ts_min = delta.rolling(4, min_periods=4).min()
+        ts_max = delta.rolling(4, min_periods=4).max()
+        expected = delta.where((ts_min > 0) | (ts_max < 0), -delta).rank(axis=1, pct=True)
+
+        pd.testing.assert_frame_equal(signal, expected)
+        assert signal.loc[dates[-1], "600002"] == pytest.approx(1.0 / 3.0)
+        assert signal.loc[dates[-1], "600001"] == pytest.approx(5.0 / 6.0)
+        assert signal.loc[dates[-1], "600003"] == pytest.approx(5.0 / 6.0)
 
     def test_factor_validator_uses_adjusted_close_for_forward_returns(self):
         from quant.features.research.validation.factor_validator import FactorValidator

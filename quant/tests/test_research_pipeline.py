@@ -8,7 +8,7 @@ import pytest
 import pandas as pd
 
 from quant.features.research.evaluator import StrategyEvaluator
-from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, EvaluationReport, RawStrategy, ResearchConfig, StrategySpec, ValidationReport
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, EvaluationReport, RawStrategy, ResearchConfig, ResearchResult, StrategySpec, ValidationReport
 from quant.features.research.pool import CandidatePool
 from quant.features.research.research_engine import ResearchEngine
 from quant.infrastructure.research.repository import FileResearchStore
@@ -452,6 +452,67 @@ def test_research_engine_walkforward_stage_runs_without_strict_backtest():
         assert stages["walkforward_strict_audit"]["verdict"] == "pass"
         assert "strict_backtest" not in stages
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_research_engine_walkforward_stage_uses_persistent_rejected_candidate_metadata():
+    tmp_path = _test_root()
+    captured = {}
+
+    class FixedRigorHub:
+        def run_walkforward(self, strategy_id, symbols, start, end, benchmark_data=None, strategy_archive_dir=""):
+            captured["strategy_id"] = strategy_id
+            captured["symbols"] = list(symbols)
+            captured["strategy_archive_dir"] = strategy_archive_dir
+            return SimpleNamespace(
+                is_viable=False,
+                aggregate_oos_sharpe=-0.1,
+                worst_oos_sharpe=-0.2,
+                deflated_sharpe_ratio=None,
+                pct_profitable_splits=0.0,
+                splits=[],
+            )
+
+    try:
+        archive_dir = tmp_path / "rejected_strategy" / "persisted_rejected"
+        archive_dir.mkdir(parents=True)
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate({
+            "id": "persisted_rejected",
+            "name": "Persisted Rejected",
+            "status": "rejected",
+            "research_meta": {
+                "strategy_spec": {"universe": ["600001", "600002"]},
+                "rejected_strategy_dir": str(archive_dir),
+            },
+        })
+        research_store.upsert_hypothesis({
+            "hypothesis_id": "h1",
+            "strategy_id": "persisted_rejected",
+            "title": "Persisted Rejected",
+            "status": "rejected",
+            "stage": "go_no_go",
+            "source": "fixture",
+            "source_url": "https://example.test",
+            "thesis": "fixture",
+            "decision_reason": "strict failed",
+            "metrics": {},
+            "evidence": {"strategy_spec": {"strategy_id": "persisted_rejected", "universe": ["600001", "600002"]}},
+        })
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, rigor_enabled=True, default_symbols=["000300", "600519"]),
+            research_store=research_store,
+            rigor_hub=FixedRigorHub(),
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        engine.run_walkforward_audit_stage(strategy_ids=["persisted_rejected"])
+
+        assert captured["strategy_id"] == "persisted_rejected"
+        assert captured["symbols"] == ["600001", "600002"]
+        assert captured["strategy_archive_dir"].replace("\\", "/").endswith("rejected_strategy/persisted_rejected")
+        assert (tmp_path / "research" / "reports" / "persisted_rejected" / "walkforward_audit_report.html").exists()
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -1100,6 +1161,92 @@ def test_research_engine_passes_ready_strategy_spec_to_integrator():
     assert integrator.received_spec.signal_formula_key == "momentum_close_return"
 
 
+def test_fast_validation_gate_fails_weak_after_cost_portfolio_diagnostics():
+    tmp_path = _test_root()
+
+    class FixedScout:
+        def search(self, sources=None, max_results=10):
+            return [_raw_strategy()]
+
+    class FixedEvaluator:
+        def evaluate(self, raw):
+            return _evaluation_report()
+
+    class FixedSpecBuilder:
+        def build(self, raw, report):
+            return StrategySpec(
+                strategy_id="daily_momentum_breakout",
+                strategy_type="momentum",
+                signal_formula_key="momentum_close_return",
+                universe=["600519"],
+                horizon_days=5,
+                lookback_days=20,
+                execution_lag_days=1,
+                required_fields=["close"],
+                status="ready",
+            )
+
+    class WeakPortfolioValidator:
+        def validate(self, spec):
+            return ValidationReport(
+                strategy_id=spec.strategy_id,
+                status="validated",
+                rank_ic=0.05,
+                rank_ic_ir=1.0,
+                ic_decay=[(1, 0.05), (5, 0.04), (10, 0.03), (21, 0.025)],
+                fdr_adjusted_p=0.01,
+                fdr_significant=True,
+                ff_alpha_monthly=0.0,
+                ff_alpha_tstat=0.0,
+                ff_r2=0.0,
+                long_short_spread=0.0,
+                hit_rate=0.55,
+                data_start="2020-01-01",
+                data_end="2020-12-31",
+                n_observations=120,
+                portfolio_diagnostics={
+                    "top_bucket_after_cost_sharpe": 0.20,
+                    "top_bucket_after_cost_annualized_return": 0.04,
+                    "top_bucket_after_cost_max_drawdown": -0.75,
+                    "benchmark_excess_after_cost_sharpe": -0.10,
+                    "benchmark_excess_after_cost_annualized_return": -0.02,
+                    "top_bucket_turnover": 0.10,
+                    "rolling_oos": [
+                        {"split": "2020", "annualized_return": 0.05},
+                        {"split": "2021", "annualized_return": -0.02},
+                        {"split": "2022", "annualized_return": -0.01},
+                    ],
+                },
+            )
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False, validation_enabled=True),
+            scout=FixedScout(),
+            evaluator=FixedEvaluator(),
+            research_store=research_store,
+            strategies_dir=str(tmp_path / "strategies"),
+            spec_builder=FixedSpecBuilder(),
+            validator=WeakPortfolioValidator(),
+        )
+
+        result = engine.run_full_pipeline()
+
+        candidate = research_store.get_candidate("daily_momentum_breakout")
+        hypothesis = research_store.list_hypotheses()[0]
+        gate = candidate["research_meta"]["validation_gate"]
+        assert result.integrated == 1
+        assert result.validated_passed == 0
+        assert gate["status"] == "failed"
+        assert "top_bucket_after_cost_sharpe" in gate["reason"]
+        assert gate["metrics"]["top_bucket_after_cost_max_drawdown"] == pytest.approx(-0.75)
+        assert gate["metrics"]["rolling_oos_positive_pct"] == pytest.approx(1 / 3)
+        assert hypothesis["metrics"]["research_stage_conclusions"]["fast_research"]["verdict"] == "fail"
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_research_engine_continues_after_negative_rank_ic_direction():
     class FixedScout:
         def search(self, sources=None, max_results=10):
@@ -1447,6 +1594,138 @@ def test_api_make_rigor_hub_uses_two_arg_walkforward_runner_and_experiment_store
     assert hub._experiment_store is experiment_store
 
 
+def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(monkeypatch):
+    from quant.api import research_bp as research_module
+    import quant.features.backtest.benchmark as benchmark_module
+    import quant.features.backtest.engine as engine_module
+    import quant.features.backtest.walkforward as walkforward_module
+    import quant.features.strategies.registry as registry_module
+    import quant.infrastructure.data.providers.duckdb_provider as duckdb_module
+
+    tmp_path = _test_root()
+    captured = {}
+
+    class FakeStrategy:
+        def __init__(self, symbols=None):
+            self.symbols = list(symbols or [])
+            self.max_position_pct = 1.0
+            self.max_positions = 20
+
+    class FakeRegistry:
+        def get(self, sid):
+            return FakeStrategy
+
+    class FakeStorage:
+        def get_all_instrument_meta(self):
+            return pd.DataFrame({"symbol": ["600001", "600002"], "lot_size": [100, 100]})
+
+    class FakeDuckDBProvider:
+        def __init__(self):
+            self.storage = FakeStorage()
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def get_bars_for_symbols(self, symbols, start, end, timeframe):
+            captured["symbols"] = list(symbols)
+            return pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2020-01-01", "2020-01-02"] * len(symbols)),
+                    "symbol": [symbol for symbol in symbols for _ in range(2)],
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.5,
+                    "close": 10.2,
+                    "volume": 100000,
+                }
+            )
+
+        def get_bars(self, symbol, start, end, timeframe):
+            return pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2020-01-01", "2020-01-02"]),
+                    "close": [100.0, 101.0],
+                    "adj_close": [100.0, 101.0],
+                }
+            )
+
+    class FakeBenchmarkProvider:
+        def __init__(self, frame, price_column="close"):
+            self.frame = frame
+
+        def get_benchmark_equity(self, start, end, initial_cash):
+            return pd.Series([float(initial_cash), float(initial_cash) * 1.01], index=pd.to_datetime(["2020-01-01", "2020-01-02"]))
+
+    class FakeBacktester:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def run(self, start, end, strategies, initial_cash, data_provider, symbols):
+            captured["strategy_symbols"] = list(strategies[0].symbols)
+            return SimpleNamespace(
+                final_nav=float(initial_cash) * 1.05,
+                sharpe_ratio=0.8,
+                sortino_ratio=1.0,
+                total_return=0.05,
+                max_drawdown_pct=-0.03,
+                win_rate=0.6,
+                profit_factor=1.2,
+                trades=[],
+                metrics=SimpleNamespace(total_trades=0, statistical_significance={"t_stat": 1.5, "p_value": 0.13}),
+                diagnostics=None,
+                equity_curve=pd.Series([float(initial_cash), float(initial_cash) * 1.05], index=pd.to_datetime(["2020-01-01", "2020-01-02"])),
+            )
+
+    monkeypatch.setattr(registry_module, "StrategyRegistry", FakeRegistry)
+    monkeypatch.setattr(duckdb_module, "DuckDBProvider", FakeDuckDBProvider)
+    monkeypatch.setattr(benchmark_module, "BenchmarkProvider", FakeBenchmarkProvider)
+    monkeypatch.setattr(engine_module, "Backtester", FakeBacktester)
+    monkeypatch.setattr(walkforward_module, "DataFrameProvider", lambda frame: frame)
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate(
+            {
+                "id": "persisted_candidate",
+                "name": "Persisted Candidate",
+                "status": "candidate",
+                "research_meta": {"strategy_spec": {"universe": ["600001", "600002"]}},
+            }
+        )
+        research_store.upsert_hypothesis(
+            {
+                "hypothesis_id": "h1",
+                "strategy_id": "persisted_candidate",
+                "title": "Persisted Candidate",
+                "status": "candidate",
+                "stage": "stage2_integrate",
+                "source": "fixture",
+                "source_url": "https://example.test",
+                "thesis": "fixture",
+                "decision_reason": "",
+                "metrics": {},
+                "evidence": {"strategy_spec": {"strategy_id": "persisted_candidate"}},
+            }
+        )
+        pool = CandidatePool(research_store=research_store)
+        backtest_fn = research_module._make_backtest_fn()
+        integrator = SimpleNamespace(get_registry_entry=lambda sid: None)
+        result = ResearchResult()
+
+        backtest_fn("persisted_candidate", result, ResearchConfig(default_backtest_start="2020-01-01", default_backtest_end="2020-01-02"), integrator, pool)
+
+        hypothesis = research_store.list_hypotheses()[0]
+        assert captured["symbols"] == ["600001", "600002"]
+        assert captured["strategy_symbols"] == ["600001", "600002"]
+        assert hypothesis["metrics"]["strict_backtest"]["metrics"]["sharpe"] == pytest.approx(0.8)
+        assert result.backtested == 1
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_api_make_validation_components_wires_market_and_factor_ports(monkeypatch):
     from quant.api import research_bp as research_module
 
@@ -1562,6 +1841,101 @@ def test_walkforward_runner_reuses_prefetched_data(monkeypatch):
     assert seen_windows[1][3] == pd.Timestamp("2020-01-08")
     assert first["metrics"]["sharpe"] == 1.0
     assert second["metrics"]["sharpe"] == 1.0
+
+
+def test_walkforward_runner_loads_archived_rejected_strategy(monkeypatch):
+    from quant.api import research_bp as research_module
+    import quant.features.backtest.engine as engine_module
+    import quant.features.strategies.registry as registry_module
+    import quant.infrastructure.data.providers.duckdb_provider as duckdb_module
+
+    tmp_path = _test_root()
+    captured = {}
+
+    class FakeRegistry:
+        def get(self, name):
+            return None
+
+    class FakeStorage:
+        def get_all_instrument_meta(self):
+            return pd.DataFrame({"symbol": ["600001"], "lot_size": [100]})
+
+    class FakeDuckDBProvider:
+        def __init__(self):
+            self.storage = FakeStorage()
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def get_bars_for_symbols(self, symbols, start, end, timeframe):
+            return pd.DataFrame(
+                {
+                    "timestamp": pd.date_range(start, end, freq="D"),
+                    "symbol": "600001",
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.5,
+                    "close": 10.0,
+                    "volume": 100000,
+                }
+            )
+
+    class FakeBacktester:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def run(self, start, end, strategies, initial_cash, data_provider, symbols):
+            captured["strategy_class"] = strategies[0].__class__.__name__
+            captured["strategy_symbols"] = list(strategies[0].symbols)
+            return SimpleNamespace(
+                equity_curve=pd.Series([initial_cash, initial_cash * 1.02], index=pd.to_datetime([start, end])),
+                trades=[],
+                sharpe_ratio=1.1,
+                max_drawdown_pct=-0.02,
+                total_return=0.02,
+                win_rate=0.6,
+            )
+
+    try:
+        archive_dir = tmp_path / "rejected_strategy" / "archived_strategy"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "strategy.py").write_text(
+            "\n".join(
+                [
+                    "from quant.features.strategies.registry import strategy",
+                    "",
+                    "@strategy('archived_strategy')",
+                    "class ArchivedStrategy:",
+                    "    def __init__(self, symbols=None):",
+                    "        self.symbols = list(symbols or [])",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(registry_module, "StrategyRegistry", FakeRegistry)
+        monkeypatch.setattr(duckdb_module, "DuckDBProvider", FakeDuckDBProvider)
+        monkeypatch.setattr(engine_module, "Backtester", FakeBacktester)
+
+        runner = research_module._make_walkforward_runner()
+        response = runner(
+            "archived_strategy",
+            {
+                "symbols": ["600001"],
+                "start": "2020-01-01",
+                "end": "2020-01-03",
+                "initial_cash": 100000,
+                "strategy_archive_dir": str(archive_dir),
+            },
+        )
+
+        assert captured["strategy_class"] == "ArchivedStrategy"
+        assert captured["strategy_symbols"] == ["600001"]
+        assert response["metrics"]["sharpe"] == pytest.approx(1.1)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 def test_api_load_lot_sizes_uses_bulk_instrument_meta():

@@ -104,6 +104,33 @@ def test_integrator_generates_executable_momentum_strategy_from_spec(tmp_path):
     assert context.orders[-1]["strategy_name"] == strategy_id
 
 
+def test_generic_generated_rebalance_uses_top_max_positions(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("Top Capped Momentum")
+    report = _report("momentum")
+    spec = _spec("momentum", "momentum_close_return", strategy_id="top_capped_momentum")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    cls = _load_generated_class(strategy_file, "TopCappedMomentumStrategy")
+    strategy = cls(symbols=["600001", "600002", "600003"], lookback=2, max_positions=1)
+    context = _Context()
+    strategy.on_start(context)
+    for symbol, closes in {
+        "600001": [100.0, 101.0, 102.0],
+        "600002": [100.0, 101.0, 104.0],
+        "600003": [100.0, 101.0, 103.0],
+    }.items():
+        for close in closes:
+            strategy.on_data(context, {"symbol": symbol, "close": close, "high": close, "low": close, "volume": 1000000})
+
+    strategy.on_after_trading(context, date(2026, 5, 9))
+
+    buy_orders = [order for order in context.orders if order["side"] == "BUY"]
+    assert len(buy_orders) == 1
+    assert buy_orders[0]["symbol"] == "600002"
+
+
 def test_integrator_prefixes_generated_class_name_when_title_starts_with_number(tmp_path):
     integrator = StrategyIntegrator(tmp_path)
     raw = _raw("2026 Trend Following Momentum")
@@ -129,6 +156,46 @@ def test_integrator_generates_mean_reversion_formula_logic(tmp_path):
     assert "mean_reversion_close_to_ma" in code
     assert "moving_average" in code
     assert "TODO" not in code
+
+
+def test_integrator_generates_a_share_structural_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("A-Share Short-Term Reversal 5D")
+    report = _report("mean_reversion")
+    spec = _spec("mean_reversion", "ashare_short_reversal_5d", strategy_id="a_share_short_term_reversal_5d")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "ashare_short_reversal_5d" in code
+    assert "return float(-(current / past - 1.0))" in code
+    assert "Manual implementation required" not in code
+    assert "TODO" not in code
+
+    cls = _load_generated_class(strategy_file, "AshareShorttermReversal5dStrategy")
+    strategy = cls(symbols=["600001"], lookback=2)
+    assert strategy.name == "a_share_short_term_reversal_5d"
+
+
+def test_integrator_generates_a_share_extended_liquidity_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("A-Share Liquidity-Weighted Low Volatility")
+    report = _report("factor")
+    spec = _spec("factor", "ashare_liquidity_weighted_low_volatility", strategy_id="a_share_liquidity_weighted_low_volatility")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "ashare_liquidity_weighted_low_volatility" in code
+    assert "_bar_turnover" in code
+    assert "np.log1p(avg_turnover)" in code
+    assert "Manual implementation required" not in code
+
+    cls = _load_generated_class(strategy_file, "AshareLiquidityweightedLowVolatilityStrategy")
+    strategy = cls(symbols=["600001"], lookback=20)
+    assert strategy.name == "a_share_liquidity_weighted_low_volatility"
 
 
 def test_integrator_generates_worldquant_alpha_001_formula_logic(tmp_path):
@@ -196,6 +263,77 @@ def test_integrator_generates_worldquant_alpha_003_formula_logic(tmp_path):
     cls = _load_generated_class(strategy_file, "Worldquant101Alpha003Strategy")
     strategy = cls(symbols=["600001", "600002"], lookback=10)
     assert strategy.name == "worldquant_101_alpha_003"
+
+
+def test_integrator_generates_worldquant_alpha_004_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("WorldQuant 101 Alpha #004")
+    report = _report("worldquant_factor")
+    spec = _spec("worldquant_factor", "worldquant_alpha_004", strategy_id="worldquant_101_alpha_004")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "worldquant_alpha_004" in code
+    assert "_worldquant_alpha_004_scores" in code
+    assert "ranked_low_history" in code
+    assert "signal = -ts_rank" in code
+    assert "signal > 0" not in code
+    assert code.count("def _execute_rebalance") == 1
+    assert "Manual implementation required" not in code
+    assert "TODO" not in code
+
+    cls = _load_generated_class(strategy_file, "Worldquant101Alpha004Strategy")
+    strategy = cls(symbols=["600001", "600002"], lookback=9)
+    assert strategy.name == "worldquant_101_alpha_004"
+
+
+def test_integrator_generates_worldquant_alpha_006_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("WorldQuant 101 Alpha #006")
+    report = _report("worldquant_factor")
+    spec = _spec("worldquant_factor", "worldquant_alpha_006", strategy_id="worldquant_101_alpha_006")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "worldquant_alpha_006" in code
+    assert "_worldquant_alpha_006_scores" in code
+    assert "open_values" in code
+    assert "volume_values" in code
+    assert "signal = -self._correlation(open_values, volume_values)" in code
+    assert code.count("def _execute_rebalance") == 1
+    assert "Manual implementation required" not in code
+    assert "TODO" not in code
+
+    cls = _load_generated_class(strategy_file, "Worldquant101Alpha006Strategy")
+    strategy = cls(symbols=["600001", "600002"], lookback=10)
+    assert strategy.name == "worldquant_101_alpha_006"
+
+
+def test_integrator_generates_worldquant_alpha_010_formula_logic(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("WorldQuant 101 Alpha #010")
+    report = _report("worldquant_factor")
+    spec = _spec("worldquant_factor", "worldquant_alpha_010", strategy_id="worldquant_101_alpha_010")
+
+    strategy_id = integrator.integrate(raw, report, spec=spec)
+    strategy_file = tmp_path / strategy_id / "strategy.py"
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "worldquant_alpha_010" in code
+    assert "_worldquant_alpha_010_scores" in code
+    assert "raw_values[symbol] = -current_delta" in code
+    assert "delta_window = max(2, int(self.lookback))" in code
+    assert code.count("def _execute_rebalance") == 1
+    assert "Manual implementation required" not in code
+    assert "TODO" not in code
+
+    cls = _load_generated_class(strategy_file, "Worldquant101Alpha010Strategy")
+    strategy = cls(symbols=["600001", "600002"], lookback=4)
+    assert strategy.name == "worldquant_101_alpha_010"
 
 
 def test_integrator_uses_ready_spec_strategy_id_for_generated_candidate(tmp_path):

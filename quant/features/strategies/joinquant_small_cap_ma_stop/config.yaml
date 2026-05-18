@@ -1,0 +1,11 @@
+strategy:
+  name: joinquant_small_cap_ma_stop
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  short_window: 10
+  long_window: 50
+  max_positions: 20
+  lot_size: 100
