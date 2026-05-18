@@ -9,6 +9,7 @@ from quant.scripts.ingest_tushare_daily_basic import (
     _upsert_daily_basic,
     ingest_tushare_daily_basic,
 )
+from quant.scripts.backfill_missing_cn_ohlc import missing_ohlc_tasks
 
 
 def test_normalize_daily_basic_maps_symbol_dates_and_numbers():
@@ -124,3 +125,55 @@ def test_ingest_dry_run_does_not_add_columns_to_market_db(tmp_path):
     assert "circ_mv" not in market_columns
     assert basic_exists == 1
     assert summary.coverage["bar_rows"] == 1
+
+
+def test_missing_ohlc_tasks_uses_daily_basic_ranges(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    basic_db = tmp_path / "cn_daily_basic.duckdb"
+
+    market_conn = duckdb.connect(str(market_db))
+    try:
+        market_conn.execute(
+            """
+            CREATE TABLE daily_cn_ochl (
+                timestamp TIMESTAMP,
+                symbol VARCHAR,
+                close DOUBLE
+            )
+            """
+        )
+        market_conn.execute("INSERT INTO daily_cn_ochl VALUES ('2024-01-02', '600001', 10.0)")
+    finally:
+        market_conn.close()
+
+    basic_conn = duckdb.connect(str(basic_db))
+    try:
+        basic_conn.execute(
+            """
+            CREATE TABLE cn_daily_basic (
+                trade_date DATE,
+                symbol VARCHAR,
+                ts_code VARCHAR
+            )
+            """
+        )
+        basic_conn.executemany(
+            "INSERT INTO cn_daily_basic VALUES (?, ?, ?)",
+            [
+                ("2024-01-02", "600001", "600001.SH"),
+                ("2024-01-02", "600002", "600002.SH"),
+                ("2024-01-03", "600002", "600002.SH"),
+                ("2024-01-02", "920000", "920000.BJ"),
+            ],
+        )
+    finally:
+        basic_conn.close()
+
+    tasks = missing_ohlc_tasks(market_db_path=market_db, basic_db_path=basic_db)
+
+    assert len(tasks) == 1
+    assert tasks[0].symbol == "600002"
+    assert tasks[0].start == date(2024, 1, 2)
+    assert tasks[0].end == date(2024, 1, 3)
+    assert tasks[0].daily_basic_rows == 2

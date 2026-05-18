@@ -6,6 +6,7 @@ import pytest
 
 from quant.infrastructure.events import EventBus
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+from quant.infrastructure.data.providers.tushare import TushareProvider
 from quant.domain.events.base import EventType, Event
 from quant.features.trading.portfolio import Portfolio
 from quant.domain.models.position import Position
@@ -111,6 +112,12 @@ class TestDuckDBStorage:
         assert bars["total_mv"].iloc[0] == pytest.approx(12345)
         assert bars["circ_mv"].iloc[0] == pytest.approx(6789)
         assert bulk["total_mv"].iloc[0] == pytest.approx(12345)
+
+    def test_tushare_provider_routes_bse_symbols_to_bj(self):
+        assert TushareProvider._to_ts_code("830799") == "830799.BJ"
+        assert TushareProvider._to_ts_code("920000") == "920000.BJ"
+        assert TushareProvider._to_ts_code("600519") == "600519.SH"
+        assert TushareProvider._to_ts_code("000001") == "000001.SZ"
 
     def test_get_bars_for_symbols_can_use_cn_security_status(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")

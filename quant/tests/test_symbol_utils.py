@@ -11,7 +11,7 @@ from quant.shared.utils.symbol_utils import (
 
 
 class TestIsCnSymbol:
-    @pytest.mark.parametrize("sym", ["600519", "000001", "300750", "688981", "830799"])
+    @pytest.mark.parametrize("sym", ["600519", "000001", "300750", "688981", "830799", "920000"])
     def test_cn_symbols(self, sym):
         assert is_cn_symbol(sym) is True
 
@@ -35,7 +35,7 @@ class TestIsHkSymbol:
 
 
 class TestDetectMarket:
-    @pytest.mark.parametrize("sym", ["600519", "000001", "300750", "688981", "830799"])
+    @pytest.mark.parametrize("sym", ["600519", "000001", "300750", "688981", "830799", "920000"])
     def test_cn(self, sym):
         assert detect_market(sym) == "CN"
 
@@ -61,6 +61,9 @@ class TestCnPriceLimitPct:
 
     def test_bse_30(self):
         assert cn_price_limit_pct("830799") == 0.30
+
+    def test_bse_920_30(self):
+        assert cn_price_limit_pct("920000") == 0.30
 
     def test_main_board_10(self):
         assert cn_price_limit_pct("600519") == 0.10

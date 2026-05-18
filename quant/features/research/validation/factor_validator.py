@@ -89,7 +89,7 @@ def _corr_tstat(corr: float, n_observations: int) -> float:
 
 
 def _signal_error(formula_key: str) -> str:
-    if formula_key == "joinquant_small_cap_size_factor":
+    if formula_key in {"joinquant_small_cap_size_factor", "joinquant_small_cap_low_price_factor"}:
         return "Missing point-in-time market cap field: expected one of total_mv, circ_mv, market_cap, total_market_cap"
     return f"Unsupported formula: {formula_key}"
 
@@ -201,7 +201,7 @@ class FactorValidator:
         }
 
     def _preflight_required_fields(self, spec: StrategySpec, symbols: List[str]) -> str:
-        if spec.signal_formula_key != "joinquant_small_cap_size_factor":
+        if spec.signal_formula_key not in {"joinquant_small_cap_size_factor", "joinquant_small_cap_low_price_factor"}:
             return ""
         if not symbols or not hasattr(self._market_data, "available_fields"):
             return ""
@@ -212,12 +212,13 @@ class FactorValidator:
         return _signal_error(spec.signal_formula_key)
 
     def _requested_market_data_fields(self, spec: StrategySpec) -> Optional[List[str]]:
-        if spec.signal_formula_key == "joinquant_small_cap_size_factor":
+        if spec.signal_formula_key in {"joinquant_small_cap_size_factor", "joinquant_small_cap_low_price_factor"}:
             return [
                 "close",
                 "adj_close",
                 "adj_factor",
                 "volume",
+                "turnover",
                 "total_mv",
                 "circ_mv",
                 "market_cap",
@@ -615,11 +616,16 @@ class FactorValidator:
         cost_bps: float,
     ) -> List[Dict[str, Any]]:
         layers: List[Dict[str, Any]] = []
-        strategy_positive_only = str(spec.signal_formula_key) not in {"worldquant_alpha_004"}
+        non_positive_signal_formulas = {
+            "worldquant_alpha_004",
+            "joinquant_small_cap_size_factor",
+            "joinquant_small_cap_low_price_factor",
+        }
+        strategy_positive_only = str(spec.signal_formula_key) not in non_positive_signal_formulas
         strategy_selection_note = (
             "使用策略生成器规则：top 1% capped 20，且 signal > 0。"
             if strategy_positive_only
-            else "使用策略生成器规则：top 1% capped 20；该公式信号整体为非正，按信号从高到低选股。"
+            else "使用策略生成器规则：top 1% capped 20；该公式不使用 signal > 0 过滤，按信号从高到低选股。"
         )
         layer_specs = [
             (

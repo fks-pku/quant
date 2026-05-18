@@ -110,7 +110,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
                     WHERE b.symbol IN ({placeholders})
                       AND {start_filter}
                       AND {end_filter}
-                    ORDER BY date, symbol
+                    ORDER BY date, b.symbol
                 """
                 params = table_symbols + [start, end]
                 try:

@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
 import pytest
+from datetime import date
+from types import SimpleNamespace
+import importlib.util
 
 from quant.features.research.models import (
     EvaluationReport,
@@ -31,6 +34,37 @@ def _report(strategy_type="momentum", symbols=None) -> EvaluationReport:
         strategy_type=strategy_type,
         summary="test",
     )
+
+
+def _generated_low_price_strategy_class(tmp_path):
+    from quant.features.research.integrator import StrategyIntegrator
+
+    spec = StrategySpec(
+        strategy_id="joinquant_small_cap_low_price",
+        strategy_type="factor",
+        signal_formula_key="joinquant_small_cap_low_price_factor",
+        universe=["600001"],
+        horizon_days=5,
+        lookback_days=1,
+        execution_lag_days=1,
+        required_fields=["close", "market_cap", "turnover"],
+        status="ready",
+    )
+    code = StrategyIntegrator(tmp_path)._generate_strategy_code(
+        "joinquant_small_cap_low_price",
+        _raw("JoinQuant Small Cap Low Price"),
+        _report("factor", symbols=["600001"]),
+        spec,
+    )
+    strategy_file = tmp_path / "strategy.py"
+    strategy_file.write_text(code, encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location(
+        f"test_generated_low_price_{id(tmp_path)}",
+        strategy_file,
+    )
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module.JoinquantSmallCapLowPriceStrategy
 
 
 class TestStrategySpecBuilder:
@@ -260,6 +294,105 @@ class TestStrategySpecBuilder:
         assert spec.lookback_days == 50
         assert spec.horizon_days == 5
         assert spec.status == "ready"
+
+    def test_joinquant_small_cap_low_price_formula_maps_to_ready_spec(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = _raw(
+            "JoinQuant Small Cap Low Price",
+            metadata={"formula_key": "joinquant_small_cap_low_price"},
+        )
+        builder = StrategySpecBuilder()
+        spec = builder.build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.strategy_type == "factor"
+        assert spec.signal_formula_key == "joinquant_small_cap_low_price_factor"
+        assert spec.required_fields == ["close", "market_cap", "turnover"]
+        assert spec.lookback_days == 1
+        assert spec.horizon_days == 5
+        assert spec.status == "ready"
+
+    def test_generated_low_price_strategy_has_delisting_risk_guard(self, tmp_path):
+        strategy_cls = _generated_low_price_strategy_class(tmp_path)
+        strategy = strategy_cls(
+            symbols=["600001"],
+            min_trade_price=2.0,
+            min_avg_turnover=20000.0,
+            liquidity_lookback=2,
+        )
+
+        strategy.on_data(None, {
+            "symbol": "600001",
+            "close": 3.0,
+            "adj_close": 3.0,
+            "volume": 1000000,
+            "turnover": 30000.0,
+            "total_mv": 100.0,
+            "is_st": False,
+            "_suspended": False,
+            "tradable": True,
+            "is_listed": True,
+            "list_status": "L",
+        })
+        assert strategy._signal("600001") > 0
+
+        strategy.on_data(None, {
+            "symbol": "600001",
+            "close": 1.8,
+            "adj_close": 1.8,
+            "volume": 1000000,
+            "turnover": 30000.0,
+            "total_mv": 100.0,
+            "is_st": False,
+            "_suspended": False,
+            "tradable": True,
+            "is_listed": True,
+            "list_status": "L",
+        })
+        assert strategy._signal("600001") == 0.0
+
+    def test_generated_low_price_strategy_daily_risk_exit_bypasses_holding_gate(self, tmp_path):
+        strategy_cls = _generated_low_price_strategy_class(tmp_path)
+        strategy = strategy_cls(
+            symbols=["600001"],
+            holding_days=5,
+            min_trade_price=2.0,
+            min_avg_turnover=20000.0,
+            liquidity_lookback=2,
+        )
+        submitted = []
+
+        def submit_order(symbol, quantity, side, order_type, price, strategy_name):
+            submitted.append((symbol, quantity, side, order_type, price, strategy_name))
+            return "order-1"
+
+        context = SimpleNamespace(
+            portfolio=SimpleNamespace(nav=100000.0),
+            submit_order=submit_order,
+        )
+        strategy.on_start(context)
+        strategy._positions["600001"] = 100
+        strategy._last_rebalance_date = date(2024, 1, 2)
+        strategy._days_since_rebalance = 0
+        strategy.on_data(context, {
+            "symbol": "600001",
+            "close": 1.8,
+            "adj_close": 1.8,
+            "volume": 1000000,
+            "turnover": 30000.0,
+            "total_mv": 100.0,
+            "is_st": False,
+            "_suspended": False,
+            "tradable": True,
+            "is_listed": True,
+            "list_status": "L",
+        })
+
+        strategy.on_after_trading(context, date(2024, 1, 3))
+
+        assert submitted == [("600001", 100, "SELL", "MARKET", 1.8, "joinquant_small_cap_low_price")]
 
     def test_unknown_type_returns_unsupported(self):
         from quant.features.research.validation.strategy_spec_builder import (
@@ -538,6 +671,47 @@ class TestResearchAdjustedPrices:
         signal = compute_signal("joinquant_small_cap_size_factor", frame, lookback=1)
 
         assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600002"]
+
+    def test_joinquant_small_cap_low_price_factor_filters_high_price_names(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=3, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 3,
+                "symbol": ["600001"] * 3 + ["600002"] * 3 + ["600003"] * 3,
+                "close": [10.0, 10.0, 10.0, 18.0, 18.0, 18.0, 25.0, 25.0, 25.0],
+                "adj_close": [10.0, 10.0, 10.0, 18.0, 18.0, 18.0, 25.0, 25.0, 25.0],
+                "turnover": [30000.0] * 9,
+                "total_mv": [100.0, 100.0, 100.0, 500.0, 500.0, 500.0, 50.0, 50.0, 50.0],
+            }
+        )
+
+        signal = compute_signal("joinquant_small_cap_low_price_factor", frame, lookback=1)
+
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600002"]
+        assert pd.isna(signal.loc[dates[-1], "600003"])
+
+    def test_joinquant_small_cap_low_price_factor_filters_penny_and_illiquid_names(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=3, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 3,
+                "symbol": ["600001"] * 3 + ["600002"] * 3 + ["600003"] * 3,
+                "close": [3.0, 3.0, 3.0, 1.8, 1.8, 1.8, 5.0, 5.0, 5.0],
+                "adj_close": [3.0, 3.0, 3.0, 1.8, 1.8, 1.8, 5.0, 5.0, 5.0],
+                "turnover": [30000.0, 30000.0, 30000.0, 30000.0, 30000.0, 30000.0, 1000.0, 1000.0, 1000.0],
+                "total_mv": [100.0, 100.0, 100.0, 50.0, 50.0, 50.0, 30.0, 30.0, 30.0],
+            }
+        )
+
+        signal = compute_signal("joinquant_small_cap_low_price_factor", frame, lookback=1)
+
+        assert signal.loc[dates[-1], "600001"] == -100.0
+        assert pd.isna(signal.loc[dates[-1], "600002"])
+        assert pd.isna(signal.loc[dates[-1], "600003"])
 
     def test_worldquant_alpha_001_returns_cross_sectional_rank_signal(self):
         from quant.features.research.validation.signal_library import compute_signal
@@ -1016,6 +1190,39 @@ class TestFactorValidator:
         assert np.isfinite(diagnostics["top1_pct_after_cost_calmar_ratio"])
         assert np.isfinite(diagnostics["top1_pct_after_cost_sharpe"])
         assert np.isfinite(diagnostics["top1_pct_turnover"])
+
+    def test_pnl_bridge_does_not_positive_filter_joinquant_low_price_signal(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        dates = pd.date_range("2024-01-01", periods=12, freq="D")
+        symbols = [f"60000{i}" for i in range(5)]
+        signals = pd.DataFrame(
+            {symbol: [-float(i + 1 + day * 0.01) for day in range(len(dates))] for i, symbol in enumerate(symbols)},
+            index=dates,
+        )
+        prices = pd.DataFrame(
+            {symbol: [10.0 + i + day * 0.1 for day in range(len(dates))] for i, symbol in enumerate(symbols)},
+            index=dates,
+        )
+        volume = pd.DataFrame(1000.0, index=dates, columns=symbols)
+        spec = StrategySpec(
+            strategy_id="joinquant_small_cap_low_price",
+            strategy_type="factor",
+            signal_formula_key="joinquant_small_cap_low_price_factor",
+            universe=symbols,
+            horizon_days=5,
+            lookback_days=1,
+            execution_lag_days=1,
+            required_fields=["close", "market_cap", "turnover"],
+            status="ready",
+        )
+        validator = FactorValidator(None, config={"min_stocks": 2, "top_bucket_size": 20})
+
+        bridge = validator._pnl_attribution_bridge(spec, signals, prices, volume, cost_bps=10.0)
+        selection = next(item for item in bridge if item["key"] == "strategy_selection_rule")
+
+        assert "不使用 signal > 0 过滤" in selection["note"]
+        assert selection["selected_count_mean"] > 0
 
     def test_factor_validator_applies_execution_lag_once(self, monkeypatch):
         from quant.features.research.validation import signal_library

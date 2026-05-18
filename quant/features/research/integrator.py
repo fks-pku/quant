@@ -166,20 +166,38 @@ class {class_name}(DailyBarStrategy):
         holding_days: int = {horizon},
         max_position_pct: float = {RESEARCH_DEFAULT_MAX_POSITION_PCT:.1f},
         max_positions: int = 20,
+        delisting_risk_guard: bool = True,
+        min_trade_price: float = 2.0,
+        min_avg_turnover: float = 20000.0,
+        liquidity_lookback: int = 20,
+        max_recent_suspended_days: int = 0,
     ):
         self._symbols = symbols or {default_symbols_expr}
         self.lookback = lookback
         self.max_position_pct = max_position_pct
         self.max_positions = max_positions
+        self.delisting_risk_guard = bool(delisting_risk_guard)
+        self.min_trade_price = float(min_trade_price)
+        self.min_avg_turnover = float(min_avg_turnover)
+        self.liquidity_lookback = int(liquidity_lookback)
+        self.max_recent_suspended_days = int(max_recent_suspended_days)
+        self._risk_exit_symbols = set()
         super().__init__("{name}", self._symbols, holding_days=holding_days)
 
     @property
     def _max_keep_hint(self) -> int:
-        return max(self.lookback * 3, self.lookback + 5)
+        return max(self.lookback * 3, self.lookback + 5, self.liquidity_lookback + 5)
 
     def on_start(self, context: "Context") -> None:
         super().on_start(context)
         self.logger = get_logger("{class_name}")
+
+    def on_after_trading(self, context: "Context", trading_date: date) -> None:
+        self._risk_exit_symbols = self._exit_delisting_risk_positions(context)
+        try:
+            super().on_after_trading(context, trading_date)
+        finally:
+            self._risk_exit_symbols = set()
 
 {rebalance_body}
     def _target_quantity(self, context: "Context", price: float, slots: int) -> int:
@@ -200,6 +218,74 @@ class {class_name}(DailyBarStrategy):
             return float(value)
         return self._bar_volume(bar) * self._adj(bar, "close")
 
+    def _exit_delisting_risk_positions(self, context: "Context") -> set:
+        exited = set()
+        if not self.delisting_risk_guard:
+            return exited
+        for symbol, quantity in list(self._positions.items()):
+            if quantity <= 0:
+                continue
+            bar = self._get_last_bar(symbol)
+            if not bar or not self._delisting_exit_risk(symbol, bar):
+                continue
+            price = self._get_last_price(symbol)
+            self.sell(symbol, int(quantity), "MARKET", price if price > 0 else None)
+            exited.add(symbol)
+        return exited
+
+    def _delisting_entry_risk(self, symbol: str, bar: Any) -> bool:
+        if not self.delisting_risk_guard:
+            return False
+        if self._bar_bool(bar, "is_st") or self._bar_bool(bar, "_suspended"):
+            return True
+        if self._bar_bool(bar, "tradable", default=True) is False:
+            return True
+        if self._bar_bool(bar, "is_listed", default=True) is False:
+            return True
+        list_status = self._bar_text(bar, "list_status", "L").upper()
+        if list_status and list_status != "L":
+            return True
+        price = self._price(bar)
+        if price <= 0.0 or price < self.min_trade_price:
+            return True
+        if self._recent_suspended_days(symbol) > self.max_recent_suspended_days:
+            return True
+        return self._average_turnover(symbol) < self.min_avg_turnover
+
+    def _delisting_exit_risk(self, symbol: str, bar: Any) -> bool:
+        if self._delisting_entry_risk(symbol, bar):
+            return True
+        price = self._price(bar)
+        if price > 0.0 and price < self.min_trade_price:
+            return True
+        return False
+
+    def _average_turnover(self, symbol: str) -> float:
+        bars = self._day_data.get(symbol, [])[-max(1, self.liquidity_lookback):]
+        values = [self._bar_turnover(bar) for bar in bars if not self._bar_bool(bar, "_suspended")]
+        values = [value for value in values if value == value and value > 0.0]
+        return float(np.mean(values)) if values else 0.0
+
+    def _recent_suspended_days(self, symbol: str) -> int:
+        bars = self._day_data.get(symbol, [])[-max(1, self.liquidity_lookback):]
+        return sum(
+            1
+            for bar in bars
+            if self._bar_bool(bar, "_suspended")
+            or self._bar_bool(bar, "tradable", default=True) is False
+            or self._bar_bool(bar, "has_daily_bar", default=True) is False
+        )
+
+    @staticmethod
+    def _bar_bool(bar: Any, field: str, default: bool = False) -> bool:
+        value = bar.get(field, default) if isinstance(bar, dict) else getattr(bar, field, default)
+        return bool(value)
+
+    @staticmethod
+    def _bar_text(bar: Any, field: str, default: str = "") -> str:
+        value = bar.get(field, default) if isinstance(bar, dict) else getattr(bar, field, default)
+        return "" if value is None else str(value)
+
 {body}
 
     def _get_parameters(self) -> Dict[str, Any]:
@@ -207,6 +293,11 @@ class {class_name}(DailyBarStrategy):
             "lookback": self.lookback,
             "max_position_pct": self.max_position_pct,
             "max_positions": self.max_positions,
+            "delisting_risk_guard": self.delisting_risk_guard,
+            "min_trade_price": self.min_trade_price,
+            "min_avg_turnover": self.min_avg_turnover,
+            "liquidity_lookback": self.liquidity_lookback,
+            "max_recent_suspended_days": self.max_recent_suspended_days,
             "formula_key": "{formula_key or "manual_review_required"}",
         }}
 '''
@@ -215,7 +306,10 @@ class {class_name}(DailyBarStrategy):
     def _generic_rebalance_body() -> str:
         return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
         candidates = []
+        risk_exits = getattr(self, "_risk_exit_symbols", set())
         for symbol in self._symbols:
+            if symbol in risk_exits:
+                continue
             signal = self._signal(symbol)
             price = self._get_last_price(symbol)
             current_pos = self._positions.get(symbol, 0)
@@ -479,6 +573,35 @@ class {class_name}(DailyBarStrategy):
         if avg_turnover <= 0.0 or turnover_vol <= 0.0:
             return 0.0
         return float(np.log1p(avg_turnover) * avg_turnover / turnover_vol)
+'''
+        if formula_key == "joinquant_small_cap_low_price_factor":
+            return '''    def _signal(self, symbol: str) -> float:
+        bar = self._get_last_bar(symbol)
+        if not bar:
+            return 0.0
+        if self._delisting_entry_risk(symbol, bar):
+            return 0.0
+        price = self._price(bar)
+        if price <= 0.0 or price > 20.0:
+            return 0.0
+        market_cap = self._market_cap(bar)
+        if market_cap <= 0.0:
+            return 0.0
+        return float(1.0 / market_cap)
+
+    @staticmethod
+    def _market_cap(bar: Any) -> float:
+        for field in ("total_mv", "circ_mv", "market_cap", "total_market_cap", "float_market_cap", "circulating_market_cap"):
+            value = bar.get(field, None) if isinstance(bar, dict) else getattr(bar, field, None)
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(numeric) and numeric > 0.0:
+                return numeric
+        return 0.0
 '''
         if formula_key == "worldquant_alpha_001":
             return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
@@ -1041,6 +1164,11 @@ parameters:
   holding_days: {horizon}
   max_position_pct: {RESEARCH_DEFAULT_MAX_POSITION_PCT:.1f}
   max_positions: 20
+  delisting_risk_guard: true
+  min_trade_price: 2.0
+  min_avg_turnover: 20000.0
+  liquidity_lookback: 20
+  max_recent_suspended_days: 0
 """
 
     def _register_in_runtime(

@@ -196,6 +196,24 @@ _IDEAS: tuple[Dict[str, Any], ...] = (
             "unless after-cost long-only performance beats 000300 with controlled drawdown."
         ),
     },
+    {
+        "idea_id": "joinquant_small_cap_low_price",
+        "title": "JoinQuant Small Cap Low Price",
+        "formula_key": "joinquant_small_cap_low_price",
+        "strategy_type": "factor",
+        "required_fields": ["close", "market_cap"],
+        "lookback_days": 1,
+        "horizon_days": 5,
+        "family": "joinquant_small_cap",
+        "source": "joinquant_community",
+        "source_url": "https://www.joinquant.com/community/post/detailMobile?postId=59884",
+        "description": (
+            "JoinQuant community-style A-share daily factor: within tradable non-ST stocks, keep only low nominal "
+            "price names and rank by point-in-time market cap ascending. Economic thesis: A-share retail preference "
+            "and small-cap style premia may concentrate in lower-priced small caps, but strict validation must include "
+            "status-table ST/suspension filters, daily price limits, T+1 execution, costs, turnover, and CSI 300 excess."
+        ),
+    },
 )
 
 
@@ -224,8 +242,8 @@ def _raw_strategy(spec: Dict[str, Any]) -> RawStrategy:
     return RawStrategy(
         title=spec["title"],
         description=spec["description"],
-        source=ASHARE_STRUCTURAL_SOURCE,
-        source_url=ASHARE_STRUCTURAL_SOURCE_URL,
+        source=spec.get("source", ASHARE_STRUCTURAL_SOURCE),
+        source_url=spec.get("source_url", ASHARE_STRUCTURAL_SOURCE_URL),
         authors=ASHARE_STRUCTURAL_AUTHORS,
         published_date=ASHARE_STRUCTURAL_PUBLISHED_DATE,
         metadata={

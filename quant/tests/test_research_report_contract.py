@@ -276,7 +276,26 @@ def test_generated_stage_reports_match_contract():
                             "t1_rejected_sells": 0,
                             "rejection_counts": {"insufficient_cash": 2},
                             "final_suspended_holding_nav": 12345.67,
+                            "final_suspended_holding_nav_pct_of_final_nav": 0.0213,
+                            "frozen_zero_final_nav": 567654.33,
+                            "frozen_zero_cagr": 0.12,
                             "final_suspended_symbols": ["600519"],
+                        },
+                        "data_quality": {
+                            "survivorship_audit": {
+                                "material": True,
+                                "reason": "fixture survivorship risk",
+                                "daily_basic_symbols": 5717,
+                                "ohlc_symbols": 5189,
+                                "daily_basic_not_ohlc_symbols": 540,
+                                "missing_low_price_symbols_excluding_920": 251,
+                                "missing_symbols_below_top20_excluding_920": 197,
+                                "dates_with_missing_below_top20_excluding_920": 3389,
+                                "sample_missing_symbols": [
+                                    {"symbol": "000005", "last_date": "2024-03-05"},
+                                    {"symbol": "000018", "last_date": "2020-01-06"},
+                                ],
+                            }
                         },
                         "equity_curve": {
                             "strategy": [
@@ -297,6 +316,13 @@ def test_generated_stage_reports_match_contract():
                             "commission": {"CN": "cn_realistic"},
                             "t_plus_1": True,
                             "cn_lot_size": 100,
+                            "delisting_risk_guard": {
+                                "enabled": True,
+                                "min_trade_price": 2.0,
+                                "min_avg_turnover": 20000.0,
+                                "liquidity_lookback": 20,
+                                "max_recent_suspended_days": 0,
+                            },
                         },
                         "yearly_returns": {"2024": 0.0, "2025-12-31": 0.16},
                     },
@@ -331,6 +357,10 @@ def test_generated_stage_reports_match_contract():
     assert "final fixture 结论" not in fast_html
     assert "Calmar Ratio" in strict_html
     assert "final_suspended_holding_nav" in strict_html
+    assert "数据完整性审计" in strict_html
+    assert "<td>daily_basic_not_ohlc_symbols</td><td>540</td>" in strict_html
+    assert "<td>missing_symbols_below_top20_excluding_920</td><td>197</td>" in strict_html
+    assert "000005, 000018" in strict_html
     assert "<td>默认目标总仓位</td><td>100.00%</td>" in strict_html
     assert '<figure class="equity-chart">' in strict_html
     assert '<path class="strategy-line"' in strict_html
@@ -343,8 +373,14 @@ def test_generated_stage_reports_match_contract():
     assert "000300 6.00% · 超额 10.00%" in strict_html
     assert "<td>insufficient_cash_rejected_orders</td><td>2</td><td>现金不足拒单</td>" in strict_html
     assert "12,345.67" in strict_html
+    assert "<td>退市风险护栏</td><td>启用；最低价格 2.0000；20 日均成交额 &gt;= 20000.0000</td>" in strict_html
+    assert "<td>frozen_zero_final_nav</td><td>567,654.33</td>" in strict_html
     assert "<td>Rank IC t-stat</td><td>1.3000</td>" in fast_html
     assert "<td>p-value</td><td>0.1900</td>" in fast_html
+    assert "通常有意义/较好水平" in fast_html
+    assert "&gt;=0.02 有研究意义；&gt;=0.04 较好；&gt;=0.06 很强" in fast_html
+    assert "&gt;50% 方向有效；&gt;=55% 较好；&gt;=60% 很强" in fast_html
+    assert "正向 OOS split &gt;50% 有意义；&gt;=60%-70% 较好" in fast_html
     assert "1d=0.0080; 5d=0.0040" in fast_html
     assert "<td>Top 20 long-only</td><td>28.00%</td><td>0.6200</td>" in fast_html
     assert "<td>34.00%</td><td>19.00%</td><td>A 股可交易方向诊断</td>" in fast_html
@@ -388,3 +424,47 @@ def test_signal_oos_validation_uses_structured_walkforward_verdict():
     )
 
     assert "<td>OOS validation</td><td>fail</td>" in html
+    assert "正向 OOS split &gt;50% 有意义" in html
+
+
+def test_fast_report_explains_joinquant_low_price_signal_in_chinese():
+    html = build_research_stage_report_html(
+        "fast_research",
+        {"run_id": "joinquant_low_price_contract", "validated": 1, "validated_passed": 1},
+        [
+            {
+                "title": "JoinQuant Small Cap Low Price",
+                "source": "joinquant_community",
+                "source_url": "https://www.joinquant.com/community/post/detailMobile?postId=59884",
+                "status": "candidate",
+                "thesis": "English source text should not be the only hypothesis shown.",
+                "evidence": {
+                    "published_date": "2026-05-17",
+                    "authors": "Codex Quant Research",
+                    "strategy_spec": {
+                        "strategy_id": "joinquant_small_cap_low_price",
+                        "signal_formula_key": "joinquant_small_cap_low_price_factor",
+                        "universe": ["000001", "000002"],
+                        "lookback_days": 1,
+                        "horizon_days": 5,
+                        "execution_lag_days": 1,
+                        "required_fields": ["close", "market_cap", "turnover"],
+                    },
+                },
+                "metrics": {
+                    "rank_ic": 0.04,
+                    "rank_ic_ir": 0.23,
+                    "fdr_adjusted_p": 0.001,
+                    "hit_rate": 0.62,
+                },
+            }
+        ],
+    )
+
+    assert "这不是基本面预测模型，而是一个 A 股日频截面风格信号" in html
+    assert "2-20 元且具备基本流动性" in html
+    assert "低价股票中优先选择市值最小的股票" in html
+    assert "strict strategy: signal_i,t = 1 / market_cap_i,t" in html
+    assert "持仓触发风险后每日尝试退出" in html
+    assert "t+1 由 Backtester 下 MARKET 单" in html
+    assert "A 股 T+1、100 股一手、涨跌停、停牌、成交量限制、现金不足、佣金和 5bps 滑点" in html

@@ -108,6 +108,14 @@ _FORMULA_MAP = {
         "horizon_days": 5,
         "execution_lag_days": 1,
     },
+    "joinquant_small_cap_low_price": {
+        "formula_key": "joinquant_small_cap_low_price_factor",
+        "strategy_type": "factor",
+        "required_fields": ["close", "market_cap", "turnover"],
+        "lookback_days": 1,
+        "horizon_days": 5,
+        "execution_lag_days": 1,
+    },
     "worldquant_alpha_001": {
         "formula_key": "worldquant_alpha_001",
         "strategy_type": "worldquant_factor",

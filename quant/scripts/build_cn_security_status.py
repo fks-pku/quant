@@ -27,6 +27,7 @@ DEFAULT_MARKET_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "quan
 DEFAULT_SECURITY_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "security_status.duckdb"
 DAILY_CN_TABLE = "daily_cn_ochl"
 STATUS_TABLE = "cn_security_status_daily"
+NON_SH_SZ_PREFIXES = ("920", "8", "4")
 
 
 class TushareClient:
@@ -236,6 +237,7 @@ def _load_stock_basic(conn: duckdb.DuckDBPyConnection, client: TushareClient) ->
     if not frame.empty:
         frame["ts_code"] = frame["ts_code"].astype(str)
         frame["symbol"] = frame["ts_code"].map(_symbol_from_ts_code)
+        frame = frame[~frame["symbol"].fillna("").astype(str).str.startswith(NON_SH_SZ_PREFIXES)].copy()
         frame["list_date"] = _date_series(frame.get("list_date"))
         frame["delist_date"] = _date_series(frame.get("delist_date"))
         frame = frame[["symbol", "ts_code", "name", "list_date", "delist_date", "list_status"]]
@@ -253,6 +255,7 @@ def _load_namechange(conn: duckdb.DuckDBPyConnection, client: TushareClient) -> 
     if not frame.empty:
         frame["ts_code"] = frame["ts_code"].astype(str)
         frame["symbol"] = frame["ts_code"].map(_symbol_from_ts_code)
+        frame = frame[~frame["symbol"].fillna("").astype(str).str.startswith(NON_SH_SZ_PREFIXES)].copy()
         frame["start_date"] = _date_series(frame.get("start_date"))
         frame["end_date"] = _date_series(frame.get("end_date"))
         frame["name"] = frame["name"].fillna("").astype(str)
@@ -280,6 +283,7 @@ def _load_suspend(conn: duckdb.DuckDBPyConnection, client: TushareClient, start:
             continue
         frame["ts_code"] = frame["ts_code"].astype(str)
         frame["symbol"] = frame["ts_code"].map(_symbol_from_ts_code)
+        frame = frame[~frame["symbol"].fillna("").astype(str).str.startswith(NON_SH_SZ_PREFIXES)].copy()
         frame["trade_date"] = _date_series(frame["trade_date"])
         frame["suspend_timing"] = frame["suspend_timing"].fillna("").astype(str)
         frame["suspend_type"] = frame["suspend_type"].fillna("").astype(str)
@@ -305,6 +309,7 @@ def _load_stk_limit(conn: duckdb.DuckDBPyConnection, client: TushareClient, star
             continue
         frame["ts_code"] = frame["ts_code"].astype(str)
         frame["symbol"] = frame["ts_code"].map(_symbol_from_ts_code)
+        frame = frame[~frame["symbol"].fillna("").astype(str).str.startswith(NON_SH_SZ_PREFIXES)].copy()
         frame["trade_date"] = _date_series(frame["trade_date"])
         frame["up_limit"] = pd.to_numeric(frame["up_limit"], errors="coerce")
         frame["down_limit"] = pd.to_numeric(frame["down_limit"], errors="coerce")
@@ -331,29 +336,9 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
             ) AS pre_close
         FROM market.{DAILY_CN_TABLE}
         WHERE CAST(timestamp AS DATE) BETWEEN ? AND ?
+          AND NOT (symbol LIKE '920%' OR symbol LIKE '8%' OR symbol LIKE '4%')
         """,
         [start, end],
-    )
-    conn.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE stage_symbol_ranges AS
-        SELECT symbol, MIN(trade_date) AS start_date, MAX(trade_date) AS end_date
-        FROM stage_local_bars
-        GROUP BY symbol
-        """
-    )
-    conn.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE stage_grid AS
-        SELECT r.symbol, c.trade_date
-        FROM stage_symbol_ranges r
-        JOIN (
-            SELECT DISTINCT trade_date
-            FROM stage_trade_cal
-            WHERE is_open = TRUE
-        ) c
-          ON c.trade_date BETWEEN r.start_date AND r.end_date
-        """
     )
     conn.execute(
         """
@@ -371,6 +356,47 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
             FROM stage_stock_basic
         )
         WHERE rn = 1
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE stage_symbol_ranges AS
+        WITH local_ranges AS (
+            SELECT symbol, MIN(trade_date) AS start_date, MAX(trade_date) AS end_date
+            FROM stage_local_bars
+            GROUP BY symbol
+        ),
+        meta_ranges AS (
+            SELECT
+                symbol,
+                GREATEST(COALESCE(list_date, CAST(? AS DATE)), CAST(? AS DATE)) AS start_date,
+                CAST(? AS DATE) AS end_date
+            FROM stage_meta
+            WHERE symbol IS NOT NULL
+              AND (list_date IS NULL OR list_date <= CAST(? AS DATE))
+              AND (delist_date IS NULL OR delist_date >= CAST(? AS DATE))
+        )
+        SELECT symbol, MIN(start_date) AS start_date, MAX(end_date) AS end_date
+        FROM (
+            SELECT * FROM local_ranges
+            UNION ALL
+            SELECT * FROM meta_ranges
+        )
+        GROUP BY symbol
+        """,
+        [start, start, end, end, start],
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE stage_grid AS
+        SELECT r.symbol, c.trade_date
+        FROM stage_symbol_ranges r
+        JOIN (
+            SELECT DISTINCT trade_date
+            FROM stage_trade_cal
+            WHERE is_open = TRUE
+        ) c
+          ON c.trade_date BETWEEN r.start_date AND r.end_date
         """
     )
     conn.execute(
@@ -467,14 +493,14 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
             list_status,
             is_st,
             st_type,
-            NOT has_daily_bar AS is_suspended,
+                (NOT has_daily_bar) OR NOT COALESCE(is_listed, TRUE) AS is_suspended,
             suspend_type,
             suspend_timing,
             has_daily_bar,
             pre_close,
             up_limit,
             down_limit,
-            has_daily_bar AND COALESCE(is_listed, TRUE) AS tradable,
+                has_daily_bar AND COALESCE(is_listed, TRUE) AS tradable,
             'daily_cn_ochl+tushare' AS source,
             CURRENT_TIMESTAMP AS updated_at
         FROM joined

@@ -107,7 +107,9 @@ class TestAShareStructuralSource:
         ideas = build_ashare_structural_raw_strategies()
 
         assert len(ideas) >= 12
-        assert {idea.source for idea in ideas} == {"ashare_structural"}
+        sources = {idea.source for idea in ideas}
+        assert "ashare_structural" in sources
+        assert "joinquant_community" in sources
         assert all((idea.metadata or {}).get("data_table") == "daily_cn_ochl" for idea in ideas)
         assert all((idea.metadata or {}).get("formula_key") for idea in ideas)
         assert all((idea.metadata or {}).get("a_share_ready") is True for idea in ideas)

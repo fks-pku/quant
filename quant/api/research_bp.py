@@ -44,12 +44,15 @@ def _make_backtest_fn():
 
     def _run_backtest(sid, result, config, integrator, pool):
         registry = StrategyRegistry()
+        info = _candidate_info_for_backtest(sid, integrator, pool)
         strategy_class = registry.get(sid)
+        if strategy_class is None:
+            archive_dir = ((info or {}).get("research_meta") or {}).get("rejected_strategy_dir")
+            strategy_class = _load_archived_strategy_class(sid, archive_dir)
         if strategy_class is None:
             result.errors.append(f"Strategy {sid} not in registry for backtest")
             return
 
-        info = _candidate_info_for_backtest(sid, integrator, pool)
         symbols = _candidate_symbols(info, config.default_symbols)
         start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
         end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
@@ -61,6 +64,7 @@ def _make_backtest_fn():
         lot_sizes = {}
         benchmark_provider = None
         benchmark_meta = {"symbol": "", "coverage_start": "", "coverage_end": "", "rows": 0, "fallback_used": False}
+        survivorship_audit = {}
         try:
             if _candidate_requires_market_cap(info):
                 market_cap_cols = _available_market_cap_columns(db_provider)
@@ -106,6 +110,12 @@ def _make_backtest_fn():
             lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
             if is_cn:
                 benchmark_provider, benchmark_meta = _load_cn_benchmark_provider(db_provider, start, end, BenchmarkProvider)
+                survivorship_audit = _cn_survivorship_audit(
+                    db_provider,
+                    start,
+                    end,
+                    formula_key=_candidate_formula_key(info),
+                )
         finally:
             db_provider.disconnect()
 
@@ -145,8 +155,9 @@ def _make_backtest_fn():
                 symbols=symbols,
             )
         finally:
-            if hasattr(data_provider, "close"):
-                data_provider.close()
+            close_data_provider = getattr(data_provider, "close", None)
+            if callable(close_data_provider):
+                close_data_provider()
         benchmark_equity_curve = None
         if benchmark_provider is not None:
             try:
@@ -164,6 +175,7 @@ def _make_backtest_fn():
             lot_sizes,
             strategy,
             benchmark_equity_curve,
+            survivorship_audit,
         )
         result.backtested += 1
 
@@ -173,6 +185,7 @@ def _make_backtest_fn():
             meta["backtest_result"] = strict_report
             meta["strict_backtest_result"] = strict_report
             _persist_candidate_backtest(pool, sid, info, strict_report)
+            audit_material = bool((strict_report.get("data_quality") or {}).get("survivorship_audit", {}).get("material"))
             if bt_result.sharpe_ratio < config.backtest_sharpe_threshold:
                 pool.reject(sid, reason=f"Backtest Sharpe {bt_result.sharpe_ratio:.2f} below threshold")
                 result.rejected += 1
@@ -205,12 +218,17 @@ def _make_backtest_fn():
                     strict_report,
                     "candidate",
                     "backtest",
-                    f"Strict Backtester Sharpe {bt_result.sharpe_ratio:.2f}",
+                    f"Strict Backtester Sharpe {bt_result.sharpe_ratio:.2f}"
+                    + ("; survivorship audit requires review" if audit_material else ""),
                 )
                 result.log.append(ResearchLogEntry(
                     phase="backtest", title=info.get("name", sid),
-                    source="", source_url="", verdict="pass",
-                    reason=f"Sharpe {bt_result.sharpe_ratio:.2f}",
+                    source="", source_url="", verdict="warning" if audit_material else "pass",
+                    reason=(
+                        f"Sharpe {bt_result.sharpe_ratio:.2f}; survivorship audit requires review"
+                        if audit_material
+                        else f"Sharpe {bt_result.sharpe_ratio:.2f}"
+                    ),
                     scores={
                         "sharpe": round(bt_result.sharpe_ratio, 2),
                         "sortino": round(float(bt_result.sortino_ratio), 2) if bt_result.sortino_ratio != float("inf") else "inf",
@@ -230,7 +248,16 @@ def _candidate_requires_market_cap(info):
     spec = dict(meta.get("strategy_spec") or {})
     required = {str(field) for field in spec.get("required_fields") or []}
     formula = str(spec.get("signal_formula_key") or "")
-    return "market_cap" in required or formula == "joinquant_small_cap_size_factor"
+    return any("market_cap" in field for field in required) or formula in {
+        "joinquant_small_cap_size_factor",
+        "joinquant_small_cap_low_price_factor",
+    }
+
+
+def _candidate_formula_key(info):
+    meta = dict((info or {}).get("research_meta") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    return str(spec.get("signal_formula_key") or "")
 
 
 def _available_market_cap_columns(db_provider):
@@ -248,6 +275,274 @@ def _available_market_cap_columns(db_provider):
         except Exception:
             pass
     return [column for column in sorted(columns) if column in wanted]
+
+
+def _cn_survivorship_audit(db_provider, start, end, formula_key=""):
+    storage = getattr(db_provider, "storage", db_provider)
+    conn = getattr(storage, "conn", None)
+    audit = {
+        "kind": "cn_survivorship_audit",
+        "material": False,
+        "formula_key": str(formula_key or ""),
+    }
+    if conn is None:
+        audit["reason"] = "DuckDB connection unavailable; survivorship audit not run."
+        return audit
+    try:
+        daily_basic_available = bool(storage._daily_basic_available()) if hasattr(storage, "_daily_basic_available") else False
+        status_available = bool(storage._status_available()) if hasattr(storage, "_status_available") else False
+    except Exception as exc:
+        audit["reason"] = f"Survivorship audit preflight failed: {exc}"
+        return audit
+    audit["daily_basic_available"] = daily_basic_available
+    audit["status_available"] = status_available
+    if not daily_basic_available:
+        audit["reason"] = "daily_basic sidecar unavailable; cannot compare historical listing universe."
+        return audit
+
+    start_date = start.date().isoformat() if hasattr(start, "date") else str(start)[:10]
+    end_date = end.date().isoformat() if hasattr(end, "date") else str(end)[:10]
+    status_cte = (
+        "SELECT DISTINCT symbol FROM security_status.cn_security_status_daily "
+        f"WHERE trade_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'"
+        if status_available
+        else "SELECT CAST(NULL AS VARCHAR) AS symbol WHERE FALSE"
+    )
+    try:
+        coverage = _duckdb_fetch_one_dict(
+            conn,
+            f"""
+            WITH dbs AS (
+                SELECT DISTINCT symbol
+                FROM daily_basic.cn_daily_basic
+                WHERE trade_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+            ),
+            ss AS ({status_cte}),
+            os AS (
+                SELECT DISTINCT symbol
+                FROM daily_cn_ochl
+                WHERE CAST(timestamp AS DATE) BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+            )
+            SELECT
+                (SELECT COUNT(*) FROM dbs) AS daily_basic_symbols,
+                (SELECT COUNT(*) FROM ss) AS status_symbols,
+                (SELECT COUNT(*) FROM os) AS ohlc_symbols,
+                (SELECT COUNT(*) FROM dbs WHERE symbol NOT IN (SELECT symbol FROM ss)) AS daily_basic_not_status_symbols,
+                (SELECT COUNT(*) FROM dbs WHERE symbol NOT IN (SELECT symbol FROM os)) AS daily_basic_not_ohlc_symbols,
+                (SELECT COUNT(*) FROM ss WHERE symbol NOT IN (SELECT symbol FROM dbs)) AS status_not_daily_basic_symbols
+            """,
+        )
+        audit.update(coverage)
+        missing_summary = _duckdb_fetch_one_dict(
+            conn,
+            f"""
+            WITH os AS (
+                SELECT DISTINCT symbol
+                FROM daily_cn_ochl
+                WHERE CAST(timestamp AS DATE) BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+            ),
+            missing AS (
+                SELECT
+                    db.symbol,
+                    db.trade_date,
+                    db.total_mv,
+                    db.total_mv / NULLIF(db.total_share, 0) AS inferred_price
+                FROM daily_basic.cn_daily_basic db
+                LEFT JOIN os USING(symbol)
+                WHERE db.trade_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+                  AND os.symbol IS NULL
+                  AND db.total_mv > 0
+                  AND db.total_share > 0
+            )
+            SELECT
+                COUNT(*) AS missing_daily_basic_rows,
+                COUNT(DISTINCT symbol) AS missing_daily_basic_symbols,
+                SUM(CASE WHEN inferred_price > 0 AND inferred_price <= 20 THEN 1 ELSE 0 END) AS missing_low_price_rows,
+                COUNT(DISTINCT CASE WHEN inferred_price > 0 AND inferred_price <= 20 THEN symbol END) AS missing_low_price_symbols,
+                COUNT(DISTINCT CASE WHEN inferred_price > 0 AND inferred_price <= 20
+                    AND NOT (starts_with(symbol, '920') OR starts_with(symbol, '8') OR starts_with(symbol, '4')) THEN symbol END)
+                    AS missing_low_price_symbols_excluding_920,
+                MIN(CASE WHEN inferred_price > 0 AND inferred_price <= 20 THEN total_mv END) AS min_missing_low_price_total_mv
+            FROM missing
+            """,
+        )
+        audit.update(missing_summary)
+        included_date_expr = "s.trade_date" if status_available else "CAST(b.timestamp AS DATE)"
+        included_symbol_expr = "s.symbol" if status_available else "b.symbol"
+        included_from = (
+            "security_status.cn_security_status_daily s JOIN daily_cn_ochl b "
+            "ON s.symbol = b.symbol AND s.trade_date = CAST(b.timestamp AS DATE)"
+            if status_available
+            else "daily_cn_ochl b"
+        )
+        included_status_filter = (
+            f"AND s.trade_date BETWEEN DATE '{start_date}' AND DATE '{end_date}' "
+            "AND s.tradable = TRUE AND s.is_st = FALSE"
+            if status_available
+            else ""
+        )
+        top20_summary = _duckdb_fetch_one_dict(
+            conn,
+            f"""
+            WITH included AS (
+                SELECT {included_date_expr} AS trade_date, {included_symbol_expr} AS symbol, db.total_mv, b.close
+                FROM {included_from}
+                JOIN daily_basic.cn_daily_basic db
+                  ON b.symbol = db.symbol
+                 AND CAST(b.timestamp AS DATE) = db.trade_date
+                WHERE CAST(b.timestamp AS DATE) BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+                  {included_status_filter}
+                  AND b.close > 0
+                  AND b.close <= 20
+                  AND db.total_mv > 0
+            ),
+            ranked AS (
+                SELECT
+                    trade_date,
+                    symbol,
+                    total_mv,
+                    ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY total_mv ASC, symbol ASC) AS rn
+                FROM included
+            ),
+            threshold AS (
+                SELECT trade_date, MAX(total_mv) AS top20_mv_threshold
+                FROM ranked
+                WHERE rn <= 20
+                GROUP BY trade_date
+            ),
+            os AS (
+                SELECT DISTINCT symbol
+                FROM daily_cn_ochl
+                WHERE CAST(timestamp AS DATE) BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+            ),
+            missing AS (
+                SELECT
+                    db.trade_date,
+                    db.symbol,
+                    db.total_mv,
+                    db.total_mv / NULLIF(db.total_share, 0) AS inferred_price
+                FROM daily_basic.cn_daily_basic db
+                LEFT JOIN os USING(symbol)
+                WHERE db.trade_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+                  AND os.symbol IS NULL
+                  AND db.total_mv > 0
+                  AND db.total_share > 0
+                  AND db.total_mv / NULLIF(db.total_share, 0) > 0
+                  AND db.total_mv / NULLIF(db.total_share, 0) <= 20
+            ),
+            displaced AS (
+                SELECT m.*
+                FROM missing m
+                JOIN threshold t ON m.trade_date = t.trade_date
+                WHERE m.total_mv < t.top20_mv_threshold
+            ),
+            displaced_ex_920 AS (
+                SELECT *
+                FROM displaced
+                WHERE NOT (starts_with(symbol, '920') OR starts_with(symbol, '8') OR starts_with(symbol, '4'))
+            ),
+            by_date_ex_920 AS (
+                SELECT trade_date, COUNT(*) AS n_symbols
+                FROM displaced_ex_920
+                GROUP BY trade_date
+            )
+            SELECT
+                (SELECT COUNT(DISTINCT trade_date) FROM displaced) AS dates_with_missing_below_top20,
+                (SELECT COUNT(*) FROM displaced) AS missing_rows_below_top20,
+                (SELECT COUNT(DISTINCT symbol) FROM displaced) AS missing_symbols_below_top20,
+                (SELECT COUNT(DISTINCT trade_date) FROM displaced_ex_920) AS dates_with_missing_below_top20_excluding_920,
+                (SELECT COUNT(*) FROM displaced_ex_920) AS missing_rows_below_top20_excluding_920,
+                (SELECT COUNT(DISTINCT symbol) FROM displaced_ex_920) AS missing_symbols_below_top20_excluding_920,
+                (SELECT MAX(n_symbols) FROM by_date_ex_920) AS max_missing_below_top20_per_date_excluding_920
+            """,
+        )
+        audit.update(top20_summary)
+        samples = _duckdb_fetch_dicts(
+            conn,
+            f"""
+            WITH os AS (
+                SELECT DISTINCT symbol
+                FROM daily_cn_ochl
+                WHERE CAST(timestamp AS DATE) BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+            ),
+            per_symbol AS (
+                SELECT
+                    db.symbol,
+                    MIN(db.trade_date) AS first_date,
+                    MAX(db.trade_date) AS last_date,
+                    COUNT(*) AS n_rows,
+                    SUM(CASE WHEN db.total_mv / NULLIF(db.total_share, 0) > 0
+                              AND db.total_mv / NULLIF(db.total_share, 0) <= 20 THEN 1 ELSE 0 END) AS low_price_rows,
+                    MIN(CASE WHEN db.total_mv / NULLIF(db.total_share, 0) > 0
+                              AND db.total_mv / NULLIF(db.total_share, 0) <= 20 THEN db.total_mv END) AS min_total_mv,
+                    MIN(db.total_mv / NULLIF(db.total_share, 0)) AS min_inferred_price
+                FROM daily_basic.cn_daily_basic db
+                LEFT JOIN os USING(symbol)
+                WHERE db.trade_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+                  AND os.symbol IS NULL
+                  AND NOT (starts_with(db.symbol, '920') OR starts_with(db.symbol, '8') OR starts_with(db.symbol, '4'))
+                  AND db.total_mv > 0
+                  AND db.total_share > 0
+                GROUP BY db.symbol
+            )
+            SELECT symbol, first_date, last_date, n_rows, low_price_rows, min_total_mv, min_inferred_price
+            FROM per_symbol
+            WHERE low_price_rows > 0
+            ORDER BY last_date DESC, min_total_mv ASC
+            LIMIT 12
+            """,
+        )
+        audit["sample_missing_symbols"] = samples
+    except Exception as exc:
+        audit["reason"] = f"Survivorship audit failed: {exc}"
+        return audit
+
+    missing_below_top20 = int(audit.get("missing_symbols_below_top20_excluding_920") or 0)
+    missing_ohlc = int(audit.get("daily_basic_not_ohlc_symbols") or 0)
+    audit["material"] = missing_below_top20 > 0
+    if audit["material"]:
+        audit["reason"] = (
+            f"daily_basic has {missing_ohlc} symbols absent from OHLC; "
+            f"{missing_below_top20} Shanghai/Shenzhen symbols would fall below the current Top20 small-cap threshold. "
+            "Strict backtest may be upward biased until historical OHLC/status coverage is completed."
+        )
+    else:
+        audit["reason"] = "No missing Shanghai/Shenzhen daily_basic symbols fell below the current Top20 small-cap threshold."
+    return audit
+
+
+def _duckdb_fetch_one_dict(conn, query, params=None):
+    cursor = conn.execute(query, params or [])
+    row = cursor.fetchone()
+    columns = [item[0] for item in cursor.description]
+    if row is None:
+        return {column: 0 for column in columns}
+    return {column: _json_scalar(row[index]) for index, column in enumerate(columns)}
+
+
+def _duckdb_fetch_dicts(conn, query, params=None):
+    cursor = conn.execute(query, params or [])
+    columns = [item[0] for item in cursor.description]
+    return [
+        {column: _json_scalar(row[index]) for index, column in enumerate(columns)}
+        for row in cursor.fetchall()
+    ]
+
+
+def _json_scalar(value):
+    if value is None:
+        return None
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return value
 
 
 def _candidate_info_for_backtest(sid, integrator, pool):
@@ -269,13 +564,24 @@ def _candidate_info_for_backtest(sid, integrator, pool):
 
 
 class _DuckDBDailyDateProvider:
-    def __init__(self, symbols, start, end):
+    def __init__(self, symbols, start, end, db_path=None, status_db_path=None, daily_basic_db_path=None):
         import pandas as pd
-        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+        from quant.infrastructure.data.storage_duckdb import (
+            DuckDBStorage,
+            _DEFAULT_DAILY_BASIC_DB,
+            _DEFAULT_DB,
+            _DEFAULT_STATUS_DB,
+        )
 
         self.symbols = list(dict.fromkeys(str(symbol) for symbol in symbols))
         self._symbol_lookup = set(self.symbols)
-        self._storage = DuckDBStorage(read_only=True, use_security_status=False)
+        self._storage = DuckDBStorage(
+            db_path or _DEFAULT_DB,
+            read_only=True,
+            use_security_status=True,
+            status_db_path=status_db_path or _DEFAULT_STATUS_DB,
+            daily_basic_db_path=daily_basic_db_path or _DEFAULT_DAILY_BASIC_DB,
+        )
         rows = self._storage.conn.execute(
             """
             SELECT DISTINCT CAST(timestamp AS DATE) AS trade_date
@@ -291,7 +597,64 @@ class _DuckDBDailyDateProvider:
         import pandas as pd
 
         day = pd.Timestamp(trading_date).date()
-        if self._storage._daily_basic_available():
+        if self._storage._status_available():
+            self._storage._daily_basic_available()
+            frame = self._storage.conn.execute(
+                """
+                SELECT
+                    CAST(s.trade_date AS TIMESTAMP) AS timestamp,
+                    s.symbol,
+                    b.open,
+                    b.high,
+                    b.low,
+                    b.close,
+                    b.volume,
+                    b.turnover,
+                    b.adj_open,
+                    b.adj_high,
+                    b.adj_low,
+                    b.adj_close,
+                    b.adj_factor,
+                    db.turnover_rate,
+                    db.turnover_rate_f,
+                    db.volume_ratio,
+                    db.pe,
+                    db.pe_ttm,
+                    db.pb,
+                    db.ps,
+                    db.ps_ttm,
+                    db.dv_ratio,
+                    db.dv_ttm,
+                    db.total_share,
+                    db.float_share,
+                    db.free_share,
+                    db.total_mv,
+                    db.circ_mv,
+                    s.is_st,
+                    s.st_type,
+                    s.is_suspended AS status_is_suspended,
+                    s.has_daily_bar,
+                    s.tradable,
+                    s.up_limit,
+                    s.down_limit,
+                    s.pre_close AS status_pre_close,
+                    s.is_listed,
+                    s.list_status,
+                    s.suspend_type,
+                    s.suspend_timing
+                FROM security_status.cn_security_status_daily s
+                LEFT JOIN daily_cn_ochl b
+                  ON s.symbol = b.symbol
+                 AND s.trade_date = CAST(b.timestamp AS DATE)
+                LEFT JOIN daily_basic.cn_daily_basic db
+                  ON s.symbol = db.symbol
+                 AND s.trade_date = db.trade_date
+                WHERE s.trade_date = ?
+                """,
+                [day],
+            ).fetchdf()
+            frame = self._storage._normalize_status_enriched_bars(frame)
+        elif self._storage._daily_basic_available():
             frame = self._storage.conn.execute(
                 """
                 SELECT
@@ -385,6 +748,7 @@ def _strict_backtest_report(
     lot_sizes,
     strategy=None,
     benchmark_equity_curve=None,
+    survivorship_audit=None,
 ):
     metrics = getattr(bt_result, "metrics", None)
     diagnostics = getattr(bt_result, "diagnostics", None)
@@ -394,6 +758,23 @@ def _strict_backtest_report(
     stat_sig = getattr(metrics, "statistical_significance", {}) if metrics is not None else {}
     benchmark_metrics = _benchmark_equity_metrics(benchmark_equity_curve, initial_cash, start, end)
     strategy_equity_curve = getattr(bt_result, "equity_curve", None)
+    diagnostics_dict = _diagnostics_dict(diagnostics)
+    final_nav = _metric_float(getattr(bt_result, "final_nav", 0.0))
+    frozen_nav = _metric_float(diagnostics_dict.get("final_suspended_holding_nav", 0.0))
+    if not isinstance(final_nav, str) and not isinstance(frozen_nav, str):
+        frozen_zero_nav = max(0.0, float(final_nav) - float(frozen_nav))
+        diagnostics_dict["final_suspended_holding_nav_pct_of_final_nav"] = (
+            float(frozen_nav) / float(final_nav) if float(final_nav) > 0 else 0.0
+        )
+        diagnostics_dict["frozen_zero_final_nav"] = frozen_zero_nav
+        diagnostics_dict["frozen_zero_total_return"] = (
+            frozen_zero_nav / float(initial_cash) - 1.0 if float(initial_cash) > 0 else 0.0
+        )
+        diagnostics_dict["frozen_zero_cagr"] = (
+            (frozen_zero_nav / float(initial_cash)) ** (365.25 / days) - 1.0
+            if float(initial_cash) > 0 and frozen_zero_nav > 0
+            else -1.0
+        )
     return {
         "framework": "Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio",
         "period": f"{start.date()}-{end.date()}",
@@ -423,7 +804,10 @@ def _strict_backtest_report(
             "tracking_error": _metric_float(getattr(metrics, "tracking_error", None) if metrics is not None else None),
             "benchmark_yearly_returns": _yearly_returns_from_equity(benchmark_equity_curve, initial_cash),
         },
-        "diagnostics": _diagnostics_dict(diagnostics),
+        "diagnostics": diagnostics_dict,
+        "data_quality": {
+            "survivorship_audit": dict(survivorship_audit or {}),
+        },
         "equity_curve": {
             "strategy": _series_to_curve_points(strategy_equity_curve),
             "benchmark": _series_to_curve_points(benchmark_equity_curve),
@@ -441,6 +825,13 @@ def _strict_backtest_report(
             "slippage_bps": 5,
             "strategy_max_position_pct": _metric_float(getattr(strategy, "max_position_pct", None)),
             "strategy_max_positions": int(getattr(strategy, "max_positions", 0) or 0),
+            "delisting_risk_guard": {
+                "enabled": bool(getattr(strategy, "delisting_risk_guard", False)),
+                "min_trade_price": _metric_float(getattr(strategy, "min_trade_price", 0.0)),
+                "min_avg_turnover": _metric_float(getattr(strategy, "min_avg_turnover", 0.0)),
+                "liquidity_lookback": int(getattr(strategy, "liquidity_lookback", 0) or 0),
+                "max_recent_suspended_days": int(getattr(strategy, "max_recent_suspended_days", 0) or 0),
+            },
         },
     }
 

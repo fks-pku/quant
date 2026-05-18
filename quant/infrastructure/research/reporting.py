@@ -383,6 +383,8 @@ def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Di
             _yearly_return_calendar(data, rows),
             "<h3>回测配置</h3>",
             _backtest_config_contract_table(data, rows),
+            "<h3>数据完整性审计</h3>",
+            _data_quality_contract_table(data, rows),
             "<h3>核心绩效</h3>",
             _core_performance_contract_table(data, rows),
             "<h3>成交与成本诊断</h3>",
@@ -482,9 +484,47 @@ def _idea_source_overview_table(rows: List[Dict[str, Any]]) -> str:
         f"<tr><td>来源</td><td>{_source_link(row)}</td><td>必须附 URL</td></tr>",
         f"<tr><td>发布时间</td><td>{escape(str(evidence.get('published_date') or '未记录'))}</td><td>用于判断 post-publication 风险</td></tr>",
         f"<tr><td>作者/机构</td><td>{escape(_join_text(authors))}</td><td>用于来源可信度审计</td></tr>",
-        f"<tr><td>核心假设</td><td>{escape(str(row.get('thesis') or _decision_reason(row)))}</td><td>不能只写“可能赚钱”</td></tr>",
+        f"<tr><td>核心假设</td><td>{_core_hypothesis_cell(row)}</td><td>用中文说明收益来源、适用边界和必须验证的约束</td></tr>",
     ]
     return _table(["字段", "内容", "要求"], body)
+
+
+def _core_hypothesis_cell(row: Dict[str, Any]) -> str:
+    items = _core_hypothesis_items(row)
+    if items:
+        return '<ol class="hypothesis-list">' + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ol>"
+    return escape(str(row.get("thesis") or _decision_reason(row)))
+
+
+def _core_hypothesis_items(row: Dict[str, Any]) -> List[str]:
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    formula = str(spec.get("signal_formula_key", "") or "").lower()
+    if formula == "joinquant_small_cap_low_price_factor":
+        return [
+            "这不是基本面预测模型，而是一个 A 股日频截面风格信号：在可交易股票中，先限定名义股价位于 2-20 元且具备基本流动性，再偏好市值更小的股票。",
+            "经济直觉是低价股更容易受到散户交易、题材资金和单位价格可负担性的影响；在低价股票内部，小市值公司对边际资金更敏感，可能形成短周期的小盘弹性和风险补偿。",
+            "主要风险是该收益可能只是小盘、低流动性、涨跌停约束或退市尾部风险补偿，所以必须用 ST/停牌/可交易状态、T+1、涨跌停、成交量、佣金滑点和沪深 300 超额收益一起检验。",
+        ]
+    if formula == "joinquant_small_cap_size_factor":
+        return [
+            "核心假设是 A 股小市值股票在部分市场阶段存在风格溢价，市值越小，对边际资金和风险偏好变化越敏感。",
+            "信号本身不预测行业或基本面改善，只表达小盘暴露；因此研究结论必须区分真实 alpha、风格 beta 和流动性补偿。",
+            "落地前必须检验 ST/停牌、涨跌停、T+1、成交量容量、交易成本和回撤，因为小市值组合最容易在执行层面打折。",
+        ]
+    if "momentum" in formula:
+        return [
+            "核心假设是近期强势股票可能存在趋势延续，价格动量反映资金继续流入、信息扩散或风险偏好持续。",
+            "该假设容易受市场 regime 影响，牛市中更可能有效，震荡或急跌阶段可能快速反转。",
+            "必须用样本外验证、换手成本和回撤检验，避免把阶段性趋势误判为稳定 alpha。",
+        ]
+    if "reversal" in formula or "mean_reversion" in formula or "mean" in formula:
+        return [
+            "核心假设是短期过度下跌或偏离均值后，价格存在修复压力，反转收益来自流动性冲击消退或投资者过度反应修正。",
+            "该信号在市场急跌或基本面恶化时可能接住下跌趋势，所以需要额外关注尾部风险和止损/容量约束。",
+            "研究必须验证反转收益是否能覆盖交易成本，并确认不是由少数极端日期贡献。",
+        ]
+    text = str(row.get("thesis") or _decision_reason(row)).strip()
+    return [text] if text else []
 
 
 def _source_quality_score_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -572,6 +612,28 @@ def _formula_block(rows: List[Dict[str, Any]]) -> str:
             f"target_i,t+{lag} = top_20(rank_i,t), long-only; no signal > 0 filter because signal <= 0",
             f"forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1",
         ]
+    elif formula == "joinquant_small_cap_low_price_factor":
+        lines = [
+            "信号类型：A 股日频横截面 long-only 选股信号；信号值越高，越优先进入目标组合。",
+            "输入字段：raw close 用于低价/面值退市风险过滤；turnover 用于基本流动性过滤；point-in-time market_cap/total_mv/circ_mv 用于市值排序；收益验证使用 HFQ adj_close。",
+            "有效样本：2 <= price_i,t <= 20；20 日均 turnover_i,t >= 20000；market_cap_i,t > 0。",
+            "fast validation: signal_i,t = -market_cap_i,t if eligible else NaN；等价于在低价股票中优先选择市值最小的股票。",
+            "strict strategy: signal_i,t = 1 / market_cap_i,t，并额外排除 ST、停牌、tradable=false、list_status != L、近期停牌、无有效价格或无有效市值的股票；持仓触发风险后每日尝试退出。",
+            "rank_i,t = rank_desc(signal_i,t)；每天按信号从高到低选择 Top 20。",
+            f"执行路径：t 日收盘后形成目标名单，t+{lag} 由 Backtester 下 MARKET 单；long-only、当前研究默认目标总仓位 100%、Top 20 等权目标。",
+            "交易约束：A 股 T+1、100 股一手、涨跌停、停牌、成交量限制、现金不足、佣金和 5bps 滑点都会在严格回测中生效。",
+            f"验证标签：forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1；horizon={horizon} 个交易日。",
+        ]
+    elif formula == "joinquant_small_cap_size_factor":
+        lines = [
+            "信号类型：A 股日频横截面 long-only 小市值选股信号；信号值越高，市值越小。",
+            "输入字段：point-in-time market_cap/total_mv/circ_mv；收益验证使用 HFQ adj_close。",
+            "有效样本：market_cap_i,t > 0。",
+            "signal_i,t = -market_cap_i,t",
+            "rank_i,t = rank_desc(signal_i,t)；每天按信号从高到低选择 Top 20。",
+            f"执行路径：t 日收盘后形成目标名单，t+{lag} 由 Backtester 按 A 股约束执行。",
+            f"验证标签：forward_return_i,t = adj_close_i,t+{int(lag) + int(horizon)} / adj_close_i,t+{lag} - 1；horizon={horizon} 个交易日。",
+        ]
     elif "mean_reversion" in formula or "reversal" in formula:
         lines = [
             f"ma_i,t = mean(adj_close_i,t-{int(lookback) - 1 if _safe_float(lookback) else lookback} ... adj_close_i,t)",
@@ -648,30 +710,72 @@ def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str,
     metrics = row.get("metrics") or {}
     wf_scores, _, wf_verdict = _walkforward_scores(row)
     rows_data = [
-        ("Rank IC", _fmt(metrics.get("rank_ic")), "横截面秩相关；正负号必须与预测方向一致"),
-        ("ICIR", _fmt(metrics.get("rank_ic_ir")), "IC 均值 / IC 波动，衡量稳定性"),
+        (
+            "Rank IC",
+            _fmt(metrics.get("rank_ic")),
+            ">=0.02 有研究意义；>=0.04 较好；>=0.06 很强。必须与预测方向一致。",
+            "横截面秩相关；正负号必须与预测方向一致",
+        ),
+        (
+            "ICIR",
+            _fmt(metrics.get("rank_ic_ir")),
+            ">=0.20 有稳定性迹象；>=0.50 较好；>=1.00 很强。",
+            "IC 均值 / IC 波动，衡量稳定性",
+        ),
         (
             "Rank IC t-stat",
             _fmt(_first_present(metrics, "rank_ic_tstat", "t_stat")),
+            "|t|>=2 通常认为显著；>=3 较强。",
             "每日 IC 均值对 0 的 t 检验",
         ),
         (
             "p-value",
             _fmt(_first_present(metrics, "rank_ic_p_value", "p_value", "rank_ic_p", "fdr_adjusted_p")),
+            "<0.05 通常显著；<0.01 较强。",
             "每日 IC 均值 t 检验 p 值",
         ),
-        ("FDR adjusted p", _fmt(metrics.get("fdr_adjusted_p")), "多重检验控制；不过则不能给强结论"),
-        ("Hit rate", _pct(metrics.get("hit_rate")), "预测方向命中率"),
-        ("IC decay", _format_decay(metrics.get("ic_decay")), "看 alpha 半衰期与持有期是否匹配"),
-        ("Fama-MacBeth t-stat", _fmt(metrics.get("fama_macbeth_tstat")), "横截面回归显著性"),
-        ("Factor exposure", _factor_exposure_text(metrics), "是否只是已知风险因子暴露"),
-        ("OOS validation", _signal_oos_text(metrics, wf_scores, wf_verdict), "滚动样本外是否保持方向和显著性"),
+        (
+            "FDR adjusted p",
+            _fmt(metrics.get("fdr_adjusted_p")),
+            "<0.10 可探索；<0.05 可给正式显著结论；<0.01 很强。",
+            "多重检验控制；不过则不能给强结论",
+        ),
+        (
+            "Hit rate",
+            _pct(metrics.get("hit_rate")),
+            ">50% 方向有效；>=55% 较好；>=60% 很强。",
+            "预测方向命中率",
+        ),
+        (
+            "IC decay",
+            _format_decay(metrics.get("ic_decay")),
+            "目标持有期 IC 仍为正且未快速归零才有意义；若远期 IC 高于近端，需检查滞后和执行口径。",
+            "看 alpha 半衰期与持有期是否匹配",
+        ),
+        (
+            "Fama-MacBeth t-stat",
+            _fmt(metrics.get("fama_macbeth_tstat")),
+            ">=2 通常显著；>=3 较强。",
+            "横截面回归显著性",
+        ),
+        (
+            "Factor exposure",
+            _factor_exposure_text(metrics),
+            "若做独立 alpha，ff_alpha_tstat>=2 且 R² 不应过高；高 R² 更像风格 beta。",
+            "是否只是已知风险因子暴露",
+        ),
+        (
+            "OOS validation",
+            _signal_oos_text(metrics, wf_scores, wf_verdict),
+            "正向 OOS split >50% 有意义；>=60%-70% 较好；最差 split 不能严重失控。",
+            "滚动样本外是否保持方向和显著性",
+        ),
     ]
     body = "".join(
-        f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(note)}</td></tr>"
-        for metric, value, note in rows_data
+        f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(good_level)}</td><td>{escape(note)}</td></tr>"
+        for metric, value, good_level, note in rows_data
     )
-    return _table(["Metric", "数值", "阈值/解释"], body)
+    return _table(["Metric", "数值", "通常有意义/较好水平", "解释"], body)
 
 
 def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -791,11 +895,19 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
             "信号验证失败后流水线停止；不得展示历史残留回测指标作为本轮结论。",
         )
     constraints = strict.get("constraints") or {}
+    guard = constraints.get("delisting_risk_guard") or {}
+    guard_text = (
+        f"启用；最低价格 {_fmt(guard.get('min_trade_price'))}；"
+        f"{int(guard.get('liquidity_lookback') or 0)} 日均成交额 >= {_fmt(guard.get('min_avg_turnover'))}"
+        if guard.get("enabled")
+        else "未启用"
+    )
     rows_data = [
         ("回测区间", strict.get("period") or "未记录", "必须与数据覆盖一致"),
         ("初始资金", strict.get("initial_cash") or metrics.get("initial_cash") or "500000 CNY", "A 股示例默认 500000 CNY"),
         ("默认目标总仓位", _pct(constraints.get("strategy_max_position_pct")), "研究生成策略默认满仓；按持仓数等权分配"),
         ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
+        ("退市风险护栏", guard_text, "买入过滤低价/低流动性/非上市状态，持仓风险每日尝试退出"),
         ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
         ("佣金", _commission_text(constraints.get("commission")), "含最低佣金、印花税等"),
         ("T+1", "启用" if constraints.get("t_plus_1", True) else "未启用", "当日买入不可卖出"),
@@ -870,12 +982,50 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
         ("volume_limited_trades", str(diagnostics.get("volume_limited_trades") or 0), "成交量限制"),
         ("risk_skipped_orders", str(diagnostics.get("risk_skipped_orders") or 0), "风控跳过订单"),
         ("final_suspended_holding_nav", _money(diagnostics.get("final_suspended_holding_nav")), suspended_note),
+        ("final_suspended_holding_nav_pct", _pct(diagnostics.get("final_suspended_holding_nav_pct_of_final_nav")), "最终 frozen 持仓占期末 NAV"),
+        ("frozen_zero_final_nav", _money(diagnostics.get("frozen_zero_final_nav")), "退市/frozen 持仓归零压力下的期末 NAV"),
+        ("frozen_zero_cagr", _pct(diagnostics.get("frozen_zero_cagr")), "退市/frozen 持仓归零压力下的 CAGR"),
     ]
     body = "".join(
         f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
         for item, value, note in rows_data
     )
     return _table(["诊断项", "数值", "解释"], body)
+
+
+def _data_quality_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["审计项", "数值", "解释"],
+            "本轮未运行数据完整性审计",
+            "strict Backtester 未执行，无法比较 OHLC/status/daily_basic 覆盖。",
+        )
+    audit = ((strict.get("data_quality") or {}).get("survivorship_audit") or {})
+    if not audit:
+        return _not_run_table(
+            ["审计项", "数值", "解释"],
+            "未记录 survivorship audit",
+            "报告缺少 daily_basic 与 OHLC/status universe 的覆盖对账。",
+        )
+    samples = audit.get("sample_missing_symbols") or []
+    sample_text = ", ".join(str(item.get("symbol")) for item in samples[:8] if isinstance(item, dict) and item.get("symbol"))
+    rows_data = [
+        ("material", "是" if audit.get("material") else "否", audit.get("reason") or "是否足以影响 strict 结论"),
+        ("daily_basic_symbols", str(audit.get("daily_basic_symbols") or 0), "daily_basic 中的历史 symbol 数"),
+        ("ohlc_symbols", str(audit.get("ohlc_symbols") or 0), "OHLC 可回测 symbol 数"),
+        ("daily_basic_not_ohlc_symbols", str(audit.get("daily_basic_not_ohlc_symbols") or 0), "daily_basic 有但 OHLC 缺失的 symbol 数"),
+        ("missing_low_price_symbols_excluding_920", str(audit.get("missing_low_price_symbols_excluding_920") or 0), "缺失且曾满足低价条件的非 920 symbol"),
+        ("missing_symbols_below_top20_excluding_920", str(audit.get("missing_symbols_below_top20_excluding_920") or 0), "缺失且市值可能进入当前 Top20 小市值阈值的非 920 symbol"),
+        ("dates_with_missing_below_top20_excluding_920", str(audit.get("dates_with_missing_below_top20_excluding_920") or 0), "受影响交易日数"),
+        ("sample_missing_symbols", sample_text or "-", "样例缺失 symbol"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(_cell(note))}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["审计项", "数值", "解释"], body)
 
 
 def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -1212,7 +1362,7 @@ def _next_steps_contract_table(rows: List[Dict[str, Any]]) -> str:
 def _template_style() -> str:
     base_style = (
         ":root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}"
-        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.hypothesis-list{margin:0;padding-left:20px}.hypothesis-list li{margin:0 0 6px}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}"
     )
     return base_style + "\n" + _REQUIRED_CHART_STYLE
 

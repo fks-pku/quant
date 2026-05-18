@@ -950,6 +950,9 @@ class ResearchEngine:
                 if strict_verdict == "fail":
                     final_status = "rejected"
                     final_reasons.append(strict_reason)
+                elif strict_verdict == "warn" and final_status != "rejected":
+                    final_status = "needs_more_validation"
+                    final_reasons.append(strict_reason)
 
                 if run_walkforward and self._rigor_hub is not None and self.config.rigor_enabled:
                     split_benchmark_data = benchmark_data
@@ -1384,6 +1387,7 @@ class ResearchEngine:
         strict = self._strict_backtest_for_strategy(strategy_id)
         metrics = strict.get("metrics") or {}
         diagnostics = strict.get("diagnostics") or {}
+        survivorship = ((strict.get("data_quality") or {}).get("survivorship_audit") or {})
         sharpe = _optional_float(metrics.get("sharpe"))
         cagr = _optional_float(metrics.get("cagr"))
         max_dd = _optional_float(metrics.get("max_drawdown_pct"))
@@ -1396,6 +1400,9 @@ class ResearchEngine:
             "total_trades": trades,
             "total_commission": diagnostics.get("total_commission"),
             "insufficient_cash_rejected_orders": (diagnostics.get("rejection_counts") or {}).get("insufficient_cash", 0),
+            "survivorship_material": bool(survivorship.get("material")),
+            "daily_basic_not_ohlc_symbols": survivorship.get("daily_basic_not_ohlc_symbols"),
+            "missing_symbols_below_top20_excluding_920": survivorship.get("missing_symbols_below_top20_excluding_920"),
         }
         if not strict or sharpe is None:
             verdict = "warn"
@@ -1411,6 +1418,13 @@ class ResearchEngine:
             conclusion = (
                 f"strict 回测边际：Sharpe={sharpe:.2f} 达标但 CAGR={_percent_text(cagr)}，"
                 "需要 walk-forward audit 再确认稳定性。"
+            )
+        elif bool(survivorship.get("material")):
+            verdict = "warn"
+            conclusion = (
+                f"strict 回测数据审计警告：Sharpe={sharpe:.2f}，CAGR={_percent_text(cagr)}，"
+                f"但 {survivorship.get('missing_symbols_below_top20_excluding_920') or 0} 个非 920 缺失股票"
+                "可能进入小市值 Top20 区间；本阶段不能形成无偏通过结论。"
             )
         else:
             verdict = "pass"

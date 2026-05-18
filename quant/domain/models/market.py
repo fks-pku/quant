@@ -9,7 +9,7 @@ Rules:
 Sub-market classification for CN price limits:
   STAR   (688xxx) → 20%
   ChiNext (300xxx) → 20%
-  BSE     (8xxxxx) → 30%   (must check AFTER 688 to avoid mis-classification)
+  BSE     (8xxxxx/4xxxxx/920xxx) → 30%   (must check AFTER 688 to avoid mis-classification)
   Main board       → 10%
 """
 
@@ -44,7 +44,7 @@ def cn_price_limit_pct(symbol: str) -> float:
         return 0.20
     if symbol.startswith(_CN_CHINEXT_PREFIX):
         return 0.20
-    if symbol.startswith("8"):
+    if symbol.startswith(("8", "4", "920")):
         return 0.30
     return 0.10
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any, Callable
 
 import numpy as np
@@ -89,6 +91,7 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
         "ashare_gap_down_liquid_reversal": _ashare_gap_down_liquid_reversal,
         "ashare_turnover_stability_factor": _ashare_turnover_stability_factor,
         "joinquant_small_cap_size_factor": _joinquant_small_cap_size_factor,
+        "joinquant_small_cap_low_price_factor": _joinquant_small_cap_low_price_factor,
         "momentum_close_return": _momentum_close_return,
         "mean_reversion_close_to_ma": _mean_reversion_close_to_ma,
         "volatility_breakout_atr": _volatility_breakout_atr,
@@ -111,6 +114,7 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
             "ashare_gap_down_liquid_reversal": _ashare_gap_down_liquid_reversal_panel,
             "ashare_turnover_stability_factor": _ashare_turnover_stability_factor_panel,
             "joinquant_small_cap_size_factor": _joinquant_small_cap_size_factor_panel,
+            "joinquant_small_cap_low_price_factor": _joinquant_small_cap_low_price_factor_panel,
             "momentum_close_return": _momentum_close_return_panel,
             "mean_reversion_close_to_ma": _mean_reversion_close_to_ma_panel,
             "volatility_breakout_atr": _volatility_breakout_atr_panel,
@@ -394,6 +398,34 @@ def _joinquant_small_cap_size_factor_panel(data: pd.DataFrame, lookback: int) ->
     return -market_cap.astype(float)
 
 
+def _joinquant_small_cap_low_price_factor(data: Any, lookback: int) -> Any:
+    if not isinstance(data, pd.DataFrame):
+        return None
+    market_cap = _market_cap_series(data)
+    if market_cap is None or "close" not in data.columns:
+        return None
+    price = pd.to_numeric(data["close"], errors="coerce")
+    eligible = (price >= 2.0) & (price <= 20.0)
+    if "turnover" in data.columns:
+        turnover = pd.to_numeric(data["turnover"], errors="coerce")
+        eligible &= turnover.rolling(20, min_periods=1).mean() >= 20000.0
+    signal = -market_cap.astype(float)
+    return signal.where(eligible)
+
+
+def _joinquant_small_cap_low_price_factor_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    market_cap = _market_cap_matrix(data)
+    if market_cap is None or "close" not in data.columns:
+        return None
+    price = field_matrix(data, "close").astype(float)
+    eligible = (price >= 2.0) & (price <= 20.0)
+    if "turnover" in data.columns:
+        turnover = field_matrix(data, "turnover").astype(float)
+        eligible &= turnover.rolling(20, min_periods=1).mean() >= 20000.0
+    signal = -market_cap.astype(float)
+    return signal.where(eligible)
+
+
 def _mean_reversion_close_to_ma(data: Any, lookback: int) -> Any:
     close = adjusted_price_series(data, "close")
     ma = close.rolling(lookback).mean()
@@ -669,6 +701,7 @@ SUPPORTED_FORMULAS = {
     "ashare_gap_down_liquid_reversal",
     "ashare_turnover_stability_factor",
     "joinquant_small_cap_size_factor",
+    "joinquant_small_cap_low_price_factor",
     "momentum_close_return",
     "mean_reversion_close_to_ma",
     "volatility_breakout_atr",

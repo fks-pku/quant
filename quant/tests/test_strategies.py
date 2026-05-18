@@ -6,13 +6,15 @@ from quant.features.strategies.registry import StrategyRegistry, strategy
 
 
 class TestStrategyRegistry:
-    def test_no_builtin_strategy_files(self):
+    def test_generated_strategy_directories_have_required_files(self):
         strategies_dir = Path(__file__).resolve().parents[1] / "features" / "strategies"
-        strategy_files = [
+        strategy_dirs = [
             p for p in strategies_dir.iterdir()
             if p.is_dir() and (p / "strategy.py").exists()
         ]
-        assert strategy_files == []
+        assert strategy_dirs
+        assert all((p / "config.yaml").exists() for p in strategy_dirs)
+        assert all((p / "README.md").exists() for p in strategy_dirs)
 
     def test_register_and_create_strategy(self):
         @strategy("FrameworkSmoke")
