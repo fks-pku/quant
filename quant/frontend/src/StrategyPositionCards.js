@@ -1,13 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { detectMarket, formatCurrencyValue } from './market';
 
 const API_BASE = 'http://localhost:5000/api';
 
-const fmtCur = (v, market) => {
-  const n = parseFloat(v) || 0;
-  const prefix = market === 'US' ? '$' : 'HK$';
-  return prefix + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
+const fmtCur = formatCurrencyValue;
 const pnlColor = (v) => v >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
 function Sparkline({ data, width = 120, height = 32 }) {
@@ -38,11 +35,6 @@ function StrategyCard({ name, data, history, holdings }) {
   const holdingsList = data?.holdings || holdings || [];
   const mv = data?.total_market_value || 0;
   const pnl = data?.total_unrealized_pnl || 0;
-
-  const detectMarket = (sym) => {
-    if (sym.startsWith('HK.') || /^\d{5}$/.test(sym)) return 'HK';
-    return 'US';
-  };
 
   return (
     <div style={{

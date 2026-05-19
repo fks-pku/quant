@@ -16,13 +16,20 @@ quant/tests/
 ├── test_analytics.py          # 分析指标测试 (~41 tests)
 ├── test_infrastructure.py     # 基础设施测试 (~25 tests)
 ├── test_sub_portfolio.py      # SubPortfolio 测试
+├── test_domain_invariants.py  # Domain 不变量 CASE 套件
+├── test_trading_invariants.py # Trading 不变量 CASE 套件
+├── test_strategies_invariants.py # Strategy 不变量 CASE 套件
+├── test_research_*.py         # Research pipeline/rigor/report contract 测试
+├── test_*ingest*.py           # 数据导入/sidecar 测试
+├── test_backtest_fuzz.py      # Hypothesis fuzz 测试
+├── test_text_encoding.py      # 文本编码检查
 └── test_symbol_utils.py       # Symbol 工具测试
 ```
 
 ## 运行
 
 ```bash
-python3 -m pytest quant/tests/ -q                      # 全部 (~315 tests, ~2s)
+python3 -m pytest quant/tests/ -q                      # 全部 (~900 tests)
 python3 -m pytest quant/tests/test_market_rules.py -q  # 市场规则单元测试
 python3 -m pytest quant/tests/test_commission.py -q    # 佣金单元测试
 python3 -m pytest quant/tests/test_cn_market.py -q     # A股集成测试

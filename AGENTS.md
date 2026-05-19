@@ -16,12 +16,12 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 | trading | `quant/features/trading/` | 交易引擎、风控、调度器 | `quant/features/trading/AGENTS.md` |
 | portfolio | `quant/features/portfolio/` | 仓位管理 | `quant/features/portfolio/AGENTS.md` |
 | cio | `quant/features/cio/` | CIO 市场评估、LLM 分析 | `quant/features/cio/AGENTS.md` |
-| strategies | `quant/features/strategies/` | 策略框架 + 注册表（当前无内置策略） | `quant/features/strategies/AGENTS.md` |
+| strategies | `quant/features/strategies/` | 策略框架 + 注册表（7 个 active 策略） | `quant/features/strategies/AGENTS.md` |
 | research | `quant/features/research/` | 自动策略研究管线 | `quant/features/research/AGENTS.md` |
 | shared | `quant/shared/` | 跨模块工具 (logger, config) | `quant/shared/AGENTS.md` |
 | api | `quant/api/` | Flask REST 路由层 | `quant/api/AGENTS.md` |
 | frontend | `quant/frontend/` | React Dashboard UI | `quant/frontend/AGENTS.md` |
-| tests | `quant/tests/` | 测试套件 (~315 tests) | `quant/tests/AGENTS.md` |
+| tests | `quant/tests/` | 测试套件 (~900 tests) | `quant/tests/AGENTS.md` |
 | scripts | `quant/scripts/` | CLI 工具脚本 | — |
 
 ## Architecture Rules (铁律)
@@ -29,9 +29,9 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 详见 `ARCHITECTURE.md` "Architecture Invariants" 节。核心：
 
 1. **domain/ 零外部依赖**
-2. **features/ 只依赖 domain** (通过 ports 注入)
+2. **features/ 不直接依赖 infrastructure**；可依赖 `domain/` 与 `shared/` 纯工具
 3. **infrastructure/ 实现 domain ports** (不导入 features)
-4. **Feature-to-feature 禁止直接导入** — 共享类型提升到 `domain/models/`
+4. **跨 feature 禁止直接导入** — 同一 feature 内部可分层导入，共享类型提升到 `domain/models/`
 5. **domain ports 返回 `Any`**，不用 `pd.DataFrame`
 
 ## Commands

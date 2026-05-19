@@ -1777,30 +1777,30 @@ def _load_research_config() -> ResearchConfig:
     from quant.shared.utils.config_loader import ConfigLoader
     try:
         data = _load_research_config_data(ConfigLoader)
-        research_cfg = data.get("research", {})
-        validation_cfg = data.get("validation", {})
-        evaluation_cfg = data.get("evaluation", {})
-        pit_cfg = data.get("pit", {})
-        llm_cfg = data.get("llm", {})
-        merged_validation = dict(research_cfg.get("validation_config", {}) or {})
-        merged_validation.update(validation_cfg or {})
-        research_cfg["validation_config"] = merged_validation
-        merged_evaluation = dict(research_cfg.get("evaluation_config", {}) or {})
-        merged_evaluation.update(evaluation_cfg or {})
-        research_cfg["evaluation_config"] = merged_evaluation
-        if "enabled" in pit_cfg:
-            research_cfg["pit_enabled"] = bool(pit_cfg.get("enabled"))
-        if "universe_snapshot_dir" in pit_cfg:
-            research_cfg["pit_universe_snapshot_dir"] = pit_cfg.get("universe_snapshot_dir")
-        research_cfg.setdefault("llm_provider", llm_cfg.get("provider", "minimax"))
-        research_cfg.setdefault("llm_model", llm_cfg.get("model", "MiniMax-M2.7"))
-        research_cfg.setdefault("llm_api_key", llm_cfg.get("api_key"))
-        research_cfg.setdefault("llm_temperature", llm_cfg.get("temperature", 0.3))
-        research_cfg.setdefault("llm_base_url", llm_cfg.get("base_url"))
-        research_cfg.setdefault("llm_group_id", llm_cfg.get("group_id"))
-        return ResearchConfig(**research_cfg)
-    except Exception:
+    except FileNotFoundError:
         return ResearchConfig()
+    research_cfg = data.get("research", {})
+    validation_cfg = data.get("validation", {})
+    evaluation_cfg = data.get("evaluation", {})
+    pit_cfg = data.get("pit", {})
+    llm_cfg = data.get("llm", {})
+    merged_validation = dict(research_cfg.get("validation_config", {}) or {})
+    merged_validation.update(validation_cfg or {})
+    research_cfg["validation_config"] = merged_validation
+    merged_evaluation = dict(research_cfg.get("evaluation_config", {}) or {})
+    merged_evaluation.update(evaluation_cfg or {})
+    research_cfg["evaluation_config"] = merged_evaluation
+    if "enabled" in pit_cfg:
+        research_cfg["pit_enabled"] = bool(pit_cfg.get("enabled"))
+    if "universe_snapshot_dir" in pit_cfg:
+        research_cfg["pit_universe_snapshot_dir"] = pit_cfg.get("universe_snapshot_dir")
+    research_cfg.setdefault("llm_provider", llm_cfg.get("provider", "minimax"))
+    research_cfg.setdefault("llm_model", llm_cfg.get("model", "MiniMax-M2.7"))
+    research_cfg.setdefault("llm_api_key", llm_cfg.get("api_key"))
+    research_cfg.setdefault("llm_temperature", llm_cfg.get("temperature", 0.3))
+    research_cfg.setdefault("llm_base_url", llm_cfg.get("base_url"))
+    research_cfg.setdefault("llm_group_id", llm_cfg.get("group_id"))
+    return ResearchConfig(**research_cfg)
 
 
 def _load_research_config_data(loader_cls=None) -> dict:

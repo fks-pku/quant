@@ -74,7 +74,7 @@ quant/
 |------|-------------|------------------|
 | DataFeed | Data source interface (get_bars, subscribe) | TushareProvider, YfinanceProvider |
 | BrokerAdapter | Broker interface (submit_order, get_positions) | PaperBroker, FutuProvider |
-| Strategy | Strategy interface (on_data, buy, sell) | DailyBarStrategy + 12 concrete strategies |
+| Strategy | Strategy interface (on_data, buy, sell) | DailyBarStrategy + 7 active concrete strategies |
 | Storage | Persistence interface (save_bars, get_bars, get_symbols, get_lot_size) | DuckDBStorage |
 | EventPublisher | Event publish interface (subscribe, publish, publish_nowait) | EventBus |
 | PortfolioLike | Portfolio contract (cash, positions, nav, update_position, reset_daily) | Portfolio, SubPortfolio |
@@ -85,33 +85,28 @@ quant/
 ## Architecture Invariants
 
 1. **domain/ has zero external dependencies** — does not depend on any other layer
-2. **features/ only depend on domain** — communicate through ports injection, not direct infrastructure access
+2. **features/ do not import infrastructure directly** — features depend on domain contracts and shared pure utilities; external adapters are injected by composition roots
 3. **infrastructure/ implements domain ports** — depends on domain. Cannot import features. Cross-layer communication via event bus
 4. **shared/ has no business semantics** — pure utilities (models/ only re-exports, no independent model classes)
 5. **api/ only calls features**
-6. **Feature-to-feature import is forbidden** — shared types (like RiskCheckResult) must be elevated to `domain/models/`
+6. **Cross-feature import is forbidden** — imports inside the same feature package are allowed; shared types (like RiskCheckResult) must be elevated to `domain/models/`
 7. **Inter-layer communication**: direct call + Event Bus (pub/sub) + Dependency Injection (DI)
 8. **domain ports return `Any` type**, not `pd.DataFrame` — keeps domain zero-dependency. pandas conversion happens in infrastructure layer
 
-## Strategies (13 implemented)
+## Strategies (7 active)
 
 All strategies extend `DailyBarStrategy` (in `features/strategies/daily_bar.py`) which provides
 bar buffering, price helpers, rebalance gating, position liquidation, and serialization.
 
 | Strategy | Directory | CN Compatible | Type |
 |----------|-----------|---------------|------|
-| SimpleMomentum | `features/strategies/simple_momentum/` | Yes | Cross-sectional momentum |
-| CrossSectionalMeanReversion | `features/strategies/cross_sectional_mr/` | Partially | Mean reversion vs market |
-| VolatilityRegime | `features/strategies/volatility_regime/` | No | Regime-switching (VIX) |
-| DualMomentum | `features/strategies/dual_momentum/` | Partially | Absolute + relative momentum |
-| DualMACrossover | `features/strategies/dual_ma_crossover/` | Yes | MA crossover signal |
-| BollingerMeanReversion | `features/strategies/bollinger_mean_reversion/` | Yes | BB + RSI oversold bounce |
-| ATRVolatilityBreakout | `features/strategies/atr_volatility_breakout/` | Yes | ATR-based breakout |
-| TurtleTrading | `features/strategies/turtle_trading/` | Yes | Donchian channel breakout |
-| MultiFactorScore | `features/strategies/multi_factor_score/` | Yes | Momentum + RSI + Volume composite |
-| RegimeFilteredMomentum | `features/strategies/regime_filtered_momentum/` | Yes | Momentum with vol-regime sizing |
-| VolatilityScaledTrend | `features/strategies/volatility_scaled_trend/` | Yes | Trend with inverse-vol weighting |
-| DailyReturnAnomaly | `features/strategies/daily_return_anomaly/` | Yes | Consecutive return streak |
+| a_share_range_contraction_breakout | `features/strategies/a_share_range_contraction_breakout/` | Yes | A-share breakout |
+| a_share_liquidity_weighted_low_volatility | `features/strategies/a_share_liquidity_weighted_low_volatility/` | Yes | A-share low volatility |
+| a_share_low_volatility_momentum | `features/strategies/a_share_low_volatility_momentum/` | Yes | A-share momentum |
+| a_share_volatility_scaled_reversal | `features/strategies/a_share_volatility_scaled_reversal/` | Yes | A-share reversal |
+| a_share_volume_exhaustion_reversal | `features/strategies/a_share_volume_exhaustion_reversal/` | Yes | A-share volume exhaustion |
+| joinquant_small_cap_ma_stop | `features/strategies/joinquant_small_cap_ma_stop/` | Yes | A-share small-cap MA stop |
+| worldquant_101_alpha_010 | `features/strategies/worldquant_101_alpha_010/` | Yes | WorldQuant Alpha 010 |
 
 ## Key Conventions
 

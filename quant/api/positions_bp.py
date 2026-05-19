@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 
 from quant.api.state.runtime import (
     portfolio_data, positions_data, MOCK_PRICES, orders_data,
+    _get_strategy_history,
 )
 from quant.features.portfolio.tracker import get_tracker
 
@@ -96,24 +97,9 @@ def strategy_positions():
 
 @positions_bp.route('/api/strategy/<name>/history', methods=['GET'])
 def strategy_history(name):
-    try:
-        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage(read_only=True)
-        snapshots = db.get_strategy_snapshots(strategy_name=name)
-        return jsonify({"strategy": name, "snapshots": snapshots})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"strategy": name, "snapshots": _get_strategy_history(name)})
 
 
 @positions_bp.route('/api/strategy/all-history', methods=['GET'])
 def all_strategy_history():
-    try:
-        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage(read_only=True)
-        snapshots = db.get_strategy_snapshots()
-        by_strategy = {}
-        for s in snapshots:
-            by_strategy.setdefault(s["strategy_name"], []).append(s)
-        return jsonify(by_strategy)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify(_get_strategy_history())

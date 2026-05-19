@@ -1560,6 +1560,19 @@ def test_api_load_research_config_reads_feature_yaml():
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
 
 
+def test_api_load_research_config_does_not_hide_invalid_config(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    monkeypatch.setattr(
+        research_module,
+        "_load_research_config_data",
+        lambda loader_cls=None: {"research": {"unknown_field": True}},
+    )
+
+    with pytest.raises(TypeError):
+        research_module._load_research_config()
+
+
 def test_api_remote_llm_without_key_uses_heuristic(monkeypatch):
     from quant.api import research_bp as research_module
 

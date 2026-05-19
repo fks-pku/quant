@@ -21,6 +21,8 @@ _backtest_results: Dict[str, Any] = {}
 _backtest_lock = threading.Lock()
 _futu_lock = threading.Lock()
 _futu_broker: Optional[Any] = None
+_strategy_history_lock = threading.RLock()
+_strategy_history: Dict[str, List[Dict[str, Any]]] = {}
 
 MOCK_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY', 'QQQ']
 MOCK_PRICES = {
@@ -98,7 +100,7 @@ def _discover_strategies_dynamic() -> tuple:
         strategy_dir = STRATEGIES_DIR / sid
         if not strategy_dir.is_dir():
             for item in STRATEGIES_DIR.iterdir():
-                if item.is_dir() and not item.name.startswith(('_' or '.')):
+                if item.is_dir() and not item.name.startswith(('_', '.')):
                     cfg = item / 'config.yaml'
                     if cfg.exists():
                         try:
@@ -307,20 +309,41 @@ def _maybe_snapshot(tracker, total_nav):
     from datetime import date as date_type
     today = date_type.today().isoformat()
     if _last_snapshot_date == today:
-        return
+        return False
     try:
-        from quant.infrastructure.data.storage_duckdb import DuckDBStorage
-        db = DuckDBStorage(read_only=False)  # TODO: move snapshot writes to features/trading, then use read_only=True
         snapshots = tracker.snapshot_all(total_nav)
-        for snap in snapshots:
-            d = {"date": snap.date, "strategy_name": snap.strategy_name,
-                 "nav": snap.nav, "market_value": snap.market_value,
-                 "cash": snap.cash, "unrealized_pnl": snap.unrealized_pnl,
-                 "realized_pnl": snap.realized_pnl}
-            db.save_strategy_snapshot(d)
-        _last_snapshot_date = today
     except Exception:
-        pass
+        return False
+
+    with _strategy_history_lock:
+        for snap in snapshots:
+            d = {
+                "date": snap.date,
+                "strategy_name": snap.strategy_name,
+                "nav": snap.nav,
+                "market_value": snap.market_value,
+                "cash": snap.cash,
+                "unrealized_pnl": snap.unrealized_pnl,
+                "realized_pnl": snap.realized_pnl,
+            }
+            existing = [
+                item for item in _strategy_history.get(snap.strategy_name, [])
+                if item.get("date") != snap.date
+            ]
+            existing.append(d)
+            _strategy_history[snap.strategy_name] = existing[-365:]
+        _last_snapshot_date = today
+    return True
+
+
+def _get_strategy_history(strategy_name: Optional[str] = None):
+    with _strategy_history_lock:
+        if strategy_name is not None:
+            return [dict(item) for item in _strategy_history.get(strategy_name, [])]
+        return {
+            name: [dict(item) for item in snapshots]
+            for name, snapshots in _strategy_history.items()
+        }
 
 
 _build_strategy_state()

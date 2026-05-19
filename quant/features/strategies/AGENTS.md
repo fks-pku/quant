@@ -26,8 +26,8 @@
 ## 修改守则
 
 - 改策略框架：只动 `base.py`, `registry.py`
-- 新增策略：在 `strategies/` 下新建目录
-- 每个策略需要配一个AGENTS.md，展示其基本概述
+- 新增策略：在 `strategies/` 下新建目录，包含 `strategy.py`、`config.yaml`、`README.md`
+- 只有当策略有额外本地约束或复杂审计要求时才新增策略目录级 `AGENTS.md`
 
 ## Known Pitfalls
 

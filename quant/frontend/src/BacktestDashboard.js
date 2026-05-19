@@ -1,23 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import { detectCurrency, formatCurrencyValue } from './market';
 
 const API_BASE = 'http://localhost:5000/api';
 
-const detectCurrency = (symbols) => {
-  const list = symbols.split(',').map(s => s.trim()).filter(Boolean);
-  const markets = new Set(list.map(s => {
-    if (s.startsWith('HK.')) return 'HKD';
-    if (/^\d{6}$/.test(s) && '03689'.includes(s[0])) return 'CNY';
-    return 'USD';
-  }));
-  if (markets.size === 1) return [...markets][0];
-  return 'USD';
-};
-
-const fmtCurrency = (v, currency) => {
-  const n = parseFloat(v) || 0;
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD' }).format(n);
-};
+const fmtCurrency = formatCurrencyValue;
 
 const fmtPct = (v) => {
   const n = parseFloat(v) || 0;
