@@ -1503,6 +1503,38 @@ class TestCriticalRegression:
         assert sum(t.quantity for t in trades) == pytest.approx(25.0)
         assert diag.volume_limited_trades == 1
 
+    def test_cn_low_price_cost_model_uses_tick_spread_and_adv_cap(self):
+        portfolio = Portfolio(initial_cash=100000, currency="CNY")
+        order = DeferredOrder(
+            symbol="600519", quantity=10000, side="BUY", order_type="MARKET",
+            price=None, strategy="SmallCapCost", signal_date=START, risk_check_price=2.0,
+        )
+        bar = {
+            "symbol": "600519", "timestamp": START + timedelta(days=1),
+            "open": 2.0, "high": 2.1, "low": 1.9, "close": 2.0,
+            "volume": 1_000_000, "adv20_value": 20_500.0, "volatility20": 0.03,
+        }
+        diag = BacktestDiagnostics()
+
+        trades = execute_order(
+            order, portfolio, "600519", bar, {}, {}, diag,
+            {}, None, 5, CommissionConfig(), prev_bar={"close": 2.0},
+            execution_cost_model={
+                "enabled": True,
+                "markets": ["CN"],
+                "tick_size": 0.01,
+                "half_spread_ticks": 0.5,
+                "min_slippage_bps": 5,
+                "max_participation_rate": 0.01,
+                "impact_coefficient": 0.5,
+                "volatility_fallback": 0.03,
+            },
+        )
+
+        assert trades[0].quantity == pytest.approx(100.0)
+        assert diag.volume_limited_trades == 1
+        assert trades[0].fill_price == pytest.approx(2.0080, rel=1e-4)
+
     def test_context_drain_resets_buy_dedup(self):
         """OrderManager drain clears the BUY dedup set."""
         from quant.features.backtest.entities import _BacktestContext, _BacktestOrderManager

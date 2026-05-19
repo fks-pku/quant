@@ -68,40 +68,200 @@ _REQUIRED_CHART_STYLE = """
 }
 .return-calendar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
   gap: 10px;
+  align-items: start;
 }
 .return-cell {
-  min-height: 104px;
-  padding: 11px;
+  min-height: 112px;
+  padding: 0;
   border: 1px solid var(--line);
   background: #fff;
-  overflow-wrap: anywhere;
+  overflow: hidden;
 }
-.return-cell b,
-.return-cell span,
-.return-cell small {
-  display: block;
+details.return-cell {
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
-.return-cell b {
+details.return-cell:hover {
+  border-color: rgba(15, 23, 42, 0.26);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+details.return-cell[open] {
+  grid-column: 1 / -1;
+  cursor: default;
+}
+.return-year-summary {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) 1fr 24px;
+  grid-template-areas:
+    "year toggle toggle"
+    "value value value"
+    "caption meta meta";
+  gap: 4px 10px;
+  min-height: 112px;
+  padding: 12px;
+  align-items: center;
+  list-style: none;
+  cursor: pointer;
+}
+.return-year-summary::-webkit-details-marker {
+  display: none;
+}
+details.return-cell[open] .return-year-summary {
+  grid-template-columns: auto auto 1fr auto 24px;
+  grid-template-areas: "year value caption meta toggle";
+  min-height: 0;
+  border-bottom: 1px solid rgba(102, 114, 126, 0.22);
+}
+.return-year-summary::after {
+  content: "+";
+  grid-area: toggle;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(102, 114, 126, 0.32);
+  color: var(--muted);
+  font: 700 15px/1 "Cascadia Mono", Consolas, monospace;
+  background: rgba(255, 255, 255, 0.65);
+}
+details.return-cell[open] > .return-year-summary::after {
+  content: "-";
+}
+.return-year-label,
+.return-year-summary > b {
+  grid-area: year;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
-.return-cell strong {
+.return-year-value,
+.return-year-summary > strong {
+  grid-area: value;
   display: block;
-  margin: 5px 0 2px;
   font-size: 22px;
   line-height: 1.15;
+  white-space: nowrap;
 }
-.return-cell span,
-.return-cell small {
+.return-year-caption,
+.return-year-summary > span {
+  grid-area: caption;
   color: var(--muted);
   font-size: 12px;
+}
+.return-year-meta,
+.return-year-summary > small {
+  grid-area: meta;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
 }
 .return-cell.positive { background: #fff1f2; border-color: #fecdd3; }
 .return-cell.negative { background: #f0fdf4; border-color: #bbf7d0; }
 .return-cell.neutral { background: #f8fafc; }
+.return-month-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  background: rgba(248, 250, 252, 0.7);
+}
+@media (min-width: 1180px) {
+  details.return-cell[open] .return-month-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  details.return-cell[open] .return-year-summary {
+    grid-template-columns: minmax(48px, auto) 1fr 24px;
+    grid-template-areas:
+      "year toggle toggle"
+      "value value value"
+      "caption meta meta";
+  }
+}
+.return-month {
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid rgba(102, 114, 126, 0.24);
+  border-left: 4px solid rgba(102, 114, 126, 0.34);
+  background: rgba(255, 255, 255, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.return-month-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.return-month-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.return-month > span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.return-month-head em {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.2;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(102, 114, 126, 0.2);
+}
+.return-month strong {
+  font-size: 18px;
+  line-height: 1.1;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.return-month > small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.return-month dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.return-month dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.return-month dt,
+.return-month dd {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.return-month dt {
+  color: var(--muted);
+}
+.return-month dd {
+  overflow: hidden;
+  color: #334155;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+}
+.return-month.positive { background: #fff7f7; border-color: #fecdd3; border-left-color: #e11d48; }
+.return-month.negative { background: #f4fdf7; border-color: #bbf7d0; border-left-color: #16a34a; }
+.return-month.neutral { background: #f8fafc; }
 """.strip()
 
 
@@ -909,6 +1069,7 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
         ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
         ("退市风险护栏", guard_text, "买入过滤低价/低流动性/非上市状态，持仓风险每日尝试退出"),
         ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
+        ("执行成本模型", _execution_cost_model_text(constraints.get("execution_cost_model")), "小市值策略不应只依赖固定滑点"),
         ("佣金", _commission_text(constraints.get("commission")), "含最低佣金、印花税等"),
         ("T+1", "启用" if constraints.get("t_plus_1", True) else "未启用", "当日买入不可卖出"),
         ("100 股手数", "启用" if constraints.get("cn_lot_size", 100) else "未启用", "A 股下单约束"),
@@ -920,6 +1081,23 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
         for item, value, note in rows_data
     )
     return _table(["项目", "取值", "说明"], body)
+
+
+def _execution_cost_model_text(model: Any) -> str:
+    if not isinstance(model, dict) or not model.get("enabled"):
+        return "disabled"
+    parts = [str(model.get("name") or "execution_cost_model")]
+    if model.get("tick_size") is not None:
+        parts.append(f"tick_size={_fmt(model.get('tick_size'))}")
+    if model.get("half_spread_ticks") is not None:
+        parts.append(f"half_spread_ticks={_fmt(model.get('half_spread_ticks'))}")
+    if model.get("max_participation_rate") is not None:
+        parts.append(f"max_participation_rate={_pct(model.get('max_participation_rate'))}")
+    if model.get("impact_coefficient") is not None:
+        parts.append(f"impact_coefficient={_fmt(model.get('impact_coefficient'))}")
+    if model.get("volatility_fallback") is not None:
+        parts.append(f"volatility_fallback={_pct(model.get('volatility_fallback'))}")
+    return "; ".join(parts)
 
 
 def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -1132,6 +1310,8 @@ def _yearly_return_calendar(data: Dict[str, Any], rows: List[Dict[str, Any]]) ->
     if not strategy_returns:
         return "<p>本轮 strict Backtester 未保存足够的年度收益或 equity curve，无法生成年度收益日历图。</p>"
 
+    strategy_monthly = _monthly_returns_from_curve_points(curves.get("strategy"), strict.get("initial_cash"))
+    benchmark_monthly = _monthly_returns_from_curve_points(curves.get("benchmark"), strict.get("initial_cash"))
     years = sorted(
         set(strategy_returns).union(benchmark_returns),
         key=lambda item: int(item) if str(item).isdigit() else str(item),
@@ -1142,15 +1322,23 @@ def _yearly_return_calendar(data: Dict[str, Any], rows: List[Dict[str, Any]]) ->
         strategy_value = strategy_returns.get(year)
         benchmark_value = benchmark_returns.get(year)
         excess = _excess(strategy_value, benchmark_value)
+        monthly_grid = _monthly_return_grid(
+            strategy_monthly.get(str(year), {}),
+            benchmark_monthly.get(str(year), {}),
+            benchmark_symbol,
+        )
         cells.append(
-            '<div class="return-cell '
+            '<details class="return-cell '
             + _return_calendar_class(strategy_value)
             + '">'
-            + f"<b>{escape(str(year))}</b>"
-            + f"<strong>{escape(_pct(strategy_value))}</strong>"
-            + f"<span>策略</span>"
-            + f"<small>{escape(benchmark_symbol)} {_pct(benchmark_value)} · 超额 {_pct(excess)}</small>"
-            + "</div>"
+            + '<summary class="return-year-summary">'
+            + f'<b class="return-year-label">{escape(str(year))}</b>'
+            + f'<strong class="return-year-value">{escape(_pct(strategy_value))}</strong>'
+            + '<span class="return-year-caption">策略</span>'
+            + f'<small class="return-year-meta">{escape(benchmark_symbol)} {_pct(benchmark_value)} · 超额 {_pct(excess)}</small>'
+            + "</summary>"
+            + monthly_grid
+            + "</details>"
         )
     return (
         '<figure class="return-calendar-chart">'
@@ -1160,6 +1348,35 @@ def _yearly_return_calendar(data: Dict[str, Any], rows: List[Dict[str, Any]]) ->
         + f"<figcaption>年度收益按 strict Backtester 的策略账户 NAV 计算；benchmark 使用同一初始资金的 {escape(benchmark_symbol)} equity curve。</figcaption>"
         + "</figure>"
     )
+
+
+def _monthly_return_grid(
+    strategy_returns: Dict[str, float],
+    benchmark_returns: Dict[str, float],
+    benchmark_symbol: str,
+) -> str:
+    month_cells = []
+    for month in range(1, 13):
+        month_key = f"{month:02d}"
+        strategy_value = strategy_returns.get(month_key)
+        benchmark_value = benchmark_returns.get(month_key)
+        excess = _excess(strategy_value, benchmark_value)
+        month_cells.append(
+            '<div class="return-month '
+            + _return_calendar_class(strategy_value)
+            + '">'
+            + '<div class="return-month-head">'
+            + f"<span>{month_key}月</span>"
+            + "<em>策略</em>"
+            + "</div>"
+            + f"<strong>{escape(_pct(strategy_value))}</strong>"
+            + "<dl>"
+            + f"<div><dt>{escape(benchmark_symbol)}</dt><dd>{escape(_pct(benchmark_value))}</dd></div>"
+            + f"<div><dt>超额</dt><dd>{escape(_pct(excess))}</dd></div>"
+            + "</dl>"
+            + "</div>"
+        )
+    return '<div class="return-month-grid">' + "".join(month_cells) + "</div>"
 
 
 def _yearly_returns_for_report(value: Any) -> Dict[str, float]:
@@ -1185,42 +1402,56 @@ def _yearly_returns_for_report(value: Any) -> Dict[str, float]:
     return result
 
 
+def _monthly_returns_from_curve_points(points: Any, initial_cash: Any = None) -> Dict[str, Dict[str, float]]:
+    period_returns = _period_returns_from_curve_points(points, initial_cash, date_len=7)
+    result: Dict[str, Dict[str, float]] = {}
+    for period, value in period_returns.items():
+        year, month = period[:4], period[5:7]
+        if year.isdigit() and month.isdigit():
+            result.setdefault(year, {})[month] = value
+    return result
+
+
 def _yearly_returns_from_curve_points(points: Any, initial_cash: Any = None) -> Dict[str, float]:
+    return _period_returns_from_curve_points(points, initial_cash, date_len=4)
+
+
+def _period_returns_from_curve_points(points: Any, initial_cash: Any = None, date_len: int = 4) -> Dict[str, float]:
     if not isinstance(points, list):
         return {}
     parsed = []
     for point in points:
         if not isinstance(point, dict):
             continue
-        year = str(point.get("date") or "")[:4]
+        period = str(point.get("date") or "")[:date_len]
         value = _safe_float(point.get("value"))
-        if year.isdigit() and value is not None:
-            parsed.append((str(point.get("date") or ""), year, value))
+        if len(period) == date_len and value is not None:
+            parsed.append((str(point.get("date") or ""), period, value))
     parsed.sort(key=lambda item: item[0])
     if not parsed:
         return {}
     result: Dict[str, float] = {}
     previous_close = _safe_float(initial_cash)
-    current_year = ""
+    current_period = ""
     first_value = None
     last_value = None
-    for _, year, value in parsed:
-        if current_year and year != current_year:
+    for _, period, value in parsed:
+        if current_period and period != current_period:
             base = previous_close if previous_close is not None and previous_close > 0 else first_value
             if base is not None and base > 0 and last_value is not None:
-                result[current_year] = last_value / base - 1.0
+                result[current_period] = last_value / base - 1.0
             previous_close = last_value
             first_value = value
             last_value = value
-            current_year = year
+            current_period = period
             continue
-        if not current_year:
-            current_year = year
+        if not current_period:
+            current_period = period
             first_value = value
         last_value = value
     base = previous_close if previous_close is not None and previous_close > 0 else first_value
-    if current_year and base is not None and base > 0 and last_value is not None:
-        result[current_year] = last_value / base - 1.0
+    if current_period and base is not None and base > 0 and last_value is not None:
+        result[current_period] = last_value / base - 1.0
     return result
 
 

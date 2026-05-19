@@ -48,6 +48,7 @@ class Backtester:
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
         self.risk_price_deviation_limit = config.get("backtest", {}).get("risk_price_deviation_limit", 0.15)
         self.market_impact_factor = config.get("backtest", {}).get("market_impact_factor", 0.0)
+        self.execution_cost_model = config.get("backtest", {}).get("execution_cost_model")
         self.force_close_on_stop = config.get("backtest", {}).get("force_close_on_stop", True)
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
@@ -197,6 +198,7 @@ class Backtester:
                 current_date, portfolio_map, primary_portfolio, use_subs,
                 strategies, all_trades, diag, self.lot_sizes, self.commission,
                 self.slippage_bps, self.market_impact_factor,
+                self.execution_cost_model,
                 self.risk_price_deviation_limit,
                 entry_times, entry_prices,
             )
@@ -309,6 +311,7 @@ class Backtester:
                 stop_signal_time, portfolio_map, primary_portfolio, use_subs,
                 strategies, all_trades, diag, self.lot_sizes, self.commission,
                 self.slippage_bps, self.market_impact_factor,
+                self.execution_cost_model,
                 self.risk_price_deviation_limit,
                 entry_times, entry_prices,
                 ignore_settlement=True,
@@ -348,6 +351,7 @@ class Backtester:
         commission_cfg,
         slippage_bps: float,
         market_impact_factor: float,
+        execution_cost_model: dict | None,
         risk_price_deviation_limit: float,
         entry_times: dict,
         entry_prices: dict,
@@ -381,6 +385,7 @@ class Backtester:
                     prev_bar=prev_close_bars.get(sym),
                     risk_price_deviation_limit=risk_price_deviation_limit,
                     market_impact_factor=market_impact_factor,
+                    execution_cost_model=execution_cost_model,
                     ignore_settlement=ignore_settlement,
                 )
             except OrderRejectedError as e:

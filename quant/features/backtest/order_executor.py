@@ -70,6 +70,99 @@ def compute_market_impact(quantity: float, daily_volume: float, impact_factor: f
     return impact_factor * (participation ** 0.5) * 10000
 
 
+def _safe_number(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def _cost_model_enabled(model: Optional[Dict[str, Any]], market: str) -> bool:
+    if not isinstance(model, dict) or not model.get("enabled"):
+        return False
+    markets = model.get("markets")
+    if not markets:
+        return True
+    return market in {str(item) for item in markets}
+
+
+def _execution_adv_value(bar: "BacktestBar", price: float) -> float:
+    for key in ("adv20_value", "adv_value", "avg_turnover_20", "turnover20", "avg_turnover", "turnover"):
+        value = _safe_number(bar.get(key))
+        if value is not None:
+            return value
+    volume = _safe_number(bar.get("volume"))
+    return float(volume * price) if volume is not None and price > 0 else 0.0
+
+
+def _model_slippage_bps(price: float, base_bps: float, market: str, model: Optional[Dict[str, Any]]) -> float:
+    if not _cost_model_enabled(model, market):
+        return base_bps
+    effective_bps = max(float(base_bps or 0), float(model.get("min_slippage_bps", 0) or 0))
+    tick_size = float(model.get("tick_size", 0) or 0)
+    half_spread_ticks = float(model.get("half_spread_ticks", 0.5) or 0.0)
+    if price > 0 and tick_size > 0 and half_spread_ticks > 0:
+        effective_bps = max(effective_bps, half_spread_ticks * tick_size / price * 10000)
+    return effective_bps
+
+
+def _model_participation_limit(default_limit: float, market: str, model: Optional[Dict[str, Any]]) -> float:
+    if not _cost_model_enabled(model, market):
+        return default_limit
+    limit = _safe_number(model.get("max_participation_rate"))
+    return min(default_limit, limit) if limit is not None else default_limit
+
+
+def _liquidity_quantity_cap(
+    bar: "BacktestBar",
+    fill_price: float,
+    bar_volume: float,
+    participation_limit: float,
+) -> Optional[float]:
+    candidates = []
+    if bar_volume > 0:
+        candidates.append(bar_volume * participation_limit)
+    adv_value = _execution_adv_value(bar, fill_price)
+    if adv_value > 0 and fill_price > 0:
+        candidates.append(adv_value * participation_limit / fill_price)
+    if not candidates:
+        return None
+    return min(candidates)
+
+
+def compute_execution_impact(
+    quantity: float,
+    fill_price: float,
+    bar: "BacktestBar",
+    market: str,
+    model: Optional[Dict[str, Any]],
+    fallback_daily_volume: float,
+    fallback_impact_factor: float,
+) -> float:
+    if not _cost_model_enabled(model, market):
+        return compute_market_impact(quantity, fallback_daily_volume, fallback_impact_factor)
+    adv_value = _execution_adv_value(bar, fill_price)
+    if adv_value <= 0 or fill_price <= 0 or quantity <= 0:
+        return 0.0
+    volatility = (
+        _safe_number(bar.get("volatility20"))
+        or _safe_number(bar.get("volatility_20d"))
+        or _safe_number(bar.get("daily_volatility"))
+        or _safe_number(model.get("volatility_fallback"))
+        or 0.0
+    )
+    coefficient = float(model.get("impact_coefficient", 0.0) or 0.0)
+    if volatility <= 0 or coefficient <= 0:
+        return 0.0
+    participation = quantity * fill_price / adv_value
+    if participation <= 0:
+        return 0.0
+    return coefficient * volatility * (participation ** 0.5) * 10000
+
+
 def apply_market_impact(fill_price: float, side: str, impact_bps: float) -> float:
     """Apply market impact to fill price. BUY increases price, SELL decreases."""
     if impact_bps <= 0:
@@ -95,6 +188,7 @@ def execute_order(
     prev_bar: Optional["BacktestBar"] = None,
     risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
     market_impact_factor: float = 0.0,
+    execution_cost_model: Optional[Dict[str, Any]] = None,
     ignore_settlement: bool = False,
 ) -> List[Trade]:
     if bar is None:
@@ -129,7 +223,8 @@ def execute_order(
             raise OrderRejectedError(OrderRejectionReason.PRICE_AT_LIMIT, symbol)
 
     order_type = (order.order_type or "MARKET").upper()
-    fill_price = resolve_base_fill_price(order, raw_open, order_type, slippage_bps)
+    effective_slippage_bps = _model_slippage_bps(raw_open, slippage_bps, market, execution_cost_model)
+    fill_price = resolve_base_fill_price(order, raw_open, order_type, effective_slippage_bps)
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
 
     risk_price = order.risk_check_price
@@ -147,8 +242,10 @@ def execute_order(
         diag.lot_adjusted_trades += 1
 
     bar_volume = _non_negative_volume(bar.get('volume', 0))
-    if bar_volume > 0 and quantity > bar_volume * VOLUME_PARTICIPATION_LIMIT:
-        max_qty = max(1, int(bar_volume * VOLUME_PARTICIPATION_LIMIT))
+    participation_limit = _model_participation_limit(VOLUME_PARTICIPATION_LIMIT, market, execution_cost_model)
+    max_liquidity_qty = _liquidity_quantity_cap(bar, fill_price, bar_volume, participation_limit)
+    if max_liquidity_qty is not None and quantity > max_liquidity_qty:
+        max_qty = max(1, int(max_liquidity_qty))
         if market == "HK" or (market == "CN" and order.side == "BUY"):
             max_qty = (max_qty // lot_size) * lot_size
         if max_qty <= 0:
@@ -156,7 +253,15 @@ def execute_order(
         quantity = float(max_qty)
         diag.volume_limited_trades += 1
 
-    impact_bps = compute_market_impact(quantity, bar_volume, market_impact_factor)
+    impact_bps = compute_execution_impact(
+        quantity,
+        fill_price,
+        bar,
+        market,
+        execution_cost_model,
+        bar_volume,
+        market_impact_factor,
+    )
     fill_price = apply_market_impact(fill_price, order.side, impact_bps)
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
     enforce_limit_after_impact(order, fill_price, order_type)

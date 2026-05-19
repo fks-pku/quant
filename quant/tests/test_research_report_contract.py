@@ -313,6 +313,15 @@ def test_generated_stage_reports_match_contract():
                             "strategy_max_position_pct": 1.0,
                             "strategy_max_positions": 20,
                             "slippage_bps": 5,
+                            "execution_cost_model": {
+                                "enabled": True,
+                                "name": "small_cap_realistic",
+                                "tick_size": 0.01,
+                                "half_spread_ticks": 0.5,
+                                "max_participation_rate": 0.01,
+                                "impact_coefficient": 0.5,
+                                "volatility_fallback": 0.03,
+                            },
                             "commission": {"CN": "cn_realistic"},
                             "t_plus_1": True,
                             "cn_lot_size": 100,
@@ -369,8 +378,15 @@ def test_generated_stage_reports_match_contract():
     assert "Benchmark 期末 530,000.00（指数 106）" in strict_html
     assert "首日=100 的归一化指数" in strict_html
     assert '<figure class="return-calendar-chart">' in strict_html
-    assert '<div class="return-cell positive"><b>2025</b><strong>16.00%</strong>' in strict_html
+    assert '<details class="return-cell positive"><summary class="return-year-summary"><b class="return-year-label">2025</b><strong class="return-year-value">16.00%</strong>' in strict_html
+    assert '<div class="return-month-grid">' in strict_html
+    assert '<div class="return-month positive"><div class="return-month-head"><span>01月</span><em>策略</em></div><strong>2.00%</strong>' in strict_html
+    assert '<div class="return-month positive"><div class="return-month-head"><span>12月</span><em>策略</em></div><strong>13.73%</strong>' in strict_html
     assert "000300 6.00% · 超额 10.00%" in strict_html
+    assert "<dt>000300</dt><dd>-0.40%</dd>" in strict_html
+    assert "<dt>超额</dt><dd>2.40%</dd>" in strict_html
+    assert "small_cap_realistic" in strict_html
+    assert "max_participation_rate=1.00%" in strict_html
     assert "<td>insufficient_cash_rejected_orders</td><td>2</td><td>现金不足拒单</td>" in strict_html
     assert "12,345.67" in strict_html
     assert "<td>退市风险护栏</td><td>启用；最低价格 2.0000；20 日均成交额 &gt;= 20000.0000</td>" in strict_html

@@ -58,6 +58,7 @@ def _make_backtest_fn():
         end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
         is_cn = any(is_cn_symbol(sym) for sym in symbols)
         initial_cash = 500000 if is_cn else 100000
+        execution_cost_model = _strict_execution_cost_model(sid, info, is_cn)
 
         db_provider = DuckDBProvider()
         db_provider.connect()
@@ -107,6 +108,7 @@ def _make_backtest_fn():
                 streaming_provider = _DuckDBDailyDateProvider(symbols, start, end)
             else:
                 data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
+                data_df = _add_execution_liquidity_features(data_df, execution_cost_model)
             lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
             if is_cn:
                 benchmark_provider, benchmark_meta = _load_cn_benchmark_provider(db_provider, start, end, BenchmarkProvider)
@@ -126,8 +128,11 @@ def _make_backtest_fn():
         data_provider = streaming_provider or DataFrameProvider(data_df)
         strategy = strategy_class(symbols=symbols)
 
+        backtest_config = {"slippage_bps": 5}
+        if execution_cost_model:
+            backtest_config["execution_cost_model"] = execution_cost_model
         bt_config = {
-            "backtest": {"slippage_bps": 5},
+            "backtest": backtest_config,
             "execution": {"commission": {
                 "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
                 "HK": {"type": "hk_realistic"},
@@ -176,6 +181,7 @@ def _make_backtest_fn():
             strategy,
             benchmark_equity_curve,
             survivorship_audit,
+            backtest_config,
         )
         result.backtested += 1
 
@@ -258,6 +264,65 @@ def _candidate_formula_key(info):
     meta = dict((info or {}).get("research_meta") or {})
     spec = dict(meta.get("strategy_spec") or {})
     return str(spec.get("signal_formula_key") or "")
+
+
+def _strict_execution_cost_model(strategy_id, info, is_cn):
+    if not is_cn:
+        return None
+    meta = dict((info or {}).get("research_meta") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    text = " ".join(
+        str(value or "")
+        for value in (
+            strategy_id,
+            (info or {}).get("name"),
+            (info or {}).get("description"),
+            spec.get("signal_formula_key"),
+            " ".join(str(field) for field in (spec.get("required_fields") or [])),
+        )
+    ).lower()
+    if not any(token in text for token in ("small_cap", "low_price", "market_cap", "circ_mv", "total_mv")):
+        return None
+    return {
+        "enabled": True,
+        "name": "small_cap_realistic",
+        "markets": ["CN"],
+        "tick_size": 0.01,
+        "half_spread_ticks": 0.5,
+        "min_slippage_bps": 5,
+        "max_participation_rate": 0.01,
+        "impact_coefficient": 0.5,
+        "volatility_fallback": 0.03,
+        "adv_value_field": "adv20_value",
+        "volatility_field": "volatility20",
+    }
+
+
+def _add_execution_liquidity_features(data_df, execution_cost_model):
+    if not isinstance(execution_cost_model, dict) or not execution_cost_model.get("enabled"):
+        return data_df
+    if data_df is None or data_df.empty or not {"symbol", "timestamp", "close", "volume"}.issubset(data_df.columns):
+        return data_df
+    import pandas as pd
+
+    frame = data_df.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    frame = frame.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+    close = pd.to_numeric(frame["close"], errors="coerce")
+    volume = pd.to_numeric(frame["volume"], errors="coerce")
+    if "turnover" in frame.columns:
+        value = pd.to_numeric(frame["turnover"], errors="coerce")
+        value = value.where(value > 0, close * volume)
+    else:
+        value = close * volume
+    frame["adv20_value"] = value.groupby(frame["symbol"]).transform(
+        lambda item: item.shift(1).rolling(20, min_periods=1).mean()
+    )
+    returns = close.groupby(frame["symbol"], group_keys=False).pct_change()
+    frame["volatility20"] = returns.groupby(frame["symbol"]).transform(
+        lambda item: item.shift(1).rolling(20, min_periods=2).std()
+    )
+    return frame
 
 
 def _available_market_cap_columns(db_provider):
@@ -560,7 +625,49 @@ def _candidate_info_for_backtest(sid, integrator, pool):
             info = store.get_candidate(sid)
         except Exception:
             info = None
-    return info
+    if info is not None:
+        return info
+    return _archived_candidate_info(sid)
+
+
+def _archived_candidate_info(sid):
+    archive_dir = Path(__file__).resolve().parent.parent / "features" / "rejected_strategy" / str(sid)
+    config_path = archive_dir / "config.yaml"
+    strategy_path = archive_dir / "strategy.py"
+    if not config_path.exists() and not strategy_path.exists():
+        return None
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except Exception:
+        config = {}
+    params = dict(config.get("parameters") or {})
+    strategy_cfg = dict(config.get("strategy") or {})
+    symbols = [str(symbol) for symbol in params.get("symbols") or [] if _is_a_share_symbol(str(symbol))]
+    formula_key = "joinquant_small_cap_size_factor"
+    if "low_price" in str(sid):
+        formula_key = "joinquant_small_cap_low_price_factor"
+    return {
+        "id": str(sid),
+        "name": strategy_cfg.get("name") or str(sid),
+        "description": f"Archived research strategy {sid}",
+        "status": strategy_cfg.get("status") or "rejected",
+        "parameters": params,
+        "research_meta": {
+            "source": "archived_rejected_strategy",
+            "rejected_strategy_dir": str(archive_dir),
+            "strategy_spec": {
+                "strategy_id": str(sid),
+                "strategy_type": "factor",
+                "signal_formula_key": formula_key,
+                "required_fields": ["close", "market_cap", "turnover"],
+                "lookback_days": int(params.get("lookback", 1) or 1),
+                "horizon_days": int(params.get("holding_days", 5) or 5),
+                "execution_lag_days": 1,
+                "universe": symbols,
+            },
+        },
+    }
 
 
 class _DuckDBDailyDateProvider:
@@ -749,6 +856,7 @@ def _strict_backtest_report(
     strategy=None,
     benchmark_equity_curve=None,
     survivorship_audit=None,
+    backtest_config=None,
 ):
     metrics = getattr(bt_result, "metrics", None)
     diagnostics = getattr(bt_result, "diagnostics", None)
@@ -775,6 +883,16 @@ def _strict_backtest_report(
             if float(initial_cash) > 0 and frozen_zero_nav > 0
             else -1.0
         )
+    backtest_config = dict(backtest_config or {})
+    execution_cost_model = backtest_config.get("execution_cost_model")
+    volume_limit = "Backtester execution diagnostics record volume_limited_trades."
+    if isinstance(execution_cost_model, dict) and execution_cost_model.get("enabled"):
+        try:
+            participation = float(execution_cost_model.get("max_participation_rate"))
+            participation_text = f"{participation:.2%}"
+        except (TypeError, ValueError):
+            participation_text = "configured rate"
+        volume_limit = f"Liquidity cap uses max_participation_rate={participation_text} when ADV/value data is available."
     return {
         "framework": "Backtester + DataFrameProvider + Strategy + Portfolio/RiskEngine/SubPortfolio",
         "period": f"{start.date()}-{end.date()}",
@@ -819,10 +937,11 @@ def _strict_backtest_report(
             "t_plus_1": True,
             "cn_lot_size": 100,
             "lot_sizes": dict(lot_sizes or {}),
-            "volume_limit": "Backtester execution diagnostics record volume_limited_trades.",
+            "volume_limit": volume_limit,
             "price_limits": "Backtester execution diagnostics record limit_rejected_orders.",
             "commission": {"CN": "cn_realistic", "HK": "hk_realistic", "US": "per_share"},
-            "slippage_bps": 5,
+            "slippage_bps": backtest_config.get("slippage_bps", 5),
+            "execution_cost_model": execution_cost_model,
             "strategy_max_position_pct": _metric_float(getattr(strategy, "max_position_pct", None)),
             "strategy_max_positions": int(getattr(strategy, "max_positions", 0) or 0),
             "delisting_risk_guard": {
@@ -921,9 +1040,11 @@ def _update_hypothesis_backtest(pool, sid, strict_report, status, stage, reason)
     if store is None or not hasattr(store, "list_hypotheses"):
         return
     try:
+        matched = False
         for row in store.list_hypotheses():
             if row.get("strategy_id") != sid:
                 continue
+            matched = True
             updated = dict(row)
             metrics = dict(updated.get("metrics") or {})
             metrics["strict_backtest"] = strict_report
@@ -938,6 +1059,33 @@ def _update_hypothesis_backtest(pool, sid, strict_report, status, stage, reason)
             updated["stage"] = stage
             updated["decision_reason"] = reason
             store.upsert_hypothesis(updated)
+        if matched or not hasattr(store, "upsert_hypothesis"):
+            return
+        candidate = store.get_candidate(sid) if hasattr(store, "get_candidate") else None
+        meta = dict((candidate or {}).get("research_meta") or {})
+        spec = dict(meta.get("strategy_spec") or {})
+        metrics = {
+            "strict_backtest": strict_report,
+            "backtest_sharpe": strict_report.get("metrics", {}).get("sharpe", 0.0),
+            "backtest_sortino": strict_report.get("metrics", {}).get("sortino", 0.0),
+            "backtest_cagr": strict_report.get("metrics", {}).get("cagr", 0.0),
+            "backtest_max_drawdown_pct": strict_report.get("metrics", {}).get("max_drawdown_pct", 0.0),
+            "backtest_calmar_ratio": strict_report.get("metrics", {}).get("calmar_ratio", 0.0),
+            "benchmark_symbol": strict_report.get("benchmark", {}).get("symbol", ""),
+        }
+        store.upsert_hypothesis({
+            "hypothesis_id": f"strict_backtest_{sid}",
+            "strategy_id": str(sid),
+            "title": str((candidate or {}).get("name") or sid),
+            "source": str(meta.get("source") or "archived_rejected_strategy"),
+            "source_url": str(meta.get("source_url") or ""),
+            "thesis": str((candidate or {}).get("description") or f"Standalone strict backtest for {sid}."),
+            "status": status,
+            "stage": stage,
+            "decision_reason": reason,
+            "metrics": metrics,
+            "evidence": {"strategy_spec": spec},
+        })
     except Exception:
         return
 
