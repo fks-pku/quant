@@ -31,8 +31,9 @@ _RATE_LIMIT_LOCK = threading.Lock()
 _LAST_REQUEST_AT = 0.0
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MARKET_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "quant.duckdb"
-DEFAULT_BASIC_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "cn_daily_basic.duckdb"
+DEFAULT_DUCKDB_DIR = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "live"
+DEFAULT_MARKET_DB = DEFAULT_DUCKDB_DIR / "cn_ohlcv.duckdb"
+DEFAULT_BASIC_DB = DEFAULT_DUCKDB_DIR / "cn_daily_basic.duckdb"
 DAILY_CN_TABLE = "daily_cn_ochl"
 BASIC_TABLE = "cn_daily_basic"
 
@@ -472,7 +473,7 @@ def _print_summary(summary: IngestSummary) -> None:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Ingest Tushare daily_basic into a sidecar DuckDB")
-    parser.add_argument("--market-db-path", default=str(DEFAULT_MARKET_DB), help="Path to quant.duckdb")
+    parser.add_argument("--market-db-path", default=str(DEFAULT_MARKET_DB), help="Path to cn_ohlcv.duckdb")
     parser.add_argument("--basic-db-path", default=str(DEFAULT_BASIC_DB), help="Path to cn_daily_basic.duckdb")
     parser.add_argument("--db-path", default=None, help="Deprecated alias for --market-db-path")
     parser.add_argument("--start", default=None, help="Start date YYYY-MM-DD, default local DB min date")

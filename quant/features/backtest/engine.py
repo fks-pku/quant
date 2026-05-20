@@ -66,7 +66,7 @@ class Backtester:
         self.commission = CommissionConfig(
             US=commission_config.get("US", {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0}),
             HK=commission_config.get("HK", {"type": "hk_realistic"}),
-            CN=commission_config.get("CN", {"type": "cn_realistic"})
+            CN=commission_config.get("CN", {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0})
         )
 
     def run(

@@ -157,6 +157,25 @@ class TestCalculateCommissionBySymbol:
         assert "transfer_fee" in breakdown
         assert "regulator_fee" in breakdown
 
+    def test_cn_etf_sell_exempts_stock_stamp_duty(self):
+        cfg = CommissionConfig()
+        breakdown = calculate_commission("159915", 10.0, 1000, "SELL", cfg)
+        assert breakdown["stamp_duty"] == 0.0
+        assert breakdown["transfer_fee"] == 0.0
+        assert breakdown["regulator_fee"] == 0.0
+
+    def test_cn_lof_sell_exempts_stock_stamp_duty(self):
+        cfg = CommissionConfig()
+        breakdown = calculate_commission("501018", 10.0, 1000, "SELL", cfg)
+        assert breakdown["stamp_duty"] == 0.0
+        assert breakdown["transfer_fee"] == 0.0
+        assert breakdown["regulator_fee"] == 0.0
+
+    def test_cn_fund_commission_can_be_configured(self):
+        cfg = CommissionConfig(CN={"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0})
+        breakdown = calculate_commission("510300", 10.0, 1000, "BUY", cfg)
+        assert breakdown["commission"] == pytest.approx(1.0, rel=1e-4)
+
     def test_hk_symbol_uses_hk_rules(self):
         cfg = CommissionConfig()
         breakdown = calculate_commission("00700", 100.0, 1000, "BUY", cfg)

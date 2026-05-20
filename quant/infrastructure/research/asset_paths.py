@@ -53,8 +53,8 @@ def report_id_for_result(data: Dict[str, Any], hypotheses: Iterable[Dict[str, An
     if len(unique_titles) == 1:
         return safe_asset_key(unique_titles[0])
 
-    run_id = str(data.get("run_id", "")).strip()
-    if run_id:
+    run_id = str(data.get("run_id") or "").strip()
+    if run_id and run_id.lower() not in {"none", "null"}:
         return safe_asset_key(run_id)
     return "research_pipeline"
 

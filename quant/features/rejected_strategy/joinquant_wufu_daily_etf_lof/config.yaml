@@ -1,0 +1,18 @@
+strategy:
+  name: joinquant_wufu_daily_etf_lof
+  enabled: false
+  priority: 1
+  status: rejected
+
+parameters:
+  symbols: [511880]
+  cash_symbol: 511880
+  score_window: 25
+  liquidity_window: 20
+  min_active_candidates: 5
+  min_score: 0.0
+  min_avg_turnover: 20000000.0
+  max_premium_rate: 0.03
+  target_exposure: 0.98
+  lot_size: 100
+  holding_days: 1

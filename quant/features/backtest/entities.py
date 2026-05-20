@@ -78,7 +78,7 @@ class BacktestResult:
 class CommissionConfig:
     US: Dict[str, Any] = field(default_factory=lambda: {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0})
     HK: Dict[str, Any] = field(default_factory=lambda: {"type": "hk_realistic"})
-    CN: Dict[str, Any] = field(default_factory=lambda: {"type": "cn_realistic"})
+    CN: Dict[str, Any] = field(default_factory=lambda: {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0})
 
 
 class BacktestResultExporter:

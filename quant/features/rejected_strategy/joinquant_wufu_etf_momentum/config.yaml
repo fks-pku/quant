@@ -1,0 +1,19 @@
+strategy:
+  name: joinquant_wufu_etf_momentum
+  enabled: false
+  priority: 1
+  status: rejected
+
+parameters:
+  symbols: [159915, 513100, 511010, 518880, 159980, 511880]
+  core_symbols: [159915, 513100, 511010, 518880, 159980]
+  fill_symbol: 511880
+  score_window: 13
+  min_active_candidates: 5
+  min_score: 0.0
+  boll_window: 20
+  boll_std: 2.0
+  extreme_days: 3
+  target_exposure: 0.98
+  lot_size: 100
+  holding_days: 1

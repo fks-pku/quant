@@ -1,5 +1,6 @@
 from html.parser import HTMLParser
 
+from quant.infrastructure.research.asset_paths import report_id_for_result
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 REQUIRED_TOP_LEVEL_SECTIONS = [
@@ -51,6 +52,11 @@ def _headings(html: str, tag: str) -> list[str]:
 def _assert_clean_html(html: str):
     assert "???" not in html
     assert "\ufffd" not in html
+
+
+def test_report_id_ignores_none_run_id():
+    data = {"run_id": None, "log": []}
+    assert report_id_for_result(data, []) == "research_pipeline"
 
 
 def test_generated_stage_reports_match_contract():

@@ -139,15 +139,16 @@ def _make_backtest_fn():
         backtest_config = {"slippage_bps": 5}
         if execution_cost_model:
             backtest_config["execution_cost_model"] = execution_cost_model
+        commission_cfg = {
+            "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
+            "HK": {"type": "hk_realistic"},
+            "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0},
+        }
         bt_config = {
             "backtest": backtest_config,
-            "execution": {"commission": {
-                "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
-                "HK": {"type": "hk_realistic"},
-                "CN": {"type": "cn_realistic"},
-            }},
+            "execution": {"commission": commission_cfg},
             "data": {"default_timeframe": "1d"},
-            "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
+            "risk": _candidate_backtest_risk_config(info),
         }
 
         backtester = Backtester(
@@ -189,7 +190,7 @@ def _make_backtest_fn():
             strategy,
             benchmark_equity_curve,
             survivorship_audit,
-            backtest_config,
+            {**backtest_config, "commission": commission_cfg},
         )
         result.backtested += 1
 
@@ -272,6 +273,23 @@ def _candidate_formula_key(info):
     meta = dict((info or {}).get("research_meta") or {})
     spec = dict(meta.get("strategy_spec") or {})
     return str(spec.get("signal_formula_key") or "")
+
+
+def _candidate_backtest_risk_config(info):
+    meta = dict((info or {}).get("research_meta") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    max_position_pct = spec.get("max_position_pct", meta.get("max_position_pct", 0.20))
+    try:
+        max_position_pct = float(max_position_pct)
+    except (TypeError, ValueError):
+        max_position_pct = 0.20
+    max_position_pct = min(max(max_position_pct, 0.01), 1.0)
+    return {
+        "max_position_pct": max_position_pct,
+        "max_sector_pct": 1.0,
+        "max_daily_loss_pct": 0.10,
+        "max_leverage": 2.0,
+    }
 
 
 def _strict_execution_cost_model(strategy_id, info, is_cn):
@@ -1185,7 +1203,7 @@ def _strict_backtest_report(
             "lot_sizes": dict(lot_sizes or {}),
             "volume_limit": volume_limit,
             "price_limits": "Backtester execution diagnostics record limit_rejected_orders.",
-            "commission": {"CN": "cn_realistic", "HK": "hk_realistic", "US": "per_share"},
+            "commission": backtest_config.get("commission") or {"CN": "cn_realistic", "HK": "hk_realistic", "US": "per_share"},
             "slippage_bps": backtest_config.get("slippage_bps", 5),
             "execution_cost_model": execution_cost_model,
             "strategy_max_position_pct": _metric_float(getattr(strategy, "max_position_pct", None)),
@@ -2087,7 +2105,7 @@ def _make_walkforward_runner():
             "execution": {"commission": {
                 "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
                 "HK": {"type": "hk_realistic"},
-                "CN": {"type": "cn_realistic"},
+                "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0},
             }},
             "data": {"default_timeframe": "1d"},
             "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},

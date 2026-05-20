@@ -1,8 +1,9 @@
 """Delete stale 000001 data and re-ingest as Ping An Bank."""
 import duckdb
 from datetime import datetime
+from quant.infrastructure.data.storage_duckdb import _DEFAULT_DB
 
-db_path = "quant/infrastructure/var/duckdb/quant.duckdb"
+db_path = _DEFAULT_DB
 conn = duckdb.connect(db_path)
 
 tables = conn.execute("SHOW TABLES").fetchall()

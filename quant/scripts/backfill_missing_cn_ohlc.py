@@ -24,8 +24,9 @@ from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 logger = logging.getLogger("backfill_missing_cn_ohlc")
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MARKET_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "quant.duckdb"
-DEFAULT_BASIC_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "cn_daily_basic.duckdb"
+DEFAULT_DUCKDB_DIR = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "live"
+DEFAULT_MARKET_DB = DEFAULT_DUCKDB_DIR / "cn_ohlcv.duckdb"
+DEFAULT_BASIC_DB = DEFAULT_DUCKDB_DIR / "cn_daily_basic.duckdb"
 DAILY_CN_TABLE = "daily_cn_ochl"
 BASIC_TABLE = "cn_daily_basic"
 NON_SH_SZ_PREDICATE = "(symbol LIKE '920%' OR symbol LIKE '8%' OR symbol LIKE '4%')"

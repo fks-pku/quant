@@ -1,8 +1,9 @@
 """DuckDB-based storage for historical market data.
 
-Replaces SQLite+Parquet with a single DuckDB columnar database.
-Tables are organized by market and frequency:
-  - daily_cn_ochl, daily_hk, daily_us, minute_hk, minute_us
+Tables are organized by market, frequency, and CN instrument class:
+  - daily_cn_ochl in the main CN stock DB
+  - cn_etf.daily_cn_ochl and cn_index.daily_cn_ochl sidecars
+  - daily_hk, daily_us, minute_hk, minute_us
   - orders, trades, portfolio_snapshots
 
 Supports ALTER TABLE ADD COLUMN for schema evolution without rewriting data.
@@ -24,11 +25,27 @@ from quant.shared.utils.logger import setup_logger
 from quant.shared.utils.symbol_utils import detect_market as _detect_market
 
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
-_DEFAULT_DB = str(_PKG_DIR / "var" / "duckdb" / "quant.duckdb")
-_DEFAULT_STATUS_DB = str(_PKG_DIR / "var" / "duckdb" / "security_status.duckdb")
-_DEFAULT_DAILY_BASIC_DB = str(_PKG_DIR / "var" / "duckdb" / "cn_daily_basic.duckdb")
+_DEFAULT_DUCKDB_DIR = _PKG_DIR / "var" / "duckdb" / "live"
+_DEFAULT_DB = str(_DEFAULT_DUCKDB_DIR / "cn_ohlcv.duckdb")
+_DEFAULT_ETF_DB = str(_DEFAULT_DUCKDB_DIR / "cn_etf_ohlcv.duckdb")
+_DEFAULT_INDEX_DB = str(_DEFAULT_DUCKDB_DIR / "cn_index_ohlcv.duckdb")
+_DEFAULT_STATUS_DB = str(_DEFAULT_DUCKDB_DIR / "cn_status.duckdb")
+_DEFAULT_DAILY_BASIC_DB = str(_DEFAULT_DUCKDB_DIR / "cn_daily_basic.duckdb")
+_DEFAULT_CORPORATE_ACTIONS_DB = str(_DEFAULT_DUCKDB_DIR / "cn_corporate_actions.duckdb")
+_DEFAULT_FUND_META_DB = str(_DEFAULT_DUCKDB_DIR / "cn_fund_meta.duckdb")
+_DEFAULT_FUND_NAV_DB = str(_DEFAULT_DUCKDB_DIR / "cn_fund_nav.duckdb")
 _STATUS_TABLE = "cn_security_status_daily"
 _DAILY_BASIC_TABLE = "cn_daily_basic"
+_ETF_SCHEMA = "cn_etf"
+_INDEX_SCHEMA = "cn_index"
+_CORPORATE_ACTIONS_SCHEMA = "corp_actions"
+_FUND_META_SCHEMA = "fund_meta"
+_FUND_NAV_SCHEMA = "fund_nav"
+_CN_DAILY_TABLE = "daily_cn_ochl"
+_FUND_INSTRUMENTS_TABLE = "cn_fund_instruments"
+_FUND_NAV_TABLE = "cn_fund_nav"
+_CN_ETF_PREFIXES = ("15", "16", "50", "51", "52", "56", "58")
+_CN_INDEX_SYMBOLS = {"000300", "399001", "399006", "399673"}
 
 BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE"
 BAR_INDEX = "timestamp, symbol"
@@ -70,6 +87,11 @@ class DuckDBStorage(Storage):
         use_security_status: bool = False,
         status_db_path: str = _DEFAULT_STATUS_DB,
         daily_basic_db_path: str = _DEFAULT_DAILY_BASIC_DB,
+        etf_db_path: str = _DEFAULT_ETF_DB,
+        index_db_path: str = _DEFAULT_INDEX_DB,
+        corporate_actions_db_path: str = _DEFAULT_CORPORATE_ACTIONS_DB,
+        fund_meta_db_path: str = _DEFAULT_FUND_META_DB,
+        fund_nav_db_path: str = _DEFAULT_FUND_NAV_DB,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,31 +104,95 @@ class DuckDBStorage(Storage):
         self._status_attach_failed = False
         self._daily_basic_db_path = Path(daily_basic_db_path)
         self._daily_basic_attach_failed = False
+        self._etf_db_path = Path(etf_db_path)
+        self._index_db_path = Path(index_db_path)
+        self._corporate_actions_db_path = Path(corporate_actions_db_path)
+        self._fund_meta_db_path = Path(fund_meta_db_path)
+        self._fund_nav_db_path = Path(fund_nav_db_path)
+        self._sidecar_attach_failed: set[str] = set()
         self._init_database()
 
     def _init_database(self) -> None:
         self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
         if not self._read_only:
             self._conn.execute("SET threads=4")
-            for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta", "cn_dividends"):
+            self._ensure_table(_CN_DAILY_TABLE)
+            for table in ("orders", "trades", "portfolio_snapshots", "strategy_snapshots", "instrument_meta"):
                 self._ensure_table(table)
+            self._ensure_sidecar_attached(_CORPORATE_ACTIONS_SCHEMA, self._corporate_actions_db_path)
+            self._ensure_table(f"{_CORPORATE_ACTIONS_SCHEMA}.cn_dividends")
+            self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
+            self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path)
+        else:
+            self._ensure_sidecar_attached(_ETF_SCHEMA, self._etf_db_path)
+            self._ensure_sidecar_attached(_INDEX_SCHEMA, self._index_db_path)
+            self._ensure_sidecar_attached(_CORPORATE_ACTIONS_SCHEMA, self._corporate_actions_db_path)
+            self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
+            self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path)
         self.logger.info(f"DuckDB initialized at {self.db_path} (read_only={self._read_only})")
+
+    @staticmethod
+    def is_cn_etf_symbol(symbol: str) -> bool:
+        value = str(symbol).strip()
+        return value.isdigit() and len(value) == 6 and value.startswith(_CN_ETF_PREFIXES)
+
+    @staticmethod
+    def is_cn_index_symbol(symbol: str) -> bool:
+        return str(symbol).strip() in _CN_INDEX_SYMBOLS
+
+    @staticmethod
+    def _base_table_name(table_name: str) -> str:
+        return str(table_name).split(".")[-1]
+
+    def _ensure_sidecar_attached(self, schema: str, path: Path) -> bool:
+        if schema in self._sidecar_attach_failed:
+            return False
+        if self._read_only and not path.exists():
+            return False
+        if not self._read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            try:
+                attached = {
+                    row[1]
+                    for row in self.conn.execute("PRAGMA database_list").fetchall()
+                    if len(row) > 1
+                }
+                if schema in attached:
+                    return True
+                escaped = str(path).replace("'", "''")
+                read_only_suffix = " (READ_ONLY)" if self._read_only else ""
+                self.conn.execute(f"ATTACH IF NOT EXISTS '{escaped}' AS {schema}{read_only_suffix}")
+                return True
+            except Exception as e:
+                self._sidecar_attach_failed.add(schema)
+                self.logger.warning(f"DuckDB sidecar {schema} unavailable: {e}")
+                return False
+
+    def _table_exists(self, table_name: str) -> bool:
+        try:
+            self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 0")
+            return True
+        except Exception:
+            return False
 
     def _ensure_table(self, table_name: str) -> None:
         if self._read_only:
             return
-        if table_name.startswith(("daily_", "minute_")):
+        base_table = self._base_table_name(table_name)
+        if base_table.startswith(("daily_", "minute_")):
             self._conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {table_name} (
                     {BAR_COLUMNS}
                 )
             """)
             try:
+                index_name = f"idx_{str(table_name).replace('.', '_')}_ts_sym"
                 self._conn.execute(f"""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_{table_name}_ts_sym
+                    CREATE UNIQUE INDEX IF NOT EXISTS {index_name}
                     ON {table_name}({BAR_INDEX})
                 """)
-            except duckdb.CatalogException:
+            except Exception:
                 pass
         elif table_name == "orders":
             self._conn.execute("""
@@ -183,6 +269,52 @@ class DuckDBStorage(Storage):
                     PRIMARY KEY (symbol, ex_date)
                 )
             """)
+        elif table_name == f"{_CORPORATE_ACTIONS_SCHEMA}.cn_dividends":
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    symbol VARCHAR,
+                    ex_date TIMESTAMP,
+                    cash_dividend DOUBLE DEFAULT 0,
+                    stock_dividend DOUBLE DEFAULT 0,
+                    allotment_ratio DOUBLE DEFAULT 0,
+                    allotment_price DOUBLE DEFAULT 0,
+                    record_date VARCHAR DEFAULT '',
+                    pay_date VARCHAR DEFAULT '',
+                    ann_date VARCHAR DEFAULT '',
+                    PRIMARY KEY (symbol, ex_date)
+                )
+            """)
+        elif table_name == f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}":
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    symbol VARCHAR PRIMARY KEY,
+                    ts_code VARCHAR DEFAULT '',
+                    name VARCHAR DEFAULT '',
+                    fund_type VARCHAR DEFAULT '',
+                    instrument_type VARCHAR DEFAULT '',
+                    status VARCHAR DEFAULT '',
+                    market VARCHAR DEFAULT '',
+                    list_date VARCHAR DEFAULT '',
+                    delist_date VARCHAR DEFAULT '',
+                    index_code VARCHAR DEFAULT '',
+                    index_name VARCHAR DEFAULT '',
+                    exchange VARCHAR DEFAULT '',
+                    updated_at TIMESTAMP
+                )
+            """)
+        elif table_name == f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}":
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    symbol VARCHAR,
+                    nav_date DATE,
+                    unit_nav DOUBLE,
+                    accum_nav DOUBLE,
+                    adj_nav DOUBLE,
+                    net_asset DOUBLE,
+                    total_netasset DOUBLE,
+                    PRIMARY KEY (symbol, nav_date)
+                )
+            """)
 
     @property
     def conn(self) -> duckdb.DuckDBPyConnection:
@@ -196,7 +328,13 @@ class DuckDBStorage(Storage):
         freq = "daily" if timeframe in ("1d", "day", "daily") else "minute"
         market = _detect_market(symbol).lower()
         if freq == "daily" and market == "cn":
-            return "daily_cn_ochl"
+            if self.is_cn_etf_symbol(symbol):
+                self._ensure_sidecar_attached(_ETF_SCHEMA, self._etf_db_path)
+                return f"{_ETF_SCHEMA}.{_CN_DAILY_TABLE}"
+            if self.is_cn_index_symbol(symbol):
+                self._ensure_sidecar_attached(_INDEX_SCHEMA, self._index_db_path)
+                return f"{_INDEX_SCHEMA}.{_CN_DAILY_TABLE}"
+            return _CN_DAILY_TABLE
         return f"{freq}_{market}"
 
     def save_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:
@@ -237,17 +375,20 @@ class DuckDBStorage(Storage):
         timeframe: str = "1d",
     ) -> pd.DataFrame:
         table_name = self._resolve_table(symbol, timeframe)
-        if table_name == "daily_cn_ochl" and self._is_daily_timeframe(timeframe):
+        if table_name == _CN_DAILY_TABLE and self._is_daily_timeframe(timeframe):
             status_frame = self._get_status_enriched_cn_bars([symbol], start, end)
             if status_frame is not None:
                 return status_frame
             sidecar_frame = self._get_daily_basic_enriched_cn_bars([symbol], start, end)
             if sidecar_frame is not None:
                 return sidecar_frame
+        if table_name == f"{_ETF_SCHEMA}.{_CN_DAILY_TABLE}" and self._is_daily_timeframe(timeframe):
+            fund_frame = self._get_fund_enriched_bars([symbol], start, end)
+            if fund_frame is not None:
+                return fund_frame
 
         try:
-            tables = self.conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()
-            if (table_name,) not in tables:
+            if not self._table_exists(table_name):
                 return pd.DataFrame()
         except Exception:
             return pd.DataFrame()
@@ -284,27 +425,28 @@ class DuckDBStorage(Storage):
             symbols_by_table.setdefault(table_name, []).append(symbol)
 
         try:
-            existing_tables = {
-                row[0]
-                for row in self.conn.execute(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-                ).fetchall()
-            }
+            self.conn.execute("SELECT 1")
         except Exception:
             return pd.DataFrame()
 
         frames = []
         with self._lock:
             for table_name, table_symbols in symbols_by_table.items():
-                if table_name not in existing_tables:
+                if not self._table_exists(table_name):
                     continue
-                if table_name == "daily_cn_ochl" and self._is_daily_timeframe(timeframe):
+                if table_name == _CN_DAILY_TABLE and self._is_daily_timeframe(timeframe):
                     frame = self._get_status_enriched_cn_bars(table_symbols, start, end)
                     if frame is not None:
                         if not frame.empty:
                             frames.append(frame)
                         continue
                     frame = self._get_daily_basic_enriched_cn_bars(table_symbols, start, end)
+                    if frame is not None:
+                        if not frame.empty:
+                            frames.append(frame)
+                        continue
+                if table_name == f"{_ETF_SCHEMA}.{_CN_DAILY_TABLE}" and self._is_daily_timeframe(timeframe):
+                    frame = self._get_fund_enriched_bars(table_symbols, start, end)
                     if frame is not None:
                         if not frame.empty:
                             frames.append(frame)
@@ -339,18 +481,10 @@ class DuckDBStorage(Storage):
 
     def _available_columns(self, table_name: str, candidates: tuple[str, ...]) -> List[str]:
         try:
-            rows = self.conn.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'main'
-                  AND table_name = ?
-                """,
-                [table_name],
-            ).fetchall()
+            rows = self.conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
         except Exception:
             return []
-        existing = {str(row[0]) for row in rows}
+        existing = {str(row[1]) for row in rows}
         return [col for col in candidates if col in existing and col not in _BASE_READ_BAR_COLUMNS]
 
     def _daily_basic_available(self) -> bool:
@@ -382,6 +516,95 @@ class DuckDBStorage(Storage):
                 self._daily_basic_attach_failed = True
                 self.logger.warning(f"Daily basic sidecar unavailable: {e}")
                 return False
+
+    def _fund_meta_available(self) -> bool:
+        if not self._fund_meta_db_path.exists():
+            return False
+        if not self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path):
+            return False
+        return self._table_exists(f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}")
+
+    def _fund_nav_available(self) -> bool:
+        if not self._fund_nav_db_path.exists():
+            return False
+        if not self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path):
+            return False
+        return self._table_exists(f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}")
+
+    def _get_fund_enriched_bars(
+        self,
+        symbols: List[str],
+        start: Optional[datetime],
+        end: Optional[datetime],
+    ) -> Optional[pd.DataFrame]:
+        meta_available = self._fund_meta_available()
+        nav_available = self._fund_nav_available()
+        if not meta_available and not nav_available:
+            return None
+        table_symbols = list(dict.fromkeys(symbols))
+        placeholders = ", ".join("?" for _ in table_symbols)
+        bar_columns = self._read_bar_columns(f"{_ETF_SCHEMA}.{_CN_DAILY_TABLE}")
+        select_columns = [f"b.{col}" for col in bar_columns]
+        joins = []
+        if meta_available:
+            select_columns.extend(
+                [
+                    "m.name AS fund_name",
+                    "m.fund_type",
+                    "m.instrument_type",
+                    "m.status AS fund_status",
+                    "m.market AS fund_market",
+                    "m.list_date AS fund_list_date",
+                    "m.delist_date AS fund_delist_date",
+                    "m.index_code",
+                    "m.index_name",
+                    "m.exchange AS fund_exchange",
+                ]
+            )
+            joins.append(
+                f"""
+                LEFT JOIN {_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE} m
+                  ON b.symbol = m.symbol
+                """
+            )
+        if nav_available:
+            select_columns.extend(
+                [
+                    "n.unit_nav",
+                    "n.accum_nav",
+                    "n.adj_nav",
+                    "n.net_asset",
+                    "n.total_netasset",
+                    "CASE WHEN n.unit_nav > 0 THEN b.close / n.unit_nav - 1 ELSE NULL END AS premium_rate",
+                ]
+            )
+            joins.append(
+                f"""
+                LEFT JOIN {_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE} n
+                  ON b.symbol = n.symbol
+                 AND CAST(b.timestamp AS DATE) = n.nav_date
+                """
+            )
+        query = f"""
+            SELECT {", ".join(select_columns)}
+            FROM {_ETF_SCHEMA}.{_CN_DAILY_TABLE} b
+            {" ".join(joins)}
+            WHERE b.symbol IN ({placeholders})
+        """
+        params: list = list(table_symbols)
+        if start is not None:
+            query += " AND b.timestamp >= ?"
+            params.append(start)
+        if end is not None:
+            query += " AND b.timestamp <= ?"
+            params.append(end)
+        query += " ORDER BY b.symbol ASC, b.timestamp ASC"
+        try:
+            with self._lock:
+                return self.conn.execute(query, params).fetchdf()
+        except Exception as e:
+            self.logger.warning(f"Fund sidecar join failed, falling back to OHLC bars: {e}")
+            return None
 
     def _daily_basic_columns(self) -> set:
         if not self._daily_basic_available():
@@ -419,7 +642,7 @@ class DuckDBStorage(Storage):
             return None
         table_symbols = list(dict.fromkeys(symbols))
         placeholders = ", ".join("?" for _ in table_symbols)
-        bar_columns = list(_BASE_READ_BAR_COLUMNS[2:]) + self._available_columns("daily_cn_ochl", _OPTIONAL_READ_BAR_COLUMNS)
+        bar_columns = list(_BASE_READ_BAR_COLUMNS[2:]) + self._available_columns(_CN_DAILY_TABLE, _OPTIONAL_READ_BAR_COLUMNS)
         sidecar_columns = self._daily_basic_sidecar_columns(bar_columns)
         if not sidecar_columns:
             return None
@@ -431,7 +654,7 @@ class DuckDBStorage(Storage):
         ]
         query = f"""
             SELECT {", ".join(select_columns)}
-            FROM daily_cn_ochl b
+            FROM {_CN_DAILY_TABLE} b
             LEFT JOIN daily_basic.{_DAILY_BASIC_TABLE} db
               ON b.symbol = db.symbol
              AND CAST(b.timestamp AS DATE) = db.trade_date
@@ -495,7 +718,7 @@ class DuckDBStorage(Storage):
 
         table_symbols = list(dict.fromkeys(symbols))
         placeholders = ", ".join("?" for _ in table_symbols)
-        bar_columns = list(_BASE_READ_BAR_COLUMNS[2:]) + self._available_columns("daily_cn_ochl", _OPTIONAL_READ_BAR_COLUMNS)
+        bar_columns = list(_BASE_READ_BAR_COLUMNS[2:]) + self._available_columns(_CN_DAILY_TABLE, _OPTIONAL_READ_BAR_COLUMNS)
         bar_select = ",\n                ".join(f"b.{col}" for col in bar_columns)
         sidecar_columns = self._daily_basic_sidecar_columns(bar_columns)
         sidecar_select = ""
@@ -525,7 +748,7 @@ class DuckDBStorage(Storage):
                 s.suspend_type,
                 s.suspend_timing
             FROM security_status.{_STATUS_TABLE} s
-            LEFT JOIN daily_cn_ochl b
+            LEFT JOIN {_CN_DAILY_TABLE} b
               ON s.symbol = b.symbol
              AND s.trade_date = CAST(b.timestamp AS DATE)
             {sidecar_join}
@@ -615,7 +838,7 @@ class DuckDBStorage(Storage):
     def get_symbols(self, timeframe: str = "1d", market: str = "hk") -> List[str]:
         freq = timeframe if timeframe in ("daily", "minute") else "daily"
         market = str(market).lower()
-        table_name = "daily_cn_ochl" if freq == "daily" and market == "cn" else f"{freq}_{market}"
+        table_name = _CN_DAILY_TABLE if freq == "daily" and market == "cn" else f"{freq}_{market}"
         try:
             df = self.conn.execute(f"SELECT DISTINCT symbol FROM {table_name}").fetchdf()
             return df["symbol"].tolist()
@@ -729,8 +952,19 @@ class DuckDBStorage(Storage):
             return self.conn.execute(query, params).fetchdf()
 
     def list_tables(self) -> List[str]:
-        df = self.conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name").fetchdf()
-        return df["table_name"].tolist()
+        main_catalog = self.conn.execute("SELECT current_database()").fetchone()[0]
+        rows = self.conn.execute(
+            """
+            SELECT table_catalog, table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'main'
+            ORDER BY table_catalog, table_name
+            """
+        ).fetchall()
+        return [
+            str(table) if str(catalog) == str(main_catalog) else f"{catalog}.{table}"
+            for catalog, table in rows
+        ]
 
     def table_info(self, table_name: str) -> pd.DataFrame:
         return self.conn.execute(f"DESCRIBE {table_name}").fetchdf()
@@ -802,7 +1036,9 @@ class DuckDBStorage(Storage):
     def save_cn_dividends(self, df: pd.DataFrame) -> int:
         if df is None or df.empty:
             return 0
-        self._ensure_table("cn_dividends")
+        table_name = f"{_CORPORATE_ACTIONS_SCHEMA}.cn_dividends"
+        self._ensure_sidecar_attached(_CORPORATE_ACTIONS_SCHEMA, self._corporate_actions_db_path)
+        self._ensure_table(table_name)
         df = df.copy()
         if "ex_date" in df.columns:
             df["ex_date"] = pd.to_datetime(df["ex_date"])
@@ -814,10 +1050,83 @@ class DuckDBStorage(Storage):
         df = df.drop_duplicates(subset=["symbol", "ex_date"], keep="last")
         with self._lock:
             symbol = df["symbol"].iloc[0] if "symbol" in df.columns else ""
-            self.conn.execute("DELETE FROM cn_dividends WHERE symbol = ?", [symbol])
-            self.conn.execute("INSERT INTO cn_dividends SELECT * FROM df")
+            self.conn.execute(f"DELETE FROM {table_name} WHERE symbol = ?", [symbol])
+            self.conn.execute(f"INSERT INTO {table_name} SELECT * FROM df")
         self.logger.info(f"Saved {len(df)} dividend records for {symbol}")
         return len(df)
+
+    def save_cn_fund_instruments(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        table_name = f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}"
+        self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
+        self._ensure_table(table_name)
+        frame = df.copy()
+        if "symbol" not in frame.columns and "ts_code" in frame.columns:
+            frame["symbol"] = frame["ts_code"].astype(str).str.split(".").str[0]
+        for col in (
+            "ts_code",
+            "name",
+            "fund_type",
+            "instrument_type",
+            "status",
+            "market",
+            "list_date",
+            "delist_date",
+            "index_code",
+            "index_name",
+            "exchange",
+        ):
+            if col not in frame.columns:
+                frame[col] = ""
+            frame[col] = frame[col].fillna("").astype(str)
+        frame["updated_at"] = pd.Timestamp.now("UTC").tz_localize(None)
+        cols = [
+            "symbol",
+            "ts_code",
+            "name",
+            "fund_type",
+            "instrument_type",
+            "status",
+            "market",
+            "list_date",
+            "delist_date",
+            "index_code",
+            "index_name",
+            "exchange",
+            "updated_at",
+        ]
+        frame = frame[cols].dropna(subset=["symbol"]).drop_duplicates(subset=["symbol"], keep="last")
+        with self._lock:
+            self.conn.execute(f"INSERT OR REPLACE INTO {table_name} SELECT * FROM frame")
+        self.logger.info(f"Saved {len(frame)} CN fund instruments")
+        return len(frame)
+
+    def save_cn_fund_nav(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        table_name = f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}"
+        self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path)
+        self._ensure_table(table_name)
+        frame = df.copy()
+        if "symbol" not in frame.columns and "ts_code" in frame.columns:
+            frame["symbol"] = frame["ts_code"].astype(str).str.split(".").str[0]
+        if "nav_date" not in frame.columns and "trade_date" in frame.columns:
+            frame["nav_date"] = frame["trade_date"]
+        frame["nav_date"] = pd.to_datetime(frame["nav_date"], errors="coerce").dt.date
+        for col in ("unit_nav", "accum_nav", "adj_nav", "net_asset", "total_netasset"):
+            if col not in frame.columns:
+                frame[col] = pd.NA
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        cols = ["symbol", "nav_date", "unit_nav", "accum_nav", "adj_nav", "net_asset", "total_netasset"]
+        frame = frame[cols].dropna(subset=["symbol", "nav_date"]).drop_duplicates(subset=["symbol", "nav_date"], keep="last")
+        with self._lock:
+            self.conn.execute(
+                f"DELETE FROM {table_name} WHERE (symbol, nav_date) IN (SELECT symbol, nav_date FROM frame)"
+            )
+            self.conn.execute(f"INSERT INTO {table_name} SELECT * FROM frame")
+        self.logger.info(f"Saved {len(frame)} CN fund NAV rows")
+        return len(frame)
 
     def get_cn_dividends(
         self,
@@ -825,8 +1134,11 @@ class DuckDBStorage(Storage):
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
     ) -> pd.DataFrame:
-        self._ensure_table("cn_dividends")
-        query = "SELECT * FROM cn_dividends WHERE 1=1"
+        table_name = f"{_CORPORATE_ACTIONS_SCHEMA}.cn_dividends"
+        if not self._ensure_sidecar_attached(_CORPORATE_ACTIONS_SCHEMA, self._corporate_actions_db_path):
+            return pd.DataFrame()
+        self._ensure_table(table_name)
+        query = f"SELECT * FROM {table_name} WHERE 1=1"
         params: list = []
         if symbol:
             query += " AND symbol = ?"

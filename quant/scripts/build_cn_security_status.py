@@ -23,8 +23,9 @@ except ImportError:
 logger = logging.getLogger("build_cn_security_status")
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MARKET_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "quant.duckdb"
-DEFAULT_SECURITY_DB = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "security_status.duckdb"
+DEFAULT_DUCKDB_DIR = ROOT / "quant" / "infrastructure" / "var" / "duckdb" / "live"
+DEFAULT_MARKET_DB = DEFAULT_DUCKDB_DIR / "cn_ohlcv.duckdb"
+DEFAULT_SECURITY_DB = DEFAULT_DUCKDB_DIR / "cn_status.duckdb"
 DAILY_CN_TABLE = "daily_cn_ochl"
 STATUS_TABLE = "cn_security_status_daily"
 NON_SH_SZ_PREFIXES = ("920", "8", "4")

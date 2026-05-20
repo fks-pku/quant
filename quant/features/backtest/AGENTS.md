@@ -100,6 +100,7 @@ while current_date ≤ end:
 
 ## Known Pitfalls
 
+- CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. Research backtests default fund fees to `fund_percent=0.0001` and `fund_min_per_order=0.0`.
 - `prev_close_bars` 在 Step ② 中必须在 `prev_bars` 更新之前捕获，否则涨跌停检查会用今日数据
 - `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` 在每个日循环末尾调用，勿遗漏
 - `order_executor` 中 SELL 路径的 settled_quantity 检查：CN T+1 用 `pos.settled_quantity()`，其他市场用 `pos.quantity`
@@ -107,7 +108,7 @@ while current_date ≤ end:
 - `_BacktestContext` 和 `_BacktestOrderManager` 定义在 `entities.py`，不要暴露到外部
 - Engine 通过 `_BacktestContext.prepare_for_trading_day()` 和 `drain_orders()` 公开方法与 Context 交互，不要直接访问 `_pending_orders`、`_current_date`、`_last_prices` 等私有属性
 - Market order 无有效价格时（`effective_price <= 0`）直接 reject，不再用 share count 充当 dollar value 绕过风控
-- CN 回测数据应通过 `DuckDBProvider`/`DuckDBStorage(use_security_status=True)` 读取；它会用 `security_status.duckdb::cn_security_status_daily` 给 `daily_cn_ochl` 补 `_suspended`、`tradable`、`is_st`、`up_limit/down_limit`，并为无 OHLC 的停牌日生成 synthetic bar
+- CN 回测数据应通过 `DuckDBProvider`/`DuckDBStorage(use_security_status=True)` 读取；它会用 `cn_status.duckdb::cn_security_status_daily` 给股票 `daily_cn_ochl` 补 `_suspended`、`tradable`、`is_st`、`up_limit/down_limit`，并为无 OHLC 的停牌日生成 synthetic bar；ETF 和指数日线分别从 `cn_etf`/`cn_index` sidecar 读取
 - ST 不自动从回测 universe 剔除，也不自动禁止交易；优先用 status 表 `up_limit/down_limit`，缺失时 `is_st=True` 按 5% 涨跌停 fallback
 - `is_suspended()` 优先检查 `bar["_suspended"]` / `tradable=False` / `has_daily_bar=False` 显式状态，其次才用 volume=0 / close=open=0 启发式
 - 研究生成的小市值低价策略通过策略层 `delisting_risk_guard` 过滤退市风险：`close >= 2`、流动性下限、ST/停牌/非上市/list_status 过滤，并在持仓触发风险时每日尝试 SELL；该退出不能被 `holding_days` 调仓门控阻挡，见 `test_backtest_invariants.py` CASE-37

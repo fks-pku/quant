@@ -113,11 +113,280 @@ class TestDuckDBStorage:
         assert bars["circ_mv"].iloc[0] == pytest.approx(6789)
         assert bulk["total_mv"].iloc[0] == pytest.approx(12345)
 
+    def test_cn_etf_and_index_bars_route_to_sidecars(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        etf_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        index_db = tmp_path / "cn_index_ohlcv.duckdb"
+        start = datetime(2024, 1, 2)
+
+        storage = DuckDBStorage(
+            str(stock_db),
+            etf_db_path=str(etf_db),
+            index_db_path=str(index_db),
+        )
+        try:
+            for symbol, close in (("600519", 100.0), ("510300", 3.5), ("000300", 3300.0)):
+                storage.save_bars(
+                    pd.DataFrame(
+                        [
+                            {
+                                "timestamp": start,
+                                "symbol": symbol,
+                                "open": close,
+                                "high": close,
+                                "low": close,
+                                "close": close,
+                                "volume": 1000,
+                            }
+                        ]
+                    ),
+                    "1d",
+                )
+        finally:
+            storage.close()
+
+        conn = duckdb.connect(str(stock_db), read_only=True)
+        try:
+            assert conn.execute("SELECT symbol FROM daily_cn_ochl").fetchall() == [("600519",)]
+        finally:
+            conn.close()
+        conn = duckdb.connect(str(etf_db), read_only=True)
+        try:
+            assert conn.execute("SELECT symbol FROM daily_cn_ochl").fetchall() == [("510300",)]
+        finally:
+            conn.close()
+        conn = duckdb.connect(str(index_db), read_only=True)
+        try:
+            assert conn.execute("SELECT symbol FROM daily_cn_ochl").fetchall() == [("000300",)]
+        finally:
+            conn.close()
+
+        storage = DuckDBStorage(
+            str(stock_db),
+            read_only=True,
+            etf_db_path=str(etf_db),
+            index_db_path=str(index_db),
+        )
+        try:
+            bars = storage.get_bars_for_symbols(["600519", "510300", "000300"], start, start, "1d")
+        finally:
+            storage.close()
+
+        assert set(bars["symbol"]) == {"600519", "510300", "000300"}
+
+    def test_cn_lof_bars_route_to_fund_sidecar(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        fund_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        start = datetime(2024, 1, 2)
+
+        storage = DuckDBStorage(str(stock_db), etf_db_path=str(fund_db))
+        try:
+            for symbol, close in (("160216", 1.5), ("501018", 0.8)):
+                storage.save_bars(
+                    pd.DataFrame(
+                        [
+                            {
+                                "timestamp": start,
+                                "symbol": symbol,
+                                "open": close,
+                                "high": close,
+                                "low": close,
+                                "close": close,
+                                "volume": 1000,
+                            }
+                        ]
+                    ),
+                    "1d",
+                )
+        finally:
+            storage.close()
+
+        conn = duckdb.connect(str(stock_db), read_only=True)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM daily_cn_ochl").fetchone()[0] == 0
+        finally:
+            conn.close()
+        conn = duckdb.connect(str(fund_db), read_only=True)
+        try:
+            assert set(row[0] for row in conn.execute("SELECT symbol FROM daily_cn_ochl").fetchall()) == {"160216", "501018"}
+        finally:
+            conn.close()
+
+    def test_cn_fund_bars_can_join_nav_and_metadata_sidecars(self, tmp_path):
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        fund_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        fund_meta_db = tmp_path / "cn_fund_meta.duckdb"
+        fund_nav_db = tmp_path / "cn_fund_nav.duckdb"
+        start = datetime(2024, 1, 2)
+
+        storage = DuckDBStorage(
+            str(stock_db),
+            etf_db_path=str(fund_db),
+            fund_meta_db_path=str(fund_meta_db),
+            fund_nav_db_path=str(fund_nav_db),
+        )
+        try:
+            storage.save_bars(
+                pd.DataFrame(
+                    [
+                        {
+                            "timestamp": start,
+                            "symbol": "160216",
+                            "open": 1.05,
+                            "high": 1.06,
+                            "low": 1.04,
+                            "close": 1.05,
+                            "volume": 1000,
+                            "turnover": 1050,
+                        }
+                    ]
+                ),
+                "1d",
+            )
+            storage.save_cn_fund_instruments(
+                pd.DataFrame(
+                    [
+                        {
+                            "symbol": "160216",
+                            "ts_code": "160216.SZ",
+                            "name": "GT Commodity LOF",
+                            "fund_type": "QDII",
+                            "instrument_type": "LOF",
+                            "status": "L",
+                            "market": "E",
+                            "list_date": "20150407",
+                            "delist_date": "",
+                            "index_code": "",
+                            "index_name": "",
+                        }
+                    ]
+                )
+            )
+            storage.save_cn_fund_nav(
+                pd.DataFrame(
+                    [
+                        {
+                            "symbol": "160216",
+                            "nav_date": start,
+                            "unit_nav": 1.00,
+                            "accum_nav": 1.20,
+                            "adj_nav": 1.25,
+                            "net_asset": 10_000_000.0,
+                            "total_netasset": 10_000_000.0,
+                        }
+                    ]
+                )
+            )
+            bars = storage.get_bars("160216", start, start, "1d")
+        finally:
+            storage.close()
+
+        assert bars["fund_name"].iloc[0] == "GT Commodity LOF"
+        assert bars["instrument_type"].iloc[0] == "LOF"
+        assert bars["unit_nav"].iloc[0] == pytest.approx(1.00)
+        assert bars["premium_rate"].iloc[0] == pytest.approx(0.05)
+
     def test_tushare_provider_routes_bse_symbols_to_bj(self):
         assert TushareProvider._to_ts_code("830799") == "830799.BJ"
         assert TushareProvider._to_ts_code("920000") == "920000.BJ"
         assert TushareProvider._to_ts_code("600519") == "600519.SH"
         assert TushareProvider._to_ts_code("000001") == "000001.SZ"
+
+    def test_tushare_provider_fetches_cn_etfs_from_fund_daily(self):
+        class FakeApi:
+            def __init__(self):
+                self.calls = []
+
+            def fund_daily(self, **kwargs):
+                self.calls.append(("fund_daily", kwargs))
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "513100.SH",
+                            "trade_date": "20240102",
+                            "open": 1.0,
+                            "high": 1.1,
+                            "low": 0.9,
+                            "close": 1.05,
+                            "vol": 1000,
+                            "amount": 1050,
+                        }
+                    ]
+                )
+
+            def daily(self, **kwargs):
+                self.calls.append(("daily", kwargs))
+                return pd.DataFrame()
+
+            def index_daily(self, **kwargs):
+                self.calls.append(("index_daily", kwargs))
+                return pd.DataFrame()
+
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+        provider._connected = True
+
+        frame = provider.fetch_daily_with_hfq("513100", datetime(2024, 1, 2), datetime(2024, 1, 3))
+
+        assert provider._api.calls[0][0] == "fund_daily"
+        assert frame["symbol"].iloc[0] == "513100"
+        assert frame["adj_factor"].iloc[0] == pytest.approx(1.0)
+        assert frame["adj_close"].iloc[0] == pytest.approx(1.05)
+
+    def test_tushare_provider_fetches_cn_lofs_from_fund_daily_with_fund_adj(self):
+        class FakeApi:
+            def __init__(self):
+                self.calls = []
+
+            def fund_daily(self, **kwargs):
+                self.calls.append(("fund_daily", kwargs))
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "160216.SZ",
+                            "trade_date": "20240102",
+                            "open": 1.0,
+                            "high": 1.1,
+                            "low": 0.9,
+                            "close": 1.05,
+                            "vol": 1000,
+                            "amount": 1050,
+                        }
+                    ]
+                )
+
+            def fund_adj(self, **kwargs):
+                self.calls.append(("fund_adj", kwargs))
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "160216.SZ",
+                            "trade_date": "20240102",
+                            "adj_factor": 2.0,
+                        }
+                    ]
+                )
+
+            def daily(self, **kwargs):
+                self.calls.append(("daily", kwargs))
+                return pd.DataFrame()
+
+            def adj_factor(self, **kwargs):
+                self.calls.append(("adj_factor", kwargs))
+                return pd.DataFrame()
+
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+        provider._connected = True
+
+        frame = provider.fetch_daily_with_hfq("160216", datetime(2024, 1, 2), datetime(2024, 1, 3))
+
+        assert [call[0] for call in provider._api.calls[:2]] == ["fund_daily", "fund_adj"]
+        assert frame["symbol"].iloc[0] == "160216"
+        assert frame["adj_factor"].iloc[0] == pytest.approx(2.0)
+        assert frame["adj_close"].iloc[0] == pytest.approx(2.10)
 
     def test_get_bars_for_symbols_can_use_cn_security_status(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")

@@ -1092,7 +1092,7 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
         ("退市风险护栏", guard_text, "买入过滤低价/低流动性/非上市状态，持仓风险每日尝试退出"),
         ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
         ("执行成本模型", _execution_cost_model_text(constraints.get("execution_cost_model")), "小市值策略不应只依赖固定滑点"),
-        ("佣金", _commission_text(constraints.get("commission")), "含最低佣金、印花税等"),
+        ("佣金", _commission_text(constraints.get("commission")), "股票按 A 股费率；ETF/LOF 按 fund_percent/fund_min_per_order 且不收股票印花税"),
         ("T+1", "启用" if constraints.get("t_plus_1", True) else "未启用", "当日买入不可卖出"),
         ("100 股手数", "启用" if constraints.get("cn_lot_size", 100) else "未启用", "A 股下单约束"),
         ("成交量限制", str(constraints.get("volume_limit") or "Backtester diagnostics"), "记录 volume_limited_trades"),

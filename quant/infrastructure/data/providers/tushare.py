@@ -34,6 +34,7 @@ _CN_INDEX_CODES = {
     "000016", "000300", "000905",
     "399001", "399006", "399673",
 }
+_CN_FUND_PREFIXES = ("15", "16", "50", "51", "52", "56", "58")
 
 
 class TushareProvider(DataFeed):
@@ -106,6 +107,14 @@ class TushareProvider(DataFeed):
         return symbol in _CN_INDEX_CODES
 
     @staticmethod
+    def _is_fund(symbol: str) -> bool:
+        return symbol.isdigit() and len(symbol) == 6 and symbol.startswith(_CN_FUND_PREFIXES)
+
+    @staticmethod
+    def _is_etf(symbol: str) -> bool:
+        return TushareProvider._is_fund(symbol)
+
+    @staticmethod
     def _to_ts_code(symbol: str) -> str:
         if TushareProvider._is_index(symbol):
             if symbol.startswith("399"):
@@ -157,6 +166,10 @@ class TushareProvider(DataFeed):
         try:
             if self._is_index(symbol):
                 df = self._api.index_daily(
+                    ts_code=ts_code, start_date=start_str, end_date=end_str,
+                )
+            elif self._is_fund(symbol):
+                df = self._api.fund_daily(
                     ts_code=ts_code, start_date=start_str, end_date=end_str,
                 )
             else:
@@ -255,7 +268,7 @@ class TushareProvider(DataFeed):
         Returns DataFrame with columns: trade_date, adj_factor
         HFQ price = true_price * adj_factor
         """
-        if self._api is None or self._is_index(symbol):
+        if self._api is None or self._is_index(symbol) or self._is_fund(symbol):
             return pd.DataFrame()
 
         ts_code = self._to_ts_code(symbol)
@@ -290,6 +303,53 @@ class TushareProvider(DataFeed):
             )
         except Exception as e:
             self.logger.warning(f"Error fetching adj_factor for {symbol} ({start_str}-{end_str}): {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.rename(columns={"trade_date": "timestamp"})
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y%m%d")
+        df["symbol"] = symbol
+        df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
+        return df[["timestamp", "symbol", "adj_factor"]].sort_values("timestamp").reset_index(drop=True)
+
+    def fetch_fund_adj_factor(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        if self._api is None or not self._is_fund(symbol):
+            return pd.DataFrame()
+
+        ts_code = self._to_ts_code(symbol)
+        total_days = (end - start).days
+        if total_days <= self._MAX_DAYS_PER_REQUEST:
+            return self._fetch_fund_adj_factor_chunk(ts_code, symbol, start, end)
+
+        chunks: List[pd.DataFrame] = []
+        chunk_start = start
+        from datetime import timedelta
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=self._MAX_DAYS_PER_REQUEST), end)
+            chunk_df = self._fetch_fund_adj_factor_chunk(ts_code, symbol, chunk_start, chunk_end)
+            if not chunk_df.empty:
+                chunks.append(chunk_df)
+            chunk_start = chunk_end + timedelta(days=1)
+
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).drop_duplicates(
+            subset=["timestamp", "symbol"],
+        ).sort_values("timestamp").reset_index(drop=True)
+
+    def _fetch_fund_adj_factor_chunk(self, ts_code: str, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        start_str = start.strftime("%Y%m%d")
+        end_str = end.strftime("%Y%m%d")
+
+        self._rate_limit()
+        try:
+            df = self._api.fund_adj(
+                ts_code=ts_code, start_date=start_str, end_date=end_str,
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching fund_adj for {symbol} ({start_str}-{end_str}): {e}")
             return pd.DataFrame()
 
         if df is None or df.empty:
@@ -426,6 +486,130 @@ class TushareProvider(DataFeed):
         df["symbol"] = df["ts_code"].apply(self._from_ts_code)
         return df
 
+    def fetch_etf_basic(self, status: str = "L") -> pd.DataFrame:
+        if self._api is None:
+            return pd.DataFrame()
+
+        self._rate_limit()
+        try:
+            df = self._api.etf_basic(
+                list_status=status,
+                fields="ts_code,csname,extname,cname,index_code,index_name,setup_date,list_date,list_status,exchange,mgr_name,custod_name,mgt_fee,etf_type",
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching etf_basic status={status}: {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+        frame = df.copy()
+        frame["symbol"] = frame["ts_code"].apply(self._from_ts_code)
+        if "extname" in frame.columns:
+            frame["name"] = frame["extname"]
+        elif "csname" in frame.columns:
+            frame["name"] = frame["csname"]
+        else:
+            frame["name"] = ""
+        if "csname" in frame.columns:
+            frame["name"] = frame["name"].fillna(frame["csname"])
+        if "cname" in frame.columns:
+            frame["name"] = frame["name"].fillna(frame["cname"])
+        frame["name"] = frame["name"].fillna("").astype(str)
+        frame["fund_type"] = frame["etf_type"] if "etf_type" in frame.columns else ""
+        frame["instrument_type"] = "ETF"
+        frame["status"] = frame["list_status"] if "list_status" in frame.columns else status
+        frame["market"] = "E"
+        frame["delist_date"] = ""
+        return frame
+
+    def fetch_fund_basic(self, status: str = "L") -> pd.DataFrame:
+        if self._api is None:
+            return pd.DataFrame()
+
+        self._rate_limit()
+        try:
+            df = self._api.fund_basic(
+                market="E",
+                status=status,
+                fields="ts_code,name,fund_type,list_date,status,market,benchmark,type,invest_type",
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching fund_basic status={status}: {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+        frame = df.copy()
+        frame["symbol"] = frame["ts_code"].apply(self._from_ts_code)
+        frame["instrument_type"] = frame["symbol"].apply(lambda value: "ETF" if str(value).startswith(("15", "51", "52", "56", "58")) else "LOF")
+        frame["delist_date"] = ""
+        frame["index_code"] = ""
+        frame["index_name"] = frame.get("benchmark", "")
+        frame["exchange"] = frame["ts_code"].astype(str).str.split(".").str[-1]
+        return frame
+
+    def fetch_fund_nav(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        if self._api is None or not self._is_fund(symbol):
+            return pd.DataFrame()
+        ts_code = self._to_ts_code(symbol)
+        total_days = (end - start).days
+        if total_days > self._MAX_DAYS_PER_REQUEST:
+            chunks: List[pd.DataFrame] = []
+            chunk_start = start
+            from datetime import timedelta
+            while chunk_start < end:
+                chunk_end = min(chunk_start + timedelta(days=self._MAX_DAYS_PER_REQUEST), end)
+                chunk_df = self._fetch_fund_nav_chunk(ts_code, symbol, chunk_start, chunk_end)
+                if not chunk_df.empty:
+                    chunks.append(chunk_df)
+                chunk_start = chunk_end + timedelta(days=1)
+            if not chunks:
+                return pd.DataFrame()
+            return pd.concat(chunks, ignore_index=True).drop_duplicates(
+                subset=["symbol", "nav_date"],
+            ).sort_values("nav_date").reset_index(drop=True)
+        return self._fetch_fund_nav_chunk(ts_code, symbol, start, end)
+
+    def _fetch_fund_nav_chunk(self, ts_code: str, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        self._rate_limit()
+        try:
+            df = self._api.fund_nav(
+                ts_code=ts_code,
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                fields="ts_code,ann_date,nav_date,unit_nav,accum_nav,net_asset,total_netasset,adj_nav",
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching fund_nav for {symbol}: {e}")
+            return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        frame = df.copy()
+        frame["symbol"] = frame["ts_code"].apply(self._from_ts_code)
+        if "nav_date" in frame.columns:
+            frame["nav_date"] = pd.to_datetime(frame["nav_date"], format="%Y%m%d", errors="coerce")
+        return frame
+
+    def fetch_fund_share(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        if self._api is None or not self._is_fund(symbol):
+            return pd.DataFrame()
+        ts_code = self._to_ts_code(symbol)
+        self._rate_limit()
+        try:
+            df = self._api.fund_share(
+                ts_code=ts_code,
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching fund_share for {symbol}: {e}")
+            return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        frame = df.copy()
+        frame["symbol"] = frame["ts_code"].apply(self._from_ts_code)
+        return frame
+
     def fetch_daily_with_hfq(
         self, symbol: str, start: datetime, end: datetime,
     ) -> pd.DataFrame:
@@ -445,6 +629,18 @@ class TushareProvider(DataFeed):
             bars["adj_low"] = bars["low"]
             bars["adj_close"] = bars["close"]
             bars["adj_factor"] = 1.0
+            return bars
+
+        if self._is_fund(symbol):
+            factors = self.fetch_fund_adj_factor(symbol, start, end)
+            if factors.empty:
+                self.logger.warning(f"No fund_adj for {symbol}, using identity")
+                bars["adj_factor"] = 1.0
+            else:
+                bars = bars.merge(factors[["timestamp", "adj_factor"]], on="timestamp", how="left")
+                bars["adj_factor"] = bars["adj_factor"].ffill().bfill().fillna(1.0)
+            for col in ("open", "high", "low", "close"):
+                bars[f"adj_{col}"] = bars[col] * bars["adj_factor"]
             return bars
 
         factors = self.fetch_adj_factor(symbol, start, end)

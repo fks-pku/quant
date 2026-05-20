@@ -20,6 +20,8 @@ CN_STAMP_DUTY_RATE = 0.0005
 CN_TRANSFER_FEE_RATE = 0.00001
 CN_REGULATOR_FEE_RATE = 0.00002
 CN_MIN_COMMISSION = 5.0
+CN_FUND_COMMISSION_RATE = CN_COMMISSION_RATE
+CN_FUND_MIN_COMMISSION = CN_MIN_COMMISSION
 
 US_SEC_FEE_RATE = 0.0000278
 US_FINRA_TAF_PER_SHARE = 0.000166
@@ -40,6 +42,17 @@ HK_STAMP_DUTY_RATE_HISTORY = {
 }
 
 VOLUME_PARTICIPATION_LIMIT = 0.05
+
+CN_EXCHANGE_TRADED_FUND_PREFIXES = (
+    "15",
+    "16",
+    "18",
+    "50",
+    "51",
+    "52",
+    "56",
+    "58",
+)
 
 
 def get_rate_for_date(
@@ -95,9 +108,16 @@ def calculate_commission(
     if market == "US":
         return _calculate_us_commission(quantity, trade_value, side, commission_config)
     elif market == "CN":
+        if _is_cn_exchange_traded_fund_symbol(symbol):
+            return _calculate_cn_fund_commission(trade_value, side, commission_config)
         return _calculate_cn_commission(trade_value, side, commission_config, trade_date)
     else:
         return _calculate_hk_commission(trade_value, side, commission_config, trade_date)
+
+
+def _is_cn_exchange_traded_fund_symbol(symbol: str) -> bool:
+    code = str(symbol).strip()
+    return code.isdigit() and len(code) == 6 and code.startswith(CN_EXCHANGE_TRADED_FUND_PREFIXES)
 
 
 def _calculate_us_commission(quantity: float, trade_value: float, side: str, commission_config: Any) -> Dict[str, float]:
@@ -136,6 +156,27 @@ def _calculate_cn_commission(
         "stamp_duty": stamp_duty,
         "transfer_fee": transfer_fee,
         "regulator_fee": regulator_fee,
+    }
+
+
+def _calculate_cn_fund_commission(
+    trade_value: float,
+    side: str,
+    commission_config: Any = None,
+) -> Dict[str, float]:
+    cfg = _get_market_config(commission_config, "CN") or {}
+    fund_rate = cfg.get("fund_percent")
+    if fund_rate is None:
+        fund_rate = cfg.get("percent", CN_FUND_COMMISSION_RATE) if cfg.get("type") == "percent" else CN_FUND_COMMISSION_RATE
+    fund_min = cfg.get("fund_min_per_order")
+    if fund_min is None:
+        fund_min = cfg.get("min_per_order", CN_FUND_MIN_COMMISSION)
+    commission = max(trade_value * float(fund_rate), float(fund_min))
+    return {
+        "commission": commission,
+        "stamp_duty": 0.0,
+        "transfer_fee": 0.0,
+        "regulator_fee": 0.0,
     }
 
 

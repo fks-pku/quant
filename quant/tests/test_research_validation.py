@@ -1517,6 +1517,45 @@ class TestFactorValidator:
         assert market_data._table_for_symbol("HSI") == "daily_hk"
         assert market_data._table_for_symbol("AAPL") == "daily_us"
 
+    def test_duckdb_market_data_routes_cn_etf_and_index_sidecars(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        from quant.infrastructure.research.market_data.duckdb_research_market_data import (
+            DuckDBResearchMarketData,
+        )
+
+        db_path = tmp_path / "research_market.duckdb"
+        etf_path = tmp_path / "cn_etf_ohlcv.duckdb"
+        index_path = tmp_path / "cn_index_ohlcv.duckdb"
+        schema = "(symbol VARCHAR, timestamp TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)"
+        for path, symbol, close in (
+            (db_path, "600519", 100.0),
+            (etf_path, "510300", 3.5),
+            (index_path, "000300", 3300.0),
+        ):
+            conn = duckdb.connect(str(path))
+            conn.execute(f"CREATE TABLE daily_cn_ochl {schema}")
+            conn.execute(
+                "INSERT INTO daily_cn_ochl VALUES (?, '2024-01-02 09:30:00', ?, ?, ?, ?, 100)",
+                [symbol, close, close, close, close],
+            )
+            conn.close()
+
+        market_data = DuckDBResearchMarketData(
+            str(db_path),
+            etf_db_path=str(etf_path),
+            index_db_path=str(index_path),
+        )
+
+        assert market_data.get_universe_symbols("cn") == ["600519"]
+        assert market_data.get_universe_symbols("cn_etf") == ["510300"]
+        assert market_data.get_universe_symbols("cn_index") == ["000300"]
+        assert market_data._table_for_symbol("510300") == "cn_etf.daily_cn_ochl"
+        assert market_data._table_for_symbol("000300") == "cn_index.daily_cn_ochl"
+
+        bars = market_data.get_daily_bars(["600519", "510300", "000300"], "2024-01-01", "2024-01-31")
+
+        assert set(bars["symbol"]) == {"600519", "510300", "000300"}
+
     def test_duckdb_market_data_supports_date_schema_fallback(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")
         from quant.infrastructure.research.market_data.duckdb_research_market_data import (

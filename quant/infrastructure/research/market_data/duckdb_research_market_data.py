@@ -2,7 +2,13 @@ import logging
 from typing import Any, Dict, List
 
 from quant.domain.ports.research_market_data import ResearchMarketData
-from quant.infrastructure.data.storage_duckdb import _DEFAULT_DAILY_BASIC_DB, _DEFAULT_DB
+from quant.infrastructure.data.storage_duckdb import (
+    _DEFAULT_DAILY_BASIC_DB,
+    _DEFAULT_DB,
+    _DEFAULT_ETF_DB,
+    _DEFAULT_INDEX_DB,
+    DuckDBStorage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +20,15 @@ class DuckDBResearchMarketData(ResearchMarketData):
         pit_data: Any = None,
         pit_as_of_date: str = None,
         daily_basic_db_path: str = _DEFAULT_DAILY_BASIC_DB,
+        etf_db_path: str = _DEFAULT_ETF_DB,
+        index_db_path: str = _DEFAULT_INDEX_DB,
     ):
         self._db_path = db_path
         self._pit_data = pit_data
         self._pit_as_of_date = pit_as_of_date
         self._daily_basic_db_path = daily_basic_db_path
+        self._etf_db_path = etf_db_path
+        self._index_db_path = index_db_path
 
     def get_universe_symbols(self, market: str) -> List[str]:
         if self._pit_data is not None and self._pit_as_of_date:
@@ -36,6 +46,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
         try:
             import duckdb
             conn = duckdb.connect(self._db_path, read_only=True)
+            self._attach_sidecars(conn)
             rows = conn.execute(f"SELECT DISTINCT symbol FROM {table} ORDER BY symbol").fetchall()
             return [row[0] for row in rows]
         except Exception as e:
@@ -53,6 +64,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
         try:
             import duckdb
             conn = duckdb.connect(self._db_path, read_only=True)
+            self._attach_sidecars(conn)
             fields = [str(row[1]) for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
             if table == "daily_cn_ochl":
                 fields.extend([field for field in self._daily_basic_fields(conn) if field not in fields])
@@ -82,6 +94,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
             import duckdb
             import pandas as pd
             conn = duckdb.connect(self._db_path, read_only=True)
+            self._attach_sidecars(conn)
             frames = []
             requested_fields = {str(field) for field in fields} if fields else None
             for table, table_symbols in self._symbols_by_table(symbols).items():
@@ -128,7 +141,13 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 conn.close()
 
     def _symbols_by_table(self, symbols: List[str]) -> Dict[str, List[str]]:
-        grouped: Dict[str, List[str]] = {"daily_cn_ochl": [], "daily_hk": [], "daily_us": []}
+        grouped: Dict[str, List[str]] = {
+            "daily_cn_ochl": [],
+            "cn_etf.daily_cn_ochl": [],
+            "cn_index.daily_cn_ochl": [],
+            "daily_hk": [],
+            "daily_us": [],
+        }
         for symbol in symbols:
             grouped[self._table_for_symbol(symbol)].append(symbol)
         return grouped
@@ -144,6 +163,10 @@ class DuckDBResearchMarketData(ResearchMarketData):
         if value.endswith(".HK"):
             return "daily_hk"
         bare = value.split(".")[0]
+        if DuckDBStorage.is_cn_etf_symbol(bare):
+            return "cn_etf.daily_cn_ochl"
+        if DuckDBStorage.is_cn_index_symbol(bare):
+            return "cn_index.daily_cn_ochl"
         if bare.isdigit() and len(bare) == 5:
             return "daily_hk"
         if bare.isdigit() and len(bare) == 6:
@@ -153,9 +176,34 @@ class DuckDBResearchMarketData(ResearchMarketData):
     def _table_for_market(self, market: str) -> Any:
         return {
             "cn": "daily_cn_ochl",
+            "ashare": "daily_cn_ochl",
+            "cn_stock": "daily_cn_ochl",
+            "cn_etf": "cn_etf.daily_cn_ochl",
+            "etf": "cn_etf.daily_cn_ochl",
+            "cn_index": "cn_index.daily_cn_ochl",
+            "index": "cn_index.daily_cn_ochl",
             "hk": "daily_hk",
             "us": "daily_us",
         }.get(str(market).lower())
+
+    def _attach_sidecars(self, conn: Any) -> None:
+        from pathlib import Path
+
+        for schema, path_text in (("cn_etf", self._etf_db_path), ("cn_index", self._index_db_path)):
+            path = Path(path_text)
+            if not path.exists():
+                continue
+            try:
+                attached = {
+                    row[1]
+                    for row in conn.execute("PRAGMA database_list").fetchall()
+                    if len(row) > 1
+                }
+                if schema not in attached:
+                    escaped = str(path).replace("'", "''")
+                    conn.execute(f"ATTACH IF NOT EXISTS '{escaped}' AS {schema} (READ_ONLY)")
+            except Exception as e:
+                logger.warning(f"{schema} sidecar unavailable: {e}")
 
     def _date_expressions(self, conn: Any, table: str) -> Any:
         columns = {row[1].lower() for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}

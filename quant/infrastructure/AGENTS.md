@@ -45,8 +45,18 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `research/pit_duckdb.PITDuckDBData` implements point-in-time universe and bar access with read-only DuckDB.
 - Research feature code must receive it through dependency injection; infrastructure must not import from `features/`.
 
+## DuckDB Data Layout
+
+- Live mutable DuckDB data is stored under ignored `var/duckdb/live/`.
+- `cn_ohlcv.duckdb::daily_cn_ochl` stores CN stock OHLCV only.
+- `cn_etf_ohlcv.duckdb::daily_cn_ochl` stores CN ETF OHLCV and is attached as `cn_etf`.
+- `cn_index_ohlcv.duckdb::daily_cn_ochl` stores CN index OHLCV and is attached as `cn_index`.
+- `cn_daily_basic.duckdb::cn_daily_basic` stores Tushare daily valuation, shares, market cap, and turnover sidecar fields.
+- `cn_status.duckdb::cn_security_status_daily` stores daily listing/tradability/ST/suspension/limit status.
+- `cn_corporate_actions.duckdb::cn_dividends` stores CN dividend and allotment records.
+
 ## Security Status Data
 
-- `quant/scripts/build_cn_security_status.py` rebuilds `var/duckdb/security_status.duckdb::cn_security_status_daily` from read-only `daily_cn_ochl` plus Tushare `stock_basic`, `namechange`, `suspend_d`, `stk_limit`, and `trade_cal`.
-- The status table is stored separately from `quant.duckdb`; keep DuckDB market reads `read_only=True` when rebuilding.
+- `quant/scripts/build_cn_security_status.py` rebuilds `var/duckdb/live/cn_status.duckdb::cn_security_status_daily` from read-only stock OHLCV plus Tushare `stock_basic`, `namechange`, `suspend_d`, `stk_limit`, and `trade_cal`.
+- The status table is stored separately from `cn_ohlcv.duckdb`; keep DuckDB market reads `read_only=True` when rebuilding.
 - `DuckDBStorage(use_security_status=True)` attaches the status DB read-only and filters by requested symbols/date range before joining, so backtests do not scan the whole status table unless the requested universe itself is whole-market.

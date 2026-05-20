@@ -16,6 +16,7 @@ quant/infrastructure/var/*
 !quant/infrastructure/var/duckdb/
 quant/infrastructure/var/duckdb/*
 !quant/infrastructure/var/duckdb/*.duckdb
+quant/infrastructure/var/duckdb/live/
 
 # Local workspace
 .vibe-kanban-workspaces/
