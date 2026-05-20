@@ -32,6 +32,7 @@ class DailyBarStrategy(Strategy):
     def __init__(self, name: str, symbols: List[str], holding_days: int = 1):
         super().__init__(name)
         self._symbols = symbols
+        self._symbol_set = set(symbols)
         self._day_data: Dict[str, List[Any]] = {}
         self.holding_days = holding_days
 
@@ -47,7 +48,7 @@ class DailyBarStrategy(Strategy):
 
     def on_data(self, context: "Context", data: Any) -> None:
         symbol = data.get("symbol", "") if isinstance(data, dict) else getattr(data, "symbol", "")
-        if not symbol or symbol not in self._symbols:
+        if not symbol or symbol not in self._symbol_set:
             return
         if symbol not in self._day_data:
             self._day_data[symbol] = []
@@ -55,6 +56,20 @@ class DailyBarStrategy(Strategy):
         max_keep = self._max_keep_hint
         if max_keep > 0 and len(self._day_data[symbol]) > max_keep:
             self._day_data[symbol] = self._day_data[symbol][-max_keep:]
+
+    def on_data_batch(self, context: "Context", data: Any) -> None:
+        bars = data.values() if isinstance(data, dict) else data
+        symbol_set = self._symbol_set
+        day_data = self._day_data
+        max_keep = self._max_keep_hint
+        for bar in bars:
+            symbol = bar.get("symbol", "") if isinstance(bar, dict) else getattr(bar, "symbol", "")
+            if not symbol or symbol not in symbol_set:
+                continue
+            symbol_bars = day_data.setdefault(symbol, [])
+            symbol_bars.append(bar)
+            if max_keep > 0 and len(symbol_bars) > max_keep:
+                del symbol_bars[:-max_keep]
 
     @property
     def _max_keep_hint(self) -> int:

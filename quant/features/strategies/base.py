@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import date
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 if TYPE_CHECKING:
     from quant.domain.context import StrategyContext as Context
@@ -38,6 +38,12 @@ class Strategy(ABC):
     def on_data(self, context: "Context", data: Any) -> None:
         """Called on each bar/quote of data."""
         pass
+
+    def on_data_batch(self, context: "Context", data: Iterable[Any]) -> None:
+        """Called with all bars for one trading step."""
+        bars = data.values() if isinstance(data, dict) else data
+        for bar in bars:
+            self.on_data(context, bar)
 
     def on_fill(self, context: "Context", fill: Any) -> None:
         """Called when an order is filled."""

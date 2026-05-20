@@ -1,6 +1,8 @@
 import importlib.util
+import hashlib
 import json
 import os
+import pickle
 import threading
 import time
 import uuid
@@ -110,6 +112,7 @@ def _make_backtest_fn():
                     start,
                     end,
                     include_daily_basic=_candidate_requires_market_cap(info),
+                    include_execution_liquidity_features=bool(execution_cost_model and execution_cost_model.get("enabled")),
                 )
             else:
                 data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
@@ -327,7 +330,7 @@ def _add_execution_liquidity_features(data_df, execution_cost_model):
     frame["adv20_value"] = value.groupby(frame["symbol"]).transform(
         lambda item: item.shift(1).rolling(20, min_periods=1).mean()
     )
-    returns = close.groupby(frame["symbol"], group_keys=False).pct_change()
+    returns = close.groupby(frame["symbol"], group_keys=False).pct_change(fill_method=None)
     frame["volatility20"] = returns.groupby(frame["symbol"]).transform(
         lambda item: item.shift(1).rolling(20, min_periods=2).std()
     )
@@ -679,6 +682,42 @@ def _archived_candidate_info(sid):
     }
 
 
+class _BarRecordBatch:
+    def __init__(self, records):
+        self.records = records
+
+    def __iter__(self):
+        return iter(self.records)
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, index):
+        return self.records[index]
+
+
+_STREAMING_PROVIDER_CACHE_VERSION = 1
+_STREAMING_PROVIDER_CACHE_MIN_SYMBOLS = 1000
+
+
+def _streaming_provider_cache_dir():
+    return Path(__file__).resolve().parents[1] / "infrastructure" / "var" / "research" / "cache" / "daily_date_provider"
+
+
+def _file_fingerprint(path):
+    item = Path(path)
+    try:
+        stat = item.stat()
+    except OSError:
+        return {"path": str(item), "exists": False}
+    return {
+        "path": str(item.resolve()),
+        "exists": True,
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
 class _DuckDBDailyDateProvider:
     def __init__(
         self,
@@ -689,6 +728,9 @@ class _DuckDBDailyDateProvider:
         status_db_path=None,
         daily_basic_db_path=None,
         include_daily_basic=True,
+        include_execution_liquidity_features=False,
+        cache_dir=None,
+        cache_enabled=None,
     ):
         import pandas as pd
         from quant.infrastructure.data.storage_duckdb import (
@@ -700,7 +742,10 @@ class _DuckDBDailyDateProvider:
 
         self.symbols = list(dict.fromkeys(str(symbol) for symbol in symbols))
         self._symbol_lookup = set(self.symbols)
+        self._start_day = pd.Timestamp(start).date()
+        self._end_day = pd.Timestamp(end).date()
         self._include_daily_basic = bool(include_daily_basic)
+        self._include_execution_liquidity_features = bool(include_execution_liquidity_features)
         self._storage = DuckDBStorage(
             db_path or _DEFAULT_DB,
             read_only=True,
@@ -722,6 +767,13 @@ class _DuckDBDailyDateProvider:
         self.trading_dates = set(self._trading_dates_list)
         self._chunk_size = 63
         self._cached_rows_by_date = {}
+        self._cache_enabled = (
+            len(self.symbols) >= _STREAMING_PROVIDER_CACHE_MIN_SYMBOLS
+            if cache_enabled is None
+            else bool(cache_enabled)
+        )
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else _streaming_provider_cache_dir()
+        self._cache_key_base = self._build_cache_key_base()
 
     def get_bars_for_date(self, trading_date):
         import pandas as pd
@@ -745,7 +797,15 @@ class _DuckDBDailyDateProvider:
         chunk_dates = self._trading_dates_list[index:index + self._chunk_size]
         start_day = chunk_dates[0]
         end_day = chunk_dates[-1]
-        frame = self._fetch_frame(start_day, end_day)
+        lookback_start_day = start_day
+        if self._include_execution_liquidity_features:
+            lookback_index = max(0, index - 25)
+            lookback_start_day = self._trading_dates_list[lookback_index]
+        if self._load_cached_chunk(chunk_dates, lookback_start_day, end_day):
+            return
+        frame = self._fetch_frame(lookback_start_day, end_day)
+        if self._include_execution_liquidity_features:
+            frame = _add_execution_liquidity_features(frame, {"enabled": True})
         grouped = {item: [] for item in chunk_dates}
         if frame is not None and not frame.empty:
             if "symbol" in frame.columns:
@@ -753,9 +813,91 @@ class _DuckDBDailyDateProvider:
             if not frame.empty:
                 timestamps = pd.to_datetime(frame["timestamp"], errors="coerce")
                 frame = frame.assign(_cache_date=timestamps.dt.date)
-                for cache_date, group in frame.groupby("_cache_date", sort=False):
-                    grouped[cache_date] = group.drop(columns=["_cache_date"]).to_dict("records")
+                frame = frame[frame["_cache_date"].isin(set(chunk_dates))]
+                for record in frame.to_dict("records"):
+                    cache_date = record.pop("_cache_date", None)
+                    if cache_date in grouped:
+                        grouped[cache_date].append(record)
+        self._cached_rows_by_date = {
+            item: _BarRecordBatch(records) if records else []
+            for item, records in grouped.items()
+        }
+        self._store_cached_chunk(chunk_dates, lookback_start_day, end_day, grouped)
+
+    def _build_cache_key_base(self):
+        status_available = self._storage._status_available()
+        include_basic = self._include_daily_basic and self._storage._daily_basic_available()
+        symbols_digest = hashlib.sha256("\n".join(sorted(self._symbol_lookup)).encode("utf-8")).hexdigest()
+        return {
+            "version": _STREAMING_PROVIDER_CACHE_VERSION,
+            "symbols_digest": symbols_digest,
+            "symbols_count": len(self._symbol_lookup),
+            "start": self._start_day.isoformat(),
+            "end": self._end_day.isoformat(),
+            "bar_columns": list(self._bar_columns),
+            "include_daily_basic": bool(self._include_daily_basic),
+            "include_execution_liquidity_features": bool(self._include_execution_liquidity_features),
+            "status_available": bool(status_available),
+            "daily_basic_available": bool(include_basic),
+            "market_db": _file_fingerprint(self._storage.db_path),
+            "status_db": _file_fingerprint(self._storage._status_db_path) if status_available else None,
+            "daily_basic_db": _file_fingerprint(self._storage._daily_basic_db_path) if include_basic else None,
+        }
+
+    def _chunk_cache_path(self, chunk_dates, lookback_start_day, end_day):
+        if not self._cache_enabled:
+            return None
+        key = {
+            **self._cache_key_base,
+            "chunk_start": chunk_dates[0].isoformat(),
+            "chunk_end": chunk_dates[-1].isoformat(),
+            "lookback_start": lookback_start_day.isoformat(),
+            "fetch_end": end_day.isoformat(),
+        }
+        digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()
+        return self._cache_dir / f"chunk_{digest}.pkl"
+
+    def _load_cached_chunk(self, chunk_dates, lookback_start_day, end_day):
+        cache_path = self._chunk_cache_path(chunk_dates, lookback_start_day, end_day)
+        if cache_path is None or not cache_path.exists():
+            return False
+        try:
+            with cache_path.open("rb") as handle:
+                payload = pickle.load(handle)
+        except Exception:
+            return False
+        if payload.get("version") != _STREAMING_PROVIDER_CACHE_VERSION:
+            return False
+        expected_dates = [item.isoformat() for item in chunk_dates]
+        if payload.get("chunk_dates") != expected_dates:
+            return False
+        rows_by_date = payload.get("rows_by_date")
+        if not isinstance(rows_by_date, dict):
+            return False
+        grouped = {}
+        for item in chunk_dates:
+            records = rows_by_date.get(item.isoformat(), [])
+            grouped[item] = _BarRecordBatch(records) if records else []
         self._cached_rows_by_date = grouped
+        return True
+
+    def _store_cached_chunk(self, chunk_dates, lookback_start_day, end_day, grouped):
+        cache_path = self._chunk_cache_path(chunk_dates, lookback_start_day, end_day)
+        if cache_path is None:
+            return
+        payload = {
+            "version": _STREAMING_PROVIDER_CACHE_VERSION,
+            "chunk_dates": [item.isoformat() for item in chunk_dates],
+            "rows_by_date": {item.isoformat(): records for item, records in grouped.items()},
+        }
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = cache_path.with_suffix(".tmp")
+            with tmp_path.open("wb") as handle:
+                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, cache_path)
+        except Exception:
+            return
 
     def _fetch_frame(self, start_day, end_day):
         if self._storage._status_available():
@@ -942,6 +1084,22 @@ def _strict_backtest_report(
     benchmark_metrics = _benchmark_equity_metrics(benchmark_equity_curve, initial_cash, start, end)
     strategy_equity_curve = getattr(bt_result, "equity_curve", None)
     diagnostics_dict = _diagnostics_dict(diagnostics)
+    execution_observations = list(getattr(diagnostics, "execution_observations", []) or [])
+    execution_observations = _enrich_execution_observations_with_adv20(execution_observations, start, end, symbols)
+    exposure_snapshots = list(getattr(diagnostics, "exposure_snapshots", []) or [])
+    trades = list(getattr(bt_result, "trades", []) or [])
+    supplemental = _strict_supplemental_diagnostics(
+        bt_result,
+        trades,
+        strategy_equity_curve,
+        benchmark_equity_curve,
+        execution_observations,
+        exposure_snapshots,
+        initial_cash,
+        start,
+        end,
+        diagnostics_dict,
+    )
     final_nav = _metric_float(getattr(bt_result, "final_nav", 0.0))
     frozen_nav = _metric_float(diagnostics_dict.get("final_suspended_holding_nav", 0.0))
     if not isinstance(final_nav, str) and not isinstance(frozen_nav, str):
@@ -984,6 +1142,15 @@ def _strict_backtest_report(
             "profit_factor": _metric_float(getattr(bt_result, "profit_factor", 0.0)),
             "total_trades": int(len(getattr(bt_result, "trades", []) or [])),
             "round_trip_trades": int(getattr(metrics, "total_trades", 0) if metrics is not None else 0),
+            "winning_trades": int(getattr(metrics, "winning_trades", 0) if metrics is not None else 0),
+            "losing_trades": int(getattr(metrics, "losing_trades", 0) if metrics is not None else 0),
+            "avg_trade_duration_days": _duration_days(getattr(bt_result, "avg_trade_duration", None)),
+            "payoff_ratio": _metric_float(getattr(metrics, "payoff_ratio", 0.0) if metrics is not None else 0.0),
+            "expectancy": _metric_float(getattr(metrics, "expectancy", 0.0) if metrics is not None else 0.0),
+            "gain_to_pain_ratio": _metric_float(getattr(metrics, "gain_to_pain_ratio", 0.0) if metrics is not None else 0.0),
+            "ulcer_index": _metric_float(getattr(metrics, "ulcer_index", 0.0) if metrics is not None else 0.0),
+            "tail_ratio": _metric_float(getattr(metrics, "tail_ratio", 0.0) if metrics is not None else 0.0),
+            "recovery_factor": _metric_float(getattr(metrics, "recovery_factor", 0.0) if metrics is not None else 0.0),
             "t_stat": _metric_float(stat_sig.get("t_stat", 0.0) if isinstance(stat_sig, dict) else 0.0),
             "p_value": _metric_float(stat_sig.get("p_value", 1.0) if isinstance(stat_sig, dict) else 1.0),
         },
@@ -995,9 +1162,13 @@ def _strict_backtest_report(
             "beta": _metric_float(getattr(metrics, "beta", None) if metrics is not None else None),
             "information_ratio": _metric_float(getattr(metrics, "information_ratio", None) if metrics is not None else None),
             "tracking_error": _metric_float(getattr(metrics, "tracking_error", None) if metrics is not None else None),
+            "up_capture": _metric_float(getattr(metrics, "up_capture", None) if metrics is not None else None),
+            "down_capture": _metric_float(getattr(metrics, "down_capture", None) if metrics is not None else None),
             "benchmark_yearly_returns": _yearly_returns_from_equity(benchmark_equity_curve, initial_cash),
         },
         "diagnostics": diagnostics_dict,
+        **supplemental,
+        "guard_diagnostics": _strategy_guard_diagnostics(strategy),
         "data_quality": {
             "survivorship_audit": dict(survivorship_audit or {}),
         },
@@ -1095,6 +1266,440 @@ def _strict_backtest_blocked_report(sid, start, end, initial_cash, symbols, reas
     }
 
 
+def _strict_supplemental_diagnostics(
+    bt_result,
+    trades,
+    equity_curve,
+    benchmark_equity_curve,
+    execution_observations,
+    exposure_snapshots,
+    initial_cash,
+    start,
+    end,
+    diagnostics_dict,
+):
+    return {
+        "turnover": _turnover_diagnostics(trades, equity_curve, initial_cash, start, end),
+        "exposure": _exposure_diagnostics(exposure_snapshots),
+        "capacity": _capacity_diagnostics(execution_observations, initial_cash),
+        "trade_distribution": _trade_distribution(trades),
+        "drawdown_episodes": _drawdown_episodes(equity_curve),
+        "rolling_stability": _rolling_stability(equity_curve, benchmark_equity_curve),
+        "regime_breakdown": _regime_breakdown(equity_curve, benchmark_equity_curve, initial_cash),
+        "cost_decomposition": _cost_decomposition(bt_result, initial_cash, diagnostics_dict),
+    }
+
+
+def _turnover_diagnostics(trades, equity_curve, initial_cash, start, end):
+    years = max(1.0 / 365.25, (end - start).days / 365.25)
+    avg_nav = _series_mean(equity_curve) or float(initial_cash or 0.0)
+    rows = []
+    daily = {}
+    buy_value = 0.0
+    sell_value = 0.0
+    for trade in trades or []:
+        notional = abs(_safe_trade_number(getattr(trade, "quantity", 0.0)) * _safe_trade_number(getattr(trade, "fill_price", 0.0)))
+        side = str(getattr(trade, "side", "") or "").upper()
+        if side == "BUY":
+            buy_value += notional
+        elif side == "SELL":
+            sell_value += notional
+        date_text = _trade_date_text(trade)
+        daily[date_text] = daily.get(date_text, 0.0) + notional
+        rows.append(notional)
+    gross_value = buy_value + sell_value
+    one_way_value = min(buy_value, sell_value)
+    avg_daily_value = sum(daily.values()) / len(daily) if daily else 0.0
+    return {
+        "gross_traded_value": _metric_float(gross_value),
+        "buy_traded_value": _metric_float(buy_value),
+        "sell_traded_value": _metric_float(sell_value),
+        "one_way_traded_value": _metric_float(one_way_value),
+        "annual_gross_turnover": _metric_float(gross_value / avg_nav / years if avg_nav > 0 else 0.0),
+        "annual_one_way_turnover": _metric_float(one_way_value / avg_nav / years if avg_nav > 0 else 0.0),
+        "avg_daily_traded_value": _metric_float(avg_daily_value),
+        "max_daily_traded_value": _metric_float(max(daily.values()) if daily else 0.0),
+        "traded_days": len(daily),
+        "avg_trade_notional": _metric_float(sum(rows) / len(rows) if rows else 0.0),
+        "max_trade_notional": _metric_float(max(rows) if rows else 0.0),
+    }
+
+
+def _exposure_diagnostics(snapshots):
+    if not snapshots:
+        return {}
+    def values(key):
+        return [_safe_trade_number(item.get(key, 0.0)) for item in snapshots]
+    position_counts = values("position_count")
+    gross = values("gross_exposure_pct")
+    cash = values("cash_pct")
+    max_weight = values("max_position_weight")
+    return {
+        "observations": len(snapshots),
+        "avg_position_count": _metric_float(_mean(position_counts)),
+        "min_position_count": _metric_float(min(position_counts) if position_counts else 0.0),
+        "max_position_count": _metric_float(max(position_counts) if position_counts else 0.0),
+        "avg_gross_exposure_pct": _metric_float(_mean(gross)),
+        "min_gross_exposure_pct": _metric_float(min(gross) if gross else 0.0),
+        "max_gross_exposure_pct": _metric_float(max(gross) if gross else 0.0),
+        "avg_cash_pct": _metric_float(_mean(cash)),
+        "min_cash_pct": _metric_float(min(cash) if cash else 0.0),
+        "max_cash_pct": _metric_float(max(cash) if cash else 0.0),
+        "avg_max_position_weight": _metric_float(_mean(max_weight)),
+        "p95_max_position_weight": _metric_float(_quantile(max_weight, 0.95)),
+        "max_position_weight": _metric_float(max(max_weight) if max_weight else 0.0),
+    }
+
+
+def _capacity_diagnostics(observations, initial_cash):
+    if not observations:
+        return {}
+    adv_participation = [_safe_trade_number(item.get("adv_participation", 0.0)) for item in observations if _safe_trade_number(item.get("adv_participation", 0.0)) > 0]
+    volume_participation = [_safe_trade_number(item.get("volume_participation", 0.0)) for item in observations if _safe_trade_number(item.get("volume_participation", 0.0)) > 0]
+    notionals = [_safe_trade_number(item.get("notional", 0.0)) for item in observations if _safe_trade_number(item.get("notional", 0.0)) > 0]
+    impacts = [_safe_trade_number(item.get("impact_bps", 0.0)) for item in observations]
+    max_adv = max(adv_participation) if adv_participation else 0.0
+    p95_adv = _quantile(adv_participation, 0.95)
+    return {
+        "executed_orders": len(observations),
+        "avg_adv_participation": _metric_float(_mean(adv_participation)),
+        "p50_adv_participation": _metric_float(_quantile(adv_participation, 0.50)),
+        "p95_adv_participation": _metric_float(p95_adv),
+        "max_adv_participation": _metric_float(max_adv),
+        "avg_volume_participation": _metric_float(_mean(volume_participation)),
+        "p95_volume_participation": _metric_float(_quantile(volume_participation, 0.95)),
+        "max_volume_participation": _metric_float(max(volume_participation) if volume_participation else 0.0),
+        "p50_trade_notional": _metric_float(_quantile(notionals, 0.50)),
+        "p95_trade_notional": _metric_float(_quantile(notionals, 0.95)),
+        "max_trade_notional": _metric_float(max(notionals) if notionals else 0.0),
+        "max_impact_bps": _metric_float(max(impacts) if impacts else 0.0),
+        "estimated_capacity_at_1pct_adv_max": _metric_float(float(initial_cash) * 0.01 / max_adv if max_adv > 0 else 0.0),
+        "estimated_capacity_at_1pct_adv_p95": _metric_float(float(initial_cash) * 0.01 / p95_adv if p95_adv > 0 else 0.0),
+    }
+
+
+def _enrich_execution_observations_with_adv20(observations, start, end, symbols=None):
+    if len(observations or []) < 100:
+        return observations
+    universe = [str(symbol) for symbol in symbols or []]
+    if len(universe) < 1000 or not all(symbol.isdigit() and len(symbol) == 6 for symbol in universe[:100]):
+        return observations
+    try:
+        import duckdb
+        import pandas as pd
+        from quant.infrastructure.data.storage_duckdb import _DEFAULT_DB
+
+        rows = []
+        for item in observations:
+            symbol = str(item.get("symbol") or "")
+            date_text = str(item.get("date") or "")[:10]
+            if symbol and date_text:
+                rows.append({"symbol": symbol, "trade_date": date_text})
+        if not rows:
+            return observations
+        obs_frame = pd.DataFrame(rows).drop_duplicates()
+        lookback_start = (pd.Timestamp(start) - pd.Timedelta(days=90)).date()
+        end_day = pd.Timestamp(end).date()
+        db_path = str(_DEFAULT_DB).replace("'", "''")
+        conn = duckdb.connect(database=":memory:")
+        try:
+            conn.execute(f"ATTACH '{db_path}' AS market (READ_ONLY)")
+            conn.register("obs", obs_frame)
+            adv_frame = conn.execute(
+                """
+                WITH bars AS (
+                    SELECT
+                        symbol,
+                        CAST(timestamp AS DATE) AS trade_date,
+                        CASE
+                            WHEN turnover IS NULL OR turnover <= 0 THEN close * volume
+                            WHEN close * volume / NULLIF(turnover, 0) BETWEEN 5.0 AND 20.0 THEN turnover * 1000.0
+                            WHEN close * volume / NULLIF(turnover, 0) BETWEEN 500.0 AND 2000.0 THEN turnover * 1000.0
+                            ELSE turnover
+                        END AS traded_value
+                    FROM market.daily_cn_ochl
+                    WHERE symbol IN (SELECT DISTINCT symbol FROM obs)
+                      AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+                ),
+                features AS (
+                    SELECT
+                        symbol,
+                        trade_date,
+                        AVG(traded_value) OVER (
+                            PARTITION BY symbol
+                            ORDER BY trade_date
+                            ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                        ) AS adv20_value
+                    FROM bars
+                )
+                SELECT
+                    o.symbol,
+                    CAST(o.trade_date AS DATE) AS trade_date,
+                    f.adv20_value
+                FROM obs o
+                LEFT JOIN features f
+                  ON o.symbol = f.symbol
+                 AND CAST(o.trade_date AS DATE) = f.trade_date
+                """,
+                [lookback_start, end_day],
+            ).fetchdf()
+        finally:
+            conn.close()
+        adv_map = {
+            (str(row.symbol), str(pd.Timestamp(row.trade_date).date())): _safe_trade_number(row.adv20_value)
+            for row in adv_frame.itertuples(index=False)
+        }
+        enriched = []
+        for item in observations:
+            copied = dict(item)
+            key = (str(copied.get("symbol") or ""), str(copied.get("date") or "")[:10])
+            adv_value = adv_map.get(key, 0.0)
+            if adv_value > 0:
+                copied["adv_value"] = adv_value
+                notional = _safe_trade_number(copied.get("notional", 0.0))
+                copied["adv_participation"] = notional / adv_value if adv_value > 0 else 0.0
+                copied["adv_value_source"] = "adv20_value_postrun"
+            enriched.append(copied)
+        return enriched
+    except Exception:
+        return observations
+
+
+def _trade_distribution(trades):
+    sell_trades = [trade for trade in trades or [] if str(getattr(trade, "side", "") or "").upper() == "SELL"]
+    pnls = [_safe_trade_number(getattr(trade, "pnl", 0.0)) for trade in sell_trades]
+    returns = [_safe_trade_number(getattr(trade, "return_pct", 0.0)) / 100.0 for trade in sell_trades]
+    durations = [_safe_trade_number(getattr(trade, "duration_days", 0.0)) for trade in sell_trades]
+    wins = [value for value in pnls if value > 0]
+    losses = [value for value in pnls if value < 0]
+    return {
+        "sell_trades": len(sell_trades),
+        "avg_pnl": _metric_float(_mean(pnls)),
+        "median_pnl": _metric_float(_quantile(pnls, 0.50)),
+        "p05_pnl": _metric_float(_quantile(pnls, 0.05)),
+        "p95_pnl": _metric_float(_quantile(pnls, 0.95)),
+        "max_win": _metric_float(max(wins) if wins else 0.0),
+        "max_loss": _metric_float(min(losses) if losses else 0.0),
+        "avg_win": _metric_float(_mean(wins)),
+        "avg_loss": _metric_float(_mean(losses)),
+        "avg_return": _metric_float(_mean(returns)),
+        "median_return": _metric_float(_quantile(returns, 0.50)),
+        "avg_duration_days": _metric_float(_mean(durations)),
+        "median_duration_days": _metric_float(_quantile(durations, 0.50)),
+        "p95_duration_days": _metric_float(_quantile(durations, 0.95)),
+    }
+
+
+def _drawdown_episodes(equity_curve, limit=5):
+    if equity_curve is None or not hasattr(equity_curve, "empty") or equity_curve.empty:
+        return []
+    try:
+        equity = equity_curve.dropna().sort_index()
+        running_max = equity.cummax()
+        drawdown = equity / running_max - 1.0
+        episodes = []
+        in_drawdown = False
+        start_date = None
+        trough_date = None
+        trough_value = 0.0
+        for idx, value in drawdown.items():
+            if value < 0 and not in_drawdown:
+                in_drawdown = True
+                start_date = idx
+                trough_date = idx
+                trough_value = float(value)
+            elif value < 0 and in_drawdown and float(value) < trough_value:
+                trough_date = idx
+                trough_value = float(value)
+            elif value >= 0 and in_drawdown:
+                episodes.append(_drawdown_episode_dict(start_date, trough_date, idx, trough_value))
+                in_drawdown = False
+        if in_drawdown:
+            episodes.append(_drawdown_episode_dict(start_date, trough_date, None, trough_value))
+        return sorted(episodes, key=lambda item: item.get("drawdown_pct", 0.0))[:limit]
+    except Exception:
+        return []
+
+
+def _drawdown_episode_dict(start_date, trough_date, recovery_date, drawdown_pct):
+    start_ts = pd_timestamp(start_date)
+    trough_ts = pd_timestamp(trough_date)
+    recovery_ts = pd_timestamp(recovery_date) if recovery_date is not None else None
+    end_ts = recovery_ts or trough_ts
+    return {
+        "start": start_ts.date().isoformat() if start_ts is not None else "",
+        "trough": trough_ts.date().isoformat() if trough_ts is not None else "",
+        "recovery": recovery_ts.date().isoformat() if recovery_ts is not None else "",
+        "duration_days": int((end_ts - start_ts).days) if start_ts is not None and end_ts is not None else 0,
+        "drawdown_pct": _metric_float(drawdown_pct),
+    }
+
+
+def _rolling_stability(equity_curve, benchmark_equity_curve):
+    if equity_curve is None or not hasattr(equity_curve, "empty") or equity_curve.empty:
+        return {}
+    try:
+        import pandas as pd
+        import numpy as np
+
+        equity = equity_curve.dropna().sort_index()
+        returns = equity.pct_change(fill_method=None).dropna()
+        result = {
+            "rolling_1y_sharpe": _rolling_stat_summary(_rolling_sharpe_series(returns, 252)),
+            "rolling_3y_sharpe": _rolling_stat_summary(_rolling_sharpe_series(returns, 756)),
+        }
+        if benchmark_equity_curve is not None and hasattr(benchmark_equity_curve, "empty") and not benchmark_equity_curve.empty:
+            bench_returns = benchmark_equity_curve.dropna().sort_index().pct_change(fill_method=None).dropna()
+            aligned = pd.concat([returns.rename("strategy"), bench_returns.rename("benchmark")], axis=1).dropna()
+            if not aligned.empty:
+                excess = aligned["strategy"] - aligned["benchmark"]
+                result["rolling_1y_information_ratio"] = _rolling_stat_summary(_rolling_sharpe_series(excess, 252))
+                cov = aligned["strategy"].rolling(252).cov(aligned["benchmark"])
+                var = aligned["benchmark"].rolling(252).var()
+                beta = (cov / var.replace(0, np.nan)).dropna()
+                result["rolling_1y_beta"] = _rolling_stat_summary(beta)
+        return result
+    except Exception:
+        return {}
+
+
+def _regime_breakdown(equity_curve, benchmark_equity_curve, initial_cash):
+    strategy_years = _yearly_returns_from_equity(equity_curve, initial_cash)
+    benchmark_years = _yearly_returns_from_equity(benchmark_equity_curve, initial_cash)
+    if not strategy_years:
+        return {}
+    common_years = sorted(set(strategy_years) & set(benchmark_years))
+    up_years = [year for year in common_years if _safe_trade_number(benchmark_years.get(year)) > 0]
+    down_years = [year for year in common_years if _safe_trade_number(benchmark_years.get(year)) <= 0]
+    best_year = max(strategy_years, key=lambda year: _safe_trade_number(strategy_years.get(year)))
+    worst_year = min(strategy_years, key=lambda year: _safe_trade_number(strategy_years.get(year)))
+    return {
+        "positive_years": sum(1 for value in strategy_years.values() if _safe_trade_number(value) > 0),
+        "total_years": len(strategy_years),
+        "outperform_years": sum(1 for year in common_years if _safe_trade_number(strategy_years.get(year)) > _safe_trade_number(benchmark_years.get(year))),
+        "benchmark_up_years": len(up_years),
+        "benchmark_down_years": len(down_years),
+        "avg_return_when_benchmark_up": _metric_float(_mean([_safe_trade_number(strategy_years.get(year)) for year in up_years])),
+        "avg_excess_when_benchmark_up": _metric_float(_mean([_safe_trade_number(strategy_years.get(year)) - _safe_trade_number(benchmark_years.get(year)) for year in up_years])),
+        "avg_return_when_benchmark_down": _metric_float(_mean([_safe_trade_number(strategy_years.get(year)) for year in down_years])),
+        "avg_excess_when_benchmark_down": _metric_float(_mean([_safe_trade_number(strategy_years.get(year)) - _safe_trade_number(benchmark_years.get(year)) for year in down_years])),
+        "best_year": {"year": best_year, "return": _metric_float(strategy_years.get(best_year))},
+        "worst_year": {"year": worst_year, "return": _metric_float(strategy_years.get(worst_year))},
+    }
+
+
+def _cost_decomposition(bt_result, initial_cash, diagnostics_dict):
+    final_nav = _safe_trade_number(getattr(bt_result, "final_nav", 0.0))
+    commission = _safe_trade_number(diagnostics_dict.get("total_commission", 0.0))
+    gross_pnl = _safe_trade_number(diagnostics_dict.get("total_gross_pnl", 0.0))
+    net_pnl = final_nav - float(initial_cash or 0.0)
+    return {
+        "gross_pnl_before_explicit_cost": _metric_float(gross_pnl),
+        "net_pnl_after_cost": _metric_float(net_pnl),
+        "explicit_commission_tax": _metric_float(commission),
+        "explicit_cost_pct_initial_cash": _metric_float(commission / float(initial_cash) if initial_cash else 0.0),
+        "explicit_cost_pct_gross_pnl": _metric_float(commission / abs(gross_pnl) if abs(gross_pnl) > 1e-10 else 0.0),
+        "slippage_impact_note": "滑点/冲击体现在成交价中；total_commission 只包含显式佣金税费。",
+    }
+
+
+def _strategy_guard_diagnostics(strategy):
+    if strategy is None:
+        return {}
+    getter = getattr(strategy, "get_guard_diagnostics", None)
+    if callable(getter):
+        try:
+            value = getter()
+            return dict(value or {}) if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+    value = getattr(strategy, "guard_diagnostics", None)
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _rolling_sharpe_series(returns, window):
+    import numpy as np
+
+    mean = returns.rolling(window).mean()
+    std = returns.rolling(window).std()
+    return (mean / std.replace(0, np.nan) * (252 ** 0.5)).dropna()
+
+
+def _rolling_stat_summary(series):
+    if series is None or len(series) == 0:
+        return {}
+    return {
+        "latest": _metric_float(series.iloc[-1]),
+        "median": _metric_float(series.median()),
+        "min": _metric_float(series.min()),
+        "max": _metric_float(series.max()),
+        "observations": int(len(series)),
+    }
+
+
+def _mean(values):
+    clean = [float(value) for value in values or [] if value == value]
+    return sum(clean) / len(clean) if clean else 0.0
+
+
+def _quantile(values, q):
+    clean = sorted(float(value) for value in values or [] if value == value)
+    if not clean:
+        return 0.0
+    if len(clean) == 1:
+        return clean[0]
+    pos = (len(clean) - 1) * float(q)
+    lower = int(pos)
+    upper = min(lower + 1, len(clean) - 1)
+    weight = pos - lower
+    return clean[lower] * (1 - weight) + clean[upper] * weight
+
+
+def _series_mean(series):
+    if series is None or not hasattr(series, "empty") or series.empty:
+        return 0.0
+    try:
+        return float(series.dropna().mean())
+    except Exception:
+        return 0.0
+
+
+def _safe_trade_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if number != number or number in (float("inf"), float("-inf")):
+        return 0.0
+    return number
+
+
+def _trade_date_text(trade):
+    fill_date = getattr(trade, "fill_date", None) or getattr(trade, "exit_time", None)
+    if hasattr(fill_date, "date"):
+        return fill_date.date().isoformat()
+    return str(fill_date)[:10]
+
+
+def _duration_days(value):
+    if value is None:
+        return 0.0
+    if hasattr(value, "total_seconds"):
+        return _metric_float(value.total_seconds() / 86400.0)
+    return _metric_float(value)
+
+
+def pd_timestamp(value):
+    if value is None:
+        return None
+    try:
+        import pandas as pd
+
+        return pd.Timestamp(value)
+    except Exception:
+        return None
+
+
 def _persist_candidate_backtest(pool, sid, info, strict_report):
     store = getattr(pool, "research_store", None)
     if store is None or not hasattr(store, "upsert_candidate"):
@@ -1171,6 +1776,7 @@ def _diagnostics_dict(diagnostics):
     fields = (
         "fill_count",
         "total_commission",
+        "total_gross_pnl",
         "cost_drag_pct",
         "volume_limited_trades",
         "lot_adjusted_trades",
@@ -1223,7 +1829,7 @@ def _benchmark_equity_metrics(series, initial_cash, start, end):
         equity = series.dropna()
         if equity.empty:
             return {}
-        returns = equity.pct_change().dropna()
+        returns = equity.pct_change(fill_method=None).dropna()
         days = max(1, (end - start).days)
         initial = float(initial_cash)
         final_value = float(equity.iloc[-1])
@@ -1494,7 +2100,7 @@ def _make_walkforward_runner():
             lot_sizes=lot_sizes,
         )
         bt_result = backtester.run(start=start, end=end, strategies=[strategy], initial_cash=initial_cash, data_provider=data_provider, symbols=symbols)
-        returns = bt_result.equity_curve.pct_change().dropna() if hasattr(bt_result, "equity_curve") else pd.Series(dtype=float)
+        returns = bt_result.equity_curve.pct_change(fill_method=None).dropna() if hasattr(bt_result, "equity_curve") else pd.Series(dtype=float)
         days = max(1, (end - start).days)
         trades = [_serialize_walkforward_trade(trade, data_df) for trade in getattr(bt_result, "trades", [])]
         return {

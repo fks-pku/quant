@@ -184,13 +184,125 @@ def test_streaming_research_backtest_provider_reads_status_and_sidecar(tmp_path)
     finally:
         provider.close()
 
+    assert type(bars).__name__ == "_BarRecordBatch"
+    assert len(bars) == 2
+    assert list(bars)[0]["symbol"] in {"600001", "600002"}
     by_symbol = {bar["symbol"]: bar for bar in bars}
     assert by_symbol["600001"]["total_mv"] == pytest.approx(12345)
     assert by_symbol["600001"]["tradable"] is True
     assert by_symbol["600001"]["_suspended"] is False
+    assert "adv20_value" not in by_symbol["600001"]
     assert by_symbol["600002"]["tradable"] is False
     assert by_symbol["600002"]["_suspended"] is True
     assert by_symbol["600002"]["close"] == pytest.approx(8.0)
+
+
+def test_streaming_research_backtest_provider_reuses_disk_cache(tmp_path, monkeypatch):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    basic_db = tmp_path / "cn_daily_basic.duckdb"
+    status_db = tmp_path / "security_status.duckdb"
+    cache_dir = tmp_path / "provider_cache"
+    _create_market_db(duckdb, market_db)
+    _create_basic_db(duckdb, basic_db)
+    _create_status_db(duckdb, status_db)
+
+    from quant.api import research_bp
+
+    provider = research_bp._DuckDBDailyDateProvider(
+        ["600001", "600002"],
+        datetime(2024, 1, 2),
+        datetime(2024, 1, 2),
+        db_path=str(market_db),
+        status_db_path=str(status_db),
+        daily_basic_db_path=str(basic_db),
+        cache_dir=cache_dir,
+        cache_enabled=True,
+    )
+    try:
+        first = list(provider.get_bars_for_date(datetime(2024, 1, 2)))
+    finally:
+        provider.close()
+
+    assert first
+    assert list(cache_dir.glob("chunk_*.pkl"))
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("_fetch_frame should not run on cache hit")
+
+    monkeypatch.setattr(research_bp._DuckDBDailyDateProvider, "_fetch_frame", fail_fetch)
+    cached_provider = research_bp._DuckDBDailyDateProvider(
+        ["600002", "600001"],
+        datetime(2024, 1, 2),
+        datetime(2024, 1, 2),
+        db_path=str(market_db),
+        status_db_path=str(status_db),
+        daily_basic_db_path=str(basic_db),
+        cache_dir=cache_dir,
+        cache_enabled=True,
+    )
+    try:
+        second = list(cached_provider.get_bars_for_date(datetime(2024, 1, 2)))
+    finally:
+        cached_provider.close()
+
+    assert {bar["symbol"] for bar in second} == {"600001", "600002"}
+    first_by_symbol = {bar["symbol"]: bar for bar in first}
+    second_by_symbol = {bar["symbol"]: bar for bar in second}
+    assert second_by_symbol["600001"]["total_mv"] == pytest.approx(first_by_symbol["600001"]["total_mv"])
+    assert second_by_symbol["600002"]["_suspended"] is first_by_symbol["600002"]["_suspended"]
+    assert second_by_symbol["600002"]["close"] == pytest.approx(first_by_symbol["600002"]["close"])
+
+
+def test_streaming_research_backtest_provider_cache_key_tracks_source_files(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    basic_db = tmp_path / "cn_daily_basic.duckdb"
+    status_db = tmp_path / "security_status.duckdb"
+    cache_dir = tmp_path / "provider_cache"
+    _create_market_db(duckdb, market_db)
+    _create_basic_db(duckdb, basic_db)
+    _create_status_db(duckdb, status_db)
+
+    from quant.api.research_bp import _DuckDBDailyDateProvider
+
+    provider = _DuckDBDailyDateProvider(
+        ["600001", "600002"],
+        datetime(2024, 1, 2),
+        datetime(2024, 1, 2),
+        db_path=str(market_db),
+        status_db_path=str(status_db),
+        daily_basic_db_path=str(basic_db),
+        cache_dir=cache_dir,
+        cache_enabled=True,
+    )
+    try:
+        dates = provider._trading_dates_list
+        before_path = provider._chunk_cache_path(dates, dates[0], dates[-1])
+    finally:
+        provider.close()
+
+    conn = duckdb.connect(str(market_db))
+    conn.execute("INSERT INTO daily_cn_ochl VALUES ('2024-01-03', '600001', 11, 12, 10, 11.5, 1000, 11500, 11, 12, 10, 11.5, 1)")
+    conn.close()
+
+    provider = _DuckDBDailyDateProvider(
+        ["600001", "600002"],
+        datetime(2024, 1, 2),
+        datetime(2024, 1, 2),
+        db_path=str(market_db),
+        status_db_path=str(status_db),
+        daily_basic_db_path=str(basic_db),
+        cache_dir=cache_dir,
+        cache_enabled=True,
+    )
+    try:
+        dates = provider._trading_dates_list
+        after_path = provider._chunk_cache_path(dates, dates[0], dates[-1])
+    finally:
+        provider.close()
+
+    assert before_path != after_path
 
 
 def test_cn_survivorship_audit_flags_missing_low_price_ohlc_symbols(tmp_path):

@@ -42,6 +42,7 @@ Blueprints:
 - `runtime.py` uses threading.RLock for thread-safe state access
 - Blueprint functions must not raise — return error dicts with appropriate HTTP status codes
 - Do not cache DuckDB connections across requests
+- Large-universe strict backtests may reuse `_DuckDBDailyDateProvider` chunk caches under `quant/infrastructure/var/research/cache/daily_date_provider/`; keys include source DuckDB file size/mtime, so data rebuilds naturally invalidate the cache
 
 ## Research Report Endpoints
 

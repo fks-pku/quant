@@ -244,8 +244,17 @@ def test_generated_stage_reports_match_contract():
                             "calmar_ratio": 0.26,
                             "win_rate": 0.49,
                             "profit_factor": 1.11,
+                            "payoff_ratio": 1.22,
+                            "expectancy": 123.45,
+                            "gain_to_pain_ratio": 0.24,
+                            "ulcer_index": 0.18,
+                            "tail_ratio": 1.35,
+                            "recovery_factor": 1.95,
+                            "avg_trade_duration_days": 8.4,
                             "total_trades": 100,
                             "round_trip_trades": 50,
+                            "winning_trades": 24,
+                            "losing_trades": 26,
                             "t_stat": 1.2,
                             "p_value": 0.11,
                         },
@@ -267,19 +276,130 @@ def test_generated_stage_reports_match_contract():
                             "beta": 1.06,
                             "information_ratio": 0.5,
                             "tracking_error": 0.14,
+                            "up_capture": 1.2,
+                            "down_capture": 0.8,
                             "benchmark_yearly_returns": {"2024": 0.04, "2025": 0.06},
                         },
                         "diagnostics": {
                             "total_commission": 1000,
+                            "total_gross_pnl": 12000,
+                            "cost_drag_pct": 8.333333,
                             "volume_limited_trades": 3,
                             "limit_rejected_orders": 1,
                             "t1_rejected_sells": 0,
+                            "submission_rejected": 5,
+                            "risk_skipped_orders": 6,
+                            "discarded_orders": 4,
+                            "expired_orders": 1,
                             "rejection_counts": {"insufficient_cash": 2},
                             "final_suspended_holding_nav": 12345.67,
                             "final_suspended_holding_nav_pct_of_final_nav": 0.0213,
                             "frozen_zero_final_nav": 567654.33,
                             "frozen_zero_cagr": 0.12,
                             "final_suspended_symbols": ["600519"],
+                        },
+                        "turnover": {
+                            "gross_traded_value": 900000,
+                            "one_way_traded_value": 440000,
+                            "annual_gross_turnover": 1.8,
+                            "annual_one_way_turnover": 0.88,
+                            "avg_daily_traded_value": 12000,
+                            "max_daily_traded_value": 85000,
+                        },
+                        "exposure": {
+                            "avg_position_count": 18.6,
+                            "min_position_count": 12,
+                            "max_position_count": 20,
+                            "avg_gross_exposure_pct": 0.94,
+                            "avg_cash_pct": 0.06,
+                            "max_position_weight": 0.075,
+                            "p95_max_position_weight": 0.068,
+                        },
+                        "capacity": {
+                            "executed_orders": 100,
+                            "avg_adv_participation": 0.002,
+                            "p95_adv_participation": 0.008,
+                            "max_adv_participation": 0.017,
+                            "p95_volume_participation": 0.009,
+                            "max_volume_participation": 0.021,
+                            "p95_trade_notional": 45000,
+                            "max_trade_notional": 120000,
+                            "estimated_capacity_at_1pct_adv_p95": 625000,
+                            "estimated_capacity_at_1pct_adv_max": 294117.65,
+                            "max_impact_bps": 0.0,
+                        },
+                        "guard_diagnostics": {
+                            "enabled": True,
+                            "parameters": {
+                                "min_trade_price": 2.0,
+                                "min_avg_turnover": 20000.0,
+                            },
+                            "entry_rejections": {"low_price": 42, "is_st": 8},
+                            "exit_triggers": {"suspended": 3},
+                        },
+                        "drawdown_episodes": [
+                            {
+                                "start": "2024-02-01",
+                                "trough": "2024-04-10",
+                                "recovery": "2024-08-01",
+                                "drawdown_pct": -0.18,
+                                "duration_days": 182,
+                            }
+                        ],
+                        "trade_distribution": {
+                            "sell_trades": 50,
+                            "avg_pnl": 123.45,
+                            "median_pnl": 45.67,
+                            "p05_pnl": -880.0,
+                            "p95_pnl": 1600.0,
+                            "max_win": 4200.0,
+                            "max_loss": -2100.0,
+                            "avg_return": 0.012,
+                            "median_return": 0.004,
+                            "avg_duration_days": 8.4,
+                            "p95_duration_days": 21.0,
+                        },
+                        "rolling_stability": {
+                            "rolling_1y_sharpe": {
+                                "latest": 0.42,
+                                "median": 0.55,
+                                "min": -0.2,
+                                "max": 1.4,
+                                "observations": 260,
+                            },
+                            "rolling_3y_sharpe": {
+                                "latest": 0.48,
+                                "median": 0.51,
+                                "min": 0.1,
+                                "max": 0.9,
+                                "observations": 20,
+                            },
+                            "rolling_1y_information_ratio": {
+                                "latest": 0.3,
+                                "median": 0.4,
+                                "min": -0.1,
+                                "max": 1.0,
+                                "observations": 260,
+                            },
+                        },
+                        "regime_breakdown": {
+                            "positive_years": 2,
+                            "total_years": 2,
+                            "outperform_years": 1,
+                            "avg_return_when_benchmark_up": 0.12,
+                            "avg_excess_when_benchmark_up": 0.06,
+                            "avg_return_when_benchmark_down": -0.04,
+                            "avg_excess_when_benchmark_down": 0.02,
+                            "best_year": {"year": "2025", "return": 0.16},
+                            "worst_year": {"year": "2024", "return": 0.0},
+                        },
+                        "cost_decomposition": {
+                            "gross_pnl_before_explicit_cost": 12000,
+                            "net_pnl_after_cost": 80000,
+                            "explicit_commission_tax": 1000,
+                            "explicit_cost_pct_initial_cash": 0.002,
+                            "explicit_cost_pct_gross_pnl": 0.08333333,
+                            "slippage_impact_note": "滑点/冲击体现在成交价中；total_commission 只包含显式佣金税费。",
                         },
                         "data_quality": {
                             "survivorship_audit": {
@@ -387,6 +507,27 @@ def test_generated_stage_reports_match_contract():
     assert "<dt>超额</dt><dd>2.40%</dd>" in strict_html
     assert "small_cap_realistic" in strict_html
     assert "max_participation_rate=1.00%" in strict_html
+    assert "换手与持仓暴露" in strict_html
+    assert "容量与流动性压力" in strict_html
+    assert "退市护栏命中归因" in strict_html
+    assert "回撤过程" in strict_html
+    assert "交易分布" in strict_html
+    assert "滚动稳定性与市场阶段" in strict_html
+    assert "成本口径拆分" in strict_html
+    assert "<td>Payoff Ratio</td><td>1.2200</td>" in strict_html
+    assert "<td>Up / Down Capture</td><td>1.2000 / 0.8000</td>" in strict_html
+    assert "<td>annual_gross_turnover</td><td>180.00%</td>" in strict_html
+    assert "<td>avg_position_count</td><td>18.6000</td>" in strict_html
+    assert "<td>p95_adv_participation</td><td>0.80%</td>" in strict_html
+    assert "<td>estimated_capacity_at_1pct_adv_p95</td><td>625,000.00</td>" in strict_html
+    assert "<td>entry_rejections_top</td><td>low_price=42; is_st=8</td>" in strict_html
+    assert "<td>exit_triggers_top</td><td>suspended=3</td>" in strict_html
+    assert "<td>2024-02-01</td><td>2024-04-10</td><td>2024-08-01</td><td>-18.00%</td><td>182</td>" in strict_html
+    assert "<td>p95_duration_days</td><td>21.0000</td>" in strict_html
+    assert "<td>rolling_1y_sharpe</td><td>latest=0.4200; median=0.5500; min=-0.2000; max=1.4000</td>" in strict_html
+    assert "<td>benchmark_down_excess</td><td>2.00%</td>" in strict_html
+    assert "<td>gross_pnl_before_explicit_cost</td><td>12,000.00</td>" in strict_html
+    assert "<td>rejection_total</td><td>17</td>" in strict_html
     assert "<td>insufficient_cash_rejected_orders</td><td>2</td><td>现金不足拒单</td>" in strict_html
     assert "12,345.67" in strict_html
     assert "<td>退市风险护栏</td><td>启用；最低价格 2.0000；20 日均成交额 &gt;= 20000.0000</td>" in strict_html

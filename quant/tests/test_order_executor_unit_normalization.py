@@ -60,3 +60,18 @@ def test_research_liquidity_features_normalize_cn_turnover_units():
     enriched = _add_execution_liquidity_features(frame, {"enabled": True, "markets": ["CN"]})
 
     assert enriched.loc[1, "adv20_value"] == pytest.approx(10000.0)
+
+
+def test_research_liquidity_features_skip_when_execution_model_disabled():
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        [
+            {"timestamp": "2026-01-01", "symbol": "000001", "close": 10.0, "volume": 1000, "turnover": 10.0},
+            {"timestamp": "2026-01-02", "symbol": "000001", "close": 10.0, "volume": 1000, "turnover": 10.0},
+        ]
+    )
+
+    enriched = _add_execution_liquidity_features(frame, None)
+
+    assert "adv20_value" not in enriched.columns
+    assert "volatility20" not in enriched.columns

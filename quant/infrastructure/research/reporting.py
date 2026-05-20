@@ -549,6 +549,20 @@ def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Di
             _core_performance_contract_table(data, rows),
             "<h3>成交与成本诊断</h3>",
             _trade_cost_contract_table(data, rows),
+            "<h3>换手与持仓暴露</h3>",
+            _turnover_exposure_contract_table(data, rows),
+            "<h3>容量与流动性压力</h3>",
+            _capacity_contract_table(data, rows),
+            "<h3>退市护栏命中归因</h3>",
+            _guard_attribution_contract_table(data, rows),
+            "<h3>回撤过程</h3>",
+            _drawdown_episode_contract_table(data, rows),
+            "<h3>交易分布</h3>",
+            _trade_distribution_contract_table(data, rows),
+            "<h3>滚动稳定性与市场阶段</h3>",
+            _rolling_regime_contract_table(data, rows),
+            "<h3>成本口径拆分</h3>",
+            _cost_decomposition_contract_table(data, rows),
             "</section>",
         ]
     return [
@@ -1062,10 +1076,18 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
         if guard.get("enabled")
         else "未启用"
     )
+    position_pct = _safe_float(constraints.get("strategy_max_position_pct"))
+    max_positions = _safe_int(constraints.get("strategy_max_positions")) or 0
+    if position_pct is not None and position_pct > 0:
+        target_exposure = _pct(position_pct)
+    elif max_positions > 0:
+        target_exposure = f"按 {max_positions} 只等权目标持仓"
+    else:
+        target_exposure = "未记录"
     rows_data = [
         ("回测区间", strict.get("period") or "未记录", "必须与数据覆盖一致"),
         ("初始资金", strict.get("initial_cash") or metrics.get("initial_cash") or "500000 CNY", "A 股示例默认 500000 CNY"),
-        ("默认目标总仓位", _pct(constraints.get("strategy_max_position_pct")), "研究生成策略默认满仓；按持仓数等权分配"),
+        ("默认目标总仓位", target_exposure, "研究生成策略默认满仓；按持仓数等权分配"),
         ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
         ("退市风险护栏", guard_text, "买入过滤低价/低流动性/非上市状态，持仓风险每日尝试退出"),
         ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
@@ -1125,8 +1147,16 @@ def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, 
         ("Calmar Ratio", _fmt(_first_present(metrics, "calmar_ratio", "calmar")), _fmt(_first_present(benchmark, "benchmark_calmar_ratio", "benchmark_calmar")), "CAGR / |Max Drawdown|"),
         ("Win Rate", _pct(metrics.get("win_rate")), "-", "按交易统计"),
         ("Profit Factor", _fmt(metrics.get("profit_factor")), "-", "总盈利 / 总亏损"),
+        ("Payoff Ratio", _fmt(metrics.get("payoff_ratio")), "-", "平均盈利 / 平均亏损"),
+        ("Expectancy", _fmt(metrics.get("expectancy")), "-", "单笔交易期望"),
+        ("Gain/Pain", _fmt(metrics.get("gain_to_pain_ratio")), "-", "收益痛苦比"),
+        ("Tail Ratio", _fmt(metrics.get("tail_ratio")), "-", "右尾 / 左尾"),
+        ("Ulcer Index", _fmt(metrics.get("ulcer_index")), "-", "回撤深度与持续性的复合惩罚"),
+        ("Recovery Factor", _fmt(metrics.get("recovery_factor")), "-", "净收益 / 最大回撤"),
+        ("Avg Trade Duration", _fmt(metrics.get("avg_trade_duration_days")), "-", "平均持仓天数"),
         ("Total Trades", str(metrics.get("total_trades") or "n/a"), "-", "含拒单和成交诊断"),
         ("Information Ratio", _fmt(benchmark.get("information_ratio")), "-", "相对 000300"),
+        ("Up / Down Capture", f"{_fmt(benchmark.get('up_capture'))} / {_fmt(benchmark.get('down_capture'))}", "-", "基准上涨/下跌阶段捕获率"),
         ("Beta / Alpha", f"{_fmt(benchmark.get('beta'))} / {_pct(benchmark.get('alpha'))}", "-", "基准归因"),
     ]
     body = "".join(
@@ -1153,12 +1183,12 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
     rows_data = [
         ("total_commission", _fmt(diagnostics.get("total_commission")), "总交易成本"),
         ("cost_drag_pct", _pct(_cost_drag_value(diagnostics)), "成本拖累"),
-        ("lot_adjusted_trades", str(diagnostics.get("lot_adjusted_trades") or 0), "因 100 股手数调整的交易"),
-        ("t1_rejected_sells", str(diagnostics.get("t1_rejected_sells") or 0), "T+1 拒绝卖出"),
-        ("limit_rejected_orders", str(diagnostics.get("limit_rejected_orders") or 0), "涨跌停拒单"),
+        ("lot_adjusted_trades", _int_cell(diagnostics.get("lot_adjusted_trades")), "因 100 股手数调整的交易"),
+        ("t1_rejected_sells", _int_cell(diagnostics.get("t1_rejected_sells")), "T+1 拒绝卖出"),
+        ("limit_rejected_orders", _int_cell(diagnostics.get("limit_rejected_orders")), "涨跌停拒单"),
         ("insufficient_cash_rejected_orders", str(_insufficient_cash_rejected_orders(diagnostics)), "现金不足拒单"),
-        ("volume_limited_trades", str(diagnostics.get("volume_limited_trades") or 0), "成交量限制"),
-        ("risk_skipped_orders", str(diagnostics.get("risk_skipped_orders") or 0), "风控跳过订单"),
+        ("volume_limited_trades", _int_cell(diagnostics.get("volume_limited_trades")), "成交量限制"),
+        ("risk_skipped_orders", _int_cell(diagnostics.get("risk_skipped_orders")), "风控跳过订单"),
         ("final_suspended_holding_nav", _money(diagnostics.get("final_suspended_holding_nav")), suspended_note),
         ("final_suspended_holding_nav_pct", _pct(diagnostics.get("final_suspended_holding_nav_pct_of_final_nav")), "最终 frozen 持仓占期末 NAV"),
         ("frozen_zero_final_nav", _money(diagnostics.get("frozen_zero_final_nav")), "退市/frozen 持仓归零压力下的期末 NAV"),
@@ -1166,6 +1196,253 @@ def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]])
     ]
     body = "".join(
         f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _turnover_exposure_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "本轮未运行换手与持仓暴露诊断",
+            "strict Backtester 未执行，无法记录成交额、现金占比和持仓数量。",
+        )
+    turnover = strict.get("turnover") or {}
+    exposure = strict.get("exposure") or {}
+    if not turnover and not exposure:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "未记录换手与持仓暴露",
+            "报告缺少 trades 或 daily exposure snapshots。",
+        )
+    rows_data = [
+        ("gross_traded_value", _money(turnover.get("gross_traded_value")), "双边总成交额"),
+        ("one_way_traded_value", _money(turnover.get("one_way_traded_value")), "按买卖较小侧估算的一边成交额"),
+        ("annual_gross_turnover", _pct(turnover.get("annual_gross_turnover")), "双边年化换手"),
+        ("annual_one_way_turnover", _pct(turnover.get("annual_one_way_turnover")), "单边年化换手"),
+        ("avg_daily_traded_value", _money(turnover.get("avg_daily_traded_value")), "有交易日平均成交额"),
+        ("max_daily_traded_value", _money(turnover.get("max_daily_traded_value")), "单日最高成交额"),
+        ("avg_position_count", _fmt(exposure.get("avg_position_count")), "日均持仓只数"),
+        ("position_count_range", f"{_fmt(exposure.get('min_position_count'))} - {_fmt(exposure.get('max_position_count'))}", "最少/最多持仓只数"),
+        ("avg_gross_exposure_pct", _pct(exposure.get("avg_gross_exposure_pct")), "日均总持仓市值 / NAV"),
+        ("avg_cash_pct", _pct(exposure.get("avg_cash_pct")), "日均现金 / NAV"),
+        ("max_position_weight", _pct(exposure.get("max_position_weight")), "单票最大权重"),
+        ("p95_max_position_weight", _pct(exposure.get("p95_max_position_weight")), "单票权重 95 分位"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _capacity_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "本轮未运行容量诊断",
+            "strict Backtester 未执行，无法记录 ADV 参与率。",
+        )
+    capacity = strict.get("capacity") or {}
+    if not capacity:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "未记录容量诊断",
+            "报告缺少 execution observations；旧报告需重跑后才会填充。",
+        )
+    rows_data = [
+        ("executed_orders", str(capacity.get("executed_orders") or 0), "实际成交订单数"),
+        ("avg_adv_participation", _pct(capacity.get("avg_adv_participation")), "平均 ADV 金额参与率"),
+        ("p95_adv_participation", _pct(capacity.get("p95_adv_participation")), "ADV 金额参与率 95 分位"),
+        ("max_adv_participation", _pct(capacity.get("max_adv_participation")), "单笔最大 ADV 金额参与率"),
+        ("p95_volume_participation", _pct(capacity.get("p95_volume_participation")), "成交量参与率 95 分位"),
+        ("max_volume_participation", _pct(capacity.get("max_volume_participation")), "单笔最大成交量参与率"),
+        ("p95_trade_notional", _money(capacity.get("p95_trade_notional")), "单笔成交额 95 分位"),
+        ("max_trade_notional", _money(capacity.get("max_trade_notional")), "单笔最大成交额"),
+        ("estimated_capacity_at_1pct_adv_p95", _money(capacity.get("estimated_capacity_at_1pct_adv_p95")), "以 p95 ADV 参与率不超过 1% 反推资金容量"),
+        ("estimated_capacity_at_1pct_adv_max", _money(capacity.get("estimated_capacity_at_1pct_adv_max")), "以最大 ADV 参与率不超过 1% 反推资金容量"),
+        ("max_impact_bps", _fmt(capacity.get("max_impact_bps")), "执行冲击模型记录的最大 bps；禁用模型时应接近 0"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _guard_attribution_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    if not strict:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "本轮未运行退市护栏归因",
+            "strict Backtester 未执行，无法记录护栏命中原因。",
+        )
+    guard = strict.get("guard_diagnostics") or {}
+    constraints = (strict.get("constraints") or {}).get("delisting_risk_guard") or {}
+    diagnostics = strict.get("diagnostics") or {}
+    entry_rejections = guard.get("entry_rejections") or {}
+    exit_triggers = guard.get("exit_triggers") or {}
+    enabled = bool(guard.get("enabled", constraints.get("enabled", False)))
+    rows_data = [
+        ("enabled", "是" if enabled else "否", "是否启用策略层退市风险护栏"),
+        ("parameters", _join_text(guard.get("parameters") or constraints), "护栏阈值"),
+        ("entry_rejections_total", str(_sum_count_values(entry_rejections)), "买入候选被护栏过滤次数"),
+        ("entry_rejections_top", _count_summary(entry_rejections), "买入过滤原因 Top"),
+        ("exit_triggers_total", str(_sum_count_values(exit_triggers)), "持仓触发风险退出次数"),
+        ("exit_triggers_top", _count_summary(exit_triggers), "退出触发原因 Top"),
+        ("submission_rejected", _int_cell(diagnostics.get("submission_rejected")), "提交阶段拒单；可用于衡量护栏后仍不可交易的冲击"),
+        ("risk_skipped_orders", _int_cell(diagnostics.get("risk_skipped_orders")), "风控跳过订单"),
+        ("limit_rejected_orders", _int_cell(diagnostics.get("limit_rejected_orders")), "涨跌停拒单"),
+        ("discarded_orders", _int_cell(diagnostics.get("discarded_orders")), "执行阶段丢弃订单"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(_cell(value))}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _drawdown_episode_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    episodes = strict.get("drawdown_episodes") or []
+    if not episodes:
+        return _not_run_table(
+            ["开始", "谷底", "修复", "深度", "持续天数"],
+            "未记录回撤过程",
+            "报告缺少 equity curve 或回撤 episode 诊断。",
+        )
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(str(item.get('start') or ''))}</td>"
+        + f"<td>{escape(str(item.get('trough') or ''))}</td>"
+        + f"<td>{escape(str(item.get('recovery') or '未修复'))}</td>"
+        + f"<td>{escape(_pct(item.get('drawdown_pct')))}</td>"
+        + f"<td>{escape(str(item.get('duration_days') or 0))}</td>"
+        + "</tr>"
+        for item in episodes
+        if isinstance(item, dict)
+    )
+    return _table(["开始", "谷底", "修复", "深度", "持续天数"], body)
+
+
+def _trade_distribution_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    distribution = strict.get("trade_distribution") or {}
+    if not distribution:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "未记录交易分布",
+            "报告缺少成交明细，无法拆分 PnL、收益率和持仓天数分布。",
+        )
+    rows_data = [
+        ("sell_trades", str(distribution.get("sell_trades") or 0), "以卖出成交统计闭合交易"),
+        ("avg_pnl", _money(distribution.get("avg_pnl")), "平均单笔 PnL"),
+        ("median_pnl", _money(distribution.get("median_pnl")), "单笔 PnL 中位数"),
+        ("p05_pnl", _money(distribution.get("p05_pnl")), "单笔 PnL 5 分位"),
+        ("p95_pnl", _money(distribution.get("p95_pnl")), "单笔 PnL 95 分位"),
+        ("max_win", _money(distribution.get("max_win")), "最大盈利单笔"),
+        ("max_loss", _money(distribution.get("max_loss")), "最大亏损单笔"),
+        ("avg_return", _pct(distribution.get("avg_return")), "平均单笔收益率"),
+        ("median_return", _pct(distribution.get("median_return")), "单笔收益率中位数"),
+        ("avg_duration_days", _fmt(distribution.get("avg_duration_days")), "平均持仓天数"),
+        ("p95_duration_days", _fmt(distribution.get("p95_duration_days")), "持仓天数 95 分位"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _rolling_regime_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    rolling = strict.get("rolling_stability") or {}
+    regime = strict.get("regime_breakdown") or {}
+    if not rolling and not regime:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "未记录滚动稳定性与市场阶段",
+            "报告缺少 equity curve 或 benchmark curve。",
+        )
+    rows_data = []
+    for key, label in (
+        ("rolling_1y_sharpe", "rolling_1y_sharpe"),
+        ("rolling_3y_sharpe", "rolling_3y_sharpe"),
+        ("rolling_1y_information_ratio", "rolling_1y_information_ratio"),
+        ("rolling_1y_beta", "rolling_1y_beta"),
+    ):
+        summary = rolling.get(key) or {}
+        if summary:
+            rows_data.append((
+                label,
+                f"latest={_fmt(summary.get('latest'))}; median={_fmt(summary.get('median'))}; min={_fmt(summary.get('min'))}; max={_fmt(summary.get('max'))}",
+                f"observations={summary.get('observations') or 0}",
+            ))
+    if regime:
+        best_year = regime.get("best_year") or {}
+        worst_year = regime.get("worst_year") or {}
+        rows_data.extend([
+            ("positive_years", f"{regime.get('positive_years') or 0}/{regime.get('total_years') or 0}", "年度收益为正的年份数"),
+            ("outperform_years", str(regime.get("outperform_years") or 0), "跑赢 benchmark 的年份数"),
+            ("benchmark_up_regime", _pct(regime.get("avg_return_when_benchmark_up")), "benchmark 上涨年份的策略平均收益"),
+            ("benchmark_up_excess", _pct(regime.get("avg_excess_when_benchmark_up")), "benchmark 上涨年份的平均超额"),
+            ("benchmark_down_regime", _pct(regime.get("avg_return_when_benchmark_down")), "benchmark 下跌年份的策略平均收益"),
+            ("benchmark_down_excess", _pct(regime.get("avg_excess_when_benchmark_down")), "benchmark 下跌年份的平均超额"),
+            ("best_year", f"{best_year.get('year') or 'n/a'}: {_pct(best_year.get('return'))}", "最佳年度"),
+            ("worst_year", f"{worst_year.get('year') or 'n/a'}: {_pct(worst_year.get('return'))}", "最差年度"),
+        ])
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(_cell(value))}</td><td>{escape(note)}</td></tr>"
+        for item, value, note in rows_data
+    )
+    return _table(["诊断项", "数值", "解释"], body)
+
+
+def _cost_decomposition_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    cost = strict.get("cost_decomposition") or {}
+    if not cost:
+        return _not_run_table(
+            ["诊断项", "数值", "解释"],
+            "未记录成本口径拆分",
+            "报告缺少 gross PnL、net PnL 或显式交易成本字段。",
+        )
+    diagnostics = strict.get("diagnostics") or {}
+    rejection_counts = diagnostics.get("rejection_counts") or {}
+    rejection_total = (
+        _safe_int(diagnostics.get("limit_rejected_orders")) or 0
+    ) + (
+        _safe_int(diagnostics.get("submission_rejected")) or 0
+    ) + (
+        _safe_int(diagnostics.get("risk_skipped_orders")) or 0
+    ) + (
+        _safe_int(diagnostics.get("discarded_orders")) or 0
+    ) + (
+        _safe_int(diagnostics.get("expired_orders")) or 0
+    )
+    rows_data = [
+        ("gross_pnl_before_explicit_cost", _money(cost.get("gross_pnl_before_explicit_cost")), "显式佣金税费前交易毛 PnL"),
+        ("net_pnl_after_cost", _money(cost.get("net_pnl_after_cost")), "期末 NAV - 初始资金"),
+        ("explicit_commission_tax", _money(cost.get("explicit_commission_tax")), "total_commission"),
+        ("explicit_cost_pct_initial_cash", _pct(cost.get("explicit_cost_pct_initial_cash")), "显式成本 / 初始资金"),
+        ("explicit_cost_pct_gross_pnl", _pct(cost.get("explicit_cost_pct_gross_pnl")), "显式成本 / |毛 PnL|"),
+        ("rejection_total", str(rejection_total), "涨跌停、提交、风控、丢弃、过期订单合计"),
+        ("rejection_breakdown", _count_summary(rejection_counts), "底层拒单原因"),
+        ("slippage_impact_note", str(cost.get("slippage_impact_note") or ""), "成交价内含滑点/冲击，显式成本只含佣金税费"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(item)}</td><td>{escape(_cell(value))}</td><td>{escape(note)}</td></tr>"
         for item, value, note in rows_data
     )
     return _table(["诊断项", "数值", "解释"], body)
@@ -2491,6 +2768,37 @@ def _cost_drag_value(diagnostics: Dict[str, Any]) -> Any:
     if numeric is not None and abs(numeric) > 1.0:
         return numeric / 100.0
     return value
+
+
+def _sum_count_values(value: Any) -> int:
+    if not isinstance(value, dict):
+        return 0
+    total = 0
+    for count in value.values():
+        number = _safe_int(count)
+        if number is not None:
+            total += number
+    return total
+
+
+def _count_summary(value: Any, limit: int = 5) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    pairs = []
+    for key, count in value.items():
+        number = _safe_int(count)
+        if number is None or number == 0:
+            continue
+        pairs.append((str(key), number))
+    if not pairs:
+        return "-"
+    pairs.sort(key=lambda item: abs(item[1]), reverse=True)
+    return "; ".join(f"{key}={count}" for key, count in pairs[:limit])
+
+
+def _int_cell(value: Any) -> str:
+    number = _safe_int(value)
+    return str(number) if number is not None else "0"
 
 
 def _insufficient_cash_rejected_orders(diagnostics: Dict[str, Any]) -> int:

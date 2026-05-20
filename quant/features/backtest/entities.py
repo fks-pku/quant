@@ -35,10 +35,18 @@ class BacktestDiagnostics:
     final_suspended_holding_count: int = 0
     final_suspended_symbols: List[str] = field(default_factory=list)
     rejection_counts: Dict[str, int] = field(default_factory=dict)
+    exposure_snapshots: List[Dict[str, Any]] = field(default_factory=list)
+    execution_observations: List[Dict[str, Any]] = field(default_factory=list)
 
     def record_rejection(self, reason: OrderRejectionReason) -> None:
         key = reason.name.lower()
         self.rejection_counts[key] = self.rejection_counts.get(key, 0) + 1
+
+    def record_exposure_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        self.exposure_snapshots.append(snapshot)
+
+    def record_execution_observation(self, observation: Dict[str, Any]) -> None:
+        self.execution_observations.append(observation)
 
     @property
     def cost_drag_pct(self) -> float:

@@ -290,20 +290,40 @@ def execute_order(
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
     enforce_limit_after_impact(order, fill_price, order_type)
 
+    adv_value = _execution_adv_value(bar, fill_price)
+    observation = {
+        "symbol": symbol,
+        "side": order.side,
+        "date": fill_ts.date().isoformat() if hasattr(fill_ts, "date") else str(fill_ts)[:10],
+        "quantity": float(quantity),
+        "fill_price": float(fill_price),
+        "notional": float(abs(quantity * fill_price)),
+        "bar_volume": float(bar_volume or 0.0),
+        "adv_value": float(adv_value or 0.0),
+        "volume_participation": float(abs(quantity) / bar_volume) if bar_volume and bar_volume > 0 else 0.0,
+        "adv_participation": float(abs(quantity * fill_price) / adv_value) if adv_value and adv_value > 0 else 0.0,
+        "participation_limit": float(participation_limit or 0.0),
+        "impact_bps": float(impact_bps or 0.0),
+        "slippage_bps": float(effective_slippage_bps or 0.0),
+    }
+
     if order.side == 'BUY':
-        return _execute_buy(
+        trades = _execute_buy(
             order, portfolio, symbol, fill_ts, fill_price, quantity,
             signal_date, market, entry_times, entry_prices, diag, commission_config,
         )
     elif order.side == 'SELL':
-        return _execute_sell(
+        trades = _execute_sell(
             order, portfolio, symbol, fill_ts, fill_price, quantity,
             signal_date, market, entry_times, entry_prices, diag, commission_config,
             ignore_settlement,
         )
+    else:
+        raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, symbol,
+                                 f"side={order.side!r}")
 
-    raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, symbol,
-                             f"side={order.side!r}")
+    diag.record_execution_observation(observation)
+    return trades
 
 
 def apply_slippage(price: float, side: str, bps: float) -> float:

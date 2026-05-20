@@ -73,6 +73,60 @@ class TestBacktesterExecution:
         bar = {"volume": 1000, "open": 100, "close": 100}
         assert is_suspended(bar) is False
 
+    def test_strategy_batch_data_hook_is_used(self):
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0},
+        }
+        bt = make_backtester(config)
+
+        class BatchStrategy:
+            name = "BatchStrategy"
+            context = None
+            _positions = {}
+
+            def __init__(self):
+                self.batch_symbols = []
+                self.single_calls = 0
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                self.single_calls += 1
+
+            def on_data_batch(self, ctx, data):
+                self.batch_symbols.append([bar["symbol"] for bar in data])
+
+            def on_after_trading(self, ctx, td):
+                pass
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        data = make_us_bars(["AAPL", "MSFT"], START, 2, {"AAPL": 150.0, "MSFT": 300.0})
+        strategy = BatchStrategy()
+
+        bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[strategy],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["AAPL", "MSFT"],
+        )
+
+        assert strategy.single_calls == 0
+        assert len(strategy.batch_symbols) == 2
+        assert all(set(symbols) == {"AAPL", "MSFT"} for symbols in strategy.batch_symbols)
+
     def test_final_suspended_holding_nav_records_pre_closeout_exposure(self):
         data = pd.DataFrame([
             {"symbol": "600519", "timestamp": START, "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000000},

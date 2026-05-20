@@ -205,18 +205,18 @@ class Backtester:
             deferred_orders = []
 
             # --- Step 5 prep: Initialize order manager with today's state ---
-            tradable_today = {
-                sym: not is_suspended(bar_data)
-                for sym, bar_data in today_bars.items()
-            }
+            tradable_today = {}
+            for sym, bar_data in today_bars.items():
+                suspended = bar_data.get("_suspended")
+                if suspended is None:
+                    suspended = is_suspended(bar_data)
+                tradable_today[sym] = not suspended
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "prepare_for_trading_day"):
                     strategy.context.prepare_for_trading_day(current_date.date(), last_prices, tradable_today)
 
             # --- Step 5: Feed bar data to strategies ---
-            for sym, bar_data in today_bars.items():
-                for strategy in strategies:
-                    strategy.on_data(strategy.context, bar_data)
+            self._feed_strategy_data(strategies, today_bars)
 
             # --- Step 6: Update portfolio prices ---
             if use_subs:
@@ -253,6 +253,9 @@ class Backtester:
             nav = calculate_daily_nav(portfolio_map, primary_portfolio, use_subs)
             equity_curve_dates.append(current_date)
             equity_curve_values.append(nav)
+            self._record_exposure_snapshot(
+                diag, current_date, nav, portfolio_map, primary_portfolio, use_subs,
+            )
 
             self._reset_daily(portfolio_map, risk_map, use_subs, diag)
 
@@ -403,6 +406,61 @@ class Backtester:
                     for t in trades:
                         s.on_fill(s.context, t)
 
+    @staticmethod
+    def _feed_strategy_data(strategies: list, today_bars: dict) -> None:
+        if not today_bars:
+            return
+        bar_batch = tuple(today_bars.values())
+        for strategy in strategies:
+            on_data_batch = getattr(strategy, "on_data_batch", None)
+            if callable(on_data_batch):
+                on_data_batch(strategy.context, bar_batch)
+                continue
+            for bar_data in bar_batch:
+                strategy.on_data(strategy.context, bar_data)
+
+    def _record_exposure_snapshot(
+        self,
+        diag,
+        current_date,
+        nav: float,
+        portfolio_map: dict,
+        primary_portfolio,
+        use_subs: bool,
+    ) -> None:
+        if nav <= 0:
+            return
+        if use_subs:
+            portfolios = list(portfolio_map.values())
+            cash = float(getattr(primary_portfolio, "cash", 0.0) or 0.0) + sum(
+                float(getattr(pf, "cash", 0.0) or 0.0) for pf in portfolios
+            )
+        else:
+            portfolios = [primary_portfolio]
+            cash = float(getattr(primary_portfolio, "cash", 0.0) or 0.0)
+        positions = []
+        for pf in portfolios:
+            positions.extend(
+                pos for pos in getattr(pf, "positions", {}).values()
+                if getattr(pos, "quantity", 0.0) > 0
+            )
+        position_values = [
+            float(getattr(pos, "market_value", 0.0) or 0.0)
+            for pos in positions
+            if float(getattr(pos, "market_value", 0.0) or 0.0) > 0
+        ]
+        positions_value = sum(position_values)
+        diag.record_exposure_snapshot({
+            "date": current_date.date().isoformat() if hasattr(current_date, "date") else str(current_date)[:10],
+            "nav": float(nav),
+            "cash": cash,
+            "cash_pct": cash / float(nav),
+            "positions_value": positions_value,
+            "gross_exposure_pct": positions_value / float(nav),
+            "position_count": len(position_values),
+            "max_position_weight": max((value / float(nav) for value in position_values), default=0.0),
+        })
+
     def _build_backtest_result(
         self,
         equity_curve_dates: list,
@@ -469,9 +527,16 @@ class Backtester:
                     symbol = raw_bar.get('symbol') if isinstance(raw_bar, dict) else getattr(raw_bar, 'symbol', None)
                     if not symbol or (symbol_lookup is not None and symbol not in symbol_lookup):
                         continue
-                    bar_data = dict(raw_bar)
-                    bar_data['symbol'] = symbol
-                    bar_data['_suspended'] = is_suspended(bar_data)
+                    if isinstance(raw_bar, dict):
+                        bar_data = raw_bar
+                        if bar_data.get('symbol') != symbol:
+                            bar_data = dict(raw_bar)
+                            bar_data['symbol'] = symbol
+                    else:
+                        bar_data = dict(raw_bar)
+                        bar_data['symbol'] = symbol
+                    if '_suspended' not in bar_data:
+                        bar_data['_suspended'] = is_suspended(bar_data)
                     today_bars[symbol] = bar_data
                     latest_bars[symbol] = bar_data
                     if bar_data['_suspended']:

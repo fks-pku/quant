@@ -97,6 +97,16 @@ class TestDailyBarStrategy:
         s.on_data(None, {"symbol": "MSFT", "close": 300})
         assert "MSFT" not in s._day_data
 
+    def test_on_data_batch_accumulates_tracked_symbols(self):
+        s = _DailySmokeStrategy(symbols=["AAPL"])
+        s.on_data_batch(None, [
+            {"symbol": "AAPL", "close": 150},
+            {"symbol": "MSFT", "close": 300},
+            {"symbol": "AAPL", "close": 152},
+        ])
+        assert [bar["close"] for bar in s._day_data["AAPL"]] == [150, 152]
+        assert "MSFT" not in s._day_data
+
     def test_get_last_price(self):
         s = _DailySmokeStrategy(symbols=["AAPL"])
         s._day_data["AAPL"] = [{"close": 150}, {"close": 155}]

@@ -40,6 +40,7 @@ class AShareSmallCapRotationBase(Strategy):
         self.lot_size = max(1, int(lot_size))
         self._bars: Dict[str, List[Any]] = {}
         self._last_price: Dict[str, float] = {}
+        self._symbol_set = set(self._symbols)
         self._rebalance_counter = 0
 
     @property
@@ -48,7 +49,7 @@ class AShareSmallCapRotationBase(Strategy):
 
     def on_data(self, context: "Context", data: Any) -> None:
         symbol = str(self._value(data, "symbol", "") or "")
-        if not symbol or (self._symbols and symbol not in self._symbols):
+        if not symbol or (self._symbol_set and symbol not in self._symbol_set):
             return
         price = self._price(data)
         if price > 0:
@@ -56,6 +57,23 @@ class AShareSmallCapRotationBase(Strategy):
         self._bars.setdefault(symbol, []).append(data)
         if len(self._bars[symbol]) > 90:
             self._bars[symbol] = self._bars[symbol][-90:]
+
+    def on_data_batch(self, context: "Context", data: Any) -> None:
+        bars = data.values() if isinstance(data, dict) else data
+        symbol_set = self._symbol_set
+        last_price = self._last_price
+        stored_bars = self._bars
+        for bar in bars:
+            symbol = str(self._value(bar, "symbol", "") or "")
+            if not symbol or (symbol_set and symbol not in symbol_set):
+                continue
+            price = self._price(bar)
+            if price > 0:
+                last_price[symbol] = price
+            symbol_bars = stored_bars.setdefault(symbol, [])
+            symbol_bars.append(bar)
+            if len(symbol_bars) > 90:
+                del symbol_bars[:-90]
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         exited = self._exit_risk_positions()

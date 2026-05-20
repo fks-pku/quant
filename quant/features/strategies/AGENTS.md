@@ -7,6 +7,7 @@
 ## 对外契约
 
 - `Strategy(ABC)` - 策略抽象基类
+- `Strategy.on_data_batch(context, data)` - 日线批量喂数 hook，默认逐条回落到 `on_data`
 - `StrategyRegistry` - 策略注册表
 - `@strategy` - 策略装饰器
 
@@ -33,3 +34,4 @@
 
 - 策略在 `__init__` 中不要访问 Context，Context 在 `on_start` 时才设置
 - 策略名称要与装饰器参数一致
+- 面向大 universe 的日线策略应实现/继承批量 `on_data_batch`，不要在 engine 外重新按 symbol 点查 provider
