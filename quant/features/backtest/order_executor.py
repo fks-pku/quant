@@ -93,9 +93,33 @@ def _execution_adv_value(bar: "BacktestBar", price: float) -> float:
     for key in ("adv20_value", "adv_value", "avg_turnover_20", "turnover20", "avg_turnover", "turnover"):
         value = _safe_number(bar.get(key))
         if value is not None:
-            return value
+            return _normalize_turnover_value(value, bar, price)
     volume = _safe_number(bar.get("volume"))
     return float(volume * price) if volume is not None and price > 0 else 0.0
+
+
+def _normalize_turnover_value(value: float, bar: "BacktestBar", price: float) -> float:
+    volume = _safe_number(bar.get("volume"))
+    if value <= 0 or volume is None or volume <= 0 or price <= 0:
+        return value
+    implied = price * volume
+    ratio = implied / value if value > 0 else 0.0
+    if 5.0 <= ratio <= 20.0 or 500.0 <= ratio <= 2000.0:
+        return value * 1000.0
+    return value
+
+
+def _execution_bar_volume(bar: "BacktestBar", price: float, market: str) -> float:
+    volume = _non_negative_volume(bar.get("volume", 0))
+    if market != "CN" or volume <= 0 or price <= 0:
+        return volume
+    turnover = _safe_number(bar.get("turnover"))
+    if turnover is None or turnover <= 0:
+        return volume
+    ratio = price * volume / turnover
+    if 5.0 <= ratio <= 20.0:
+        return volume * 100.0
+    return volume
 
 
 def _model_slippage_bps(price: float, base_bps: float, market: str, model: Optional[Dict[str, Any]]) -> float:
@@ -241,7 +265,7 @@ def execute_order(
     if lot_adjusted:
         diag.lot_adjusted_trades += 1
 
-    bar_volume = _non_negative_volume(bar.get('volume', 0))
+    bar_volume = _execution_bar_volume(bar, fill_price, market)
     participation_limit = _model_participation_limit(VOLUME_PARTICIPATION_LIMIT, market, execution_cost_model)
     max_liquidity_qty = _liquidity_quantity_cap(bar, fill_price, bar_volume, participation_limit)
     if max_liquidity_qty is not None and quantity > max_liquidity_qty:

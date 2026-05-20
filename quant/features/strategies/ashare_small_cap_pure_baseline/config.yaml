@@ -1,0 +1,12 @@
+strategy:
+  name: ashare_small_cap_pure_baseline
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  max_positions: 20
+  rebalance_interval: 10
+  min_price: 5.0
+  min_adv_value: 20000.0
+  lot_size: 100

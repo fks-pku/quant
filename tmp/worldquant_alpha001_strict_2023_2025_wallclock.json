@@ -1,0 +1,49 @@
+{
+  "rows_loaded": 3663047,
+  "symbols_loaded": 5189,
+  "trading_days": 727,
+  "stage_timings_sec": [
+    {
+      "stage": "load_config_and_strategy",
+      "seconds": 0.17942910001147538
+    },
+    {
+      "stage": "duckdb_load_status_enriched_bars",
+      "seconds": 4.6460400999640115
+    },
+    {
+      "stage": "data_validator",
+      "seconds": 17.08010279998416
+    },
+    {
+      "stage": "dataframe_provider_index",
+      "seconds": 37.95209039998008
+    },
+    {
+      "stage": "lot_size_lookup",
+      "seconds": 1.3390341000049375
+    },
+    {
+      "stage": "backtester_run",
+      "seconds": 118.23208600003272
+    }
+  ],
+  "total_sec_ex_import": 179.2493533999659,
+  "result": {
+    "final_nav": 987989.6909514501,
+    "total_return": -0.012010309048549854,
+    "sharpe_ratio": -0.1785331530862241,
+    "max_drawdown_pct": -0.059430919015129605,
+    "total_trades": 1674
+  },
+  "diagnostics": {
+    "total_commission": 20165.24789355285,
+    "cost_drag_pct": 247.27650662784254,
+    "discarded_orders": 1173
+  },
+  "data_validation": {
+    "ok": true,
+    "errors": 0,
+    "warnings": 5169
+  }
+}

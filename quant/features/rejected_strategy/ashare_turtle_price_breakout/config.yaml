@@ -1,0 +1,15 @@
+strategy:
+  name: ashare_turtle_price_breakout
+  enabled: false
+  status: rejected
+  priority: 999
+
+parameters:
+  entry_lookback: 20
+  exit_lookback: 10
+  atr_window: 20
+  atr_stop_multiplier: 2.0
+  max_positions: 20
+  min_price: 10.0
+  lot_size: 100
+  min_turnover: 0.0

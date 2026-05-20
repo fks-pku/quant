@@ -105,7 +105,12 @@ def _make_backtest_fn():
             data_df = None
             streaming_provider = None
             if use_streaming_provider:
-                streaming_provider = _DuckDBDailyDateProvider(symbols, start, end)
+                streaming_provider = _DuckDBDailyDateProvider(
+                    symbols,
+                    start,
+                    end,
+                    include_daily_basic=_candidate_requires_market_cap(info),
+                )
             else:
                 data_df = db_provider.get_bars_for_symbols(symbols, start, end, "1d")
                 data_df = _add_execution_liquidity_features(data_df, execution_cost_model)
@@ -312,7 +317,11 @@ def _add_execution_liquidity_features(data_df, execution_cost_model):
     volume = pd.to_numeric(frame["volume"], errors="coerce")
     if "turnover" in frame.columns:
         value = pd.to_numeric(frame["turnover"], errors="coerce")
-        value = value.where(value > 0, close * volume)
+        implied = close * volume
+        ratio = implied / value.where(value > 0)
+        tushare_amount_units = ratio.between(5.0, 20.0) | ratio.between(500.0, 2000.0)
+        value = value.where(~tushare_amount_units, value * 1000.0)
+        value = value.where(value > 0, implied)
     else:
         value = close * volume
     frame["adv20_value"] = value.groupby(frame["symbol"]).transform(
@@ -671,7 +680,16 @@ def _archived_candidate_info(sid):
 
 
 class _DuckDBDailyDateProvider:
-    def __init__(self, symbols, start, end, db_path=None, status_db_path=None, daily_basic_db_path=None):
+    def __init__(
+        self,
+        symbols,
+        start,
+        end,
+        db_path=None,
+        status_db_path=None,
+        daily_basic_db_path=None,
+        include_daily_basic=True,
+    ):
         import pandas as pd
         from quant.infrastructure.data.storage_duckdb import (
             DuckDBStorage,
@@ -682,6 +700,7 @@ class _DuckDBDailyDateProvider:
 
         self.symbols = list(dict.fromkeys(str(symbol) for symbol in symbols))
         self._symbol_lookup = set(self.symbols)
+        self._include_daily_basic = bool(include_daily_basic)
         self._storage = DuckDBStorage(
             db_path or _DEFAULT_DB,
             read_only=True,
@@ -689,6 +708,7 @@ class _DuckDBDailyDateProvider:
             status_db_path=status_db_path or _DEFAULT_STATUS_DB,
             daily_basic_db_path=daily_basic_db_path or _DEFAULT_DAILY_BASIC_DB,
         )
+        self._bar_columns = self._resolve_bar_columns()
         rows = self._storage.conn.execute(
             """
             SELECT DISTINCT CAST(timestamp AS DATE) AS trade_date
@@ -698,30 +718,52 @@ class _DuckDBDailyDateProvider:
             """,
             [start, end],
         ).fetchall()
-        self.trading_dates = {pd.Timestamp(row[0]).date() for row in rows}
+        self._trading_dates_list = [pd.Timestamp(row[0]).date() for row in rows]
+        self.trading_dates = set(self._trading_dates_list)
+        self._chunk_size = 63
+        self._cached_rows_by_date = {}
 
     def get_bars_for_date(self, trading_date):
         import pandas as pd
 
         day = pd.Timestamp(trading_date).date()
+        if day not in self._cached_rows_by_date:
+            self._load_chunk(day)
+        return self._cached_rows_by_date.get(day, [])
+
+    def _load_chunk(self, day):
+        import bisect
+        import pandas as pd
+
+        if not self._trading_dates_list:
+            self._cached_rows_by_date = {day: []}
+            return
+        index = bisect.bisect_left(self._trading_dates_list, day)
+        if index >= len(self._trading_dates_list):
+            self._cached_rows_by_date = {day: []}
+            return
+        chunk_dates = self._trading_dates_list[index:index + self._chunk_size]
+        start_day = chunk_dates[0]
+        end_day = chunk_dates[-1]
+        frame = self._fetch_frame(start_day, end_day)
+        grouped = {item: [] for item in chunk_dates}
+        if frame is not None and not frame.empty:
+            if "symbol" in frame.columns:
+                frame = frame[frame["symbol"].astype(str).isin(self._symbol_lookup)]
+            if not frame.empty:
+                timestamps = pd.to_datetime(frame["timestamp"], errors="coerce")
+                frame = frame.assign(_cache_date=timestamps.dt.date)
+                for cache_date, group in frame.groupby("_cache_date", sort=False):
+                    grouped[cache_date] = group.drop(columns=["_cache_date"]).to_dict("records")
+        self._cached_rows_by_date = grouped
+
+    def _fetch_frame(self, start_day, end_day):
         if self._storage._status_available():
-            self._storage._daily_basic_available()
-            frame = self._storage.conn.execute(
-                """
-                SELECT
-                    CAST(s.trade_date AS TIMESTAMP) AS timestamp,
-                    s.symbol,
-                    b.open,
-                    b.high,
-                    b.low,
-                    b.close,
-                    b.volume,
-                    b.turnover,
-                    b.adj_open,
-                    b.adj_high,
-                    b.adj_low,
-                    b.adj_close,
-                    b.adj_factor,
+            include_basic = self._include_daily_basic and self._storage._daily_basic_available()
+            sidecar_select = ""
+            sidecar_join = ""
+            if include_basic:
+                sidecar_select = """
                     db.turnover_rate,
                     db.turnover_rate_f,
                     db.volume_ratio,
@@ -737,6 +779,20 @@ class _DuckDBDailyDateProvider:
                     db.free_share,
                     db.total_mv,
                     db.circ_mv,
+                """
+                sidecar_join = """
+                LEFT JOIN daily_basic.cn_daily_basic db
+                  ON s.symbol = db.symbol
+                 AND s.trade_date = db.trade_date
+                """
+            bar_select = ",\n                    ".join(f"b.{column}" for column in self._bar_columns)
+            frame = self._storage.conn.execute(
+                f"""
+                SELECT
+                    CAST(s.trade_date AS TIMESTAMP) AS timestamp,
+                    s.symbol,
+                    {bar_select},
+                    {sidecar_select}
                     s.is_st,
                     s.st_type,
                     s.is_suspended AS status_is_suspended,
@@ -753,16 +809,14 @@ class _DuckDBDailyDateProvider:
                 LEFT JOIN daily_cn_ochl b
                   ON s.symbol = b.symbol
                  AND s.trade_date = CAST(b.timestamp AS DATE)
-                LEFT JOIN daily_basic.cn_daily_basic db
-                  ON s.symbol = db.symbol
-                 AND s.trade_date = db.trade_date
-                WHERE s.trade_date = ?
+                {sidecar_join}
+                WHERE s.trade_date BETWEEN ? AND ?
                 """,
-                [day],
+                [start_day, end_day],
             ).fetchdf()
-            frame = self._storage._normalize_status_enriched_bars(frame)
-        elif self._storage._daily_basic_available():
-            frame = self._storage.conn.execute(
+            return self._storage._normalize_status_enriched_bars(frame)
+        elif self._include_daily_basic and self._storage._daily_basic_available():
+            return self._storage.conn.execute(
                 """
                 SELECT
                     b.timestamp,
@@ -784,20 +838,41 @@ class _DuckDBDailyDateProvider:
                 LEFT JOIN daily_basic.cn_daily_basic db
                   ON b.symbol = db.symbol
                  AND CAST(b.timestamp AS DATE) = db.trade_date
-                WHERE CAST(b.timestamp AS DATE) = ?
+                WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
                 """,
-                [day],
+                [start_day, end_day],
             ).fetchdf()
         else:
-            frame = self._storage.get_bars_for_symbols(self.symbols, pd.Timestamp(day).to_pydatetime(), pd.Timestamp(day).to_pydatetime(), "1d")
-        if frame.empty:
-            return []
-        if "symbol" in frame.columns:
-            frame = frame[frame["symbol"].astype(str).isin(self._symbol_lookup)]
-        return frame.to_dict("records")
+            bar_select = ", ".join(f"b.{column}" for column in self._bar_columns)
+            return self._storage.conn.execute(
+                f"""
+                SELECT b.timestamp, b.symbol, {bar_select}
+                FROM daily_cn_ochl b
+                WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
+                """,
+                [start_day, end_day],
+            ).fetchdf()
 
     def close(self):
         self._storage.close()
+
+    def _resolve_bar_columns(self):
+        wanted = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "turnover",
+            "adj_open",
+            "adj_high",
+            "adj_low",
+            "adj_close",
+            "adj_factor",
+        ]
+        rows = self._storage.conn.execute("PRAGMA table_info('daily_cn_ochl')").fetchall()
+        available = {str(row[1]) for row in rows}
+        return [column for column in wanted if column in available]
 
 
 def _load_cn_benchmark_provider(db_provider, start, end, benchmark_provider_cls):
