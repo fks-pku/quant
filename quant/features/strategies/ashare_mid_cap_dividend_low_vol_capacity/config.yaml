@@ -1,0 +1,16 @@
+strategy:
+  name: ashare_mid_cap_dividend_low_vol_capacity
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 20
+  max_positions: 50
+  max_position_pct: 1.0
+  cap_percentile_low: 0.30
+  cap_percentile_high: 0.85
+  min_price: 5.0
+  min_turnover: 50000.0
+  lot_size: 100
+  volatility_lookback: 60

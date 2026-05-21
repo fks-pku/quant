@@ -6,7 +6,10 @@ from quant.infrastructure.data.storage_duckdb import (
     _DEFAULT_DAILY_BASIC_DB,
     _DEFAULT_DB,
     _DEFAULT_ETF_DB,
+    _DEFAULT_FINANCIAL_INDICATOR_DB,
     _DEFAULT_INDEX_DB,
+    _FINANCIAL_INDICATOR_SCHEMA,
+    _FINANCIAL_INDICATOR_TABLE,
     DuckDBStorage,
 )
 
@@ -20,6 +23,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
         pit_data: Any = None,
         pit_as_of_date: str = None,
         daily_basic_db_path: str = _DEFAULT_DAILY_BASIC_DB,
+        financial_indicator_db_path: str = _DEFAULT_FINANCIAL_INDICATOR_DB,
         etf_db_path: str = _DEFAULT_ETF_DB,
         index_db_path: str = _DEFAULT_INDEX_DB,
     ):
@@ -27,6 +31,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
         self._pit_data = pit_data
         self._pit_as_of_date = pit_as_of_date
         self._daily_basic_db_path = daily_basic_db_path
+        self._financial_indicator_db_path = financial_indicator_db_path
         self._etf_db_path = etf_db_path
         self._index_db_path = index_db_path
 
@@ -68,6 +73,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
             fields = [str(row[1]) for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
             if table == "daily_cn_ochl":
                 fields.extend([field for field in self._daily_basic_fields(conn) if field not in fields])
+                fields.extend([field for field in self._financial_indicator_fields(conn) if field not in fields])
             return fields
         except Exception as e:
             logger.warning(f"Field introspection failed for {table}: {e}")
@@ -111,7 +117,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 join_clause = ""
                 if sidecar_select:
                     select_parts.append(sidecar_select)
-                    join_clause = """
+                    join_clause += """
                     LEFT JOIN daily_basic.cn_daily_basic db
                       ON b.symbol = db.symbol
                      AND CAST(b.timestamp AS DATE) = db.trade_date
@@ -127,7 +133,10 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 """
                 params = table_symbols + [start, end]
                 try:
-                    frames.append(conn.execute(query, params).fetchdf())
+                    frame = conn.execute(query, params).fetchdf()
+                    if table == "daily_cn_ochl":
+                        frame = self._add_financial_indicators(conn, frame, requested_fields)
+                    frames.append(frame)
                 except Exception as e:
                     logger.warning(f"Market data fetch failed for {table}: {e}")
             if not frames:
@@ -308,3 +317,115 @@ class DuckDBResearchMarketData(ResearchMarketData):
             if field not in table_columns and (requested_fields is None or field in requested_fields)
         ]
         return ", ".join(f"db.{field}" for field in sidecar_fields)
+
+    def _financial_indicator_available(self, conn: Any) -> bool:
+        try:
+            from pathlib import Path
+
+            path = Path(self._financial_indicator_db_path)
+            if not path.exists():
+                return False
+            attached = {
+                row[1]
+                for row in conn.execute("PRAGMA database_list").fetchall()
+                if len(row) > 1
+            }
+            if _FINANCIAL_INDICATOR_SCHEMA not in attached:
+                escaped = str(path).replace("'", "''")
+                conn.execute(f"ATTACH IF NOT EXISTS '{escaped}' AS {_FINANCIAL_INDICATOR_SCHEMA} (READ_ONLY)")
+            exists = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_catalog = ?
+                  AND table_name = ?
+                """,
+                [_FINANCIAL_INDICATOR_SCHEMA, _FINANCIAL_INDICATOR_TABLE],
+            ).fetchone()[0]
+            return bool(exists)
+        except Exception as e:
+            logger.warning(f"Financial indicator sidecar unavailable: {e}")
+            return False
+
+    def _financial_indicator_fields(self, conn: Any) -> List[str]:
+        if not self._financial_indicator_available(conn):
+            return []
+        rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_catalog = ?
+              AND table_name = ?
+            ORDER BY ordinal_position
+            """,
+            [_FINANCIAL_INDICATOR_SCHEMA, _FINANCIAL_INDICATOR_TABLE],
+        ).fetchall()
+        keys = {"symbol", "ts_code", "ann_date", "end_date", "updated_at"}
+        return [str(row[0]) for row in rows if str(row[0]) not in keys]
+
+    def _financial_indicator_select_columns(self, conn: Any, table: str, requested_fields: set = None) -> str:
+        if table != "daily_cn_ochl" or not requested_fields:
+            return ""
+        fields = [
+            field
+            for field in self._financial_indicator_fields(conn)
+            if field in requested_fields
+        ]
+        return ", ".join(f"fi.{field}" for field in fields)
+
+    def _add_financial_indicators(self, conn: Any, frame: Any, requested_fields: set = None) -> Any:
+        if frame is None or frame.empty or not requested_fields:
+            return frame
+        try:
+            import pandas as pd
+        except Exception:
+            return frame
+        fields = [field for field in self._financial_indicator_fields(conn) if field in requested_fields]
+        if not fields:
+            return frame
+        result = frame.copy()
+        result["_finance_order"] = range(len(result))
+        result["_trade_ts"] = pd.to_datetime(result["date"], errors="coerce")
+        symbols = [str(symbol) for symbol in result["symbol"].dropna().astype(str).unique().tolist()]
+        if not symbols:
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+        end_day = result["_trade_ts"].dt.date.max()
+        placeholders = ", ".join("?" for _ in symbols)
+        select_cols = ", ".join(["symbol", "ann_date", "end_date", *fields])
+        financial = conn.execute(
+            f"""
+            SELECT {select_cols}
+            FROM {_FINANCIAL_INDICATOR_SCHEMA}.{_FINANCIAL_INDICATOR_TABLE}
+            WHERE symbol IN ({placeholders})
+              AND ann_date <= ?
+            ORDER BY symbol, ann_date, end_date
+            """,
+            [*symbols, end_day],
+        ).fetchdf()
+        if financial.empty:
+            for field in fields:
+                if field not in result.columns:
+                    result[field] = pd.NA
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+        financial["_ann_ts"] = pd.to_datetime(financial["ann_date"], errors="coerce")
+        pieces = []
+        finance_columns = ["_ann_ts", *fields]
+        for symbol, group in result.groupby("symbol", sort=False):
+            symbol_financial = financial[financial["symbol"].astype(str) == str(symbol)].sort_values(["_ann_ts", "end_date"])
+            ordered_group = group.sort_values("_trade_ts")
+            if symbol_financial.empty:
+                merged = ordered_group.copy()
+                for field in fields:
+                    if field not in merged.columns:
+                        merged[field] = pd.NA
+            else:
+                merged = pd.merge_asof(
+                    ordered_group,
+                    symbol_financial[finance_columns],
+                    left_on="_trade_ts",
+                    right_on="_ann_ts",
+                    direction="backward",
+                )
+            pieces.append(merged)
+        merged_frame = pd.concat(pieces, ignore_index=True).sort_values("_finance_order")
+        return merged_frame.drop(columns=[column for column in ("_finance_order", "_trade_ts", "_ann_ts") if column in merged_frame.columns])

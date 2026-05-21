@@ -745,7 +745,9 @@ class _DuckDBDailyDateProvider:
         db_path=None,
         status_db_path=None,
         daily_basic_db_path=None,
+        financial_indicator_db_path=None,
         include_daily_basic=True,
+        include_financial_indicators=False,
         include_execution_liquidity_features=False,
         cache_dir=None,
         cache_enabled=None,
@@ -755,7 +757,10 @@ class _DuckDBDailyDateProvider:
             DuckDBStorage,
             _DEFAULT_DAILY_BASIC_DB,
             _DEFAULT_DB,
+            _DEFAULT_FINANCIAL_INDICATOR_DB,
             _DEFAULT_STATUS_DB,
+            _FINANCIAL_INDICATOR_SCHEMA,
+            _FINANCIAL_INDICATOR_TABLE,
         )
 
         self.symbols = list(dict.fromkeys(str(symbol) for symbol in symbols))
@@ -763,13 +768,17 @@ class _DuckDBDailyDateProvider:
         self._start_day = pd.Timestamp(start).date()
         self._end_day = pd.Timestamp(end).date()
         self._include_daily_basic = bool(include_daily_basic)
+        self._include_financial_indicators = bool(include_financial_indicators)
         self._include_execution_liquidity_features = bool(include_execution_liquidity_features)
+        self._financial_indicator_schema = _FINANCIAL_INDICATOR_SCHEMA
+        self._financial_indicator_table = _FINANCIAL_INDICATOR_TABLE
         self._storage = DuckDBStorage(
             db_path or _DEFAULT_DB,
             read_only=True,
             use_security_status=True,
             status_db_path=status_db_path or _DEFAULT_STATUS_DB,
             daily_basic_db_path=daily_basic_db_path or _DEFAULT_DAILY_BASIC_DB,
+            financial_indicator_db_path=financial_indicator_db_path or _DEFAULT_FINANCIAL_INDICATOR_DB,
         )
         self._bar_columns = self._resolve_bar_columns()
         rows = self._storage.conn.execute(
@@ -845,6 +854,7 @@ class _DuckDBDailyDateProvider:
     def _build_cache_key_base(self):
         status_available = self._storage._status_available()
         include_basic = self._include_daily_basic and self._storage._daily_basic_available()
+        include_financial = self._include_financial_indicators and self._financial_indicator_available()
         symbols_digest = hashlib.sha256("\n".join(sorted(self._symbol_lookup)).encode("utf-8")).hexdigest()
         return {
             "version": _STREAMING_PROVIDER_CACHE_VERSION,
@@ -854,12 +864,15 @@ class _DuckDBDailyDateProvider:
             "end": self._end_day.isoformat(),
             "bar_columns": list(self._bar_columns),
             "include_daily_basic": bool(self._include_daily_basic),
+            "include_financial_indicators": bool(self._include_financial_indicators),
             "include_execution_liquidity_features": bool(self._include_execution_liquidity_features),
             "status_available": bool(status_available),
             "daily_basic_available": bool(include_basic),
+            "financial_indicator_available": bool(include_financial),
             "market_db": _file_fingerprint(self._storage.db_path),
             "status_db": _file_fingerprint(self._storage._status_db_path) if status_available else None,
             "daily_basic_db": _file_fingerprint(self._storage._daily_basic_db_path) if include_basic else None,
+            "financial_indicator_db": _file_fingerprint(self._storage._financial_indicator_db_path) if include_financial else None,
         }
 
     def _chunk_cache_path(self, chunk_dates, lookback_start_day, end_day):
@@ -918,6 +931,8 @@ class _DuckDBDailyDateProvider:
             return
 
     def _fetch_frame(self, start_day, end_day):
+        placeholders = ", ".join("?" for _ in self.symbols)
+        symbol_params = list(self.symbols)
         if self._storage._status_available():
             include_basic = self._include_daily_basic and self._storage._daily_basic_available()
             sidecar_select = ""
@@ -971,13 +986,14 @@ class _DuckDBDailyDateProvider:
                  AND s.trade_date = CAST(b.timestamp AS DATE)
                 {sidecar_join}
                 WHERE s.trade_date BETWEEN ? AND ?
+                  AND s.symbol IN ({placeholders})
                 """,
-                [start_day, end_day],
+                [start_day, end_day, *symbol_params],
             ).fetchdf()
-            return self._storage._normalize_status_enriched_bars(frame)
+            return self._add_financial_indicators(self._storage._normalize_status_enriched_bars(frame))
         elif self._include_daily_basic and self._storage._daily_basic_available():
-            return self._storage.conn.execute(
-                """
+            frame = self._storage.conn.execute(
+                f"""
                 SELECT
                     b.timestamp,
                     b.symbol,
@@ -999,19 +1015,106 @@ class _DuckDBDailyDateProvider:
                   ON b.symbol = db.symbol
                  AND CAST(b.timestamp AS DATE) = db.trade_date
                 WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
+                  AND b.symbol IN ({placeholders})
                 """,
-                [start_day, end_day],
+                [start_day, end_day, *symbol_params],
             ).fetchdf()
+            return self._add_financial_indicators(frame)
         else:
             bar_select = ", ".join(f"b.{column}" for column in self._bar_columns)
-            return self._storage.conn.execute(
+            frame = self._storage.conn.execute(
                 f"""
                 SELECT b.timestamp, b.symbol, {bar_select}
                 FROM daily_cn_ochl b
                 WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
+                  AND b.symbol IN ({placeholders})
                 """,
-                [start_day, end_day],
+                [start_day, end_day, *symbol_params],
             ).fetchdf()
+            return self._add_financial_indicators(frame)
+
+    def _financial_indicator_available(self):
+        if not self._include_financial_indicators:
+            return False
+        if not self._storage._financial_indicator_db_path.exists():
+            return False
+        if not self._storage._ensure_sidecar_attached(
+            self._financial_indicator_schema,
+            self._storage._financial_indicator_db_path,
+        ):
+            return False
+        return self._storage._table_exists(f"{self._financial_indicator_schema}.{self._financial_indicator_table}")
+
+    def _financial_indicator_columns(self):
+        if not self._financial_indicator_available():
+            return []
+        rows = self._storage.conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_catalog = ?
+              AND table_name = ?
+            ORDER BY ordinal_position
+            """,
+            [self._financial_indicator_schema, self._financial_indicator_table],
+        ).fetchall()
+        keys = {"symbol", "ts_code", "ann_date", "end_date", "updated_at"}
+        return [str(row[0]) for row in rows if str(row[0]) not in keys]
+
+    def _add_financial_indicators(self, frame):
+        if frame is None or frame.empty:
+            return frame
+        columns = self._financial_indicator_columns()
+        if not columns:
+            return frame
+        import pandas as pd
+
+        result = frame.copy()
+        result["_finance_order"] = range(len(result))
+        result["_trade_ts"] = pd.to_datetime(result["timestamp"], errors="coerce")
+        symbols = [str(symbol) for symbol in result["symbol"].dropna().astype(str).unique().tolist()]
+        if not symbols:
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+        end_day = result["_trade_ts"].dt.date.max()
+        placeholders = ", ".join("?" for _ in symbols)
+        select_cols = ", ".join(["symbol", "ann_date", "end_date", *columns])
+        financial = self._storage.conn.execute(
+            f"""
+            SELECT {select_cols}
+            FROM {self._financial_indicator_schema}.{self._financial_indicator_table}
+            WHERE symbol IN ({placeholders})
+              AND ann_date <= ?
+            ORDER BY symbol, ann_date, end_date
+            """,
+            [*symbols, end_day],
+        ).fetchdf()
+        if financial.empty:
+            for column in columns:
+                if column not in result.columns:
+                    result[column] = pd.NA
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+        financial["_ann_ts"] = pd.to_datetime(financial["ann_date"], errors="coerce")
+        pieces = []
+        finance_columns = ["_ann_ts", *columns]
+        for symbol, group in result.groupby("symbol", sort=False):
+            symbol_financial = financial[financial["symbol"].astype(str) == str(symbol)].sort_values(["_ann_ts", "end_date"])
+            ordered_group = group.sort_values("_trade_ts")
+            if symbol_financial.empty:
+                merged = ordered_group.copy()
+                for column in columns:
+                    if column not in merged.columns:
+                        merged[column] = pd.NA
+            else:
+                merged = pd.merge_asof(
+                    ordered_group,
+                    symbol_financial[finance_columns],
+                    left_on="_trade_ts",
+                    right_on="_ann_ts",
+                    direction="backward",
+                )
+            pieces.append(merged)
+        merged_frame = pd.concat(pieces, ignore_index=True).sort_values("_finance_order")
+        return merged_frame.drop(columns=[column for column in ("_finance_order", "_trade_ts", "_ann_ts") if column in merged_frame.columns])
 
     def close(self):
         self._storage.close()

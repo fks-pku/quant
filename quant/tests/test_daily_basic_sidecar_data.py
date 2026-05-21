@@ -70,6 +70,31 @@ def _create_basic_db(duckdb, path):
     conn.close()
 
 
+def _create_financial_db(duckdb, path):
+    conn = duckdb.connect(str(path))
+    conn.execute(
+        """
+        CREATE TABLE cn_financial_indicators (
+            symbol VARCHAR,
+            ts_code VARCHAR,
+            ann_date DATE,
+            end_date DATE,
+            roe DOUBLE,
+            netprofit_yoy DOUBLE,
+            updated_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO cn_financial_indicators VALUES
+        ('600001', '600001.SH', '2024-03-01', '2023-12-31', 5.0, 4.0, '2024-03-01'),
+        ('600001', '600001.SH', '2024-04-30', '2024-03-31', 10.0, 12.0, '2024-04-30')
+        """
+    )
+    conn.close()
+
+
 def _create_status_db(duckdb, path):
     conn = duckdb.connect(str(path))
     conn.execute(
@@ -195,6 +220,103 @@ def test_streaming_research_backtest_provider_reads_status_and_sidecar(tmp_path)
     assert by_symbol["600002"]["tradable"] is False
     assert by_symbol["600002"]["_suspended"] is True
     assert by_symbol["600002"]["close"] == pytest.approx(8.0)
+
+
+def test_streaming_research_backtest_provider_reads_financial_indicators_pit(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    financial_db = tmp_path / "cn_financial_indicators.duckdb"
+    conn = duckdb.connect(str(market_db))
+    conn.execute(
+        """
+        CREATE TABLE daily_cn_ochl (
+            timestamp TIMESTAMP,
+            symbol VARCHAR,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            turnover DOUBLE,
+            adj_open DOUBLE,
+            adj_high DOUBLE,
+            adj_low DOUBLE,
+            adj_close DOUBLE,
+            adj_factor DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO daily_cn_ochl VALUES
+        ('2024-04-10', '600001', 10, 11, 9, 10.5, 1000, 10500, 10, 11, 9, 10.5, 1),
+        ('2024-05-02', '600001', 11, 12, 10, 11.5, 1000, 11500, 11, 12, 10, 11.5, 1)
+        """
+    )
+    conn.close()
+    _create_financial_db(duckdb, financial_db)
+
+    from quant.api.research_bp import _DuckDBDailyDateProvider
+
+    provider = _DuckDBDailyDateProvider(
+        ["600001"],
+        datetime(2024, 4, 10),
+        datetime(2024, 5, 2),
+        db_path=str(market_db),
+        status_db_path=str(tmp_path / "missing_status.duckdb"),
+        financial_indicator_db_path=str(financial_db),
+        include_daily_basic=False,
+        include_financial_indicators=True,
+        cache_enabled=False,
+    )
+    try:
+        before = list(provider.get_bars_for_date(datetime(2024, 4, 10)))
+        after = list(provider.get_bars_for_date(datetime(2024, 5, 2)))
+    finally:
+        provider.close()
+
+    assert before[0]["roe"] == pytest.approx(5.0)
+    assert before[0]["netprofit_yoy"] == pytest.approx(4.0)
+    assert after[0]["roe"] == pytest.approx(10.0)
+    assert after[0]["netprofit_yoy"] == pytest.approx(12.0)
+
+
+def test_research_market_data_reads_financial_indicators_pit(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    financial_db = tmp_path / "cn_financial_indicators.duckdb"
+    conn = duckdb.connect(str(market_db))
+    conn.execute(
+        """
+        CREATE TABLE daily_cn_ochl (
+            timestamp TIMESTAMP,
+            symbol VARCHAR,
+            close DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO daily_cn_ochl VALUES
+        ('2024-04-10', '600001', 10.5),
+        ('2024-05-02', '600001', 11.5)
+        """
+    )
+    conn.close()
+    _create_financial_db(duckdb, financial_db)
+
+    market_data = DuckDBResearchMarketData(
+        str(market_db),
+        daily_basic_db_path=str(tmp_path / "missing_basic.duckdb"),
+        financial_indicator_db_path=str(financial_db),
+    )
+
+    fields = market_data.available_fields("cn")
+    frame = market_data.get_daily_bars(["600001"], "2024-04-10", "2024-05-02", fields=["close", "roe", "netprofit_yoy"])
+
+    assert "roe" in fields
+    assert frame["roe"].tolist() == pytest.approx([5.0, 10.0])
+    assert frame["netprofit_yoy"].tolist() == pytest.approx([4.0, 12.0])
 
 
 def test_streaming_research_backtest_provider_reuses_disk_cache(tmp_path, monkeypatch):

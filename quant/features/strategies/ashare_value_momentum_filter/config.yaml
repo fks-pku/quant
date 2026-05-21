@@ -1,0 +1,19 @@
+strategy:
+  name: ashare_value_momentum_filter
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 20
+  max_positions: 50
+  max_position_pct: 1.0
+  cap_percentile_low: 0.20
+  cap_percentile_high: 0.90
+  min_price: 5.0
+  min_turnover: 50000.0
+  lot_size: 100
+  momentum_lookback: 252
+  momentum_skip: 21
+  recent_return_lookback: 21
+  max_recent_return: 0.30

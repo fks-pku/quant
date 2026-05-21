@@ -53,6 +53,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `cn_index_ohlcv.duckdb::daily_cn_ochl` stores CN index OHLCV and is attached as `cn_index`.
 - `cn_daily_basic.duckdb::cn_daily_basic` stores Tushare daily valuation, shares, market cap, and turnover sidecar fields.
 - `cn_status.duckdb::cn_security_status_daily` stores daily listing/tradability/ST/suspension/limit status.
+- `cn_financial_indicators.duckdb::cn_financial_indicators` stores Tushare `fina_indicator` quality/growth fields with `ann_date` and `end_date` for point-in-time joins.
 - `cn_corporate_actions.duckdb::cn_dividends` stores CN dividend and allotment records.
 
 ## Security Status Data

@@ -1,0 +1,15 @@
+strategy:
+  name: ashare_value_dividend_capacity
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 20
+  max_positions: 50
+  max_position_pct: 1.0
+  min_price: 5.0
+  min_total_mv: 300000.0
+  min_circ_mv: 200000.0
+  min_turnover: 50000.0
+  lot_size: 100
