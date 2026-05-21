@@ -1,0 +1,39 @@
+strategy:
+  name: joinquant_value_rsrs_timing
+  enabled: false
+  status: candidate
+  description: "A-share value selection gated by RSRS market timing."
+  source_url: "https://www.joinquant.com/view/community/detail/713a60a2a1daaac2276dab73eb322ddc"
+
+parameters:
+  timing_symbol: "000300"
+  holding_days: 20
+  max_positions: 20
+  max_position_pct: 0.98
+  min_price: 5.0
+  min_turnover: 50000.0
+  rsrs_window: 18
+  rsrs_zscore_window: 120
+  rsrs_entry: 0.7
+  rsrs_exit: -0.7
+  stop_loss_pct: 0.10
+  take_profit_pct: 0.20
+  trailing_stop_pct: 0.08
+  lot_size: 100
+
+research:
+  market: CN
+  timeframe: 1d
+  universe: A-share stocks plus CSI 300 timing proxy
+  required_fields:
+    - high
+    - low
+    - pe_ttm
+    - pb
+    - ps_ttm
+    - dv_ttm
+    - total_mv
+    - circ_mv
+  notes:
+    - "The JoinQuant article does not publish full executable code; this is a daily reproducible approximation."
+    - "RSRS timing uses high-on-low rolling OLS beta z-score on the timing symbol."

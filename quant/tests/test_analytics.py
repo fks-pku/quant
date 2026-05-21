@@ -106,6 +106,42 @@ class TestCalmar:
         returns = pd.Series([0.01, 0.02, -0.005, 0.015])
         assert calculate_calmar(returns, -0.01) > 0
 
+    def test_calmar_uses_compounded_cagr_not_arithmetic_mean(self):
+        returns = pd.Series([0.10, 0.10])
+        assert calculate_calmar(returns, -0.50, periods_per_year=2) == pytest.approx(0.42, rel=1e-4)
+
+    def test_report_trade_distribution_returns_include_entry_commission(self):
+        from quant.api.research_bp import _trade_distribution
+
+        buy = Trade(
+            symbol="AAPL",
+            quantity=10,
+            entry_price=10.0,
+            exit_price=10.0,
+            entry_time=datetime(2025, 1, 2),
+            exit_time=datetime(2025, 1, 2),
+            side="BUY",
+            pnl=0.0,
+            commission=10.0,
+            strategy_name="S",
+        )
+        sell = Trade(
+            symbol="AAPL",
+            quantity=10,
+            entry_price=10.0,
+            exit_price=20.0,
+            entry_time=datetime(2025, 1, 2),
+            exit_time=datetime(2025, 1, 5),
+            side="SELL",
+            pnl=95.0,
+            commission=5.0,
+            strategy_name="S",
+        )
+
+        distribution = _trade_distribution([buy, sell])
+
+        assert distribution["avg_return"] == pytest.approx(85.0 / 110.0, rel=1e-4)
+
 
 class TestWinRate:
     def test_no_trades(self):

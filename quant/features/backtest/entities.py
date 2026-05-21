@@ -122,7 +122,7 @@ class _BacktestOrderManager:
         self._buy_dedup_set: set = set()
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
-        self._tradable_today: Dict[str, bool] = {}
+        self._tradable_today: Optional[Dict[str, bool]] = None
         self._rejected_count: int = 0
 
     def _resolve_price(self, price: Optional[float], symbol: str) -> float:
@@ -139,6 +139,14 @@ class _BacktestOrderManager:
             raise OrderRejectedError(OrderRejectionReason.DUPLICATE_BUY, symbol)
 
     def _passes_tradability(self, symbol: str) -> None:
+        if self._tradable_today is None:
+            return
+        if symbol not in self._tradable_today:
+            raise OrderRejectedError(
+                OrderRejectionReason.BAR_UNAVAILABLE,
+                symbol,
+                f"no bar on {self._current_date}",
+            )
         if self._tradable_today.get(symbol) is False:
             raise OrderRejectedError(
                 OrderRejectionReason.BAR_UNAVAILABLE,
@@ -228,7 +236,7 @@ class _BacktestContext:
     ):
         self.order_manager._current_date = trading_date
         self.order_manager._last_prices = last_prices
-        self.order_manager._tradable_today = tradable_today or {}
+        self.order_manager._tradable_today = tradable_today
 
     def drain_orders(self, signal_date: Optional[date] = None):
         return self.order_manager.drain_pending(signal_date)

@@ -746,6 +746,8 @@ class _DuckDBDailyDateProvider:
         status_db_path=None,
         daily_basic_db_path=None,
         financial_indicator_db_path=None,
+        etf_db_path=None,
+        index_db_path=None,
         include_daily_basic=True,
         include_financial_indicators=False,
         include_execution_liquidity_features=False,
@@ -757,10 +759,14 @@ class _DuckDBDailyDateProvider:
             DuckDBStorage,
             _DEFAULT_DAILY_BASIC_DB,
             _DEFAULT_DB,
+            _DEFAULT_ETF_DB,
             _DEFAULT_FINANCIAL_INDICATOR_DB,
+            _DEFAULT_INDEX_DB,
             _DEFAULT_STATUS_DB,
+            _ETF_SCHEMA,
             _FINANCIAL_INDICATOR_SCHEMA,
             _FINANCIAL_INDICATOR_TABLE,
+            _INDEX_SCHEMA,
         )
 
         self.symbols = list(dict.fromkeys(str(symbol) for symbol in symbols))
@@ -779,18 +785,14 @@ class _DuckDBDailyDateProvider:
             status_db_path=status_db_path or _DEFAULT_STATUS_DB,
             daily_basic_db_path=daily_basic_db_path or _DEFAULT_DAILY_BASIC_DB,
             financial_indicator_db_path=financial_indicator_db_path or _DEFAULT_FINANCIAL_INDICATOR_DB,
+            etf_db_path=etf_db_path or _DEFAULT_ETF_DB,
+            index_db_path=index_db_path or _DEFAULT_INDEX_DB,
         )
+        self._etf_schema = _ETF_SCHEMA
+        self._index_schema = _INDEX_SCHEMA
         self._bar_columns = self._resolve_bar_columns()
-        rows = self._storage.conn.execute(
-            """
-            SELECT DISTINCT CAST(timestamp AS DATE) AS trade_date
-            FROM daily_cn_ochl
-            WHERE CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-            ORDER BY trade_date
-            """,
-            [start, end],
-        ).fetchall()
-        self._trading_dates_list = [pd.Timestamp(row[0]).date() for row in rows]
+        self._stock_symbols, self._etf_symbols, self._index_symbols = self._split_symbols_by_market_table()
+        self._trading_dates_list = self._load_trading_dates(start, end)
         self.trading_dates = set(self._trading_dates_list)
         self._chunk_size = 63
         self._cached_rows_by_date = {}
@@ -801,6 +803,51 @@ class _DuckDBDailyDateProvider:
         )
         self._cache_dir = Path(cache_dir) if cache_dir is not None else _streaming_provider_cache_dir()
         self._cache_key_base = self._build_cache_key_base()
+
+    def _split_symbols_by_market_table(self):
+        stock_symbols = []
+        etf_symbols = []
+        index_symbols = []
+        for symbol in self.symbols:
+            if self._storage.is_cn_index_symbol(symbol):
+                index_symbols.append(symbol)
+            elif self._storage.is_cn_etf_symbol(symbol):
+                etf_symbols.append(symbol)
+            else:
+                stock_symbols.append(symbol)
+        return stock_symbols, etf_symbols, index_symbols
+
+    def _load_trading_dates(self, start, end):
+        import pandas as pd
+
+        dates = set()
+        rows = self._storage.conn.execute(
+            """
+            SELECT DISTINCT CAST(timestamp AS DATE) AS trade_date
+            FROM daily_cn_ochl
+            WHERE CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            """,
+            [start, end],
+        ).fetchall()
+        dates.update(pd.Timestamp(row[0]).date() for row in rows)
+        for table_name, symbols in (
+            (f"{self._etf_schema}.daily_cn_ochl", self._etf_symbols),
+            (f"{self._index_schema}.daily_cn_ochl", self._index_symbols),
+        ):
+            if not symbols or not self._storage._table_exists(table_name):
+                continue
+            placeholders = ", ".join("?" for _ in symbols)
+            rows = self._storage.conn.execute(
+                f"""
+                SELECT DISTINCT CAST(timestamp AS DATE) AS trade_date
+                FROM {table_name}
+                WHERE CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND symbol IN ({placeholders})
+                """,
+                [start, end, *symbols],
+            ).fetchall()
+            dates.update(pd.Timestamp(row[0]).date() for row in rows)
+        return sorted(dates)
 
     def get_bars_for_date(self, trading_date):
         import pandas as pd
@@ -870,6 +917,8 @@ class _DuckDBDailyDateProvider:
             "daily_basic_available": bool(include_basic),
             "financial_indicator_available": bool(include_financial),
             "market_db": _file_fingerprint(self._storage.db_path),
+            "etf_db": _file_fingerprint(self._storage._etf_db_path) if self._etf_symbols else None,
+            "index_db": _file_fingerprint(self._storage._index_db_path) if self._index_symbols else None,
             "status_db": _file_fingerprint(self._storage._status_db_path) if status_available else None,
             "daily_basic_db": _file_fingerprint(self._storage._daily_basic_db_path) if include_basic else None,
             "financial_indicator_db": _file_fingerprint(self._storage._financial_indicator_db_path) if include_financial else None,
@@ -931,8 +980,28 @@ class _DuckDBDailyDateProvider:
             return
 
     def _fetch_frame(self, start_day, end_day):
-        placeholders = ", ".join("?" for _ in self.symbols)
-        symbol_params = list(self.symbols)
+        import pandas as pd
+
+        frames = []
+        stock_frame = self._fetch_stock_frame(start_day, end_day)
+        if stock_frame is not None and not stock_frame.empty:
+            frames.append(stock_frame)
+        for table_name, symbols in (
+            (f"{self._etf_schema}.daily_cn_ochl", self._etf_symbols),
+            (f"{self._index_schema}.daily_cn_ochl", self._index_symbols),
+        ):
+            sidecar_frame = self._fetch_sidecar_frame(table_name, symbols, start_day, end_day)
+            if sidecar_frame is not None and not sidecar_frame.empty:
+                frames.append(sidecar_frame)
+        if not frames:
+            return pd.DataFrame()
+        return self._add_financial_indicators(pd.concat(frames, ignore_index=True))
+
+    def _fetch_stock_frame(self, start_day, end_day):
+        if not self._stock_symbols:
+            return None
+        placeholders = ", ".join("?" for _ in self._stock_symbols)
+        symbol_params = list(self._stock_symbols)
         if self._storage._status_available():
             include_basic = self._include_daily_basic and self._storage._daily_basic_available()
             sidecar_select = ""
@@ -990,8 +1059,8 @@ class _DuckDBDailyDateProvider:
                 """,
                 [start_day, end_day, *symbol_params],
             ).fetchdf()
-            return self._add_financial_indicators(self._storage._normalize_status_enriched_bars(frame))
-        elif self._include_daily_basic and self._storage._daily_basic_available():
+            return self._storage._normalize_status_enriched_bars(frame)
+        if self._include_daily_basic and self._storage._daily_basic_available():
             frame = self._storage.conn.execute(
                 f"""
                 SELECT
@@ -1019,19 +1088,38 @@ class _DuckDBDailyDateProvider:
                 """,
                 [start_day, end_day, *symbol_params],
             ).fetchdf()
-            return self._add_financial_indicators(frame)
-        else:
-            bar_select = ", ".join(f"b.{column}" for column in self._bar_columns)
-            frame = self._storage.conn.execute(
-                f"""
-                SELECT b.timestamp, b.symbol, {bar_select}
-                FROM daily_cn_ochl b
-                WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
-                  AND b.symbol IN ({placeholders})
-                """,
-                [start_day, end_day, *symbol_params],
-            ).fetchdf()
-            return self._add_financial_indicators(frame)
+            return frame
+        bar_select = ", ".join(f"b.{column}" for column in self._bar_columns)
+        return self._storage.conn.execute(
+            f"""
+            SELECT b.timestamp, b.symbol, {bar_select}
+            FROM daily_cn_ochl b
+            WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
+              AND b.symbol IN ({placeholders})
+            """,
+            [start_day, end_day, *symbol_params],
+        ).fetchdf()
+
+    def _fetch_sidecar_frame(self, table_name, symbols, start_day, end_day):
+        if not symbols or not self._storage._table_exists(table_name):
+            return None
+        placeholders = ", ".join("?" for _ in symbols)
+        select_cols = ", ".join(f"b.{column}" for column in self._storage._read_bar_columns(table_name))
+        frame = self._storage.conn.execute(
+            f"""
+            SELECT {select_cols}
+            FROM {table_name} b
+            WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
+              AND b.symbol IN ({placeholders})
+            ORDER BY b.symbol ASC, b.timestamp ASC
+            """,
+            [start_day, end_day, *symbols],
+        ).fetchdf()
+        if frame is not None and not frame.empty:
+            frame["tradable"] = True
+            frame["has_daily_bar"] = True
+            frame["_suspended"] = False
+        return frame
 
     def _financial_indicator_available(self):
         if not self._include_financial_indicators:
@@ -1587,9 +1675,11 @@ def _enrich_execution_observations_with_adv20(observations, start, end, symbols=
 
 
 def _trade_distribution(trades):
+    from quant.features.backtest.analytics import calculate_round_trip_pnls, calculate_round_trip_returns
+
     sell_trades = [trade for trade in trades or [] if str(getattr(trade, "side", "") or "").upper() == "SELL"]
-    pnls = [_safe_trade_number(getattr(trade, "pnl", 0.0)) for trade in sell_trades]
-    returns = [_safe_trade_number(getattr(trade, "return_pct", 0.0)) / 100.0 for trade in sell_trades]
+    pnls = [_safe_trade_number(value) for value in calculate_round_trip_pnls(trades or [])]
+    returns = [_safe_trade_number(value) for value in calculate_round_trip_returns(trades or [])]
     durations = [_safe_trade_number(getattr(trade, "duration_days", 0.0)) for trade in sell_trades]
     wins = [value for value in pnls if value > 0]
     losses = [value for value in pnls if value < 0]

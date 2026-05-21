@@ -1,0 +1,44 @@
+strategy:
+  name: joinquant_qixing_daily_etf_rotation
+  enabled: false
+  priority: 1
+  status: candidate
+
+parameters:
+  symbols:
+    - 510300
+    - 510500
+    - 512100
+    - 159915
+    - 159949
+    - 510050
+    - 510880
+    - 512880
+    - 512000
+    - 512480
+    - 512690
+    - 512800
+    - 512660
+    - 518880
+    - 513100
+    - 513050
+    - 513030
+    - 159920
+    - 511880
+  cash_symbol: 511880
+  score_window: 24
+  liquidity_window: 20
+  volume_window: 20
+  min_active_candidates: 5
+  min_score: 0.0
+  min_avg_turnover: 20000000.0
+  max_volume_multiple: 2.5
+  recent_drawdown_window: 3
+  recent_drawdown_stop: 0.05
+  fixed_stop_loss: 0.08
+  target_exposure: 0.98
+  lot_size: 100
+  holding_days: 1
+  exclude_symbols:
+    - 511010
+    - 511990

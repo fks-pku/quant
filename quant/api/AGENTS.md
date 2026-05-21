@@ -43,6 +43,7 @@ Blueprints:
 - Blueprint functions must not raise — return error dicts with appropriate HTTP status codes
 - Do not cache DuckDB connections across requests
 - Large-universe strict backtests may reuse `_DuckDBDailyDateProvider` chunk caches under `quant/infrastructure/var/research/cache/daily_date_provider/`; keys include source DuckDB file size/mtime, so data rebuilds naturally invalidate the cache
+- `_DuckDBDailyDateProvider` must split stock, ETF, and index symbols before loading bars: stocks use status-enriched `daily_cn_ochl`, ETFs use `cn_etf.daily_cn_ochl`, and indexes use `cn_index.daily_cn_ochl`.
 
 ## Research Report Endpoints
 

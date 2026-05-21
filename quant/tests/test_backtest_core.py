@@ -1102,6 +1102,123 @@ class TestDailyLossRiskCheck:
 class TestCriticalRegression:
     """Regression tests for bugs found in audit: C2, C3, on_stop, dedup."""
 
+    def test_get_bars_fallback_uses_only_current_day(self):
+        class InclusiveRangeProvider:
+            def __init__(self):
+                self.rows = pd.DataFrame([
+                    {"symbol": "AAPL", "timestamp": datetime(2024, 6, 3), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000},
+                    {"symbol": "AAPL", "timestamp": datetime(2024, 6, 4), "open": 99.0, "high": 99.0, "low": 99.0, "close": 99.0, "volume": 1000},
+                ])
+
+            def get_bars(self, symbol, start, end, timeframe="1d"):
+                timestamps = pd.to_datetime(self.rows["timestamp"])
+                mask = (
+                    (self.rows["symbol"] == symbol)
+                    & (timestamps >= pd.Timestamp(start))
+                    & (timestamps <= pd.Timestamp(end))
+                )
+                return self.rows.loc[mask].copy()
+
+        class Recorder:
+            name = "Recorder"
+            context = None
+            _positions = {}
+
+            def __init__(self):
+                self.closes = []
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                self.closes.append(float(data["close"]))
+
+            def on_after_trading(self, ctx, td):
+                pass
+
+            def on_fill(self, ctx, fill):
+                pass
+
+            def on_stop(self, ctx):
+                pass
+
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999},
+        }
+        strategy = Recorder()
+        bt = make_backtester(config)
+
+        bt.run(
+            start=datetime(2024, 6, 3),
+            end=datetime(2024, 6, 3),
+            strategies=[strategy],
+            initial_cash=100000,
+            data_provider=InclusiveRangeProvider(),
+            symbols=["AAPL"],
+        )
+
+        assert strategy.closes == [10.0]
+
+    def test_missing_today_bar_rejects_signal_for_stale_symbol(self):
+        data = pd.DataFrame([
+            {"symbol": "AAPL", "timestamp": datetime(2024, 6, 3), "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000},
+            {"symbol": "MSFT", "timestamp": datetime(2024, 6, 3), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000},
+            {"symbol": "AAPL", "timestamp": datetime(2024, 6, 4), "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000},
+            {"symbol": "AAPL", "timestamp": datetime(2024, 6, 5), "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000},
+            {"symbol": "MSFT", "timestamp": datetime(2024, 6, 5), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000},
+        ])
+
+        class StaleSignal:
+            name = "StaleSignal"
+            context = None
+            _positions = {}
+
+            def __init__(self):
+                self.day = -1
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                self.day += 1
+                if self.day == 1:
+                    ctx.order_manager.submit_order("MSFT", 10, "BUY", "MARKET", 10.0, self.name)
+
+            def on_fill(self, ctx, fill):
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + fill.quantity
+
+            def on_stop(self, ctx):
+                pass
+
+        config = {
+            "backtest": {"slippage_bps": 0},
+            "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+            "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999},
+        }
+        bt = make_backtester(config)
+        result = bt.run(
+            start=data["timestamp"].min(),
+            end=data["timestamp"].max(),
+            strategies=[StaleSignal()],
+            initial_cash=100000,
+            data_provider=DataFrameProvider(data),
+            symbols=["AAPL", "MSFT"],
+        )
+
+        assert result.trades == []
+        assert result.diagnostics.submission_rejected == 1
+
     def test_bug_c3_no_trading_dates_skips_non_trading_days(self):
         """Engine skips days with no bar data when trading_dates is unavailable."""
         from quant.tests.conftest import MockDataProvider

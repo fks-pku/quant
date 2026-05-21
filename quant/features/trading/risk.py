@@ -28,6 +28,10 @@ class RiskEngine(RiskEngineLike):
         self.max_daily_loss_pct = self.risk_config.get("max_daily_loss_pct", 0.02)
         self.max_leverage = self.risk_config.get("max_leverage", 1.5)
         self.max_orders_per_minute = self.risk_config.get("max_orders_minute", 30)
+        self.max_backtest_orders_per_day = self.risk_config.get(
+            "max_orders_per_day",
+            self.max_orders_per_minute if "max_orders_minute" in self.risk_config else None,
+        )
 
         self._order_timestamps: List[datetime] = []
         self._pending_order_values: Dict[str, float] = {}
@@ -188,17 +192,26 @@ class RiskEngine(RiskEngineLike):
         )
 
     def _check_order_rate(self, as_of_date: Optional[date] = None) -> RiskCheckResult:
-        """Check max orders per minute (30). Uses daily counter in backtest mode."""
+        """Check live per-minute limits and optional backtest daily limits."""
         if as_of_date is not None:
+            if self.max_backtest_orders_per_day is None:
+                return RiskCheckResult(
+                    passed=True,
+                    is_hard_limit=False,
+                    check_name="max_order_rate",
+                    message="Backtest order rate limit disabled",
+                    current_value=self._daily_order_count,
+                    limit_value=0.0,
+                )
             order_count = self._daily_order_count
-            passed = order_count < self.max_orders_per_minute
+            passed = order_count < self.max_backtest_orders_per_day
             return RiskCheckResult(
                 passed=passed,
                 is_hard_limit=False,
                 check_name="max_order_rate",
-                message=f"Order rate {order_count}/day exceeds limit {self.max_orders_per_minute}/day",
+                message=f"Order rate {order_count}/day exceeds limit {self.max_backtest_orders_per_day}/day",
                 current_value=order_count,
-                limit_value=self.max_orders_per_minute,
+                limit_value=self.max_backtest_orders_per_day,
             )
 
         now = datetime.now()

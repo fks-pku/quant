@@ -537,6 +537,8 @@ def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Di
         return [
             '<section class="panel">',
             "<h2>2. 严格回测证据</h2>",
+            "<h3>策略执行逻辑</h3>",
+            _strategy_execution_logic_contract(data, rows),
             "<h3>回测 Equity Curve</h3>",
             _equity_curve_chart(data, rows),
             "<h3>年度收益日历图</h3>",
@@ -1056,6 +1058,131 @@ def _selected_count_text(layer: Dict[str, Any]) -> str:
     if mean is None:
         return "-"
     return f"{_fmt(mean)} ({_cell(min_count)}-{_cell(max_count)})"
+
+
+def _strategy_execution_logic_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "<p>本次没有可展示的策略执行逻辑。</p>"
+    return "\n".join(
+        [
+            '<div class="execution-logic">',
+            "<h4>每日运行步骤</h4>",
+            _daily_execution_steps_table(data, rows),
+            "<h4>信号解释</h4>",
+            _strict_signal_explanation_table(data, rows),
+            "<h4>执行约束摘要</h4>",
+            _strict_execution_constraint_table(data, rows),
+            "</div>",
+        ]
+    )
+
+
+def _daily_execution_steps_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    constraints = strict.get("constraints") or {}
+    t_plus_1 = "T+1 延迟成交" if constraints.get("t_plus_1", True) else "按回测配置执行"
+    steps = [
+        ("1", "开盘前调用策略 on_before_trading（若策略实现），只允许做状态检查或预计算。", "不能使用当日收盘后才知道的信息。"),
+        ("2", "Backtester 加载当日 OHLCV，并先执行上一交易日收盘后生成的 deferred orders。", f"成交使用当日开盘价，执行路径包含 {t_plus_1}、涨跌停、停牌、手数、现金和成交量限制。"),
+        ("3", "将当日 bar 批量喂给策略 on_data_batch；无批量 hook 时回落到逐条 on_data。", "策略只把当日及历史数据写入内部缓存，不在此处使用未来价格。"),
+        ("4", "按当日收盘价更新持仓市值、组合 NAV、现金和风险快照。", "这里完成估值，不提前成交新信号。"),
+        ("5", "收盘后调用 on_after_trading，策略根据截至当日收盘的数据计算信号、目标标的和目标仓位。", "这是信号日 t；所有新订单进入 deferred order 队列。"),
+        ("6", "下一个交易日开盘执行 t 日订单，并记录成交、拒单、佣金、滑点、换手和容量诊断。", "这是成交日 t+1；报告里的交易成本和执行约束来自真实 Backtester 流水。"),
+        ("7", "日终记录 equity curve、年度收益日历、回撤、持仓暴露和成交诊断。", "这些结构化结果驱动本页所有严格回测指标。"),
+    ]
+    body = [
+        "<tr>"
+        + f"<td>{escape(number)}</td>"
+        + f"<td>{escape(action)}</td>"
+        + f"<td>{escape(boundary)}</td>"
+        + "</tr>"
+        for number, action, boundary in steps
+    ]
+    return _table(["步骤", "每日动作", "信息边界 / 执行约束"], body)
+
+
+def _strict_signal_explanation_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    formula = str(spec.get("signal_formula_key") or "")
+    lookback = spec.get("lookback_days") or "StrategySpec"
+    horizon = spec.get("horizon_days") or "StrategySpec"
+    lag = spec.get("execution_lag_days") or 1
+    fields = _join_text(spec.get("required_fields") or [])
+    fallback = spec.get("fallback_symbol") or spec.get("cash_symbol") or "未设置"
+    rows_data = [
+        ("信号公式", formula or "StrategySpec declared signal", "报告中的信号解释必须能追溯到 StrategySpec 或策略实现。"),
+        ("信号含义", _strict_signal_plaintext(row), "把公式翻译成交易含义，避免只展示代码名。"),
+        ("构造步骤", _signal_construction_steps(row), "说明从输入字段到排序/目标持仓的完整路径。"),
+        ("预测方向", _prediction_direction(row), "解释信号值越高或越低时代表的预期收益方向。"),
+        ("时间结构", f"lookback={lookback}; horizon={horizon}; execution_lag={lag}", "信号日与成交日分离，避免 look-ahead。"),
+        ("字段依赖", fields or "StrategySpec 未列出", "缺少字段时不能静默通过研究结论。"),
+        ("防御/空仓腿", str(fallback), "候选不足、风险触发或信号不达标时使用的退路。"),
+    ]
+    body = [
+        "<tr>"
+        + f"<td>{escape(label)}</td>"
+        + f"<td>{escape(_cell(value))}</td>"
+        + f"<td>{escape(note)}</td>"
+        + "</tr>"
+        for label, value, note in rows_data
+    ]
+    return _table(["项目", "内容", "说明"], body)
+
+
+def _strict_signal_plaintext(row: Dict[str, Any]) -> str:
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    formula = str(spec.get("signal_formula_key") or "").lower()
+    strategy_type = str(spec.get("strategy_type") or "").lower()
+    fallback = str(spec.get("fallback_symbol") or spec.get("cash_symbol") or "防御资产")
+    if "qixing" in formula:
+        return (
+            "七星高照日线版信号为 24日加权对数回归年化收益 × R²：年化斜率收益衡量趋势强度，"
+            "R²衡量趋势拟合质量；分数越高，代表该 ETF/LOF 的趋势越强且越稳定。"
+            f"通过成交量/流动性过滤和止损检查后，只持有最高正分标的；候选不足或触发风险时切换到 {fallback}。"
+        )
+    if "wufu" in formula or strategy_type == "etf_momentum_rotation":
+        return (
+            "ETF/LOF 动量轮动信号使用近期后复权价格趋势强度和趋势拟合质量排序；"
+            f"分数为正且通过流动性/风险过滤时持有最强标的，否则切换到 {fallback}。"
+        )
+    if formula == "joinquant_small_cap_low_price_factor":
+        return "低价小市值信号先限定可交易、非 ST、未停牌且价格处于低价区间的股票，再优先选择市值更小的标的。"
+    if formula == "joinquant_small_cap_size_factor":
+        return "小市值信号将市值作为核心截面排序变量，市值越小信号越高，用于捕捉小盘风格暴露。"
+    if formula.startswith("worldquant_alpha_"):
+        return "WorldQuant 因子按公开公式构造截面信号，并在 A 股 long-only 约束下只选择高分端。"
+    if "momentum" in formula:
+        return "动量信号认为近期强势标的存在趋势延续，信号值越高越优先进入目标组合。"
+    if "reversal" in formula or "mean" in formula:
+        return "反转信号认为偏离近期均值或过度下跌的标的存在均值回归机会，按反转强度排序。"
+    return f"策略使用 {formula or 'StrategySpec declared signal'} 生成截面信号，并按报告声明方向选择目标组合。"
+
+
+def _strict_execution_constraint_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    constraints = strict.get("constraints") or {}
+    values = [
+        ("成交延迟", "T+1" if constraints.get("t_plus_1", True) else "按配置", "信号在 t 日收盘后生成，t+1 开盘尝试成交。"),
+        ("手数约束", f"CN lot size={constraints.get('cn_lot_size', 100)}", "A 股/ETF 买入按整手约束；卖出按引擎可卖数量处理。"),
+        ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "市场单成交价按方向加入固定滑点；若有冲击模型则继续调整。"),
+        ("佣金", _join_text(constraints.get("commission") or {}), "股票与 ETF/LOF 费率按品种路由。"),
+        ("成交量/涨跌停/停牌", str(constraints.get("volume_limit") or "由 Backtester execution diagnostics 记录"), "无法成交或超约束的订单会进入诊断而不是强制成交。"),
+    ]
+    model = constraints.get("execution_cost_model")
+    if model:
+        values.append(("冲击成本模型", _execution_cost_model_text(model), "小市值或容量敏感策略使用更严格的成交冲击假设。"))
+    body = [
+        "<tr>"
+        + f"<td>{escape(label)}</td>"
+        + f"<td>{escape(_cell(value))}</td>"
+        + f"<td>{escape(note)}</td>"
+        + "</tr>"
+        for label, value, note in values
+    ]
+    return _table(["约束", "当前口径", "说明"], body)
 
 
 def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:

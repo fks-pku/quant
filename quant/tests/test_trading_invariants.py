@@ -209,6 +209,34 @@ class TestCase5RiskPositionLimit:
         re.reset_daily()
         assert re._pending_order_values.get("AAPL", 0) == 0
 
+    def test_t5_05_default_backtest_order_rate_does_not_reject_large_rebalance(self):
+        pf = Portfolio(initial_cash=1_000_000)
+        config = {"risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999}}
+        re = RiskEngine(config, pf, None)
+
+        approvals = []
+        for idx in range(35):
+            symbol = f"T{idx:03d}"
+            approved, _ = re.check_order(symbol, 1, 1.0, 1.0, side="BUY", as_of_date=D1)
+            approvals.append(approved)
+            if approved:
+                re.record_order(symbol, 1.0, as_of_date=D1)
+
+        assert all(approvals)
+
+    def test_t5_06_explicit_backtest_order_rate_limit_is_preserved(self):
+        pf = Portfolio(initial_cash=100_000)
+        config = {"risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 2}}
+        re = RiskEngine(config, pf, None)
+
+        for idx in range(2):
+            approved, _ = re.check_order(f"T{idx}", 1, 1.0, 1.0, side="BUY", as_of_date=D1)
+            assert approved is True
+            re.record_order(f"T{idx}", 1.0, as_of_date=D1)
+        approved, _ = re.check_order("T2", 1, 1.0, 1.0, side="BUY", as_of_date=D1)
+
+        assert approved is False
+
 
 # ---------------------------------------------------------------------------
 # CASE-6: RiskEngine daily loss

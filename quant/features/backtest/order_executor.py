@@ -381,11 +381,6 @@ def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -
     if market == "CN":
         if int(quantity) < 1:
             return None, False
-        if quantity >= lot_size:
-            lot_qty = (int(quantity) // lot_size) * lot_size
-            if lot_qty != int(quantity):
-                return float(lot_qty), True
-            return float(lot_qty), False
         return float(quantity), False
     return float(quantity), False
 

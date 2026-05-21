@@ -59,6 +59,74 @@ def test_report_id_ignores_none_run_id():
     assert report_id_for_result(data, []) == "research_pipeline"
 
 
+def test_strict_report_includes_strategy_execution_logic_and_signal_explanation():
+    result = {
+        "run_id": "qixing_execution_logic",
+        "backtested": 1,
+        "log": [],
+    }
+    rows = [
+        {
+            "title": "JoinQuant Qixing daily ETF/LOF momentum",
+            "source": "joinquant",
+            "source_url": "https://www.joinquant.com/community/post/detailMobile?postId=67252",
+            "status": "rejected",
+            "stage": "backtest",
+            "decision_reason": "fixture",
+            "thesis": "ETF/LOF daily momentum rotation.",
+            "evidence": {
+                "strategy_spec": {
+                    "strategy_id": "joinquant_qixing_daily_etf_rotation",
+                    "strategy_type": "etf_momentum_rotation",
+                    "signal_formula_key": "joinquant_qixing_daily_etf_rotation",
+                    "prediction_direction": "higher_is_better",
+                    "universe": ["510300", "159915", "511880"],
+                    "lookback_days": 24,
+                    "horizon_days": 1,
+                    "execution_lag_days": 1,
+                    "rebalance_frequency": "daily",
+                    "required_fields": ["adj_close", "volume", "turnover"],
+                    "fallback_symbol": "511880",
+                }
+            },
+            "metrics": {
+                "strict_backtest": {
+                    "period": "2012-01-01 to 2025-12-31",
+                    "metrics": {
+                        "sharpe": 0.04,
+                        "sortino": 0.06,
+                        "cagr": -0.03,
+                        "total_return": -0.39,
+                        "max_drawdown_pct": -0.77,
+                        "calmar_ratio": -0.04,
+                        "win_rate": 0.38,
+                        "profit_factor": 0.95,
+                        "total_trades": 100,
+                    },
+                    "benchmark": {"symbol": "000300"},
+                    "diagnostics": {"total_commission": 1000, "cost_drag_pct": 0.1},
+                    "constraints": {
+                        "t_plus_1": True,
+                        "cn_lot_size": 100,
+                        "slippage_bps": 5,
+                        "commission": {"CN": {"type": "cn_realistic", "fund_percent": 0.0001}},
+                    },
+                }
+            },
+        }
+    ]
+
+    html = build_research_stage_report_html("strict_backtest", result, rows)
+
+    assert "策略执行逻辑" in html
+    assert "每日运行步骤" in html
+    assert "信号解释" in html
+    assert "on_after_trading" in html
+    assert "T+1" in html
+    assert "24日加权对数回归年化收益 × R²" in html
+    assert "511880" in html
+
+
 def test_generated_stage_reports_match_contract():
     fixture = (
         {

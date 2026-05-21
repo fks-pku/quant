@@ -1667,6 +1667,60 @@ class TestCase20CNOddLotSell:
     def test_c20_04_all_positions_closed(self, case20_result):
         assert len(case20_result.open_positions) == 0
 
+    def test_c20_05_mixed_round_and_odd_lot_sell_keeps_full_quantity(self):
+        data = _make_bars("600519", CASE20_BARS)
+        dividends = pd.DataFrame({
+            "symbol": ["600519"],
+            "ex_date": [datetime(2024, 6, 5)],
+            "cash_dividend": [0.0],
+            "stock_dividend": [0.5],
+        })
+        bt = make_backtester(CASE20_CONFIG)
+        provider = DataFrameProvider(data, dividends=dividends)
+
+        class SellMixedOddLot:
+            name = "SellMixedOddLot"
+            context = None
+            _positions = {}
+            _day = -1
+
+            def on_start(self, ctx):
+                self.context = ctx
+
+            def on_before_trading(self, ctx, td):
+                pass
+
+            def on_data(self, ctx, data):
+                pass
+
+            def on_after_trading(self, ctx, td):
+                self._day += 1
+                if self._day == 0:
+                    ctx.order_manager.submit_order("600519", 100, "BUY", "MARKET", None, self.name)
+                elif self._day == 3:
+                    ctx.order_manager.submit_order("600519", 150, "SELL", "MARKET", None, self.name)
+
+            def on_fill(self, ctx, fill):
+                q = fill.quantity if fill.side == "BUY" else -fill.quantity
+                self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + q
+
+            def get_position(self, symbol):
+                return self._positions.get(symbol, 0)
+
+            def on_stop(self, ctx):
+                pass
+
+        result = bt.run(
+            start=data["timestamp"].min(), end=data["timestamp"].max(),
+            strategies=[SellMixedOddLot()], initial_cash=100_000,
+            data_provider=provider, symbols=["600519"],
+        )
+        sells = [trade for trade in result.trades if trade.side == "SELL"]
+
+        assert len(sells) == 1
+        assert sells[0].quantity == pytest.approx(150, rel=1e-4)
+        assert len(result.open_positions) == 0
+
 
 # ============================================================================
 # CASE-21: HK odd-lot sell rejection (碎股卖出拒绝)

@@ -133,6 +133,8 @@ while current_date ≤ end:
 - 最后一个交易日 after-close 产生的 deferred order 没有真实下一交易日，应过期计入 diagnostics，不得用 synthetic bar 成交
 - `on_stop` 订单不是普通 T+1 deferred order；默认 `backtest.force_close_on_stop=True` 时按最后有效 close 做强制清算，并写入 `forced_closeout_orders/forced_closeout_trades`，设为 `False` 时订单过期丢弃
 - `DataFrameProvider.get_bars()` 基于 `_bar_map` 去重索引返回数据，与 `get_bar_for_date()` 一致
+- Generic `data_provider.get_bars()` fallback must request and retain only `current_date`; never use `current_date + 1 day`, because inclusive DuckDB ranges would leak tomorrow's daily bar.
+- Daily order submission rejects symbols missing from `today_bars`; `on_stop` close-out passes `tradable_today=None` to bypass this daily-bar gate explicitly.
 - `process_dividends()` 记录 `total_cash_dividends/total_dividend_tax/total_net_dividends`，并返回送股记录列表；engine 在 Step ③ 后分发 synthetic fill 给策略以保持 `strategy._positions` 同步
 - SubPortfolio 模式下送股 synthetic fill 必须只分发给对应策略，不能广播给所有持有同一 symbol 的策略
 - 交易级统计的 round-trip PnL 必须包含按 FIFO 分摊的 BUY 佣金；SELL trade 的 `pnl` 只覆盖卖出侧佣金
@@ -145,5 +147,6 @@ while current_date ≤ end:
 - `execute_order()` 在任何 cash/position mutation 前必须拒绝非有限或非正成交价，使用 `PRICE_INVALID`
 - `on_stop` forced close-out 是显式清仓语义；默认可绕过 CN T+1，且 final NAV 更新最后真实交易日，不追加 `end+1`
 - CN SELL 的 volume cap 不做整手归零；碎股/部分成交数量应可通过，CN BUY 与 HK 仍按 lot size 约束
+- CN SELL lot handling allows a mixed round-lot plus odd-lot quantity such as 150 shares to sell in one order; only CN BUY and HK orders enforce lot-size rounding.
 - benchmark 显著性是单尾跑赢检验；负 excess-return `t_stat` 不能标记为显著跑赢
 - IPO 日期元数据可能是 `date` 或 `datetime`，涨跌停豁免判断前必须归一化

@@ -175,6 +175,93 @@ class TestDuckDBStorage:
 
         assert set(bars["symbol"]) == {"600519", "510300", "000300"}
 
+    def test_research_daily_provider_reads_index_sidecar_when_status_exists(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        from quant.api.research_bp import _DuckDBDailyDateProvider
+
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        etf_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        index_db = tmp_path / "cn_index_ohlcv.duckdb"
+        status_db = tmp_path / "cn_status.duckdb"
+        start = datetime(2024, 1, 2)
+
+        storage = DuckDBStorage(str(stock_db), etf_db_path=str(etf_db), index_db_path=str(index_db))
+        try:
+            storage.save_bars(pd.DataFrame([{
+                "timestamp": start,
+                "symbol": "600519",
+                "open": 10.0,
+                "high": 10.0,
+                "low": 10.0,
+                "close": 10.0,
+                "volume": 1000,
+            }]), "1d")
+            storage.save_bars(pd.DataFrame([{
+                "timestamp": start,
+                "symbol": "000300",
+                "open": 3300.0,
+                "high": 3310.0,
+                "low": 3290.0,
+                "close": 3305.0,
+                "volume": 123456,
+            }]), "1d")
+        finally:
+            storage.close()
+
+        conn = duckdb.connect(str(status_db))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE cn_security_status_daily (
+                    trade_date DATE,
+                    symbol VARCHAR,
+                    is_st BOOLEAN,
+                    st_type VARCHAR,
+                    is_suspended BOOLEAN,
+                    has_daily_bar BOOLEAN,
+                    tradable BOOLEAN,
+                    up_limit DOUBLE,
+                    down_limit DOUBLE,
+                    pre_close DOUBLE,
+                    is_listed BOOLEAN,
+                    list_status VARCHAR,
+                    suspend_type VARCHAR,
+                    suspend_timing VARCHAR
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO cn_security_status_daily VALUES
+                ('2024-01-02', '000300', false, '', false, false, true, NULL, NULL, 3200.0, true, 'L', '', '')
+                """
+            )
+        finally:
+            conn.close()
+
+        provider = _DuckDBDailyDateProvider(
+            ["000300"],
+            start,
+            start,
+            db_path=str(stock_db),
+            status_db_path=str(status_db),
+            etf_db_path=str(etf_db),
+            index_db_path=str(index_db),
+            include_daily_basic=False,
+            cache_enabled=False,
+        )
+        try:
+            rows = provider.get_bars_for_date(start)
+        finally:
+            provider.close()
+
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "000300"
+        assert rows[0]["high"] == pytest.approx(3310.0)
+        assert rows[0]["low"] == pytest.approx(3290.0)
+        assert rows[0]["close"] == pytest.approx(3305.0)
+        assert rows[0]["volume"] == 123456
+
     def test_cn_lof_bars_route_to_fund_sidecar(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")
         stock_db = tmp_path / "cn_ohlcv.duckdb"

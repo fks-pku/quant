@@ -20,7 +20,8 @@ __all__ = ["calculate_sharpe", "calculate_sortino", "calculate_max_drawdown",
            "calculate_avg_trade_duration", "calculate_ulcer_index",
            "calculate_gain_to_pain_ratio", "calculate_tail_ratio",
            "calculate_recovery_factor", "calculate_payoff_ratio",
-           "calculate_expectancy", "MAX_PROFIT_FACTOR"]
+           "calculate_expectancy", "calculate_round_trip_pnls",
+           "calculate_round_trip_returns", "MAX_PROFIT_FACTOR"]
 
 
 def calculate_sharpe(returns: pd.Series, periods_per_year: int = 252) -> float:
@@ -74,9 +75,13 @@ def calculate_max_drawdown(equity_curve: pd.Series) -> Tuple[float, float, datet
 
 def calculate_calmar(returns: pd.Series, max_dd: float, periods_per_year: int = 252) -> float:
     """Calmar ratio (annualized return / max drawdown)."""
-    if max_dd == 0:
+    if returns.empty or max_dd == 0:
         return 0.0
-    annualized_return = returns.mean() * periods_per_year
+    compounded = float((1 + returns).prod())
+    if compounded <= 0:
+        annualized_return = -1.0
+    else:
+        annualized_return = compounded ** (periods_per_year / len(returns)) - 1
     return annualized_return / abs(max_dd)
 
 
@@ -124,6 +129,58 @@ def _round_trip_pnls(trades: List[Trade]) -> List[float]:
         pnls.append(float(trade.pnl) - entry_commission)
 
     return pnls
+
+
+def calculate_round_trip_pnls(trades: List[Trade]) -> List[float]:
+    return _round_trip_pnls(trades)
+
+
+def calculate_round_trip_returns(trades: List[Trade]) -> List[float]:
+    entry_lots: Dict[Tuple[Optional[str], str], List[List[float]]] = {}
+    returns: List[float] = []
+
+    ordered = sorted(
+        trades,
+        key=lambda t: (
+            t.fill_date or t.exit_time or t.entry_time,
+            0 if t.side == "BUY" else 1,
+        ),
+    )
+    for trade in ordered:
+        key = (trade.strategy_name, trade.symbol)
+        if trade.side == "BUY":
+            if trade.quantity > 0:
+                commission_per_share = float(trade.commission) / float(trade.quantity) if trade.quantity else 0.0
+                entry_lots.setdefault(key, []).append([
+                    float(trade.quantity),
+                    float(trade.entry_price),
+                    commission_per_share,
+                ])
+            continue
+        if trade.side != "SELL":
+            continue
+
+        remaining = float(trade.quantity)
+        entry_commission = 0.0
+        cost_basis = 0.0
+        lots = entry_lots.get(key, [])
+        while remaining > 1e-12 and lots:
+            lot_qty, entry_price, commission_per_share = lots[0]
+            take = min(lot_qty, remaining)
+            entry_commission += take * commission_per_share
+            cost_basis += take * entry_price + take * commission_per_share
+            lot_qty -= take
+            remaining -= take
+            if lot_qty <= 1e-12:
+                lots.pop(0)
+            else:
+                lots[0][0] = lot_qty
+        if remaining > 1e-12:
+            cost_basis += remaining * float(trade.entry_price)
+        if cost_basis > 0:
+            returns.append((float(trade.pnl) - entry_commission) / cost_basis)
+
+    return returns
 
 
 def calculate_win_rate(trades: List[Trade]) -> float:
