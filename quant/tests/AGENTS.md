@@ -19,6 +19,7 @@ quant/tests/
 ├── test_domain_invariants.py  # Domain 不变量 CASE 套件
 ├── test_trading_invariants.py # Trading 不变量 CASE 套件
 ├── test_strategies_invariants.py # Strategy 不变量 CASE 套件
+├── test_invariant_docs_contract.py # 不变量 CASE 文档同步契约
 ├── test_research_*.py         # Research pipeline/rigor/report contract 测试
 ├── test_*ingest*.py           # 数据导入/sidecar 测试
 ├── test_backtest_fuzz.py      # Hypothesis fuzz 测试
@@ -128,7 +129,8 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 - 新增市场集成测试 → 对应 `test_<market>_market.py`
 - 新增通用引擎功能 → `test_backtest_core.py`
 - 新增回测不变量/跨模块执行语义 → `test_backtest_invariants.py`，并同步 `quant/features/backtest/docs/backtest-invariants.md`
-- 新增策略状态机/策略框架不变量 → `test_strategies_invariants.py`；单个策略的回归测试仍放在对应 `test_<strategy>.py`
+- 新增策略状态机/策略框架不变量 → `test_strategies_invariants.py`，并同步 `quant/features/strategies/docs/strategy-invariants.md`；单个策略的回归测试仍放在对应 `test_<strategy>.py`
+- 修改不变量 CASE 编号或新增不变量文档 → `test_invariant_docs_contract.py` 必须保持通过
 - 新增分析指标 → `test_analytics.py`
 - 新增回归测试 → 对应功能测试文件（如 `test_backtest_core.py`、`test_analytics.py`）
 - 共享数据生成逻辑 → `conftest.py`

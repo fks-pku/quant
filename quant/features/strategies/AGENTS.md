@@ -18,6 +18,7 @@
 
 ## 不变量
 
+- 策略层不变量详见 `quant/features/strategies/docs/strategy-invariants.md`；成交、现金、费用、T+1、NAV 等执行语义属于 `quant/features/backtest/docs/backtest-invariants.md`
 - 所有策略必须使用 `@strategy` 装饰器注册
 - 策略 ID 唯一，不区分大小写
 - 策略目录结构: `strategies/<name>/strategy.py`
@@ -34,7 +35,7 @@
 - 改策略框架：只动 `base.py`, `registry.py`
 - 新增策略：在 `strategies/` 下新建目录，包含 `strategy.py`、`config.yaml`、`README.md`
 - 只有当策略有额外本地约束或复杂审计要求时才新增策略目录级 `AGENTS.md`
-- 新增或修复日线策略状态机语义时，必须在 `quant/tests/test_strategies_invariants.py` 增加对应 CASE；单策略测试只能作为补充
+- 新增或修复策略框架/日线策略状态机语义时，必须在 `quant/tests/test_strategies_invariants.py` 增加对应 CASE，并同步 `quant/features/strategies/docs/strategy-invariants.md`；单策略测试只能作为补充
 
 ## Known Pitfalls
 

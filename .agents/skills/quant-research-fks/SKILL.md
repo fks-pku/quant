@@ -1,6 +1,6 @@
 ---
 name: quant-research-fks
-description: 量化策略研究员 — 自动搜索最新日线量化策略、评估经济学原理与适用市场、基于 quant 项目框架实现策略代码、运行回测并生成专业回测报告。Use when "策略研究, strategy research, 日线策略, daily strategy, quant strategy, 策略搜索, 策略回测, strategy discovery" mentioned.
+description: 量化策略研究员 — 自动搜索最新日线量化策略、评估经济学原理与适用市场、基于 quant 项目框架实现策略代码、运行回测并生成专业回测报告。Use when "策略研究, strategy research, 日线策略, daily strategy, quant strategy, 策略搜索, 策略回测, strategy discovery" mentioned. If research exposes framework or strategy-layer bugs, fix them and update invariant tests/docs before rerunning reports.
 ---
 
 # Quant Strategy Researcher
@@ -280,6 +280,18 @@ from quant.shared.utils.logger import get_logger
 | **Context 延迟绑定** | `__init__` 中不访问 Context，Context 在 `on_start` 时才设置 |
 | **buffer 管理** | `_day_data` 必须限制大小，避免内存泄漏 |
 | **策略命名一致** | `@strategy("X")` 与 `super().__init__("X")` 名称必须一致 |
+
+### Bug Fix and Invariant Closure Contract
+
+策略研究、报告 review 或回测异常排查过程中，如果发现 bug，必须先判断它是框架执行语义还是策略层状态机语义，然后完成代码、测试、文档三件事，最后再重新生成报告。
+
+| Bug 类型 | 修复位置 | 必须补的测试 | 必须同步的文档 |
+|----------|----------|--------------|----------------|
+| 回测撮合、拒单、手续费、滑点、涨跌停、T+1、分红送股、NAV、绩效指标 | `quant/features/backtest/` 或相关 analytics/reporting | `quant/tests/test_backtest_invariants.py` 或指标 contract 测试 | `quant/features/backtest/docs/backtest-invariants.md` |
+| 策略注册、生命周期、`_adj`/`_price`、`on_fill`、内部仓位、日线风险退出/调仓 gate | `quant/features/strategies/` 或具体策略 | `quant/tests/test_strategies_invariants.py`；单策略回归只作补充 | `quant/features/strategies/docs/strategy-invariants.md` |
+| 报告模板、指标展示、章节 contract | research/reporting/template | `quant/tests/test_research_report_contract.py` 或报告指标测试 | 对应模板文档与模块 `AGENTS.md` |
+
+不要把通用策略状态机 bug 永久埋在某个 `test_<strategy>.py` 里。只要这个规则对多个日线策略有意义，就把它提升到 `test_strategies_invariants.py` 和 `strategy-invariants.md`。完成 bug 修复后，运行相关不变量测试、`quant/tests/test_invariant_docs_contract.py`，再重新跑受影响策略报告。
 
 ### Commission Reference
 

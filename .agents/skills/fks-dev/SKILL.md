@@ -1,6 +1,6 @@
 ---
 name: fks-dev
-description: 开发量化系统的流程
+description: 开发量化系统的流程。Use this for quant 项目开发、bug 修复、框架或策略层改动；修复 bug 后必须补对应不变量测试和不变量文档。
 ---
 
 
@@ -144,6 +144,20 @@ L2 子模块 AGENTS.md      → 完整契约和实现细节（~800 tokens）
 
 **目标：** 确保实现符合预期，不引入回归。
 
+**Bug 修复的不变量闭环：**
+
+发现并修复框架层或策略层 bug 时，不要只写单点回归测试。先判断 bug 归属层级，再补对应不变量 CASE：
+
+| Bug 类型 | 必须补的测试 | 必须同步的文档 |
+|----------|--------------|----------------|
+| 回测撮合、拒单、费用、滑点、成交价格、T+1、分红送股、NAV/绩效计算 | `quant/tests/test_backtest_invariants.py` | `quant/features/backtest/docs/backtest-invariants.md` |
+| 策略注册、生命周期、信号价格/下单价格、内部仓位镜像、日线调仓 gate、风险退出状态机 | `quant/tests/test_strategies_invariants.py` | `quant/features/strategies/docs/strategy-invariants.md` |
+| 单个策略特有参数、排序、阈值或业务逻辑 | `quant/tests/test_<strategy>.py`，必要时提升为策略层 CASE | 策略 README/研究报告；若规则可泛化，同步 `strategy-invariants.md` |
+
+如果发现的是新的通用框架契约，但当前模块没有专门的不变量文档，先在该模块 `AGENTS.md` 的“不变量”或 “Known Pitfalls” 中记录，并优先创建 `docs/<module>-invariants.md`，避免同类 bug 下次重新出现。
+
+补完 CASE 后运行 `quant/tests/test_invariant_docs_contract.py`，确保测试 CASE 编号和不变量文档标题一一对应。
+
 **执行步骤：**
 
 1. **编写测试**（如果项目有测试框架）
@@ -177,6 +191,10 @@ L2 子模块 AGENTS.md      → 完整契约和实现细节（~800 tokens）
 ### 阶段 5：文档更新（Documentation Update）
 
 **目标：** 保持项目文档与代码的同步，让下一次 Agent 介入时能快速理解变更。
+
+**不变量文档优先级：**
+
+当任务包含 bug 修复、框架语义修正、策略状态机修正或测试 CASE 新增时，优先更新对应不变量文档，再更新 AGENTS.md 索引。最终报告必须明确列出更新了哪些不变量 CASE；如果判断无需新增不变量文档，必须说明原因。
 
 **执行步骤：**
 
