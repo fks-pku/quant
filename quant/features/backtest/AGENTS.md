@@ -137,6 +137,8 @@ while current_date ≤ end:
 - Daily order submission rejects symbols missing from `today_bars`; `on_stop` close-out passes `tradable_today=None` to bypass this daily-bar gate explicitly.
 - `process_dividends()` 记录 `total_cash_dividends/total_dividend_tax/total_net_dividends`，并返回送股记录列表；engine 在 Step ③ 后分发 synthetic fill 给策略以保持 `strategy._positions` 同步
 - SubPortfolio 模式下送股 synthetic fill 必须只分发给对应策略，不能广播给所有持有同一 symbol 的策略
+- 严格回测报告使用的日线 provider 若底层存在 `corp_actions.cn_dividends`，必须暴露 `get_dividend_for_date()`；否则 cash dividend、CN 红利税和送股 synthetic fill 都不会进入回测
+- A 股严格回测若启用冲击成本模型，provider 必须提供模型字段（如 `adv20_value`、`volatility20`），并在报告 constraints 中写清 `execution_cost_model`
 - 交易级统计的 round-trip PnL 必须包含按 FIFO 分摊的 BUY 佣金；SELL trade 的 `pnl` 只覆盖卖出侧佣金
 - `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询
 - Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）

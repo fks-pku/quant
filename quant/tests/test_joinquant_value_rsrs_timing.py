@@ -119,6 +119,48 @@ def test_hard_stop_loss_exits_position(monkeypatch):
     assert strategy.get_guard_diagnostics()["exit_triggers"]["stop_loss"] == 1
 
 
+def test_stop_exit_is_not_submitted_again_during_same_day_rebalance(monkeypatch):
+    strategy = JoinquantValueRsrsTimingStrategy(
+        symbols=["000001", "000002"],
+        holding_days=1,
+        min_turnover=0.0,
+        stop_loss_pct=0.10,
+    )
+    strategy._positions["000001"] = 100
+    strategy._entry_prices["000001"] = 10.0
+    strategy._risk_on = True
+    monkeypatch.setattr(strategy, "_update_rsrs_state", lambda: True)
+    monkeypatch.setattr(strategy, "_check_rebalance_gate", lambda trading_date: True)
+    day = date(2024, 1, 2)
+    base = {
+        "timestamp": day,
+        "open": 10.0,
+        "high": 10.2,
+        "low": 9.8,
+        "turnover": 100000.0,
+        "pe_ttm": 8.0,
+        "pb": 1.0,
+        "ps_ttm": 1.0,
+        "dv_ttm": 1.0,
+        "total_mv": 1000.0,
+        "circ_mv": 1000.0,
+        "is_st": False,
+        "tradable": True,
+        "has_daily_bar": True,
+        "is_listed": True,
+        "list_status": "L",
+    }
+    strategy.on_data(None, {**base, "symbol": "000001", "close": 8.9})
+    strategy.on_data(None, {**base, "symbol": "000002", "close": 10.0, "pb": 0.8})
+    sells = []
+    monkeypatch.setattr(strategy, "sell", lambda symbol, quantity, order_type="MARKET", price=None: sells.append((symbol, quantity, price)))
+    monkeypatch.setattr(strategy, "buy", lambda *args, **kwargs: "order-buy")
+
+    strategy.on_after_trading(_FakeContext(), day)
+
+    assert sells == [("000001", 100, 8.9)]
+
+
 def test_trailing_take_profit_exits_after_peak_drawdown(monkeypatch):
     strategy = JoinquantValueRsrsTimingStrategy(
         symbols=["000001"],
@@ -145,6 +187,68 @@ def test_trailing_take_profit_exits_after_peak_drawdown(monkeypatch):
     assert exited == {"000001"}
     assert sells == [("000001", 100, "MARKET", 11.4)]
     assert strategy.get_guard_diagnostics()["exit_triggers"]["trailing_take_profit"] == 1
+
+
+def test_risk_on_reentry_after_risk_off_rebalances_immediately(monkeypatch):
+    strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"], holding_days=20)
+    strategy._last_rebalance_date = date(2024, 1, 1)
+    strategy._days_since_rebalance = 0
+    strategy._risk_on = False
+    monkeypatch.setattr(strategy, "_update_rsrs_state", lambda: True)
+    called = []
+    monkeypatch.setattr(strategy, "_execute_rebalance", lambda context, trading_date, pending_exit_symbols=None: called.append(trading_date) or True)
+
+    strategy.on_after_trading(_FakeContext(), date(2024, 2, 1))
+
+    assert called == [date(2024, 2, 1)]
+
+
+def test_empty_candidate_rebalance_does_not_refresh_gate(monkeypatch):
+    strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"], holding_days=20)
+    monkeypatch.setattr(strategy, "_update_rsrs_state", lambda: True)
+
+    strategy.on_after_trading(_FakeContext(), date(2024, 1, 2))
+
+    assert strategy._last_rebalance_date is None
+    assert strategy._days_since_rebalance == 0
+
+
+def test_candidate_rejection_does_not_use_position_profit_stops():
+    strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"], stop_loss_pct=0.10)
+    strategy._positions["000001"] = 100
+    strategy._entry_prices["000001"] = 10.0
+
+    reason = strategy._candidate_rejection(
+        "000001",
+        {
+            "symbol": "000001",
+            "close": 8.9,
+            "turnover": 100000.0,
+            "is_st": False,
+            "tradable": True,
+            "has_daily_bar": True,
+            "is_listed": True,
+            "list_status": "L",
+        },
+    )
+
+    assert reason == ""
+
+
+def test_stock_dividend_fill_adjusts_entry_price():
+    strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"])
+    strategy.on_fill(
+        None,
+        SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0),
+    )
+
+    strategy.on_fill(
+        None,
+        SimpleNamespace(symbol="000001", quantity=10, side="BUY", fill_price=0.0, price=0.0),
+    )
+
+    assert strategy._positions["000001"] == 110
+    assert strategy._entry_prices["000001"] == pytest.approx(1000.0 / 110.0)
 
 
 def test_low_price_candidate_is_rejected():

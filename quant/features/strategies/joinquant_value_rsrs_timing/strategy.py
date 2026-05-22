@@ -85,18 +85,27 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         return max(self.rsrs_window + self.rsrs_zscore_window + 5, 90)
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
+        was_risk_on = self._risk_on
         exited = self._exit_risk_positions()
         risk_on = self._update_rsrs_state()
         if not risk_on:
             self._liquidate_trade_positions(exclude=exited)
+            self._reset_rebalance_gate()
             return
-        if not self._check_rebalance_gate(trading_date):
+        force_rebalance = not was_risk_on
+        if not force_rebalance and not self._check_rebalance_gate(trading_date):
             return
-        self._execute_rebalance(context, trading_date)
-        self._last_rebalance_date = trading_date
-        self._days_since_rebalance = 0
+        if self._execute_rebalance(context, trading_date, pending_exit_symbols=exited):
+            self._last_rebalance_date = trading_date
+            self._days_since_rebalance = 0
 
-    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+    def _execute_rebalance(
+        self,
+        context: "Context",
+        trading_date: date,
+        pending_exit_symbols: Optional[set[str]] = None,
+    ) -> bool:
+        pending_exit_symbols = pending_exit_symbols or set()
         snapshots = []
         for symbol in self.trade_symbols:
             bar = self._get_last_bar(symbol)
@@ -118,7 +127,7 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         self._guard_diagnostics["last_candidate_count"] = len(snapshots)
         if not snapshots:
             self._guard_diagnostics["last_selected_count"] = 0
-            return
+            return False
 
         scores = self._score_snapshots(snapshots)
         selected = [symbol for symbol, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[: self.max_positions]]
@@ -127,15 +136,17 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         self._guard_diagnostics["last_selected_count"] = len(selected)
 
         for symbol, quantity in list(self._positions.items()):
-            if quantity > 0 and symbol not in selected_set:
+            if quantity > 0 and symbol not in pending_exit_symbols and symbol not in selected_set:
                 price = self._get_last_price(symbol)
                 self.sell(symbol, int(quantity), "MARKET", price if price > 0 else None)
 
         nav = float(getattr(getattr(context, "portfolio", None), "nav", 0.0) or 0.0)
         if nav <= 0 or not selected:
-            return
+            return bool(selected)
         target_value = nav * self.max_position_pct / float(len(selected))
         for symbol in selected:
+            if symbol in pending_exit_symbols:
+                continue
             price = self._get_last_price(symbol)
             if price <= 0:
                 continue
@@ -146,6 +157,7 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
                 self.buy(symbol, delta, "MARKET", price)
             elif delta < 0:
                 self.sell(symbol, abs(delta), "MARKET", price)
+        return bool(selected)
 
     def on_fill(self, context: "Context", fill: Any) -> None:
         symbol = str(getattr(fill, "symbol", "") or "")
@@ -157,15 +169,22 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         side = str(getattr(fill, "side", "") or "").upper()
         fill_quantity = float(getattr(fill, "quantity", 0) or 0)
         fill_price = self._fill_price(fill)
-        if side == "BUY" and fill_quantity > 0 and fill_price > 0:
+        if side == "BUY" and fill_quantity > 0:
             if previous_quantity > 0 and symbol in self._entry_prices:
                 total_quantity = previous_quantity + fill_quantity
-                self._entry_prices[symbol] = (
-                    self._entry_prices[symbol] * previous_quantity + fill_price * fill_quantity
-                ) / total_quantity
-            else:
+                if fill_price > 0:
+                    self._entry_prices[symbol] = (
+                        self._entry_prices[symbol] * previous_quantity + fill_price * fill_quantity
+                    ) / total_quantity
+                else:
+                    adjustment = previous_quantity / total_quantity
+                    self._entry_prices[symbol] *= adjustment
+                    if symbol in self._peak_prices:
+                        self._peak_prices[symbol] *= adjustment
+            elif fill_price > 0:
                 self._entry_prices[symbol] = fill_price
-            self._peak_prices[symbol] = max(self._peak_prices.get(symbol, fill_price), fill_price)
+            if fill_price > 0:
+                self._peak_prices[symbol] = max(self._peak_prices.get(symbol, fill_price), fill_price)
         elif side == "SELL" and current_quantity <= 0:
             self._entry_prices.pop(symbol, None)
             self._peak_prices.pop(symbol, None)
@@ -261,6 +280,10 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
             price = self._get_last_price(symbol)
             self.sell(symbol, int(quantity), "MARKET", price if price > 0 else None)
 
+    def _reset_rebalance_gate(self) -> None:
+        self._last_rebalance_date = None
+        self._days_since_rebalance = 0
+
     def _candidate_snapshot(self, symbol: str, bar: Any) -> Dict[str, float | str]:
         pe_ttm = self._positive_float(self._value(bar, "pe_ttm"))
         if pe_ttm <= 0:
@@ -311,9 +334,29 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         return {symbol: 1.0 - index / denominator for index, (symbol, _) in enumerate(ordered)}
 
     def _candidate_rejection(self, symbol: str, bar: Any) -> str:
-        return self._position_exit_reason(symbol, bar)
+        reason = self._security_status_rejection(symbol, bar)
+        if reason:
+            return reason
+        if self._price(bar) < self.min_price:
+            return "low_price"
+        if self._bar_turnover(bar) < self.min_turnover:
+            return "low_turnover"
+        return ""
 
     def _position_exit_reason(self, symbol: str, bar: Any) -> str:
+        reason = self._security_status_rejection(symbol, bar)
+        if reason:
+            return reason
+        profit_reason = self._profit_exit_reason(symbol, self._price(bar))
+        if profit_reason:
+            return profit_reason
+        if self._price(bar) < self.min_price:
+            return "low_price"
+        if self._bar_turnover(bar) < self.min_turnover:
+            return "low_turnover"
+        return ""
+
+    def _security_status_rejection(self, symbol: str, bar: Any) -> str:
         if symbol == self.timing_symbol:
             return "timing_symbol"
         if not self._is_mainland_a_symbol(symbol):
@@ -333,17 +376,10 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         list_status = str(self._value(bar, "list_status", "L") or "L").upper()
         if list_status not in {"", "L"}:
             return "list_status"
-        profit_reason = self._profit_exit_reason(symbol, self._price(bar))
-        if profit_reason:
-            return profit_reason
-        if self._price(bar) < self.min_price:
-            return "low_price"
-        if self._bar_turnover(bar) < self.min_turnover:
-            return "low_turnover"
         return ""
 
     def _profit_exit_reason(self, symbol: str, price: float) -> str:
-        entry_price = self._entry_prices.get(symbol, 0.0)
+        entry_price = self._effective_entry_price(symbol)
         if price <= 0 or entry_price <= 0 or self._positions.get(symbol, 0) <= 0:
             return ""
         if self.stop_loss_pct > 0 and price <= entry_price * (1.0 - self.stop_loss_pct):
@@ -357,6 +393,24 @@ class JoinquantValueRsrsTimingStrategy(DailyBarStrategy):
         ):
             return "trailing_take_profit"
         return ""
+
+    def _effective_entry_price(self, symbol: str) -> float:
+        portfolio = getattr(getattr(self, "context", None), "portfolio", None)
+        get_position = getattr(portfolio, "get_position", None)
+        if callable(get_position):
+            try:
+                position = get_position(symbol)
+            except Exception:
+                position = None
+            for field in ("avg_cost", "average_cost", "entry_price"):
+                value = getattr(position, field, None)
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if number > 0 and math.isfinite(number):
+                    return number
+        return self._entry_prices.get(symbol, 0.0)
 
     def _update_peak_price(self, symbol: str, price: float) -> None:
         if price > 0 and self._positions.get(symbol, 0) > 0:

@@ -45,6 +45,19 @@ COMMISSION_CFG = {
     "HK": {"type": "hk_realistic"},
     "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0},
 }
+EXECUTION_COST_MODEL = {
+    "enabled": True,
+    "name": "cn_daily_liquidity_impact",
+    "markets": ["CN"],
+    "tick_size": 0.01,
+    "half_spread_ticks": 0.5,
+    "min_slippage_bps": 5,
+    "max_participation_rate": 0.02,
+    "impact_coefficient": 0.35,
+    "volatility_fallback": 0.03,
+    "adv_value_field": "adv20_value",
+    "volatility_field": "volatility20",
+}
 
 
 DETAIL_SECTION = """
@@ -69,11 +82,12 @@ class RsrsDailyDateProvider:
             start,
             end,
             include_daily_basic=True,
-            include_execution_liquidity_features=False,
+            include_execution_liquidity_features=True,
         )
         self.trading_dates = self._base.trading_dates
         self._timing_symbol = str(timing_symbol)
         self._index_bars_by_date = self._load_timing_bars(start, end)
+        self._dividends_by_key = self._load_dividends(stock_symbols, start, end)
 
     def get_bars_for_date(self, trading_date):
         key = pd.Timestamp(trading_date).date()
@@ -82,6 +96,10 @@ class RsrsDailyDateProvider:
         if timing_bar is not None:
             rows.append(timing_bar)
         return rows
+
+    def get_dividend_for_date(self, symbol, trading_date):
+        key = (str(symbol), pd.Timestamp(trading_date).date())
+        return self._dividends_by_key.get(key)
 
     def close(self) -> None:
         self._base.close()
@@ -106,6 +124,69 @@ class RsrsDailyDateProvider:
             record["has_daily_bar"] = True
             records[record["timestamp"].date()] = record
         return records
+
+    def _load_dividends(self, stock_symbols: List[str], start: datetime, end: datetime) -> Dict[Any, Dict[str, Any]]:
+        symbols = list(dict.fromkeys(str(symbol) for symbol in stock_symbols))
+        if not symbols:
+            return {}
+        provider = DuckDBProvider()
+        provider.connect()
+        try:
+            storage = provider.storage
+            attached = storage._ensure_sidecar_attached("corp_actions", storage._corporate_actions_db_path)
+            if not attached or not storage._table_exists("corp_actions.cn_dividends"):
+                return {}
+            placeholders = ", ".join("?" for _ in symbols)
+            frame = storage.conn.execute(
+                f"""
+                SELECT
+                    symbol,
+                    CAST(ex_date AS DATE) AS ex_date,
+                    cash_dividend,
+                    stock_dividend,
+                    allotment_ratio,
+                    allotment_price,
+                    record_date,
+                    pay_date,
+                    ann_date
+                FROM corp_actions.cn_dividends
+                WHERE CAST(ex_date AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND symbol IN ({placeholders})
+                  AND (
+                    COALESCE(cash_dividend, 0) > 0
+                    OR COALESCE(stock_dividend, 0) > 0
+                    OR COALESCE(allotment_ratio, 0) > 0
+                  )
+                """,
+                [start, end, *symbols],
+            ).fetchdf()
+        finally:
+            provider.disconnect()
+        if frame is None or frame.empty:
+            return {}
+        result = {}
+        for record in frame.to_dict("records"):
+            key = (str(record.get("symbol")), pd.Timestamp(record.get("ex_date")).date())
+            result[key] = {
+                "cash_dividend": _float_or_zero(record.get("cash_dividend")),
+                "stock_dividend": _float_or_zero(record.get("stock_dividend")),
+                "allotment_ratio": _float_or_zero(record.get("allotment_ratio")),
+                "allotment_price": _float_or_zero(record.get("allotment_price")),
+                "record_date": record.get("record_date") or "",
+                "pay_date": record.get("pay_date") or "",
+                "ann_date": record.get("ann_date") or "",
+            }
+        return result
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if pd.isna(number):
+        return 0.0
+    return number
 
 
 def main() -> None:
@@ -170,7 +251,7 @@ def _run_backtest(
     strategy_symbols = [*symbols, TIMING_SYMBOL]
     data_provider = RsrsDailyDateProvider(symbols, TIMING_SYMBOL, START, END)
     strategy = JoinquantValueRsrsTimingStrategy(symbols=strategy_symbols, timing_symbol=TIMING_SYMBOL)
-    backtest_config = {"slippage_bps": 5, "execution_cost_model": None}
+    backtest_config = {"slippage_bps": 5, "execution_cost_model": EXECUTION_COST_MODEL}
     bt_config = {
         "backtest": backtest_config,
         "execution": {"commission": COMMISSION_CFG},

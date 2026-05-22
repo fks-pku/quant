@@ -1,9 +1,12 @@
 """Invariant tests for strategies module — Registry, Strategy base, _adj."""
+from datetime import date
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from quant.features.strategies.base import Strategy
+from quant.features.strategies.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
 from quant.features.strategies.registry import StrategyRegistry, strategy
 
 
@@ -158,3 +161,122 @@ class TestCase4OnFill:
         s.on_fill(None, FillBuy())
         s.on_fill(None, FillSell())
         assert s.get_position("AAPL") == 60
+
+
+# ---------------------------------------------------------------------------
+# CASE-5: Daily strategy risk-exit/rebalance state machine
+# ---------------------------------------------------------------------------
+
+
+def _value_rsrs_bar(symbol: str, close: float, **overrides):
+    bar = {
+        "timestamp": date(2024, 1, 2),
+        "symbol": symbol,
+        "open": close,
+        "high": close * 1.01,
+        "low": close * 0.99,
+        "close": close,
+        "turnover": 100000.0,
+        "pe_ttm": 8.0,
+        "pb": 1.0,
+        "ps_ttm": 1.0,
+        "dv_ttm": 1.0,
+        "total_mv": 1000.0,
+        "circ_mv": 1000.0,
+        "is_st": False,
+        "tradable": True,
+        "has_daily_bar": True,
+        "is_listed": True,
+        "list_status": "L",
+    }
+    bar.update(overrides)
+    return bar
+
+
+class _InvariantPortfolio:
+    nav = 100000.0
+
+    def get_position(self, symbol):
+        return None
+
+
+class _InvariantContext:
+    portfolio = _InvariantPortfolio()
+
+
+class TestCase5DailyRiskExitStateMachine:
+    def test_s5_01_pending_risk_exit_is_not_sold_again_by_same_day_rebalance(self, monkeypatch):
+        strategy = JoinquantValueRsrsTimingStrategy(
+            symbols=["000001", "000002"],
+            holding_days=1,
+            min_turnover=0.0,
+            stop_loss_pct=0.10,
+        )
+        strategy._positions["000001"] = 100
+        strategy._entry_prices["000001"] = 10.0
+        strategy._risk_on = True
+        monkeypatch.setattr(strategy, "_update_rsrs_state", lambda: True)
+        monkeypatch.setattr(strategy, "_check_rebalance_gate", lambda trading_date: True)
+        strategy.on_data(None, _value_rsrs_bar("000001", 8.9))
+        strategy.on_data(None, _value_rsrs_bar("000002", 10.0, pb=0.8))
+        sells = []
+        monkeypatch.setattr(
+            strategy,
+            "sell",
+            lambda symbol, quantity, order_type="MARKET", price=None: sells.append((symbol, quantity, price)),
+        )
+        monkeypatch.setattr(strategy, "buy", lambda *args, **kwargs: "order-buy")
+
+        strategy.on_after_trading(_InvariantContext(), date(2024, 1, 2))
+
+        assert sells == [("000001", 100, 8.9)]
+
+    def test_s5_02_risk_on_reentry_bypasses_stale_rebalance_gate(self, monkeypatch):
+        strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"], holding_days=20)
+        strategy._last_rebalance_date = date(2024, 1, 1)
+        strategy._days_since_rebalance = 0
+        strategy._risk_on = False
+        monkeypatch.setattr(strategy, "_update_rsrs_state", lambda: True)
+        called = []
+        monkeypatch.setattr(
+            strategy,
+            "_execute_rebalance",
+            lambda context, trading_date, pending_exit_symbols=None: called.append(trading_date) or True,
+        )
+
+        strategy.on_after_trading(_InvariantContext(), date(2024, 2, 1))
+
+        assert called == [date(2024, 2, 1)]
+
+    def test_s5_03_empty_candidate_pool_does_not_refresh_rebalance_gate(self, monkeypatch):
+        strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"], holding_days=20)
+        monkeypatch.setattr(strategy, "_update_rsrs_state", lambda: True)
+
+        strategy.on_after_trading(_InvariantContext(), date(2024, 1, 2))
+
+        assert strategy._last_rebalance_date is None
+        assert strategy._days_since_rebalance == 0
+
+    def test_s5_04_candidate_filter_does_not_use_position_profit_stops(self):
+        strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"], stop_loss_pct=0.10)
+        strategy._positions["000001"] = 100
+        strategy._entry_prices["000001"] = 10.0
+
+        reason = strategy._candidate_rejection("000001", _value_rsrs_bar("000001", 8.9))
+
+        assert reason == ""
+
+    def test_s5_05_zero_price_stock_dividend_fill_keeps_internal_cost_in_sync(self):
+        strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"])
+        strategy.on_fill(
+            None,
+            SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0),
+        )
+
+        strategy.on_fill(
+            None,
+            SimpleNamespace(symbol="000001", quantity=10, side="BUY", fill_price=0.0, price=0.0),
+        )
+
+        assert strategy._positions["000001"] == 110
+        assert strategy._entry_prices["000001"] == pytest.approx(1000.0 / 110.0)
