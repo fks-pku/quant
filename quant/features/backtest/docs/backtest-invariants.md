@@ -458,9 +458,7 @@ C6-08  final_nav == 101,200.00
 C6-09  diag.fill_count == 3 (2 buy + 1 sell)
 ```
 
-## CASE-7: 除权除息
-
-### 7A: US 零摩擦分红(无税)
+## CASE-7A: US 零摩擦分红(无税)
 
 #### 配置(同CASE-1)
 
@@ -509,7 +507,9 @@ D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
     C7-02  trades[1].realized_pnl == 500.0 (adjusted basis)
     C7-03  final_nav == 100000 + div(100) + trading(500)
 
-### 7B: CN 含红利税
+---
+
+## CASE-7B: CN 含红利税
 
 #### 配置(同CASE-3)
 
@@ -1121,7 +1121,7 @@ C21-03  open_positions 有 1 条 (HK.00700, qty=100)
 
 ---
 
-## CASE-22: BUY 去重拒绝 (DUPLICATE_BUY)
+## CASE-27: BUY 去重拒绝 (DUPLICATE_BUY)
 
 验证同一策略同一天对同一标的两次 BUY，第二次被去重拒绝。
 
@@ -1158,7 +1158,7 @@ C27-03  trades[0].intended_qty == 100
 
 ---
 
-## CASE-23: 资金不足拒绝 (INSUFFICIENT_CASH)
+## CASE-28: 资金不足拒绝 (INSUFFICIENT_CASH)
 
 验证下单金额超过可用现金时被拒绝。
 
@@ -1519,8 +1519,8 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 |19|US|空回测 (no-trade edge case)|
 |20|CN|碎股卖出通过 (odd-lot pass-through)|
 |21|HK|碎股卖出拒绝 (LOT_IMPOSSIBLE)|
-|22|US|BUY 去重拒绝 (DUPLICATE_BUY)|
-|23|US|资金不足拒绝 (INSUFFICIENT_CASH)|
+|27|US|BUY 去重拒绝 (DUPLICATE_BUY)|
+|28|US|资金不足拒绝 (INSUFFICIENT_CASH)|
 |29|US|LIMIT 订单可成交性 (LIMIT_NOT_MARKETABLE)|
 |30|CN|涨跌停买卖方向约束|
 |31|Mixed|拒绝混合币种|
