@@ -74,6 +74,97 @@ def test_research_defaults_and_spec_universe_are_a_share_only():
     assert cli_report.recommended_symbols == DEFAULT_A_SHARE_SYMBOLS
 
 
+def test_cn_strict_backtests_always_attach_family_appropriate_execution_cost_model():
+    from quant.api.research_bp import _strict_execution_cost_model
+
+    default_model = _strict_execution_cost_model(
+        "ashare_value_momentum_filter",
+        {
+            "name": "ashare_value_momentum_filter",
+            "research_meta": {
+                "strategy_spec": {
+                    "strategy_id": "ashare_value_momentum_filter",
+                    "signal_formula_key": "ashare_value_momentum_filter",
+                    "universe": ["000001", "600519"],
+                }
+            },
+        },
+        True,
+    )
+    assert default_model["enabled"] is True
+    assert default_model["name"] == "cn_daily_liquidity_impact"
+    assert default_model["max_participation_rate"] == 0.02
+    assert default_model["impact_coefficient"] == 0.35
+
+    small_cap_model = _strict_execution_cost_model(
+        "joinquant_small_cap_low_price",
+        {
+            "name": "joinquant_small_cap_low_price",
+            "research_meta": {
+                "strategy_spec": {
+                    "signal_formula_key": "joinquant_small_cap_low_price_factor",
+                    "required_fields": ["close", "market_cap", "turnover"],
+                    "universe": ["000001", "600519"],
+                }
+            },
+        },
+        True,
+    )
+    assert small_cap_model["name"] == "small_cap_realistic"
+    assert small_cap_model["max_participation_rate"] == 0.01
+    assert small_cap_model["impact_coefficient"] == 0.5
+
+    etf_model = _strict_execution_cost_model(
+        "joinquant_qixing_daily_etf_rotation",
+        {
+            "name": "JoinQuant ETF rotation",
+            "parameters": {"symbols": ["510300", "510500", "159915", "511880"]},
+            "research_meta": {
+                "strategy_spec": {
+                    "signal_formula_key": "joinquant_qixing_daily_etf_rotation",
+                    "universe": ["510300", "510500", "159915", "511880"],
+                }
+            },
+        },
+        True,
+    )
+    assert etf_model["name"] == "cn_etf_liquidity_impact"
+    assert etf_model["max_participation_rate"] == 0.05
+    assert etf_model["impact_coefficient"] == 0.15
+
+    assert _strict_execution_cost_model("us_strategy", {"name": "us_strategy"}, False) is None
+
+
+def test_persistent_candidate_merges_archived_strategy_parameters(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    monkeypatch.setattr(
+        research_module,
+        "_archived_candidate_info",
+        lambda sid: {
+            "id": sid,
+            "parameters": {"max_position_pct": 0.85, "holding_days": 5},
+            "research_meta": {"strategy_spec": {"universe": ["600001"], "lookback_days": 1}},
+        },
+    )
+
+    merged = research_module._merge_archived_candidate_defaults(
+        "joinquant_small_cap_low_price",
+        {
+            "id": "joinquant_small_cap_low_price",
+            "name": "persisted",
+            "parameters": {"holding_days": 7},
+            "research_meta": {"strategy_spec": {"horizon_days": 7}},
+        },
+    )
+
+    assert merged["name"] == "persisted"
+    assert merged["parameters"] == {"max_position_pct": 0.85, "holding_days": 7}
+    assert merged["research_meta"]["strategy_spec"]["universe"] == ["600001"]
+    assert merged["research_meta"]["strategy_spec"]["lookback_days"] == 1
+    assert merged["research_meta"]["strategy_spec"]["horizon_days"] == 7
+
+
 def test_evaluator_parses_extended_json_report():
     class JsonLLM:
         def analyze(self, prompt, context):
@@ -461,10 +552,11 @@ def test_research_engine_walkforward_stage_uses_persistent_rejected_candidate_me
     captured = {}
 
     class FixedRigorHub:
-        def run_walkforward(self, strategy_id, symbols, start, end, benchmark_data=None, strategy_archive_dir=""):
+        def run_walkforward(self, strategy_id, symbols, start, end, benchmark_data=None, strategy_archive_dir="", initial_cash=0):
             captured["strategy_id"] = strategy_id
             captured["symbols"] = list(symbols)
             captured["strategy_archive_dir"] = strategy_archive_dir
+            captured["initial_cash"] = initial_cash
             return SimpleNamespace(
                 is_viable=False,
                 aggregate_oos_sharpe=-0.1,
@@ -512,6 +604,7 @@ def test_research_engine_walkforward_stage_uses_persistent_rejected_candidate_me
         assert captured["strategy_id"] == "persisted_rejected"
         assert captured["symbols"] == ["600001", "600002"]
         assert captured["strategy_archive_dir"].replace("\\", "/").endswith("rejected_strategy/persisted_rejected")
+        assert captured["initial_cash"] == pytest.approx(500000)
         assert (tmp_path / "research" / "reports" / "persisted_rejected" / "walkforward_audit_report.html").exists()
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -971,6 +1064,7 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
                     "worst_oos_sharpe": -4.6,
                     "pct_profitable_splits": 0.2,
                     "deflated_sharpe_ratio": 0.0,
+                    "capacity_ok": False,
                 },
             )()
 
@@ -980,7 +1074,15 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
     try:
         research_store = FileResearchStore(tmp_path / "research")
         engine = ResearchEngine(
-            config=ResearchConfig(auto_backtest=True, rigor_enabled=True),
+            config=ResearchConfig(
+                auto_backtest=True,
+                rigor_enabled=True,
+                rigor_config={
+                    "purged_walkforward": {"test_window_days": 42},
+                    "thresholds": {"min_worst_oos_sharpe": 0.4, "min_profitable_splits_pct": 0.6},
+                    "cost_model": {"max_adv_pct": 0.02},
+                },
+            ),
             scout=FixedScout(),
             evaluator=FixedEvaluator(),
             research_store=research_store,
@@ -1004,9 +1106,15 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
         assert hypothesis["status"] == "rejected"
         assert hypothesis["stage"] == "go_no_go"
         assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
-        assert hypothesis["metrics"]["walkforward"]["aggregate_oos_sharpe"] == pytest.approx(-1.2)
-        assert hypothesis["metrics"]["walkforward"]["worst_oos_sharpe"] == pytest.approx(-4.6)
-        assert hypothesis["metrics"]["walkforward"]["verdict"] == "fail"
+        walkforward = hypothesis["metrics"]["walkforward"]
+        assert walkforward["aggregate_oos_sharpe"] == pytest.approx(-1.2)
+        assert walkforward["worst_oos_sharpe"] == pytest.approx(-4.6)
+        assert walkforward["capacity_ok"] is False
+        assert walkforward["thresholds"]["test_window_days"] == 42
+        assert walkforward["thresholds"]["min_worst_oos_sharpe"] == pytest.approx(0.4)
+        assert walkforward["thresholds"]["min_profitable_splits_pct"] == pytest.approx(0.6)
+        assert walkforward["thresholds"]["max_adv_pct"] == pytest.approx(0.02)
+        assert walkforward["verdict"] == "fail"
         stages = hypothesis["metrics"]["research_stage_conclusions"]
         assert stages["fast_research"]["verdict"] == "pass"
         assert stages["strict_backtest"]["verdict"] == "warn"
@@ -1619,10 +1727,11 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
     captured = {}
 
     class FakeStrategy:
-        def __init__(self, symbols=None):
+        def __init__(self, symbols=None, max_position_pct=1.0, holding_days=1):
             self.symbols = list(symbols or [])
-            self.max_position_pct = 1.0
+            self.max_position_pct = max_position_pct
             self.max_positions = 20
+            self.holding_days = holding_days
 
     class FakeRegistry:
         def get(self, sid):
@@ -1678,6 +1787,8 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
 
         def run(self, start, end, strategies, initial_cash, data_provider, symbols):
             captured["strategy_symbols"] = list(strategies[0].symbols)
+            captured["max_position_pct"] = strategies[0].max_position_pct
+            captured["holding_days"] = strategies[0].holding_days
             return SimpleNamespace(
                 final_nav=float(initial_cash) * 1.05,
                 sharpe_ratio=0.8,
@@ -1705,6 +1816,7 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
                 "id": "persisted_candidate",
                 "name": "Persisted Candidate",
                 "status": "candidate",
+                "parameters": {"max_position_pct": 0.85, "holding_days": 7, "ignored_param": "ignored"},
                 "research_meta": {"strategy_spec": {"universe": ["600001", "600002"]}},
             }
         )
@@ -1733,6 +1845,8 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
         hypothesis = research_store.list_hypotheses()[0]
         assert captured["symbols"] == ["600001", "600002"]
         assert captured["strategy_symbols"] == ["600001", "600002"]
+        assert captured["max_position_pct"] == pytest.approx(0.85)
+        assert captured["holding_days"] == 7
         assert hypothesis["metrics"]["strict_backtest"]["metrics"]["sharpe"] == pytest.approx(0.8)
         assert result.backtested == 1
     finally:
@@ -1947,6 +2061,123 @@ def test_walkforward_runner_loads_archived_rejected_strategy(monkeypatch):
         assert captured["strategy_class"] == "ArchivedStrategy"
         assert captured["strategy_symbols"] == ["600001"]
         assert response["metrics"]["sharpe"] == pytest.approx(1.1)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_walkforward_runner_uses_archived_parameters_and_execution_cost_model(monkeypatch):
+    from quant.api import research_bp as research_module
+    import quant.features.backtest.engine as engine_module
+    import quant.features.strategies.registry as registry_module
+    import quant.infrastructure.data.providers.duckdb_provider as duckdb_module
+
+    tmp_path = _test_root()
+    captured = {}
+
+    class FakeRegistry:
+        def get(self, name):
+            return None
+
+    class FakeStorage:
+        def get_all_instrument_meta(self):
+            return pd.DataFrame({"symbol": ["600001"], "lot_size": [100]})
+
+    class FakeDuckDBProvider:
+        def __init__(self):
+            self.storage = FakeStorage()
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def get_bars_for_symbols(self, symbols, start, end, timeframe):
+            return pd.DataFrame(
+                {
+                    "timestamp": pd.date_range(start, end, freq="D"),
+                    "symbol": "600001",
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.5,
+                    "close": 10.0,
+                    "volume": 100000,
+                    "turnover": 1000000.0,
+                }
+            )
+
+    class FakeBacktester:
+        def __init__(self, config, *args, **kwargs):
+            captured["config"] = config
+
+        def run(self, start, end, strategies, initial_cash, data_provider, symbols):
+            captured["max_position_pct"] = strategies[0].max_position_pct
+            captured["holding_days"] = strategies[0].holding_days
+            captured["initial_cash"] = initial_cash
+            captured["data_columns"] = list(data_provider.data.columns)
+            return SimpleNamespace(
+                equity_curve=pd.Series([initial_cash, initial_cash * 1.02], index=pd.to_datetime([start, end])),
+                trades=[],
+                sharpe_ratio=1.1,
+                max_drawdown_pct=-0.02,
+                total_return=0.02,
+                win_rate=0.6,
+            )
+
+    try:
+        archive_dir = tmp_path / "rejected_strategy" / "joinquant_small_cap_low_price"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "config.yaml").write_text(
+            "\n".join(
+                [
+                    "strategy:",
+                    "  name: joinquant_small_cap_low_price",
+                    "parameters:",
+                    "  max_position_pct: 0.7",
+                    "  holding_days: 5",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (archive_dir / "strategy.py").write_text(
+            "\n".join(
+                [
+                    "from quant.features.strategies.registry import strategy",
+                    "",
+                    "@strategy('joinquant_small_cap_low_price')",
+                    "class ArchivedStrategy:",
+                    "    def __init__(self, symbols=None, max_position_pct=1.0, holding_days=1):",
+                    "        self.symbols = list(symbols or [])",
+                    "        self.max_position_pct = max_position_pct",
+                    "        self.holding_days = holding_days",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(registry_module, "StrategyRegistry", FakeRegistry)
+        monkeypatch.setattr(duckdb_module, "DuckDBProvider", FakeDuckDBProvider)
+        monkeypatch.setattr(engine_module, "Backtester", FakeBacktester)
+
+        runner = research_module._make_walkforward_runner()
+        runner(
+            "joinquant_small_cap_low_price",
+            {
+                "symbols": ["600001"],
+                "start": "2020-01-01",
+                "end": "2020-01-03",
+                "initial_cash": 500000,
+                "strategy_archive_dir": str(archive_dir),
+            },
+        )
+
+        model = captured["config"]["backtest"]["execution_cost_model"]
+        assert model["name"] == "small_cap_realistic"
+        assert captured["config"]["risk"]["max_position_pct"] == pytest.approx(0.20)
+        assert captured["max_position_pct"] == pytest.approx(0.7)
+        assert captured["holding_days"] == 5
+        assert captured["initial_cash"] == pytest.approx(500000)
+        assert "adv20_value" in captured["data_columns"]
+        assert "volatility20" in captured["data_columns"]
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 

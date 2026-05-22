@@ -422,6 +422,7 @@ class TestRigorHub:
         )
 
         assert result.is_viable is False
+        assert result.capacity_ok is False
 
     def test_capacity_gate_logs_result(self, caplog):
         def fake_runner(strategy_id, request):
@@ -455,7 +456,7 @@ class TestRigorHub:
                 symbols=["SPY"],
                 start="2020-01-01",
                 end="2021-01-01",
-            )
+        )
 
         assert any("Capacity gate fail" in message and "trades_present=True" in message for message in caplog.messages)
 

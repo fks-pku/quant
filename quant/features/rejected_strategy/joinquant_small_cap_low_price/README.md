@@ -29,8 +29,9 @@ factor idea triaged by deterministic professional rubric
 - Portfolio: long-only Top 20, target gross exposure `1.0`, equal target value per selected name.
 - Normal rebalance: controlled by `holding_days=5`.
 - Delisting risk exit: before the normal rebalance gate, existing holdings are checked daily; if price, liquidity, ST, suspension, tradability, listing, or list-status guard fails, the strategy submits a SELL immediately.
-- Strict execution: submitted orders still go through Backtester T+1, 100-share CN lot sizing, price-limit checks, volume caps, cash/position checks, commission, and slippage.
+- Strict execution: submitted orders go through Backtester T+1, 100-share CN lot sizing, price-limit checks, volume caps, cash/position checks, commission, fixed base slippage, and the `small_cap_realistic` execution impact model.
 
 ## Invariant Coverage
 
 - `quant/tests/test_backtest_invariants.py` CASE-37 verifies that entry guards block risky names and that daily delisting-risk exits are not blocked by `holding_days`.
+- `quant/tests/test_research_pipeline.py` verifies that standalone strict backtests and walk-forward strict audit reuse archived strategy parameters and family-appropriate execution cost models.

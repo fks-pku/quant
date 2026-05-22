@@ -288,11 +288,25 @@ def test_generated_stage_reports_match_contract():
                     "walkforward": {
                         "verdict": "warn",
                         "reason": "structured walk-forward diagnostic",
+                        "is_viable": False,
+                        "capacity_ok": False,
                         "aggregate_oos_sharpe": 0.7,
                         "worst_oos_sharpe": 0.2,
                         "pct_profitable_splits": 0.66,
                         "deflated_sharpe_ratio": None,
                         "n_splits": 1,
+                        "thresholds": {
+                            "train_window_days": 252,
+                            "test_window_days": 63,
+                            "step_days": 63,
+                            "purge_days": 5,
+                            "embargo_days": 21,
+                            "min_train_observations": 126,
+                            "min_worst_oos_sharpe": 0.3,
+                            "min_profitable_splits_pct": 0.5,
+                            "min_deflated_sharpe_ratio": 0.95,
+                            "max_adv_pct": 0.05,
+                        },
                         "splits": [
                             {
                                 "split": 1,
@@ -619,6 +633,13 @@ def test_generated_stage_reports_match_contract():
     assert "<td>理想 top20 close-to-close</td><td>31.00%</td><td>0.00%</td><td>0.8800</td>" in fast_html
     assert "<td>加入估算换手成本</td><td>19.00%</td><td>-12.00%</td><td>0.6200</td>" in fast_html
     assert "<td>aggregate_oos_sharpe</td><td>0.7000</td>" in wf_html
+    assert "通过阈值" in wf_html
+    assert "<td>train_window</td><td>252 trading days</td>" in wf_html
+    assert "<td>test_window</td><td>63 trading days</td>" in wf_html
+    assert "<td>worst_oos_sharpe</td><td>0.2000</td><td>&gt;=0.3000</td><td><span class=\"badge fail\">fail</span></td>" in wf_html
+    assert "<td>pct_profitable_splits</td><td>66.00%</td><td>&gt;=50.00%</td><td><span class=\"badge pass\">pass</span></td>" in wf_html
+    assert "<td>deflated_sharpe_ratio</td><td>n/a</td><td>&gt;=0.9500；缺失时不触发 DSR 警告</td><td><span class=\"badge warn\">not_recorded</span></td>" in wf_html
+    assert "<td>capacity_viability</td><td>未通过</td><td>所有交易可估算成交量且单笔参与率 &lt;=5.00% ADV</td><td><span class=\"badge fail\">fail</span></td>" in wf_html
     assert "<td>0.7000</td><td>-3.00%</td><td>12.00%</td><td>warn</td>" in wf_html
     assert "-9.9000" not in fast_html
     assert "-9.9000" not in wf_html

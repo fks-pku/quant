@@ -1,5 +1,6 @@
 import importlib.util
 import hashlib
+import inspect
 import json
 import os
 import pickle
@@ -134,7 +135,7 @@ def _make_backtest_fn():
             return
 
         data_provider = streaming_provider or DataFrameProvider(data_df)
-        strategy = strategy_class(symbols=symbols)
+        strategy = strategy_class(**_strategy_init_kwargs(strategy_class, info, symbols))
 
         backtest_config = {"slippage_bps": 5}
         if execution_cost_model:
@@ -297,6 +298,7 @@ def _strict_execution_cost_model(strategy_id, info, is_cn):
         return None
     meta = dict((info or {}).get("research_meta") or {})
     spec = dict(meta.get("strategy_spec") or {})
+    symbols = _execution_cost_model_symbols(info, spec)
     text = " ".join(
         str(value or "")
         for value in (
@@ -305,10 +307,37 @@ def _strict_execution_cost_model(strategy_id, info, is_cn):
             (info or {}).get("description"),
             spec.get("signal_formula_key"),
             " ".join(str(field) for field in (spec.get("required_fields") or [])),
+            " ".join(symbols),
         )
     ).lower()
+    if _is_cn_etf_cost_model_target(text, symbols):
+        return {
+            "enabled": True,
+            "name": "cn_etf_liquidity_impact",
+            "markets": ["CN"],
+            "tick_size": 0.01,
+            "half_spread_ticks": 0.5,
+            "min_slippage_bps": 5,
+            "max_participation_rate": 0.05,
+            "impact_coefficient": 0.15,
+            "volatility_fallback": 0.015,
+            "adv_value_field": "adv20_value",
+            "volatility_field": "volatility20",
+        }
     if not any(token in text for token in ("small_cap", "low_price", "market_cap", "circ_mv", "total_mv")):
-        return None
+        return {
+            "enabled": True,
+            "name": "cn_daily_liquidity_impact",
+            "markets": ["CN"],
+            "tick_size": 0.01,
+            "half_spread_ticks": 0.5,
+            "min_slippage_bps": 5,
+            "max_participation_rate": 0.02,
+            "impact_coefficient": 0.35,
+            "volatility_fallback": 0.03,
+            "adv_value_field": "adv20_value",
+            "volatility_field": "volatility20",
+        }
     return {
         "enabled": True,
         "name": "small_cap_realistic",
@@ -324,6 +353,39 @@ def _strict_execution_cost_model(strategy_id, info, is_cn):
     }
 
 
+def _strategy_init_kwargs(strategy_class, info, symbols):
+    params = dict((info or {}).get("parameters") or {})
+    params["symbols"] = symbols
+    try:
+        signature = inspect.signature(strategy_class)
+    except (TypeError, ValueError):
+        return {"symbols": symbols}
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+        return params
+    return {key: value for key, value in params.items() if key in signature.parameters}
+
+
+def _execution_cost_model_symbols(info, spec):
+    params = dict((info or {}).get("parameters") or {})
+    values = params.get("symbols") or spec.get("universe") or []
+    if isinstance(values, (str, int)):
+        values = [values]
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _is_cn_etf_cost_model_target(text, symbols):
+    if any(token in text for token in ("etf", "lof", "fund", "cash_symbol")):
+        return True
+    if not symbols:
+        return False
+    return all(_is_cn_exchange_traded_fund_symbol(symbol) for symbol in symbols)
+
+
+def _is_cn_exchange_traded_fund_symbol(symbol):
+    code = str(symbol).strip()
+    return code.isdigit() and len(code) == 6 and code.startswith(("15", "16", "18", "50", "51", "52", "56", "58"))
+
+
 def _add_execution_liquidity_features(data_df, execution_cost_model):
     if not isinstance(execution_cost_model, dict) or not execution_cost_model.get("enabled"):
         return data_df
@@ -331,7 +393,7 @@ def _add_execution_liquidity_features(data_df, execution_cost_model):
         return data_df
     import pandas as pd
 
-    frame = data_df.copy()
+    frame = data_df.copy().reset_index(drop=True)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
     frame = frame.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
     close = pd.to_numeric(frame["close"], errors="coerce")
@@ -648,7 +710,7 @@ def _candidate_info_for_backtest(sid, integrator, pool):
         except Exception:
             info = None
     if info is not None:
-        return info
+        return _merge_archived_candidate_defaults(sid, info)
     store = getattr(pool, "research_store", None)
     if store is not None and hasattr(store, "get_candidate"):
         try:
@@ -656,12 +718,35 @@ def _candidate_info_for_backtest(sid, integrator, pool):
         except Exception:
             info = None
     if info is not None:
-        return info
+        return _merge_archived_candidate_defaults(sid, info)
     return _archived_candidate_info(sid)
 
 
-def _archived_candidate_info(sid):
-    archive_dir = Path(__file__).resolve().parent.parent / "features" / "rejected_strategy" / str(sid)
+def _merge_archived_candidate_defaults(sid, info):
+    archived = _archived_candidate_info(sid)
+    if not archived:
+        return info
+    merged = dict(archived)
+    merged.update(dict(info or {}))
+    archived_params = dict(archived.get("parameters") or {})
+    params = dict((info or {}).get("parameters") or {})
+    merged["parameters"] = {**archived_params, **params}
+    archived_meta = dict(archived.get("research_meta") or {})
+    meta = dict((info or {}).get("research_meta") or {})
+    archived_spec = dict(archived_meta.get("strategy_spec") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    meta = {**archived_meta, **meta}
+    meta["strategy_spec"] = {**archived_spec, **spec}
+    merged["research_meta"] = meta
+    return merged
+
+
+def _archived_candidate_info(sid, strategy_archive_dir=None):
+    archive_dir = (
+        Path(strategy_archive_dir)
+        if strategy_archive_dir
+        else Path(__file__).resolve().parent.parent / "features" / "rejected_strategy" / str(sid)
+    )
     config_path = archive_dir / "config.yaml"
     strategy_path = archive_dir / "strategy.py"
     if not config_path.exists() and not strategy_path.exists():
@@ -2270,7 +2355,8 @@ def _make_walkforward_runner():
 
     def _run_walkforward_backtest(sid, request):
         registry = StrategyRegistry()
-        strategy_class = _walkforward_strategy_class(sid, registry, request.get("strategy_archive_dir"))
+        archive_dir = request.get("strategy_archive_dir")
+        strategy_class = _walkforward_strategy_class(sid, registry, archive_dir)
         if strategy_class is None:
             return _empty_walkforward_response()
 
@@ -2291,17 +2377,28 @@ def _make_walkforward_runner():
         if data_df.empty:
             return _empty_walkforward_response()
 
+        info = _archived_candidate_info(sid, archive_dir) or {
+            "id": str(sid),
+            "name": str(sid),
+            "research_meta": {"strategy_spec": {"strategy_id": str(sid), "universe": list(symbols)}},
+        }
+        is_cn = any(is_cn_symbol(sym) for sym in symbols)
+        execution_cost_model = _strict_execution_cost_model(sid, info, is_cn)
+        data_df = _add_execution_liquidity_features(data_df, execution_cost_model)
         data_provider = DataFrameProvider(data_df)
-        strategy = strategy_class(symbols=symbols)
+        strategy = strategy_class(**_strategy_init_kwargs(strategy_class, info, symbols))
+        backtest_config = {"slippage_bps": 5}
+        if execution_cost_model:
+            backtest_config["execution_cost_model"] = execution_cost_model
         bt_config = {
-            "backtest": {"slippage_bps": 5},
+            "backtest": backtest_config,
             "execution": {"commission": {
                 "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
                 "HK": {"type": "hk_realistic"},
                 "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0},
             }},
             "data": {"default_timeframe": "1d"},
-            "risk": {"max_position_pct": 0.20, "max_sector_pct": 1.0, "max_daily_loss_pct": 0.10, "max_leverage": 2.0},
+            "risk": _candidate_backtest_risk_config(info),
         }
         backtester = Backtester(
             bt_config,

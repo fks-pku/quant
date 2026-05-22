@@ -283,6 +283,19 @@ _STAGE_REPORT_META = {
     },
 }
 
+_WALKFORWARD_DEFAULT_THRESHOLDS = {
+    "train_window_days": 252,
+    "test_window_days": 63,
+    "step_days": 63,
+    "purge_days": 5,
+    "embargo_days": 21,
+    "min_train_observations": 126,
+    "min_worst_oos_sharpe": 0.3,
+    "min_profitable_splits_pct": 0.5,
+    "min_deflated_sharpe_ratio": 0.95,
+    "max_adv_pct": 0.05,
+}
+
 
 def build_research_stage_report_html(
     stage_key: str,
@@ -1873,13 +1886,17 @@ def _return_calendar_class(value: Any) -> str:
 def _walkforward_methodology_contract_table(rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    scores, _, _ = _walkforward_scores(row)
+    thresholds = _walkforward_thresholds(scores)
     horizon = spec.get("horizon_days") or 5
     lookback = spec.get("lookback_days") or 20
     rows_data = [
-        ("train_window", "126 trading days", "用于参数/阈值确认"),
-        ("test_window", "21 trading days", "样本外测试区间"),
-        ("step", "21 trading days", "滚动步长"),
-        ("purge_gap", f"{horizon} trading days", "训练和测试之间剔除重叠信息"),
+        ("train_window", f"{_threshold_int(thresholds, 'train_window_days')} trading days", "用于参数/阈值确认"),
+        ("test_window", f"{_threshold_int(thresholds, 'test_window_days')} trading days", "样本外测试区间"),
+        ("step", f"{_threshold_int(thresholds, 'step_days')} trading days", "滚动步长"),
+        ("purge_gap", f"{_threshold_int(thresholds, 'purge_days', horizon)} trading days", "训练和测试之间剔除重叠信息"),
+        ("embargo", f"{_threshold_int(thresholds, 'embargo_days')} trading days", "测试开始前的禁用间隔"),
+        ("min_train_observations", f"{_threshold_int(thresholds, 'min_train_observations')} trading days", "低于该训练样本数不生成 split"),
         ("parameter_grid", f"lookback={lookback}; horizon={horizon}; frozen parameters", "若无参数优化，写明 frozen parameters"),
     ]
     body = "".join(
@@ -1892,19 +1909,68 @@ def _walkforward_methodology_contract_table(rows: List[Dict[str, Any]]) -> str:
 def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     scores, reason, _ = _walkforward_scores(row)
+    thresholds = _walkforward_thresholds(scores)
+    min_worst = _threshold_float(thresholds, "min_worst_oos_sharpe")
+    min_profitable = _threshold_float(thresholds, "min_profitable_splits_pct")
+    min_dsr = _threshold_float(thresholds, "min_deflated_sharpe_ratio")
+    max_adv = _threshold_float(thresholds, "max_adv_pct")
     rows_data = [
-        ("aggregate_oos_sharpe", _fmt(scores.get("aggregate_oos_sharpe")), "所有 OOS split 聚合表现"),
-        ("worst_oos_sharpe", _fmt(scores.get("worst_oos_sharpe")), "最差样本外窗口"),
-        ("pct_profitable_splits", _pct(scores.get("pct_profitable_splits")), "赚钱 split 占比"),
-        ("deflated_sharpe_ratio", _fmt(scores.get("deflated_sharpe_ratio")), "调整多重试验后的 Sharpe 可靠性"),
-        ("regime_breakdown", _cell(scores.get("regime_breakdown") or reason or "未保存分 regime 明细"), "分市场状态稳定性"),
-        ("capacity_viability", _cell(scores.get("capacity_viability") or "未通过 Go / No-Go，容量阶段未开启"), "容量和冲击成本是否可接受"),
+        (
+            "n_splits",
+            _int_cell(scores.get("n_splits")),
+            ">0",
+            _min_threshold_verdict(scores.get("n_splits"), 1.0),
+            "必须实际生成样本外 split",
+        ),
+        (
+            "aggregate_oos_sharpe",
+            _fmt(scores.get("aggregate_oos_sharpe")),
+            ">0 作为均值表现参考；不单独决定 pass",
+            _reference_verdict(scores.get("aggregate_oos_sharpe")),
+            "所有 OOS split 聚合表现",
+        ),
+        (
+            "worst_oos_sharpe",
+            _fmt(scores.get("worst_oos_sharpe")),
+            f">={_fmt(min_worst)}",
+            _min_threshold_verdict(scores.get("worst_oos_sharpe"), min_worst),
+            "最差样本外窗口；正式 Go / No-Go 硬门槛",
+        ),
+        (
+            "pct_profitable_splits",
+            _pct(scores.get("pct_profitable_splits")),
+            f">={_pct(min_profitable)}",
+            _min_threshold_verdict(scores.get("pct_profitable_splits"), min_profitable),
+            "赚钱 split 占比；正式 Go / No-Go 硬门槛",
+        ),
+        (
+            "deflated_sharpe_ratio",
+            _fmt(scores.get("deflated_sharpe_ratio")),
+            f">={_fmt(min_dsr)}；缺失时不触发 DSR 警告",
+            _dsr_threshold_verdict(scores.get("deflated_sharpe_ratio"), min_dsr),
+            "调整多重试验后的 Sharpe 可靠性；低于阈值为 warn",
+        ),
+        (
+            "regime_breakdown",
+            _cell(scores.get("regime_breakdown") or reason or "未保存分 regime 明细"),
+            "bear regime Sharpe >= -0.5000 可避免牛市单一依赖警告",
+            _regime_threshold_verdict(scores),
+            "分市场状态稳定性；当前不单独决定 pass",
+        ),
+        (
+            "capacity_viability",
+            _walkforward_capacity_value(scores),
+            f"所有交易可估算成交量且单笔参与率 <={_pct(max_adv)} ADV",
+            _capacity_threshold_verdict(scores),
+            "容量和冲击成本是否可接受；正式 Go / No-Go 硬门槛",
+        ),
     ]
     body = "".join(
-        f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(note)}</td></tr>"
-        for metric, value, note in rows_data
+        f"<tr><td>{escape(metric)}</td><td>{escape(str(value))}</td><td>{escape(threshold)}</td>"
+        + f"<td>{_threshold_badge(verdict)}</td><td>{escape(note)}</td></tr>"
+        for metric, value, threshold, verdict, note in rows_data
     )
-    return _table(["Metric", "数值", "解释"], body)
+    return _table(["Metric", "数值", "通过阈值", "当前判定", "解释"], body)
 
 
 def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -2156,6 +2222,83 @@ def _walkforward_scores(row: Dict[str, Any]) -> tuple[Dict[str, Any], str, str]:
     return {}, "", ""
 
 
+def _walkforward_thresholds(scores: Dict[str, Any]) -> Dict[str, Any]:
+    values = dict(_WALKFORWARD_DEFAULT_THRESHOLDS)
+    raw = scores.get("thresholds") if isinstance(scores, dict) else {}
+    if isinstance(raw, dict):
+        for key in values:
+            if raw.get(key) is not None:
+                values[key] = raw.get(key)
+    return values
+
+
+def _threshold_float(thresholds: Dict[str, Any], key: str) -> float:
+    fallback = _safe_float(_WALKFORWARD_DEFAULT_THRESHOLDS.get(key)) or 0.0
+    return _safe_float(thresholds.get(key)) if _safe_float(thresholds.get(key)) is not None else fallback
+
+
+def _threshold_int(thresholds: Dict[str, Any], key: str, fallback: Any = None) -> int:
+    default = fallback if fallback is not None else _WALKFORWARD_DEFAULT_THRESHOLDS.get(key)
+    value = _safe_float(thresholds.get(key))
+    if value is None:
+        value = _safe_float(default)
+    return int(value or 0)
+
+
+def _min_threshold_verdict(value: Any, minimum: float) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "not_recorded"
+    return "pass" if number >= minimum else "fail"
+
+
+def _reference_verdict(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "not_recorded"
+    return "参考-正" if number > 0 else "参考-弱"
+
+
+def _dsr_threshold_verdict(value: Any, minimum: float) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "not_recorded"
+    return "pass" if number >= minimum else "warn"
+
+
+def _regime_threshold_verdict(scores: Dict[str, Any]) -> str:
+    if scores.get("bull_only_warning") is True:
+        return "warn"
+    if scores.get("regime_breakdown"):
+        return "pass"
+    return "not_recorded"
+
+
+def _walkforward_capacity_value(scores: Dict[str, Any]) -> str:
+    explicit = scores.get("capacity_viability")
+    if explicit:
+        return _cell(explicit)
+    if scores.get("capacity_ok") is True:
+        return "通过"
+    if scores.get("capacity_ok") is False:
+        return "未通过"
+    return "未记录"
+
+
+def _capacity_threshold_verdict(scores: Dict[str, Any]) -> str:
+    if scores.get("capacity_ok") is True:
+        return "pass"
+    if scores.get("capacity_ok") is False:
+        return "fail"
+    return "not_recorded"
+
+
+def _threshold_badge(verdict: str) -> str:
+    value = str(verdict or "not_recorded")
+    klass = "pass" if value == "pass" else "fail" if value == "fail" else "warn"
+    return _badge(value, klass)
+
+
 def _signal_badge_class(metrics: Dict[str, Any]) -> str:
     rank_ic = _safe_float(metrics.get("rank_ic"))
     fdr = _safe_float(metrics.get("fdr_adjusted_p"))
@@ -2185,12 +2328,27 @@ def _strict_badge_class(metrics: Dict[str, Any]) -> str:
 
 
 def _walkforward_badge_class(scores: Dict[str, Any]) -> str:
+    if scores.get("verdict") in {"pass", "warn", "warning", "fail"}:
+        return _stage_badge_class(str(scores.get("verdict")))
+    if scores.get("is_viable") is True:
+        thresholds = _walkforward_thresholds(scores)
+        dsr = _safe_float(scores.get("deflated_sharpe_ratio"))
+        if dsr is not None and dsr < _threshold_float(thresholds, "min_deflated_sharpe_ratio"):
+            return "warn"
+        return "pass"
+    if scores.get("is_viable") is False:
+        return "fail"
     aggregate = _safe_float(scores.get("aggregate_oos_sharpe"))
     worst = _safe_float(scores.get("worst_oos_sharpe"))
     pct_profitable = _safe_float(scores.get("pct_profitable_splits"))
+    thresholds = _walkforward_thresholds(scores)
     if aggregate is None and worst is None:
         return "fail"
-    if aggregate is not None and aggregate > 0 and (worst is None or worst > 0) and (pct_profitable is None or pct_profitable >= 0.5):
+    if (
+        worst is not None
+        and worst >= _threshold_float(thresholds, "min_worst_oos_sharpe")
+        and (pct_profitable is None or pct_profitable >= _threshold_float(thresholds, "min_profitable_splits_pct"))
+    ):
         return "pass"
     if aggregate is not None and aggregate > 0:
         return "warn"

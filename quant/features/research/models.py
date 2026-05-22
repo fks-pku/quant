@@ -224,6 +224,7 @@ class PurgedWalkForwardResult:
     sharpe_degradation: float
     pct_profitable_splits: float
     is_viable: bool
+    capacity_ok: bool = False
     regime_breakdown: Dict[str, Dict[str, float]] = field(default_factory=dict)
     bull_only_warning: bool = False
 

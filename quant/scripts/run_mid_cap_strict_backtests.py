@@ -13,6 +13,7 @@ from quant.api.research_bp import (
     _load_cn_benchmark_provider,
     _load_lot_sizes,
     _strict_backtest_report,
+    _strict_execution_cost_model,
 )
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
@@ -143,15 +144,16 @@ def _run_one(
     benchmark_meta: Dict[str, Any],
     survivorship_audit: Dict[str, Any],
 ) -> Dict[str, Any]:
+    execution_cost_model = _strict_execution_cost_model(strategy_id, {"name": strategy_id}, True)
     data_provider = _DuckDBDailyDateProvider(
         symbols,
         START,
         END,
         include_daily_basic=True,
-        include_execution_liquidity_features=False,
+        include_execution_liquidity_features=True,
     )
     strategy = strategy_class(symbols=symbols)
-    backtest_config = {"slippage_bps": 5, "execution_cost_model": None}
+    backtest_config = {"slippage_bps": 5, "execution_cost_model": execution_cost_model}
     bt_config = {
         "backtest": backtest_config,
         "execution": {"commission": COMMISSION_CFG},
@@ -196,14 +198,14 @@ def _run_one(
 def _write_report(strategy_id: str, title: str, strict_report: Dict[str, Any]) -> Tuple[Path, Path]:
     strategy_dir = REPORT_ROOT / strategy_id
     strategy_dir.mkdir(parents=True, exist_ok=True)
-    result_path = strategy_dir / "last_result_no_execution_cost_model.json"
+    result_path = strategy_dir / "last_result_with_execution_cost_model.json"
     result_path.write_text(json.dumps(strict_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     row = _hypothesis_row(strategy_id, title, strict_report)
-    result = {"run_id": f"{strategy_id}_strict_no_execution_cost_model", "backtested": 1, "rejected": 0, "errors": []}
+    result = {"run_id": f"{strategy_id}_strict_with_execution_cost_model", "backtested": 1, "rejected": 0, "errors": []}
     html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=datetime.now(timezone.utc).isoformat())
     html = _insert_detail_section(html, strategy_id)
-    report_path = strategy_dir / "strict_backtest_report_no_execution_cost_model.html"
+    report_path = strategy_dir / "strict_backtest_report_with_execution_cost_model.html"
     report_path.write_text(html, encoding="utf-8")
     (strategy_dir / "strict_backtest_report.html").write_text(html, encoding="utf-8")
     return report_path, result_path

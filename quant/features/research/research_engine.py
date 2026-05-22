@@ -1757,6 +1757,8 @@ class ResearchEngine:
             "start": start,
             "end": end,
         }
+        if any(_is_a_share_symbol(symbol) for symbol in symbols) and self._walkforward_accepts_parameter("initial_cash"):
+            kwargs["initial_cash"] = 500000
         archive_dir = self._strategy_archive_dir(strategy_id)
         if archive_dir and self._walkforward_accepts_parameter("strategy_archive_dir"):
             kwargs["strategy_archive_dir"] = archive_dir
@@ -1814,7 +1816,7 @@ class ResearchEngine:
     def _attach_walkforward_result(self, strategy_id: str, wf_result: Any, verdict: str, reason: str) -> None:
         if self.research_store is None or not hasattr(self.research_store, "list_hypotheses"):
             return
-        payload = self._walkforward_result_dict(wf_result, verdict, reason)
+        payload = self._walkforward_result_dict(wf_result, verdict, reason, self._walkforward_thresholds())
         try:
             for row in self.research_store.list_hypotheses():
                 if row.get("strategy_id") != strategy_id:
@@ -1827,13 +1829,39 @@ class ResearchEngine:
         except Exception as e:
             logger.warning(f"Failed to attach walk-forward result for {strategy_id}: {e}")
 
+    def _walkforward_thresholds(self) -> Dict[str, Any]:
+        rigor = dict(self.config.rigor_config or {})
+        wf = dict(rigor.get("purged_walkforward") or {})
+        thresholds = dict(rigor.get("thresholds") or {})
+        cost = dict(rigor.get("cost_model") or {})
+        return {
+            "train_window_days": wf.get("train_window_days", 252),
+            "test_window_days": wf.get("test_window_days", 63),
+            "step_days": wf.get("step_days", 63),
+            "purge_days": wf.get("purge_days", 5),
+            "embargo_days": wf.get("embargo_days", 21),
+            "min_train_observations": wf.get("min_train_observations", 126),
+            "min_worst_oos_sharpe": thresholds.get("min_worst_oos_sharpe", 0.3),
+            "min_profitable_splits_pct": thresholds.get("min_profitable_splits_pct", 0.5),
+            "min_deflated_sharpe_ratio": thresholds.get("min_deflated_sharpe_ratio", 0.95),
+            "max_adv_pct": cost.get("max_adv_pct", 0.05),
+        }
+
     @staticmethod
-    def _walkforward_result_dict(wf_result: Any, verdict: str, reason: str) -> Dict[str, Any]:
+    def _walkforward_result_dict(
+        wf_result: Any,
+        verdict: str,
+        reason: str,
+        thresholds: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         splits = list(getattr(wf_result, "splits", []) or [])
+        capacity_ok = getattr(wf_result, "capacity_ok", None)
         return {
             "verdict": verdict,
             "reason": reason,
             "is_viable": bool(getattr(wf_result, "is_viable", False)),
+            "capacity_ok": bool(capacity_ok) if capacity_ok is not None else None,
+            "thresholds": dict(thresholds or {}),
             "aggregate_oos_sharpe": _float_or_default(getattr(wf_result, "aggregate_oos_sharpe", 0.0), 0.0),
             "worst_oos_sharpe": _float_or_default(getattr(wf_result, "worst_oos_sharpe", 0.0), 0.0),
             "pct_profitable_splits": _float_or_default(getattr(wf_result, "pct_profitable_splits", 0.0), 0.0),

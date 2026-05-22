@@ -66,7 +66,7 @@ class RigorHub:
             return PurgedWalkForwardResult(
                 splits=[], aggregate_oos_sharpe=0.0, worst_oos_sharpe=0.0,
                 deflated_sharpe_ratio=None, sharpe_degradation=0.0,
-                pct_profitable_splits=0.0, is_viable=False,
+                pct_profitable_splits=0.0, is_viable=False, capacity_ok=False,
             )
 
         split_results = []
@@ -115,6 +115,7 @@ class RigorHub:
             sharpe_degradation=degradation,
             pct_profitable_splits=profitable,
             is_viable=is_viable,
+            capacity_ok=capacity_ok,
             regime_breakdown=regime_breakdown,
             bull_only_warning=bull_only_warning,
         )
