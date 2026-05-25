@@ -1,0 +1,26 @@
+strategy:
+  name: ashare_gold_equity_barbell_timing
+  enabled: false
+  status: candidate
+  priority: 20
+
+parameters:
+  pit_universe_enabled: true
+  universe_selection_policy: dynamic_pit_category_wide
+  universe_start: "2016-01-01"
+  universe_end: "2025-12-31"
+  universe_min_history_days_as_of: 0
+  universe_max_symbols_per_category: 0
+  timing_symbol: "000300"
+  momentum_lookback: 63
+  momentum_skip: 1
+  trend_window: 120
+  volatility_window: 20
+  liquidity_window: 20
+  min_avg_turnover: 20000000.0
+  target_exposure: 0.98
+  risk_leg_weight: 0.50
+  holding_days: 20
+  lot_size: 100
+  require_pit_size: true
+  pit_size_fields: ["total_netasset", "net_asset", "fund_size", "aum", "total_net_asset", "net_assets"]

@@ -24,7 +24,10 @@ from quant.features.backtest.market_rules import (
     is_suspended,
 )
 from quant.features.backtest.order_executor import execute_order
-from quant.features.backtest.dividend_processor import process_dividends
+from quant.features.backtest.dividend_processor import (
+    process_adjustment_factor_changes,
+    process_dividends,
+)
 from quant.features.backtest.portfolio_factory import create_portfolio_contexts, create_context
 from quant.features.backtest.nav_calculator import calculate_daily_nav, extract_open_positions
 
@@ -163,17 +166,27 @@ class Backtester:
 
             # --- Step 3: Process dividends ---
             all_stock_divs: List[Dict[str, Any]] = []
+            all_share_adjustments: List[Dict[str, Any]] = []
             if use_subs:
                 for sname, pf in portfolio_map.items():
                     divs = process_dividends(data_provider, pf, symbols, current_date, last_prices, entry_times, diag)
                     for div_info in divs:
                         div_info['strategy'] = sname
                     all_stock_divs.extend(divs)
+                    adjustments = process_adjustment_factor_changes(
+                        data_provider, pf, prev_close_bars, today_bars, current_date
+                    )
+                    for adj_info in adjustments:
+                        adj_info['strategy'] = sname
+                    all_share_adjustments.extend(adjustments)
             else:
                 divs = process_dividends(data_provider, primary_portfolio, symbols, current_date, last_prices, entry_times, diag)
                 all_stock_divs.extend(divs)
+                all_share_adjustments.extend(process_adjustment_factor_changes(
+                    data_provider, primary_portfolio, prev_close_bars, today_bars, current_date
+                ))
 
-            for div_info in all_stock_divs:
+            for div_info in [*all_stock_divs, *all_share_adjustments]:
                 sym = div_info['symbol']
                 target_sname = div_info.get('strategy')
                 for strategy in strategies:
@@ -181,12 +194,18 @@ class Backtester:
                         continue
                     current_pos = strategy.get_position(sym)
                     if current_pos > 0:
-                        additional = div_info.get('additional_shares', current_pos * div_info['ratio'])
+                        if 'quantity_delta' in div_info:
+                            quantity_delta = div_info['quantity_delta']
+                        elif 'additional_shares' in div_info:
+                            quantity_delta = div_info['additional_shares']
+                        else:
+                            quantity_delta = current_pos * div_info['ratio']
+                        side = "BUY" if quantity_delta >= 0 else "SELL"
                         strategy.on_fill(strategy.context, SimpleNamespace(
-                            symbol=sym, quantity=additional, side="BUY",
+                            symbol=sym, quantity=abs(quantity_delta), side=side,
                             price=0.0, fill_price=0.0, pnl=0.0, commission=0.0,
                             realized_pnl=0.0, entry_price=0.0, exit_price=0.0,
-                            intended_qty=additional, cost_breakdown={},
+                            intended_qty=abs(quantity_delta), cost_breakdown={},
                             entry_time=current_date, exit_time=current_date,
                             signal_date=current_date, fill_date=current_date,
                             strategy_name=_strategy_name(strategy),

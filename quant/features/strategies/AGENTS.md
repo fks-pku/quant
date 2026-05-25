@@ -30,7 +30,7 @@
 - risk-off 清仓后必须重置调仓 gate；RSRS/风控等外层 regime 从 off 重新切到 on 时，不能被旧的 `_last_rebalance_date` 卡住
 - 只有实际完成候选选择/调仓的 rebalance 才能刷新 `_last_rebalance_date`；空候选池、字段缺失或无有效 NAV 不得让策略等待下一个 holding window
 - 候选入场过滤与持仓退出过滤必须分离；入场 diagnostics 不得混入 `stop_loss`、`take_profit`、`trailing_stop` 等只对已有持仓有意义的退出原因
-- 覆盖 `on_fill()` 的策略必须兼容回测引擎的 synthetic fill：送股/转增可能以 `BUY`、`fill_price=0` 回调同步策略内部仓位，内部成本/峰值价状态要随之按数量比例调整
+- 覆盖 `on_fill()` 的策略必须兼容回测引擎的 synthetic fill：送股/转增可能以 `BUY`、`fill_price=0` 回调同步策略内部仓位，ETF/基金 `adj_factor` 份额折算可能以 `BUY` 或 `SELL`、`fill_price=0` 同步内部仓位，内部成本/峰值价状态要随之按数量比例调整
 
 ## 修改守则
 

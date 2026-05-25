@@ -1520,6 +1520,33 @@ C37-03  close<2、turnover 不足、is_st=True、is_listed=False、list_status='
 
 ---
 
+## CASE-38: ETF adj_factor 份额调整
+
+ETF 日线若出现大幅 `adj_factor` 跳变且原始价格按相反方向跳变，回测必须把它识别为份额折算，而不是把原始价格跳变计入真实收益。
+
+### 配置
+
+CN ETF、零佣金、零滑点、`force_close_on_stop=False`。
+
+### 行情
+
+| Date       | Day | Raw Close | adj_factor | adj_close | 状态 |
+| ---------- | --- | --------- | ---------- | --------- | ---- |
+| 2025-03-06 | D0  | 1.00      | 1.00       | 1.00      | signal BUY 10000 |
+| 2025-03-07 | D1  | 1.00      | 1.00       | 1.00      | exec BUY 10000 |
+| 2025-03-10 | D2  | 2.00      | 0.50       | 1.00      | 份额折算，qty 10000 -> 5000 |
+| 2025-03-11 | D3  | 2.00      | 0.50       | 1.00      | exec SELL 5000 |
+
+### 断言
+
+```text
+C38-01  final_nav == initial_cash，adj_factor 跳变不能产生虚假 NAV 利润
+C38-02  synthetic adjustment 同步 strategy._positions，持仓从 10000 调整为 5000
+C38-03  SELL qty == 5000，entry_price == 2.00，realized_pnl == 0
+```
+
+---
+
 ## Regression B1: 结束日 deferred order 过期
 
 验证最后一个真实交易日 after-close 产生的订单没有下一交易日时不会用 synthetic bar 成交。
@@ -1598,6 +1625,7 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 |35|US|round-trip 交易统计包含买入佣金|
 |36|CN|status 表驱动 ST 5% fallback、显式涨跌停、停牌 synthetic bar|
 |37|CN|小市值低价策略退市风险护栏：价格/流动性/status 买入过滤 + 每日风险退出|
+|38|CN|ETF adj_factor 大幅跳变按份额折算同步组合与策略仓位|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
 |R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

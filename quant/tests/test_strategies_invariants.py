@@ -19,7 +19,7 @@ from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy 
 )
 from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
 from quant.features.strategies.registry import StrategyRegistry, strategy
-from quant.features.rejected_strategy.ashare_gold_equity_barbell_timing.strategy import (
+from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
     AShareGoldEquityBarbellTimingStrategy,
 )
 

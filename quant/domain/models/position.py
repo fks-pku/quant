@@ -140,9 +140,11 @@ class Position:
             self.add_buy_lot(fill_date, fill_quantity, fill_price)
 
     def adjust_lots_for_stock_dividend(self, ratio: float) -> None:
-        if not self._lots or ratio <= 0:
+        self.adjust_lots_for_quantity_factor(1.0 + ratio)
+
+    def adjust_lots_for_quantity_factor(self, factor: float) -> None:
+        if not self._lots or factor <= 0:
             return
-        factor = 1.0 + ratio
         new_lots: Dict[date, LotEntry] = {}
         total_cost = 0.0
         total_qty = 0.0

@@ -2610,6 +2610,110 @@ class TestCase37LowPriceSmallCapDelistingRiskGuard:
 
 
 # ============================================================================
+# CASE-38: ETF adj_factor share adjustment
+# ============================================================================
+
+CASE38_CONFIG = {
+    "backtest": {"slippage_bps": 0, "force_close_on_stop": False},
+    "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+def _case38_bar(dt, price, adj_factor):
+    return {
+        "symbol": "510100",
+        "timestamp": dt,
+        "open": price,
+        "high": price,
+        "low": price,
+        "close": price,
+        "volume": 10_000_000,
+        "adj_open": price * adj_factor,
+        "adj_high": price * adj_factor,
+        "adj_low": price * adj_factor,
+        "adj_close": price * adj_factor,
+        "adj_factor": adj_factor,
+    }
+
+
+@pytest.fixture
+def case38_result():
+    data = pd.DataFrame([
+        _case38_bar(datetime(2025, 3, 6), 1.0, 1.0),
+        _case38_bar(datetime(2025, 3, 7), 1.0, 1.0),
+        _case38_bar(datetime(2025, 3, 10), 2.0, 0.5),
+        _case38_bar(datetime(2025, 3, 11), 2.0, 0.5),
+    ])
+    bt = make_backtester(CASE38_CONFIG, lot_sizes={"510100": 100})
+
+    class AdjFactorSplitStrat:
+        name = "AdjFactorSplit"
+        context = None
+        _positions = {}
+        _position_history = []
+        _day = -1
+
+        def on_start(self, ctx):
+            self.context = ctx
+
+        def on_before_trading(self, ctx, td):
+            pass
+
+        def on_data(self, ctx, data):
+            pass
+
+        def on_after_trading(self, ctx, td):
+            self._day += 1
+            if self._day == 0:
+                ctx.order_manager.submit_order("510100", 10_000, "BUY", "MARKET", None, self.name)
+            elif self._day == 2:
+                pos = self._positions.get("510100", 0)
+                if pos > 0:
+                    ctx.order_manager.submit_order("510100", pos, "SELL", "MARKET", None, self.name)
+
+        def on_fill(self, ctx, fill):
+            qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+            self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+            self._position_history.append(self._positions.get(fill.symbol, 0))
+
+        def get_position(self, symbol):
+            return self._positions.get(symbol, 0)
+
+        def on_stop(self, ctx):
+            pass
+
+    strat = AdjFactorSplitStrat()
+    result = bt.run(
+        start=data["timestamp"].min(),
+        end=data["timestamp"].max(),
+        strategies=[strat],
+        initial_cash=20_000,
+        data_provider=DataFrameProvider(data),
+        symbols=["510100"],
+    )
+    result._strategy_positions = strat._positions.copy()
+    result._strategy_position_history = list(strat._position_history)
+    return result
+
+
+class TestCase38EtfAdjFactorShareAdjustment:
+    def test_c38_01_adj_factor_jump_does_not_create_nav_profit(self, case38_result):
+        assert case38_result.final_nav == pytest.approx(20_000, rel=1e-6)
+
+    def test_c38_02_strategy_position_syncs_reverse_split_delta(self, case38_result):
+        assert 5_000 in case38_result._strategy_position_history
+        assert case38_result._strategy_positions.get("510100", 0) == pytest.approx(0)
+
+    def test_c38_03_sell_uses_adjusted_lot_quantity_and_cost(self, case38_result):
+        sells = [trade for trade in case38_result.trades if trade.side == "SELL"]
+        assert len(sells) == 1
+        assert sells[0].quantity == pytest.approx(5_000)
+        assert sells[0].entry_price == pytest.approx(2.0)
+        assert sells[0].realized_pnl == pytest.approx(0.0)
+
+
+# ============================================================================
 # CASE-31: Reject mixed currencies
 # ============================================================================
 
