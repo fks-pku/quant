@@ -29,6 +29,7 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
         min_turnover: float = 50000.0,
         lot_size: int = 100,
         max_lookback: int = 126,
+        target_weight_slots: Optional[int] = None,
     ):
         self._symbols = [str(symbol) for symbol in symbols] if symbols else []
         self.max_positions = max(1, int(max_positions))
@@ -40,6 +41,7 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
         self.min_avg_turnover = self.min_turnover
         self.lot_size = max(1, int(lot_size))
         self.max_lookback = max(2, int(max_lookback))
+        self.target_weight_slots = max(1, int(target_weight_slots)) if target_weight_slots else None
         self.delisting_risk_guard = True
         self.min_trade_price = self.min_price
         self.liquidity_lookback = 20
@@ -53,6 +55,7 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
                 "cap_percentile_high": self.cap_percentile_high,
                 "min_price": self.min_price,
                 "min_turnover": self.min_turnover,
+                "target_weight_slots": self.target_weight_slots,
             },
             "entry_rejections": {},
             "exit_triggers": {},
@@ -147,7 +150,8 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
         nav = float(getattr(getattr(context, "portfolio", None), "nav", 0.0) or 0.0)
         if nav <= 0:
             return
-        target_value = nav * self.max_position_pct / float(max(1, len(selected)))
+        target_slots = self.target_weight_slots or len(selected)
+        target_value = nav * self.max_position_pct / float(max(1, target_slots))
         for symbol in selected:
             price = self._get_last_price(symbol)
             if price <= 0:
@@ -365,6 +369,7 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
             "min_price": self.min_price,
             "min_turnover": self.min_turnover,
             "lot_size": self.lot_size,
+            "target_weight_slots": self.target_weight_slots,
             "formula_key": self.formula_key,
             "required_fields": self.required_fields,
         }

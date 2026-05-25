@@ -165,6 +165,217 @@ def test_persistent_candidate_merges_archived_strategy_parameters(monkeypatch):
     assert merged["research_meta"]["strategy_spec"]["horizon_days"] == 7
 
 
+def test_pit_archived_candidate_overrides_stale_persisted_universe(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    monkeypatch.setattr(
+        research_module,
+        "_archived_candidate_info",
+        lambda sid: {
+            "id": sid,
+            "parameters": {
+                "pit_universe_enabled": True,
+                "timing_symbol": "000300",
+                "risk_category_symbols": {"csi300": ["510300", "159919"]},
+                "defensive_category_symbols": {"gold": ["518880", "159934"]},
+            },
+            "research_meta": {
+                "strategy_spec": {
+                    "signal_formula_key": "ashare_gold_equity_barbell_timing",
+                    "universe": ["000300", "159919", "510300", "518880", "159934"],
+                    "risk_category_symbols": {"csi300": ["510300", "159919"]},
+                    "defensive_category_symbols": {"gold": ["518880", "159934"]},
+                }
+            },
+        },
+    )
+
+    merged = research_module._merge_archived_candidate_defaults(
+        "ashare_gold_equity_barbell_timing",
+        {
+            "id": "ashare_gold_equity_barbell_timing",
+            "name": "persisted",
+            "parameters": {
+                "risk_symbols": ["510050", "510300"],
+                "defensive_symbols": ["518880"],
+                "timing_symbol": "510300",
+            },
+            "research_meta": {
+                "strategy_spec": {
+                    "universe": ["510050", "510300", "518880"],
+                    "risk_symbols": ["510050", "510300"],
+                }
+            },
+        },
+    )
+
+    assert merged["name"] == "persisted"
+    assert merged["parameters"]["pit_universe_enabled"] is True
+    assert "risk_symbols" not in merged["parameters"]
+    assert merged["parameters"]["risk_category_symbols"] == {"csi300": ["510300", "159919"]}
+    spec = merged["research_meta"]["strategy_spec"]
+    assert spec["universe"] == ["000300", "159919", "510300", "518880", "159934"]
+    assert "risk_symbols" not in spec
+    assert spec["risk_category_symbols"] == {"csi300": ["510300", "159919"]}
+
+
+def test_research_engine_uses_archived_resolver_for_strategy_symbols():
+    tmp_path = _test_root()
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate(
+            {
+                "id": "ashare_gold_equity_barbell_timing",
+                "status": "rejected",
+                "research_meta": {"strategy_spec": {"universe": ["510050", "510300", "518880"]}},
+            }
+        )
+
+        def resolver(sid):
+            assert sid == "ashare_gold_equity_barbell_timing"
+            return {
+                "id": sid,
+                "parameters": {"pit_universe_enabled": True},
+                "research_meta": {
+                    "strategy_spec": {
+                        "universe": ["000300", "159919", "510300", "518880", "159934"],
+                    }
+                },
+            }
+
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=False),
+            research_store=research_store,
+            archived_candidate_resolver=resolver,
+        )
+
+        assert engine._strategy_symbols("ashare_gold_equity_barbell_timing") == [
+            "000300",
+            "159919",
+            "510300",
+            "518880",
+            "159934",
+        ]
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_update_hypothesis_backtest_refreshes_pit_strategy_spec(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    tmp_path = _test_root()
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate(
+            {
+                "id": "ashare_gold_equity_barbell_timing",
+                "status": "rejected",
+                "parameters": {"risk_symbols": ["510050", "510300"]},
+                "research_meta": {"strategy_spec": {"universe": ["510050", "510300", "518880"]}},
+            }
+        )
+        research_store.upsert_hypothesis(
+            {
+                "hypothesis_id": "strict_backtest_ashare_gold_equity_barbell_timing",
+                "strategy_id": "ashare_gold_equity_barbell_timing",
+                "title": "A-share Gold-Equity ETF Barbell Timing",
+                "status": "rejected",
+                "stage": "backtest",
+                "source": "fixture",
+                "source_url": "",
+                "thesis": "fixture",
+                "decision_reason": "",
+                "metrics": {},
+                "evidence": {
+                    "strategy_spec": {
+                        "universe": ["510050", "510300", "518880"],
+                        "risk_symbols": ["510050", "510300"],
+                    }
+                },
+            }
+        )
+        monkeypatch.setattr(
+            research_module,
+            "_archived_candidate_info",
+            lambda sid: {
+                "id": sid,
+                "parameters": {
+                    "pit_universe_enabled": True,
+                    "risk_category_symbols": {"csi300": ["510300", "159919"]},
+                    "defensive_category_symbols": {"gold": ["518880", "159934"]},
+                },
+                "research_meta": {
+                    "strategy_spec": {
+                        "universe": ["000300", "159919", "510300", "518880", "159934"],
+                        "risk_category_symbols": {"csi300": ["510300", "159919"]},
+                        "defensive_category_symbols": {"gold": ["518880", "159934"]},
+                    }
+                },
+            },
+        )
+
+        strict_report = {
+            "metrics": {
+                "sharpe": 1.2,
+                "sortino": 1.6,
+                "cagr": 0.14,
+                "max_drawdown_pct": -0.18,
+                "calmar_ratio": 0.78,
+            },
+            "benchmark": {"symbol": "000300"},
+        }
+
+        pool = CandidatePool(research_store=research_store)
+        research_module._update_hypothesis_backtest(
+            pool,
+            "ashare_gold_equity_barbell_timing",
+            strict_report,
+            "candidate",
+            "backtest",
+            "Strict Backtester Sharpe 1.20",
+        )
+
+        row = research_store.get_hypothesis("strict_backtest_ashare_gold_equity_barbell_timing")
+        spec = row["evidence"]["strategy_spec"]
+        assert spec["universe"] == ["000300", "159919", "510300", "518880", "159934"]
+        assert "risk_symbols" not in spec
+        assert spec["risk_category_symbols"] == {"csi300": ["510300", "159919"]}
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_archived_pit_universe_resolution_is_cached(monkeypatch):
+    from quant.api import research_bp as research_module
+    from quant.infrastructure.research import cn_etf_universe as universe_module
+
+    calls = {"count": 0}
+
+    def fake_build():
+        calls["count"] += 1
+        return {
+            "symbols": ["510300", "518880"],
+            "risk_category_symbols": {"csi300": ["510300"]},
+            "defensive_category_symbols": {"gold": ["518880"]},
+        }
+
+    monkeypatch.setattr(universe_module, "build_gold_equity_barbell_pit_universe", fake_build)
+    research_module._ARCHIVED_PIT_UNIVERSE_CACHE.clear()
+
+    params = {"pit_universe_enabled": True, "timing_symbol": "000300"}
+    first_params, first_symbols = research_module._archived_pit_universe_parameters(
+        "ashare_gold_equity_barbell_timing",
+        params,
+    )
+    second_params, second_symbols = research_module._archived_pit_universe_parameters(
+        "ashare_gold_equity_barbell_timing",
+        params,
+    )
+
+    assert calls["count"] == 1
+    assert first_symbols == second_symbols == ["000300", "510300", "518880"]
+    assert first_params["risk_category_symbols"] == second_params["risk_category_symbols"]
+
+
 def test_evaluator_parses_extended_json_report():
     class JsonLLM:
         def analyze(self, prompt, context):
@@ -292,13 +503,15 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         fast_report = (tmp_path / "research" / "reports" / "latest" / "fast_research_report.html").read_text(encoding="utf-8")
         strict_report = (tmp_path / "research" / "reports" / "latest" / "strict_backtest_report.html").read_text(encoding="utf-8")
         wf_report = (tmp_path / "research" / "reports" / "latest" / "walkforward_audit_report.html").read_text(encoding="utf-8")
-        assert not (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
+        full_report = (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").read_text(encoding="utf-8")
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "fast_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "strict_backtest_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
-        assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
         assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.md").exists()
         assert (tmp_path / "research" / "reports" / "latest" / "metadata.json").exists()
+        assert "End-to-End Research Report" in full_report
+        assert "Metric Checklist" in full_report
         assert "信号公式" in fast_report
         assert "full_research_report.html" not in fast_report
         assert 'class="formula"' in fast_report
@@ -379,11 +592,11 @@ def test_research_engine_formal_research_loads_local_idea_bank_without_scouting(
         assert ideas[0]["title"] == "Daily Momentum Breakout"
         assert (tmp_path / "research" / "reports" / "latest" / "strategy_evaluation.md").exists()
         assert not (tmp_path / "research" / "full_research_report.html").exists()
-        assert not (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "full_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "fast_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "strict_backtest_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
-        assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+        assert (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -1627,10 +1840,10 @@ def test_walkforward_trade_enrichment_adds_capacity_fields():
     assert trade["avg_daily_volume"] == pytest.approx(20_000.0)
 
 
-def test_research_config_default_backtest_window_spans_2012_to_2025():
+def test_research_config_default_backtest_window_spans_2016_to_2025():
     cfg = ResearchConfig()
 
-    assert cfg.default_backtest_start == "2012-01-01"
+    assert cfg.default_backtest_start == "2016-01-01"
     assert cfg.default_backtest_end == "2025-12-31"
 
 
@@ -1664,8 +1877,12 @@ def test_api_load_research_config_reads_feature_yaml():
     cfg = research_module._load_research_config()
 
     assert cfg.sources == ["arxiv", "ssrn", "nber", "blog"]
+    assert cfg.default_backtest_start == "2016-01-01"
+    assert cfg.default_backtest_end == "2025-12-31"
     assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
+    assert cfg.rigor_config["thresholds"]["min_profitable_splits_pct"] == 0.55
+    assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
 
 
 def test_api_load_research_config_does_not_hide_invalid_config(monkeypatch):
@@ -1713,6 +1930,35 @@ def test_api_make_rigor_hub_uses_two_arg_walkforward_runner_and_experiment_store
     assert response["metrics"]["sharpe"] == 0.0
     assert calls == [("test_strat", {"start": "2020-01-01", "end": "2020-02-01"})]
     assert hub._experiment_store is experiment_store
+
+
+def test_walkforward_candidate_info_prefers_stored_candidate(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    stored = {
+        "id": "stored_strategy",
+        "parameters": {"target_exposure": 0.5},
+        "research_meta": {"strategy_spec": {"universe": ["600001"]}},
+    }
+
+    monkeypatch.setattr(research_module, "_archived_candidate_info", lambda sid, archive_dir=None: None)
+    monkeypatch.setattr(research_module, "_stored_candidate_info", lambda sid: stored)
+
+    info = research_module._candidate_info_for_walkforward("stored_strategy", symbols=["600002"])
+
+    assert info is stored
+    assert info["parameters"]["target_exposure"] == 0.5
+
+
+def test_walkforward_candidate_info_falls_back_to_symbols(monkeypatch):
+    from quant.api import research_bp as research_module
+
+    monkeypatch.setattr(research_module, "_archived_candidate_info", lambda sid, archive_dir=None: None)
+    monkeypatch.setattr(research_module, "_stored_candidate_info", lambda sid: None)
+
+    info = research_module._candidate_info_for_walkforward("missing_strategy", symbols=["600002"])
+
+    assert info["research_meta"]["strategy_spec"]["universe"] == ["600002"]
 
 
 def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(monkeypatch):
@@ -1877,7 +2123,7 @@ def test_api_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._config["min_observations"] == 123
     assert validator._config["min_stocks"] == 17
     assert validator._config["factor_validation_enabled"] is True
-    assert validator._config["start_date"] == "2012-01-01"
+    assert validator._config["start_date"] == "2016-01-01"
     assert validator._config["end_date"] == "2025-12-31"
 
 
@@ -2229,13 +2475,18 @@ def test_api_latest_report_payload_points_to_stage_reports(tmp_path):
 
     report_dir = tmp_path / "research"
     (report_dir / "reports" / "latest").mkdir(parents=True)
+    full_path = report_dir / "reports" / "latest" / "full_research_report.html"
     fast_path = report_dir / "reports" / "latest" / "fast_research_report.html"
+    full_path.write_text("<html></html>", encoding="utf-8")
     fast_path.write_text("<html></html>", encoding="utf-8")
 
     payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
 
     assert payload["available"] is True
     assert payload["reports_root"] == str(report_dir / "reports")
+    assert payload["full_report"]["available"] is True
+    assert payload["full_report"]["path"] == str(full_path)
+    assert payload["full_report"]["url"] == "/api/research/report/latest"
     assert payload["stage_reports"]["fast_research"]["available"] is True
     assert payload["stage_reports"]["fast_research"]["path"] == str(fast_path)
     assert payload["stage_reports"]["fast_research"]["url"] == "/api/research/report/stage/fast_research"
@@ -2254,7 +2505,26 @@ def test_api_latest_report_payload_ignores_legacy_full_report(tmp_path):
     payload = research_module._latest_report_payload(ResearchConfig(research_dir=str(report_dir)))
 
     assert payload["available"] is False
-    assert "path" not in payload
+    assert payload["full_report"]["available"] is False
+
+
+def test_api_latest_report_endpoint_serves_full_report(tmp_path, monkeypatch):
+    from flask import Flask
+    from quant.api import research_bp as research_module
+
+    report_dir = tmp_path / "research"
+    latest_dir = report_dir / "reports" / "latest"
+    latest_dir.mkdir(parents=True)
+    (latest_dir / "full_research_report.html").write_text("<html><body>full</body></html>", encoding="utf-8")
+    monkeypatch.setattr(research_module, "_load_research_config", lambda: ResearchConfig(research_dir=str(report_dir)))
+
+    app = Flask(__name__)
+    app.register_blueprint(research_module.research_bp)
+    response = app.test_client().get("/api/research/report/latest")
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/html"
+    assert b"full" in response.data
 
 
 def test_api_parse_research_idea_statuses():
@@ -2317,5 +2587,18 @@ def test_cli_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._factor_data is factor_data
     assert validator._config["min_observations"] == 88
     assert validator._config["sensitivity_enabled"] is True
-    assert validator._config["start_date"] == "2012-01-01"
+    assert validator._config["start_date"] == "2016-01-01"
     assert validator._config["end_date"] == "2025-12-31"
+
+
+def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
+    from quant.scripts import run_research as cli
+
+    cfg = cli._load_research_config()
+
+    assert cfg.default_backtest_start == "2016-01-01"
+    assert cfg.default_backtest_end == "2025-12-31"
+    assert cfg.production_gate_config["min_profitable_splits_pct"] == 0.55
+    assert cfg.rigor_config["thresholds"]["min_profitable_splits_pct"] == 0.55
+    assert cfg.rigor_config["thresholds"]["min_deflated_sharpe_ratio"] == 0.95
+    assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05

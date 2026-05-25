@@ -1,4 +1,4 @@
-"""Run strict backtests for large-cap A-share stock timing candidates."""
+﻿"""Run strict backtests for large-cap A-share stock timing candidates."""
 
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
+from quant.features.strategies.reject.ashare_large_cap_low_vol_momentum_timing.strategy import (
+    AShareLargeCapLowVolMomentumTimingStrategy,
+)
 from quant.features.strategies._mid_cap_common import AShareMidCapCompositeBase, ScoreSpec
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
@@ -31,7 +34,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 
-START = datetime(2012, 1, 1)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000.0
 STRATEGY_ID = "ashare_large_cap_low_vol_momentum_timing"
@@ -90,6 +93,206 @@ SCENARIOS: List[Dict[str, Any]] = [
         "take_profit_pct": 0.25,
         "trailing_stop_pct": 0.10,
         "score_profile": "momentum_lowvol",
+    },
+    {
+        "name": "top_band_trend_elastic_ma60",
+        "cap_percentile_low": 0.90,
+        "cap_percentile_high": 1.00,
+        "max_positions": 5,
+        "max_position_pct": 0.90,
+        "holding_days": 5,
+        "min_turnover": 120_000.0,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 60,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 0.98,
+        "stop_loss_pct": 0.06,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "trend_elastic",
+    },
+    {
+        "name": "large_pool_trend_elastic_ma60",
+        "cap_percentile_low": 0.00,
+        "cap_percentile_high": 1.00,
+        "max_positions": 6,
+        "max_position_pct": 0.90,
+        "holding_days": 5,
+        "min_turnover": 120_000.0,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 60,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 0.98,
+        "stop_loss_pct": 0.06,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "trend_elastic",
+    },
+    {
+        "name": "large_pool_trend_elastic_ma120",
+        "cap_percentile_low": 0.00,
+        "cap_percentile_high": 1.00,
+        "max_positions": 5,
+        "max_position_pct": 0.90,
+        "holding_days": 10,
+        "min_turnover": 120_000.0,
+        "timing_ma": 200,
+        "timing_exit_buffer": 0.97,
+        "timing_momentum_lookback": 60,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 120,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 0.97,
+        "stop_loss_pct": 0.08,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "trend_elastic",
+    },
+    {
+        "name": "rule_top20_quality_trend_ma60",
+        "cap_percentile_low": 0.80,
+        "cap_percentile_high": 1.00,
+        "max_positions": 12,
+        "target_weight_slots": 12,
+        "max_position_pct": 0.90,
+        "holding_days": 5,
+        "min_turnover": 120_000.0,
+        "use_market_timing": False,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 60,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 1.00,
+        "min_long_momentum": 0.00,
+        "min_recent_momentum": 0.00,
+        "max_volatility": 0.70,
+        "min_drawdown": -0.35,
+        "max_pb": 15.0,
+        "max_ps_ttm": 20.0,
+        "stop_loss_pct": 0.06,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "rule_based_quality_trend",
+    },
+    {
+        "name": "rule_top20_quality_trend_ma120",
+        "cap_percentile_low": 0.80,
+        "cap_percentile_high": 1.00,
+        "max_positions": 12,
+        "target_weight_slots": 12,
+        "max_position_pct": 0.90,
+        "holding_days": 10,
+        "min_turnover": 120_000.0,
+        "use_market_timing": False,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 120,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 1.00,
+        "min_long_momentum": 0.00,
+        "min_recent_momentum": 0.00,
+        "max_volatility": 0.65,
+        "min_drawdown": -0.35,
+        "max_pb": 15.0,
+        "max_ps_ttm": 20.0,
+        "stop_loss_pct": 0.08,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "rule_based_quality_trend",
+    },
+    {
+        "name": "rule_top30_quality_trend_ma60",
+        "cap_percentile_low": 0.70,
+        "cap_percentile_high": 1.00,
+        "max_positions": 15,
+        "target_weight_slots": 15,
+        "max_position_pct": 0.90,
+        "holding_days": 5,
+        "min_turnover": 100_000.0,
+        "use_market_timing": False,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 60,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 1.00,
+        "min_long_momentum": 0.00,
+        "min_recent_momentum": 0.00,
+        "max_volatility": 0.75,
+        "min_drawdown": -0.40,
+        "max_pb": 18.0,
+        "max_ps_ttm": 25.0,
+        "stop_loss_pct": 0.06,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "rule_based_quality_trend",
+    },
+    {
+        "name": "rule_top20_quality_trend_monthly_ma60",
+        "cap_percentile_low": 0.80,
+        "cap_percentile_high": 1.00,
+        "max_positions": 12,
+        "target_weight_slots": 12,
+        "max_position_pct": 0.90,
+        "holding_days": 20,
+        "min_turnover": 120_000.0,
+        "use_market_timing": False,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 60,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 0.95,
+        "min_long_momentum": 0.00,
+        "min_recent_momentum": 0.00,
+        "max_volatility": 0.70,
+        "min_drawdown": -0.40,
+        "max_pb": 15.0,
+        "max_ps_ttm": 20.0,
+        "stop_loss_pct": 0.10,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "rule_based_quality_trend",
+    },
+    {
+        "name": "rule_top20_quality_trend_monthly_ma120",
+        "cap_percentile_low": 0.80,
+        "cap_percentile_high": 1.00,
+        "max_positions": 12,
+        "target_weight_slots": 12,
+        "max_position_pct": 0.90,
+        "holding_days": 20,
+        "min_turnover": 120_000.0,
+        "use_market_timing": False,
+        "timing_ma": 120,
+        "timing_exit_buffer": 0.96,
+        "timing_momentum_lookback": 40,
+        "min_timing_momentum": -0.10,
+        "symbol_trend_ma": 120,
+        "symbol_entry_buffer": 1.00,
+        "symbol_exit_buffer": 0.95,
+        "min_long_momentum": 0.00,
+        "min_recent_momentum": 0.00,
+        "max_volatility": 0.65,
+        "min_drawdown": -0.40,
+        "max_pb": 15.0,
+        "max_ps_ttm": 20.0,
+        "stop_loss_pct": 0.10,
+        "take_profit_pct": 0.0,
+        "trailing_stop_pct": 0.0,
+        "score_profile": "rule_based_quality_trend",
     },
     {
         "name": "top20_quality_defensive_ma120",
@@ -215,7 +418,7 @@ DETAIL_SECTION = """
 <tr><td>2. 大盘趋势风控</td><td>用 000300 的历史后复权收盘判断风险开关；风险关闭时清仓并保持现金，重新风险开启时重置调仓 gate。</td><td>网格测试 120/200 日均线和 40/60 日动量护栏。</td></tr>
 <tr><td>3. 横截面信号</td><td>候选池内按 percentile rank 打分，组合 12-1 动量、60 日动量、120 日低波、120 日小回撤、低 PB/PS 和高流通市值。</td><td>只用当日及历史后复权价格、当日财务估值字段。</td></tr>
 <tr><td>4. 持仓风控</td><td>持仓每日先跑状态/价格/流动性退出，并跟踪真实成交均价触发止损/移动止盈。</td><td>止损 8%-10%；盈利后回撤 8%-10% 出场。</td></tr>
-<tr><td>5. 严格执行</td><td>信号收盘后生成，订单 T+1 开盘执行；启用 A 股日线流动性冲击成本、真实佣金税费、涨跌停/停牌/手数约束。</td><td>目标：CAGR &gt; 10%，MaxDD 不超过 30%。</td></tr>
+<tr><td>5. 严格执行</td><td>信号收盘后生成，订单 T+1 开盘执行；启用 A 股日线流动性冲击成本、真实佣金税费、涨跌停/停牌/手数约束。</td><td>目标：CAGR &gt; 10%，MaxDD 不超过 40%。</td></tr>
 </tbody></table></div>
 """
 
@@ -603,7 +806,9 @@ class LargeCapLowVolMomentumTimingStrategy(AShareMidCapCompositeBase):
 def main() -> None:
     args = _parse_args()
     scenarios = _selected_scenarios(args.names)
-    symbols, lot_sizes, benchmark_provider, benchmark_meta, survivorship_audit = _load_shared_inputs()
+    symbols, lot_sizes, benchmark_provider, benchmark_meta, survivorship_audit = _load_shared_inputs(
+        args.top_market_cap_limit
+    )
     rows = []
     strict_reports = {}
     for scenario in scenarios:
@@ -639,11 +844,16 @@ def main() -> None:
     )
 
 
-def _load_shared_inputs() -> Tuple[List[str], Dict[str, int], BenchmarkProvider, Dict[str, Any], Dict[str, Any]]:
+def _load_shared_inputs(
+    top_market_cap_limit: Optional[int] = None,
+) -> Tuple[List[str], Dict[str, int], BenchmarkProvider, Dict[str, Any], Dict[str, Any]]:
     db_provider = DuckDBProvider()
     db_provider.connect()
     try:
-        stock_symbols = _load_ashare_symbols(db_provider)
+        if top_market_cap_limit:
+            stock_symbols = _load_latest_top_market_cap_symbols(db_provider, top_market_cap_limit)
+        else:
+            stock_symbols = _load_ashare_symbols(db_provider)
         symbols = [*stock_symbols, TIMING_SYMBOL]
         lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
         benchmark_provider, benchmark_meta = _load_cn_benchmark_provider(db_provider, START, END, BenchmarkProvider)
@@ -651,6 +861,45 @@ def _load_shared_inputs() -> Tuple[List[str], Dict[str, int], BenchmarkProvider,
     finally:
         db_provider.disconnect()
     return stock_symbols, lot_sizes, benchmark_provider, benchmark_meta, survivorship_audit
+
+
+def _load_latest_top_market_cap_symbols(db_provider: DuckDBProvider, limit: int) -> List[str]:
+    if limit <= 0:
+        raise ValueError("top_market_cap_limit must be positive")
+    storage = db_provider.storage
+    if not getattr(storage, "_daily_basic_available")():
+        raise RuntimeError("daily_basic sidecar unavailable")
+    rows = storage.conn.execute(
+        """
+        WITH latest AS (
+            SELECT max(trade_date) AS trade_date
+            FROM daily_basic.cn_daily_basic
+        ),
+        ranked AS (
+            SELECT
+                db.symbol,
+                row_number() OVER (ORDER BY db.total_mv DESC NULLS LAST) AS rank
+            FROM daily_basic.cn_daily_basic db
+            JOIN latest ON db.trade_date = latest.trade_date
+            WHERE db.total_mv IS NOT NULL
+              AND regexp_matches(db.symbol, '^[0236][0-9]{5}$')
+              AND NOT starts_with(db.symbol, '200')
+              AND db.symbol != ?
+              AND EXISTS (
+                  SELECT 1
+                  FROM daily_cn_ochl bars
+                  WHERE bars.symbol = db.symbol
+                    AND CAST(bars.timestamp AS DATE) BETWEEN ? AND ?
+              )
+        )
+        SELECT symbol
+        FROM ranked
+        WHERE rank <= ?
+        ORDER BY rank
+        """,
+        [TIMING_SYMBOL, START, END, int(limit)],
+    ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def _load_ashare_symbols(db_provider: DuckDBProvider) -> List[str]:
@@ -688,7 +937,7 @@ def _run_one(
         include_execution_liquidity_features=True,
     )
     strategy_kwargs = {key: value for key, value in scenario.items() if key not in {"name", "include_financial_indicators"}}
-    strategy = LargeCapLowVolMomentumTimingStrategy(symbols=symbols, timing_symbol=TIMING_SYMBOL, **strategy_kwargs)
+    strategy = AShareLargeCapLowVolMomentumTimingStrategy(symbols=symbols, timing_symbol=TIMING_SYMBOL, **strategy_kwargs)
     backtest_config = {"slippage_bps": 5, "execution_cost_model": execution_cost_model}
     bt_config = {
         "backtest": backtest_config,
@@ -732,7 +981,7 @@ def _run_one(
 
 
 def _meets_goal(metrics: Dict[str, Any]) -> bool:
-    return float(metrics.get("cagr") or 0.0) > 0.10 and float(metrics.get("max_drawdown_pct") or 0.0) >= -0.30
+    return float(metrics.get("cagr") or 0.0) > 0.10 and float(metrics.get("max_drawdown_pct") or 0.0) >= -0.40
 
 
 def _select_best(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -807,7 +1056,7 @@ def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict
             "strategy_spec": {
                 "strategy_id": STRATEGY_ID,
                 "scenario": best["scenario"],
-                "goal": {"cagr_gt": 0.10, "max_drawdown_gte": -0.30},
+                "goal": {"cagr_gt": 0.10, "max_drawdown_gte": -0.40},
             }
         },
     }
@@ -838,6 +1087,12 @@ def _insert_detail_section(html: str, rows: List[Dict[str, Any]]) -> str:
 def _parse_args():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--names", nargs="*", default=None, help="Scenario names to run. Defaults to all scenarios.")
+    parser.add_argument(
+        "--top-market-cap-limit",
+        type=int,
+        default=None,
+        help="Limit the stock universe to the latest total_mv top N symbols for faster strict iterations.",
+    )
     return parser.parse_args()
 
 

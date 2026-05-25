@@ -20,6 +20,7 @@ STAGE_REPORT_HTML = {
     "strict_backtest": Path("strict_backtest_report.html"),
     "walkforward_strict_audit": Path("walkforward_audit_report.html"),
 }
+FULL_REPORT_HTML = Path("full_research_report.html")
 LAST_RESULT_JSON = Path("last_result.json")
 STRATEGY_EVALUATION_MD = Path("strategy_evaluation.md")
 LATEST_REPORT_METADATA = LATEST_REPORT_DIR / "metadata.json"
@@ -31,6 +32,10 @@ def report_dir(report_id: str) -> Path:
 
 def latest_stage_report_html_path(stage_key: str) -> Path:
     return LATEST_REPORT_DIR / STAGE_REPORT_HTML[stage_key]
+
+
+def latest_full_report_html_path() -> Path:
+    return LATEST_REPORT_DIR / FULL_REPORT_HTML
 
 
 def report_id_for_result(data: Dict[str, Any], hypotheses: Iterable[Dict[str, Any]]) -> str:

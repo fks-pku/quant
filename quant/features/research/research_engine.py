@@ -13,6 +13,7 @@ from quant.features.research.integrator import StrategyIntegrator
 from quant.features.research.pool import CandidatePool
 from quant.features.research.tracking.run_recorder import RunRecorder
 from quant.features.research.discovery.quality import discovery_quality, discovery_score
+from quant.features.research.production_gate import evaluate_production_readiness
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class ResearchEngine:
         rigor_hub: Optional[Any] = None,
         ensemble: Optional[Any] = None,
         benchmark_data_loader: Optional[Callable[[List[str], str, str], Any]] = None,
+        archived_candidate_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
     ):
         self.config = config or ResearchConfig()
         self.scout = scout or StrategyScout()
@@ -56,6 +58,7 @@ class ResearchEngine:
         self._rigor_hub = rigor_hub
         self._ensemble = ensemble
         self._benchmark_data_loader = benchmark_data_loader
+        self._archived_candidate_resolver = archived_candidate_resolver
 
     def run_full_pipeline(self, sources: Optional[List[str]] = None, result: Optional[ResearchResult] = None) -> ResearchResult:
         if result is None:
@@ -259,6 +262,7 @@ class ResearchEngine:
             "scout_config": dict(self.config.scout_config or {}),
             "rigor_enabled": self.config.rigor_enabled,
             "rigor_config": dict(self.config.rigor_config or {}),
+            "production_gate_config": dict(self.config.production_gate_config or {}),
         }
 
     def _execute_pipeline(self, sources: Optional[List[str]], result: ResearchResult) -> ResearchResult:
@@ -1481,22 +1485,47 @@ class ResearchEngine:
         )
 
     def _attach_final_research_conclusion(self, strategy_id: str, status: str, reason: str = "") -> None:
+        production_gate = self._production_gate_for_strategy(strategy_id) if status != "rejected" else None
         verdict = "pass" if status in {"candidate", "paper_trading_candidate"} else "warn" if status == "needs_more_validation" else "fail"
         if status == "rejected":
             conclusion = f"最终 No-Go：{reason or '至少一个正式阶段未通过'}。"
+        elif production_gate and production_gate.get("verdict") == "fail":
+            verdict = "fail"
+            conclusion = f"Final No-Go: {production_gate.get('reason', 'Production gate failed')}."
+        elif production_gate and production_gate.get("verdict") == "warn":
+            verdict = "warn"
+            conclusion = f"Final needs more validation: {production_gate.get('reason', 'Production gate warning')}."
         elif status == "needs_more_validation":
             conclusion = f"最终结论：需要更多验证；{reason or 'walk-forward 或 DSR 未达到上线阈值'}。"
         else:
             conclusion = f"最终状态为 {status}；可进入下一层人工复核、容量和 paper trading 审批。"
+        scores = {"status": status, "reason": reason}
+        if production_gate:
+            scores["production_gate"] = production_gate
         self._attach_research_stage_conclusion(
             strategy_id,
             "final_decision",
             "最终 Go / No-Go",
             verdict,
             conclusion,
-            {"status": status, "reason": reason},
+            scores,
             "汇总快研究、strict 回测和 walk-forward strict audit 的结构化结论。",
         )
+
+    def _production_gate_for_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        if self.research_store is None or not hasattr(self.research_store, "list_hypotheses"):
+            return None
+        try:
+            for row in self.research_store.list_hypotheses():
+                if row.get("strategy_id") != strategy_id:
+                    continue
+                metrics = dict(row.get("metrics") or {})
+                if not metrics.get("strict_backtest") or not metrics.get("walkforward"):
+                    return None
+                return evaluate_production_readiness(metrics, self.config.production_gate_config)
+        except Exception as e:
+            logger.warning(f"Failed to evaluate production gate for {strategy_id}: {e}")
+        return None
 
     def _attach_research_stage_conclusion(
         self,
@@ -1679,13 +1708,13 @@ class ResearchEngine:
         entry = self.integrator.get_registry_entry(strategy_id) if hasattr(self.integrator, "get_registry_entry") else None
         meta = dict((entry or {}).get("research_meta") or {})
         if meta:
-            return meta
+            return self._merge_archived_research_meta(strategy_id, meta)
         if self.research_store is not None and hasattr(self.research_store, "get_candidate"):
             try:
                 candidate = self.research_store.get_candidate(strategy_id)
                 meta = dict((candidate or {}).get("research_meta") or {})
                 if meta:
-                    return meta
+                    return self._merge_archived_research_meta(strategy_id, meta)
             except Exception:
                 pass
         if self.research_store is not None and hasattr(self.research_store, "list_hypotheses"):
@@ -1696,10 +1725,52 @@ class ResearchEngine:
                     evidence = dict(row.get("evidence") or {})
                     spec = dict(evidence.get("strategy_spec") or {})
                     if spec:
-                        return {"strategy_spec": spec}
+                        return self._merge_archived_research_meta(strategy_id, {"strategy_spec": spec})
             except Exception:
                 pass
-        return {}
+        return self._archived_research_meta(strategy_id)
+
+    def _archived_research_meta(self, strategy_id: str) -> Dict[str, Any]:
+        archived = self._resolve_archived_candidate_info(strategy_id)
+        return dict((archived or {}).get("research_meta") or {})
+
+    def _resolve_archived_candidate_info(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        if self._archived_candidate_resolver is None:
+            return None
+        try:
+            return self._archived_candidate_resolver(strategy_id)
+        except Exception as e:
+            logger.warning(f"Archived candidate resolver failed for {strategy_id}: {e}")
+            return None
+
+    def _merge_archived_research_meta(self, strategy_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+        archived = self._resolve_archived_candidate_info(strategy_id)
+        if not archived:
+            return dict(meta or {})
+        archived_meta = dict(archived.get("research_meta") or {})
+        archived_spec = dict(archived_meta.get("strategy_spec") or {})
+        existing_meta = dict(meta or {})
+        existing_spec = dict(existing_meta.get("strategy_spec") or {})
+        merged = {**archived_meta, **existing_meta}
+        if self._archived_candidate_uses_pit_universe(archived):
+            merged["strategy_spec"] = self._drop_fixed_symbol_parameters({**existing_spec, **archived_spec})
+        else:
+            merged["strategy_spec"] = {**archived_spec, **existing_spec}
+        return merged
+
+    @staticmethod
+    def _archived_candidate_uses_pit_universe(info: Dict[str, Any]) -> bool:
+        params = dict((info or {}).get("parameters") or {})
+        meta = dict((info or {}).get("research_meta") or {})
+        spec = dict(meta.get("strategy_spec") or {})
+        return bool(params.get("pit_universe_enabled")) or bool(params.get("risk_category_symbols")) or bool(spec.get("risk_category_symbols"))
+
+    @staticmethod
+    def _drop_fixed_symbol_parameters(values: Dict[str, Any]) -> Dict[str, Any]:
+        cleaned = dict(values or {})
+        for key in ("symbols", "risk_symbols", "defensive_symbols"):
+            cleaned.pop(key, None)
+        return cleaned
 
     def _append_ic_decay_warning(self, result: ResearchResult, raw: RawStrategy, vreport: Any) -> Any:
         decay_values = self._ic_decay_values(getattr(vreport, "ic_decay", []))

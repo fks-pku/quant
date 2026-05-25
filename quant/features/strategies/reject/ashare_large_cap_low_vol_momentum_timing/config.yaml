@@ -1,0 +1,59 @@
+strategy:
+  name: ashare_large_cap_low_vol_momentum_timing
+  enabled: false
+  status: candidate
+  priority: 999
+  description: "Rule-based A-share large-cap trend and quality rotation."
+
+parameters:
+  timing_symbol: "000300"
+  use_market_timing: false
+  holding_days: 5
+  max_positions: 12
+  target_weight_slots: 12
+  max_position_pct: 0.90
+  cap_percentile_low: 0.80
+  cap_percentile_high: 1.00
+  min_price: 5.0
+  min_turnover: 120000.0
+  timing_ma: 120
+  timing_exit_buffer: 0.96
+  timing_momentum_lookback: 40
+  min_timing_momentum: -0.10
+  symbol_trend_ma: 60
+  symbol_entry_buffer: 1.00
+  symbol_exit_buffer: 1.00
+  min_long_momentum: 0.00
+  min_recent_momentum: 0.00
+  max_volatility: 0.70
+  min_drawdown: -0.35
+  max_pb: 15.0
+  max_ps_ttm: 20.0
+  stop_loss_pct: 0.06
+  take_profit_pct: 0.0
+  trailing_stop_pct: 0.0
+  score_profile: rule_based_quality_trend
+  lot_size: 100
+
+research:
+  market: CN
+  universe: point-in-time A-share top market-cap band plus CSI 300 benchmark proxy
+  benchmark: "000300"
+  objective:
+    cagr_gt: 0.10
+    max_drawdown_gte: -0.40
+  latest_strict_backtest:
+    report: "quant/infrastructure/var/research/reports/ashare_large_cap_low_vol_momentum_timing/strict_backtest_report.html"
+    universe_mode: "latest total_mv top 500 for fast research iteration; strategy applies point-in-time cap band inside that universe"
+    status: failed_target_after_removing_fixed_basket
+    best_scenario: top20_momentum_lowvol_ma200
+    best_cagr: 0.024107360307783043
+    best_max_drawdown_pct: -0.3155198121385249
+    best_sharpe: 0.2575290379341994
+  notes:
+    - "No fixed stock whitelist: daily candidates are selected from the point-in-time top market-cap band."
+    - "Uses trend, momentum, volatility, drawdown, valuation, price, liquidity, ST/suspension/list-status filters."
+    - "Uses target_weight_slots so sparse signal days do not concentrate total exposure into a single stock."
+    - "Uses adjusted prices for signals and real prices for order sizing."
+    - "The previous fixed eight-stock basket passed metrics but was removed as overfit-prone sample selection."
+    - "Current rule-based candidate does not pass the 10% CAGR target and should stay out of paper/live trading."

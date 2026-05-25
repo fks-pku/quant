@@ -1,4 +1,4 @@
-"""Run strict backtest for JoinQuant-inspired value RSRS timing."""
+﻿"""Run strict backtest for JoinQuant-inspired value RSRS timing."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
-from quant.features.strategies.joinquant_value_rsrs_timing.strategy import (
+from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import (
     JoinquantValueRsrsTimingStrategy,
 )
 from quant.features.trading.portfolio import Portfolio
@@ -33,7 +33,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 
-START = datetime(2012, 1, 1)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000.0
 STRATEGY_ID = "joinquant_value_rsrs_timing"
@@ -63,7 +63,7 @@ EXECUTION_COST_MODEL = {
 DETAIL_SECTION = """
 <h3>本策略信号解释</h3>
 <div class="table-wrap"><table><thead><tr><th>每日步骤</th><th>执行逻辑</th><th>本次参数</th></tr></thead><tbody>
-<tr><td>1. 更新数据</td><td>收盘后接收全 A 股日线 bar，并单独接收 000300 指数真实 high/low；信号只使用当日及历史数据，订单在下一交易日执行。</td><td>市场=CN，频率=1d，区间=2012-01-01 至 2025-12-31。</td></tr>
+<tr><td>1. 更新数据</td><td>收盘后接收全 A 股日线 bar，并单独接收 000300 指数真实 high/low；信号只使用当日及历史数据，订单在下一交易日执行。</td><td>市场=CN，频率=1d，区间=2016-01-01 至 2025-12-31。</td></tr>
 <tr><td>2. 持仓风控</td><td>每天先检查已有持仓，遇到 ST、停牌、不可交易、非上市、list_status 非 L、价格低于下限或成交额低于下限时尝试退出。</td><td>min_price=5，min_turnover=50000。</td></tr>
 <tr><td>3. 日线止盈止损</td><td>持仓收盘价跌破买入均价 10% 时触发硬止损；盈利达到 20% 后启动移动止盈，若从持仓最高收盘价回撤 8% 则退出。信号在收盘后生成，卖单仍在下一交易日执行。</td><td>stop_loss=10%，take_profit=20%，trailing_stop=8%。</td></tr>
 <tr><td>4. RSRS 择时</td><td>对 000300 最近 N 日最低价与最高价做 OLS：high = alpha + beta * low；取 beta 的滚动 z-score，再乘以回归 R² 得到 RSRS score。</td><td>N=18，zscore_window=120，score >= 0.7 风险开启，score <= -0.7 风险关闭。</td></tr>

@@ -1,0 +1,27 @@
+strategy:
+  name: ashare_broad_etf_momentum_rotation
+  enabled: false
+  priority: 1
+  status: candidate
+
+parameters:
+  symbols:
+    - 510050
+    - 510300
+    - 510500
+    - 512100
+    - 159915
+    - 159949
+    - 510880
+    - 518880
+    - 513100
+    - 159920
+  momentum_lookback: 180
+  trend_window: 120
+  volatility_window: 60
+  liquidity_window: 20
+  min_avg_turnover: 50000000.0
+  max_positions: 2
+  target_exposure: 0.70
+  lot_size: 100
+  holding_days: 60

@@ -539,6 +539,34 @@ D0->BUY 100 AAPL->D1 exec, D3->SELL 100 AAPL->D4 exec
 
 ---
 
+## CASE-7C: Strict research provider exposes CN corporate actions
+
+Strict A-share reports that use the streaming DuckDB daily provider must expose `get_dividend_for_date()`. If `corp_actions.cn_dividends` exists, the provider has to pass cash dividends, stock dividends, allotment data, record date, pay date, and announcement date to Backtester before NAV is recorded. Otherwise a strict report silently ignores ex-dividend and bonus-share events.
+
+#### Assertions
+
+    C7C-01  _DuckDBDailyDateProvider.get_dividend_for_date(symbol, ex_date) returns the corporate action row
+    C7C-02  cash_dividend and stock_dividend are numeric values, not strings or NaN
+    C7C-03  unknown symbol/date returns None
+    C7C-04  missing corporate-action sidecar degrades to an empty lookup, not a failing backtest
+
+---
+
+## CASE-7D: Strict research provider normalizes CN ETF fund actions
+
+CN ETF/LOF strict research reports use `cn_etf_ohlcv.duckdb::daily_cn_ochl` for tradable bars. Some ETF corporate actions, especially fund share splits, can appear as an 80%+ raw OHLC jump while `cn_fund_nav.duckdb::cn_fund_nav.adj_nav` remains continuous. If strict backtests use those raw ETF bars without either processing fund actions or normalizing prices, NAV and stop logic will treat a split as a real crash.
+
+The streaming research provider therefore joins ETF bars to `fund_nav.cn_fund_nav` when available and normalizes ETF OHLC/adj_OHLC by `adj_nav / unit_nav`. It preserves `raw_open/high/low/close` and `raw_volume` for diagnostics and turnover unit detection, while execution and NAV use the total-return synthetic ETF bar. This is an ETF/LOF bridge until a dedicated fund corporate-action processor exists.
+
+#### Assertions
+
+    C7D-01  _DuckDBDailyDateProvider joins cn_fund_nav for ETF/LOF symbols when available
+    C7D-02  close and adj_close are normalized by adj_nav / unit_nav across fund share splits
+    C7D-03  raw_close is preserved for audit and turnover unit inference
+    C7D-04  adv20_value still detects Tushare amount units from raw_close/raw_volume, not adjusted close
+
+---
+
 ## CASE-8: 混合币种拒绝
 
 验证同一个回测实例不能同时包含 USD 与 CNY/HKD 标的。跨币种组合必须先拆成不同回测，或未来显式引入 FX 汇率、换汇成本和基准币种重估层。

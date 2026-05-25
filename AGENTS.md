@@ -16,7 +16,7 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 | trading | `quant/features/trading/` | 交易引擎、风控、调度器 | `quant/features/trading/AGENTS.md` |
 | portfolio | `quant/features/portfolio/` | 仓位管理 | `quant/features/portfolio/AGENTS.md` |
 | cio | `quant/features/cio/` | CIO 市场评估、LLM 分析 | `quant/features/cio/AGENTS.md` |
-| strategies | `quant/features/strategies/` | 策略框架 + 注册表（7 个 active 策略） | `quant/features/strategies/AGENTS.md` |
+| strategies | `quant/features/strategies/` | 策略框架 + 注册表 + promoted/reject 策略分区 | `quant/features/strategies/AGENTS.md` |
 | research | `quant/features/research/` | 自动策略研究管线 | `quant/features/research/AGENTS.md` |
 | shared | `quant/shared/` | 跨模块工具 (logger, config) | `quant/shared/AGENTS.md` |
 | api | `quant/api/` | Flask REST 路由层 | `quant/api/AGENTS.md` |

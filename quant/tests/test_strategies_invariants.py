@@ -1,12 +1,21 @@
 """Invariant tests for strategies module — Registry, Strategy base, _adj."""
 from datetime import date
+import json
 import math
+from pathlib import Path
+import re
 from types import SimpleNamespace
 
 import pytest
 
 from quant.features.strategies.base import Strategy
-from quant.features.strategies.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
+from quant.features.strategies.ashare_small_cap_pure_baseline.strategy import (
+    AShareSmallCapPureBaselineStrategy,
+)
+from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy import (
+    AShareAlpha158FactorCompositeStrategy,
+)
+from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
 from quant.features.strategies.registry import StrategyRegistry, strategy
 
 
@@ -280,3 +289,122 @@ class TestCase5DailyRiskExitStateMachine:
 
         assert strategy._positions["000001"] == 110
         assert strategy._entry_prices["000001"] == pytest.approx(1000.0 / 110.0)
+
+    def test_s5_06_dust_position_does_not_submit_zero_quantity_sell(self, monkeypatch):
+        strategy = AShareAlpha158FactorCompositeStrategy(symbols=["002475", "000300"])
+        strategy._positions["002475"] = 0.5
+        monkeypatch.setattr(strategy, "_get_last_bar", lambda symbol: _value_rsrs_bar(symbol, 10.0))
+        monkeypatch.setattr(strategy, "_position_exit_reason", lambda symbol, bar: "dust_exit")
+        sells = []
+        monkeypatch.setattr(
+            strategy,
+            "sell",
+            lambda symbol, quantity, order_type="MARKET", price=None: sells.append((symbol, quantity, price)),
+        )
+
+        exited = strategy._exit_risk_positions()
+
+        assert sells == []
+        assert exited == set()
+        assert strategy.get_guard_diagnostics()["exit_triggers"]["dust_position"] == 1
+
+        small_cap = AShareSmallCapPureBaselineStrategy(symbols=["002475"], market_timing_symbol="")
+        small_cap._positions["002475"] = 0.5
+        small_cap.on_data(None, _value_rsrs_bar("002475", 4.8, total_mv=100.0))
+        monkeypatch.setattr(
+            small_cap,
+            "sell",
+            lambda symbol, quantity, order_type="MARKET", price=None: sells.append((symbol, quantity, price)),
+        )
+
+        exited = small_cap._exit_risk_positions()
+
+        assert exited == {"002475"}
+        assert sells == []
+        assert small_cap.get_guard_diagnostics()["exit_triggers"]["dust_position"] == 1
+
+
+# ---------------------------------------------------------------------------
+# CASE-6: Top-level strategy promotion gate
+# ---------------------------------------------------------------------------
+
+
+class TestCase6TopLevelStrategyPromotionGate:
+    def test_s6_01_top_level_strategies_have_cagr_above_10pct(self):
+        package_root = Path(__file__).resolve().parents[1]
+        strategies_root = package_root / "features" / "strategies"
+        reports_root = package_root / "infrastructure" / "var" / "research" / "reports"
+        reject_root = strategies_root / "reject"
+
+        assert reject_root.exists()
+        violations = []
+        for item in sorted(strategies_root.iterdir()):
+            if not item.is_dir() or item.name.startswith("_") or item.name.startswith(".") or item.name == "reject":
+                continue
+            if not (item / "strategy.py").exists():
+                continue
+            cagr = _strict_report_cagr(reports_root, item.name)
+            if cagr is None or cagr <= 0.10:
+                violations.append((item.name, cagr))
+
+        assert violations == []
+
+
+def _strict_report_cagr(reports_root: Path, strategy_id: str) -> float | None:
+    result_path = reports_root / strategy_id / "last_result.json"
+    if result_path.exists():
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        value = _payload_cagr(payload)
+        if value is not None:
+            return value
+
+    grid_path = reports_root / strategy_id / "grid_result.json"
+    if grid_path.exists():
+        payload = json.loads(grid_path.read_text(encoding="utf-8"))
+        best = payload.get("best") or {}
+        value = best.get("cagr")
+        if value is not None:
+            return float(value)
+
+    html_cagr = _strict_report_html_cagr(reports_root / strategy_id / "strict_backtest_report.html")
+    if html_cagr is not None:
+        return html_cagr
+
+    for batch_path in reports_root.glob("*/batch_result.json"):
+        payload = json.loads(batch_path.read_text(encoding="utf-8"))
+        for row in payload.get("rows", []):
+            if row.get("strategy_id") == strategy_id and row.get("cagr") is not None:
+                return float(row["cagr"])
+    return None
+
+
+def _payload_cagr(payload: dict) -> float | None:
+    metrics = payload.get("metrics") or {}
+    value = metrics.get("cagr")
+    if value is not None:
+        return float(value)
+    for entry in payload.get("log", []):
+        scores = entry.get("scores") or {}
+        value = scores.get("cagr")
+        if value is not None:
+            return float(value)
+    return None
+
+
+def _strict_report_html_cagr(report_path: Path) -> float | None:
+    if not report_path.exists():
+        return None
+    text = report_path.read_text(encoding="utf-8")
+    match = re.search(r"CAGR\s*[=:]\s*([+-]?\d+(?:\.\d+)?)(\s*%)?", text)
+    if match:
+        return _normalize_cagr(float(match.group(1)), bool(match.group(2)))
+    match = re.search(r"<td>\s*CAGR\s*</td>\s*<td>\s*([+-]?\d+(?:\.\d+)?)(\s*%)?\s*</td>", text)
+    if match:
+        return _normalize_cagr(float(match.group(1)), bool(match.group(2)))
+    return None
+
+
+def _normalize_cagr(value: float, explicit_percent: bool) -> float:
+    if explicit_percent or abs(value) > 1:
+        return value / 100.0
+    return value

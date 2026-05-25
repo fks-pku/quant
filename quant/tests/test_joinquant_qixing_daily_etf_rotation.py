@@ -1,9 +1,9 @@
-from datetime import date, timedelta
+﻿from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from quant.features.strategies.joinquant_qixing_daily_etf_rotation.strategy import (
+from quant.features.strategies.reject.joinquant_qixing_daily_etf_rotation.strategy import (
     JoinquantQixingDailyEtfRotationStrategy,
 )
 

@@ -87,6 +87,7 @@ S5-02  risk-off 清仓后，regime 从 off 切回 on 时必须绕过旧 rebalanc
 S5-03  空候选池、字段缺失或无有效 NAV 不得刷新 _last_rebalance_date / holding gate
 S5-04  候选入场过滤不得使用 stop_loss / take_profit / trailing_stop 等持仓退出条件
 S5-05  送股/转增 synthetic BUY fill_price=0 时，策略内部数量、entry price、峰值价必须按数量比例同步
+S5-06  送股/拆分等事件产生小于 1 股的内部残留仓位时，风险退出不得提交 SELL 0；共享日线调仓基类也必须记录 dust_position 并等待组合/引擎清理
 ```
 
 ### 适用范围
@@ -94,3 +95,16 @@ S5-05  送股/转增 synthetic BUY fill_price=0 时，策略内部数量、entry
 - 适用于有 `holding_days`、定期调仓、风险退出、择时 gate 或候选池筛选的日线策略。
 - 单纯 buy-and-hold 或一次性信号策略不一定需要实现所有 gate，但不能违反已适用的生命周期契约。
 - 如果未来抽象出公共日线调仓基类，应把本 CASE 的状态机迁移到公共基类测试，并保留策略级回归测试验证接入正确。
+
+## CASE-6: Top-level strategy promotion gate
+
+顶层 `quant/features/strategies/<strategy_id>/` 是生产注册表自动发现区，不再存放所有研究候选。只有严格本地回测报告证明 `CAGR > 10%` 的策略，才能留在顶层。其它策略必须迁入 `quant/features/strategies/reject/<strategy_id>/`，可用于审计、复现和单测，但不会被 `StrategyRegistry` 自动发现。
+
+### 断言
+
+```
+S6-01  `strategies/reject/` 目录存在
+S6-02  顶层每个含 strategy.py 的策略目录都必须有 strict last_result/grid_result/batch_result CAGR 证据
+S6-03  顶层策略的 CAGR 必须 > 0.10
+S6-04  `strategies/reject/<strategy_id>/strategy.py` 不参与默认目录自动发现
+```

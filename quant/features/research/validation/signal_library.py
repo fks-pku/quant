@@ -90,6 +90,7 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
         "ashare_range_contraction_breakout": _ashare_range_contraction_breakout,
         "ashare_gap_down_liquid_reversal": _ashare_gap_down_liquid_reversal,
         "ashare_turnover_stability_factor": _ashare_turnover_stability_factor,
+        "ashare_small_cap_guarded_size_factor": _ashare_small_cap_guarded_size_factor,
         "joinquant_small_cap_size_factor": _joinquant_small_cap_size_factor,
         "joinquant_small_cap_low_price_factor": _joinquant_small_cap_low_price_factor,
         "momentum_close_return": _momentum_close_return,
@@ -113,6 +114,7 @@ def compute_signal(formula_key: str, data: Any, lookback: int = 20) -> Any:
             "ashare_range_contraction_breakout": _ashare_range_contraction_breakout_panel,
             "ashare_gap_down_liquid_reversal": _ashare_gap_down_liquid_reversal_panel,
             "ashare_turnover_stability_factor": _ashare_turnover_stability_factor_panel,
+            "ashare_small_cap_guarded_size_factor": _ashare_small_cap_guarded_size_factor_panel,
             "joinquant_small_cap_size_factor": _joinquant_small_cap_size_factor_panel,
             "joinquant_small_cap_low_price_factor": _joinquant_small_cap_low_price_factor_panel,
             "momentum_close_return": _momentum_close_return_panel,
@@ -426,6 +428,24 @@ def _joinquant_small_cap_low_price_factor_panel(data: pd.DataFrame, lookback: in
     return signal.where(eligible)
 
 
+def _ashare_small_cap_guarded_size_factor(data: Any, lookback: int) -> Any:
+    if not isinstance(data, pd.DataFrame):
+        return None
+    market_cap = _market_cap_series(data)
+    if market_cap is None:
+        return None
+    signal = -market_cap.astype(float)
+    return signal.where(_guarded_small_cap_eligible_series(data, market_cap))
+
+
+def _ashare_small_cap_guarded_size_factor_panel(data: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    market_cap = _market_cap_matrix(data)
+    if market_cap is None:
+        return None
+    signal = -market_cap.astype(float)
+    return signal.where(_guarded_small_cap_eligible_panel(data, market_cap))
+
+
 def _mean_reversion_close_to_ma(data: Any, lookback: int) -> Any:
     close = adjusted_price_series(data, "close")
     ma = close.rolling(lookback).mean()
@@ -687,6 +707,66 @@ def _market_cap_matrix(data: pd.DataFrame) -> pd.DataFrame:
     return None
 
 
+def _guarded_small_cap_eligible_series(data: pd.DataFrame, market_cap: pd.Series) -> pd.Series:
+    eligible = market_cap.notna()
+    if "close" in data.columns:
+        eligible &= pd.to_numeric(data["close"], errors="coerce") >= 5.0
+    close = adjusted_price_series(data, "close") if "close" in data.columns else None
+    if close is not None and ("turnover" in data.columns or "volume" in data.columns):
+        turnover = _turnover_series(data, close)
+        eligible &= turnover.rolling(20, min_periods=1).mean() >= 20000.0
+    if "is_st" in data.columns:
+        eligible &= ~_truthy_series(data["is_st"])
+    for field in ("tradable", "has_daily_bar", "is_listed"):
+        if field in data.columns:
+            eligible &= _truthy_series(data[field], default=True)
+    if "list_status" in data.columns:
+        eligible &= data["list_status"].astype(str).str.upper().eq("L")
+    return eligible
+
+
+def _guarded_small_cap_eligible_panel(data: pd.DataFrame, market_cap: pd.DataFrame) -> pd.DataFrame:
+    eligible = market_cap.notna()
+    if "close" in data.columns:
+        price = field_matrix(data, "close").astype(float)
+        eligible &= price >= 5.0
+    if "turnover" in data.columns or "volume" in data.columns:
+        close = adjusted_price_matrix(data, "close") if "close" in data.columns else market_cap * 0.0 + 1.0
+        turnover = _turnover_matrix(data, close)
+        eligible &= turnover.rolling(20, min_periods=1).mean() >= 20000.0
+    if "is_st" in data.columns:
+        eligible &= ~_truthy_matrix(field_matrix(data, "is_st"))
+    for field in ("tradable", "has_daily_bar", "is_listed"):
+        if field in data.columns:
+            eligible &= _truthy_matrix(field_matrix(data, field), default=True)
+    if "list_status" in data.columns:
+        eligible &= field_matrix(data, "list_status").astype(str).apply(lambda col: col.str.upper().eq("L"))
+    return eligible
+
+
+def _truthy_series(values: Any, default: bool = False) -> pd.Series:
+    series = pd.Series(values)
+    if series.empty:
+        return pd.Series(default, index=series.index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(default).astype(bool)
+    numeric = pd.to_numeric(series, errors="coerce")
+    result = numeric.fillna(1 if default else 0).astype(float) != 0.0
+    text_mask = numeric.isna()
+    if text_mask.any():
+        text = series.astype(str).str.lower()
+        truthy = text.isin({"true", "t", "yes", "y", "1", "l", "listed"})
+        falsy = text.isin({"false", "f", "no", "n", "0", "nan", "none", ""})
+        parsed = truthy.where(~falsy, False)
+        parsed = parsed.where(truthy | falsy, default)
+        result = result.where(~text_mask, parsed)
+    return result.astype(bool)
+
+
+def _truthy_matrix(values: pd.DataFrame, default: bool = False) -> pd.DataFrame:
+    return values.apply(lambda col: _truthy_series(col, default=default))
+
+
 SUPPORTED_FORMULAS = {
     "ashare_short_reversal_5d",
     "ashare_volume_exhaustion_reversal",
@@ -700,6 +780,7 @@ SUPPORTED_FORMULAS = {
     "ashare_range_contraction_breakout",
     "ashare_gap_down_liquid_reversal",
     "ashare_turnover_stability_factor",
+    "ashare_small_cap_guarded_size_factor",
     "joinquant_small_cap_size_factor",
     "joinquant_small_cap_low_price_factor",
     "momentum_close_return",

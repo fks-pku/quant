@@ -31,7 +31,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 
-START = datetime(2012, 1, 1)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000.0
 STRATEGY_ID = "large_cap_single_stock_trend_stop"

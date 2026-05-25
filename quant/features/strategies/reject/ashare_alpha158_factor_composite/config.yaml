@@ -1,0 +1,14 @@
+strategy:
+  name: ashare_alpha158_factor_composite
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  holding_days: 20
+  max_positions: 20
+  target_weight_slots: 20
+  cap_percentile_low: 0.80
+  cap_percentile_high: 1.00
+  score_profile: alpha158_factor_composite
+  use_market_timing: true

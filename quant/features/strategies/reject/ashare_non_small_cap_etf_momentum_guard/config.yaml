@@ -1,0 +1,32 @@
+strategy:
+  name: ashare_non_small_cap_etf_momentum_guard
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  symbols:
+    - "510050"
+    - "510300"
+    - "159915"
+    - "159949"
+    - "510880"
+    - "512880"
+    - "512000"
+    - "512480"
+    - "518880"
+    - "513100"
+    - "513050"
+    - "159920"
+    - "510900"
+  momentum_lookback: 126
+  momentum_skip: 1
+  trend_window: 120
+  volatility_window: 20
+  liquidity_window: 20
+  min_avg_turnover: 20000000.0
+  min_momentum: 0.03
+  max_positions: 3
+  target_exposure: 0.98
+  holding_days: 5
+  lot_size: 100

@@ -1,0 +1,14 @@
+strategy:
+  name: ashare_dividend_low_vol_smart_beta
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  holding_days: 60
+  max_positions: 30
+  target_weight_slots: 30
+  cap_percentile_low: 0.60
+  cap_percentile_high: 1.00
+  score_profile: dividend_low_vol_smart_beta
+  min_dividend_yield: 0.5

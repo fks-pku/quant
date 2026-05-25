@@ -1,4 +1,4 @@
-"""Run strict backtests for the three A-share mid-cap candidate strategies."""
+﻿"""Run strict backtests for the three A-share mid-cap candidate strategies."""
 
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
-from quant.features.strategies.ashare_mid_cap_dividend_low_vol_capacity.strategy import (
+from quant.features.strategies.reject.ashare_mid_cap_dividend_low_vol_capacity.strategy import (
     AShareMidCapDividendLowVolCapacityStrategy,
 )
-from quant.features.strategies.ashare_mid_cap_low_vol_value.strategy import (
+from quant.features.strategies.reject.ashare_mid_cap_low_vol_value.strategy import (
     AShareMidCapLowVolValueStrategy,
 )
-from quant.features.strategies.ashare_mid_cap_momentum_value_guard.strategy import (
+from quant.features.strategies.reject.ashare_mid_cap_momentum_value_guard.strategy import (
     AShareMidCapMomentumValueGuardStrategy,
 )
 from quant.features.trading.portfolio import Portfolio
@@ -34,7 +34,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 
-START = datetime(2012, 1, 1)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000.0
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

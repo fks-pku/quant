@@ -50,6 +50,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - Live mutable DuckDB data is stored under ignored `var/duckdb/live/`.
 - `cn_ohlcv.duckdb::daily_cn_ochl` stores CN stock OHLCV only.
 - `cn_etf_ohlcv.duckdb::daily_cn_ochl` stores CN ETF OHLCV and is attached as `cn_etf`.
+- `cn_fund_nav.duckdb::cn_fund_nav` stores ETF/LOF unit NAV, accumulated NAV, and adjusted NAV used to normalize fund splits in strict research providers.
 - `cn_index_ohlcv.duckdb::daily_cn_ochl` stores CN index OHLCV and is attached as `cn_index`.
 - `cn_daily_basic.duckdb::cn_daily_basic` stores Tushare daily valuation, shares, market cap, and turnover sidecar fields.
 - `cn_status.duckdb::cn_security_status_daily` stores daily listing/tradability/ST/suspension/limit status.

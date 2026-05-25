@@ -241,7 +241,7 @@ def _create_validation_components(config):
 
     validation_cfg = dict(getattr(config, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(config, "validation_min_obs", 252))
-    validation_cfg.setdefault("start_date", getattr(config, "default_backtest_start", "2012-01-01"))
+    validation_cfg.setdefault("start_date", getattr(config, "default_backtest_start", "2016-01-01"))
     validation_cfg.setdefault("end_date", getattr(config, "default_backtest_end", "2025-12-31"))
     market_data = _create_research_market_data(config)
     validation_cfg.setdefault("default_universe", _default_research_universe(market_data))
@@ -263,6 +263,19 @@ def _default_research_universe(market_data):
     except Exception as exc:
         logger.warning("Failed to resolve full CN research universe: %s", exc)
         return []
+
+
+def _load_research_config():
+    from quant.features.research.configuration import research_config_kwargs_from_data
+    from quant.features.research.models import ResearchConfig
+    from quant.shared.utils.config_loader import ConfigLoader
+
+    config_dir = Path(__file__).resolve().parent.parent / "features" / "research" / "config"
+    try:
+        data = ConfigLoader(config_dir=str(config_dir)).load("research.yaml")
+    except FileNotFoundError:
+        return ResearchConfig()
+    return ResearchConfig(**research_config_kwargs_from_data(data))
 
 
 # =============================================================================
@@ -306,22 +319,19 @@ def main():
     var_root.mkdir(parents=True, exist_ok=True)
 
     needs_backtest_runner = args.backtest or args.mode in {"strict", "walkforward"}
-    config = ResearchConfig(
-        sources=["arxiv"] if args.source != "all" else ["arxiv"],
-        max_results_per_source=args.max_results,
-        evaluation_threshold=args.threshold,
-        auto_backtest=args.backtest or args.mode == "strict",
-        validation_enabled=not args.no_validation,
-        backtest_sharpe_threshold=0.5,
-        default_symbols=list(_CN_RESEARCH_SYMBOLS),
-        default_backtest_start="2012-01-01",
-        default_backtest_end="2025-12-31",
-        rigor_config={
-            "purged_walkforward": {
-                "parallel_workers": max(1, args.walkforward_workers),
-            },
-        },
-    )
+    config = _load_research_config()
+    config.sources = ["arxiv"] if args.source != "all" else ["arxiv"]
+    config.max_results_per_source = args.max_results
+    config.evaluation_threshold = args.threshold
+    config.auto_backtest = args.backtest or args.mode == "strict"
+    config.validation_enabled = not args.no_validation
+    if not config.default_symbols:
+        config.default_symbols = list(_CN_RESEARCH_SYMBOLS)
+    rigor_config = dict(config.rigor_config or {})
+    purged_walkforward = dict(rigor_config.get("purged_walkforward") or {})
+    purged_walkforward["parallel_workers"] = max(1, args.walkforward_workers)
+    rigor_config["purged_walkforward"] = purged_walkforward
+    config.rigor_config = rigor_config
     if args.mode == "fast":
         config.auto_backtest = False
         config.rigor_enabled = False
@@ -347,10 +357,12 @@ def main():
 
     backtest_fn = None
     walkforward_runner = None
+    archived_candidate_resolver = None
     if needs_backtest_runner:
-        from quant.api.research_bp import _make_backtest_fn, _make_walkforward_runner
+        from quant.api.research_bp import _archived_candidate_info, _make_backtest_fn, _make_walkforward_runner
         backtest_fn = _make_backtest_fn()
         walkforward_runner = _make_walkforward_runner()
+        archived_candidate_resolver = _archived_candidate_info
         logger.warning("Backtests enabled — requires DuckDB data")
 
     strategies_dir = str(Path(__file__).resolve().parent.parent / "features" / "strategies")
@@ -369,6 +381,7 @@ def main():
         rigor_hub=rigor_hub,
         spec_builder=spec_builder,
         validator=validator,
+        archived_candidate_resolver=archived_candidate_resolver,
     )
 
     print("=" * 70)

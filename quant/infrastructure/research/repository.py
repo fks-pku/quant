@@ -11,16 +11,18 @@ from quant.infrastructure.research.asset_paths import (
     IDEA_BANK_JSON,
     IDEA_BANK_MD,
     DISCOVERED_STRATEGIES_MD,
+    FULL_REPORT_HTML,
     LAST_RESULT_JSON,
     LATEST_REPORT_DIR,
     LATEST_REPORT_METADATA,
     STAGE_REPORT_HTML,
     STRATEGY_EVALUATION_MD,
+    latest_full_report_html_path,
     latest_stage_report_html_path,
     report_dir,
     report_id_for_result,
 )
-from quant.infrastructure.research.reporting import build_research_stage_report_html
+from quant.infrastructure.research.reporting import build_research_full_report_html, build_research_stage_report_html
 
 
 class FileResearchStore(ResearchStore):
@@ -198,10 +200,17 @@ class FileResearchStore(ResearchStore):
         self._write_json(LATEST_REPORT_DIR / LAST_RESULT_JSON, data)
         run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._write_json(report_root / "runs" / f"{run_name}_result.json", data)
-        for legacy_name in ("full_research_report.html", "full_research_report.md"):
-            self._delete_file(report_root / legacy_name)
-            self._delete_file(LATEST_REPORT_DIR / legacy_name)
-        self._delete_matching(report_root / "runs", "*_full_research_report.html")
+        self._delete_file(report_root / "full_research_report.md")
+        self._delete_file(LATEST_REPORT_DIR / "full_research_report.md")
+        full_report = build_research_full_report_html(data, hypotheses, generated_at=data["saved_at"])
+        self._write_text(report_root / FULL_REPORT_HTML, full_report)
+        self._write_text(latest_full_report_html_path(), full_report)
+        self._write_text(report_root / "runs" / f"{run_name}_{FULL_REPORT_HTML.name}", full_report)
+        full_metadata = {
+            "path": str(report_root / FULL_REPORT_HTML),
+            "latest_path": str(latest_full_report_html_path()),
+            "filename": FULL_REPORT_HTML.as_posix(),
+        }
         stage_metadata = {}
         for stage_key, filename in STAGE_REPORT_HTML.items():
             stage_report = build_research_stage_report_html(stage_key, data, hypotheses, generated_at=data["saved_at"])
@@ -219,6 +228,7 @@ class FileResearchStore(ResearchStore):
                 "report_id": report_id,
                 "run_name": run_name,
                 "updated_at": data["saved_at"],
+                "full_report": full_metadata,
                 "stage_reports": stage_metadata,
             },
         )

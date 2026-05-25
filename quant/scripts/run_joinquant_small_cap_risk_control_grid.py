@@ -44,7 +44,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 
 SID = "joinquant_small_cap_low_price"
-START = datetime(2012, 1, 1)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000
 REPORT_DIR = Path("quant/infrastructure/var/research/reports/joinquant_small_cap_low_price")

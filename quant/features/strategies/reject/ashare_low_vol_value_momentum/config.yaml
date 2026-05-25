@@ -1,0 +1,14 @@
+strategy:
+  name: ashare_low_vol_value_momentum
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  holding_days: 20
+  max_positions: 25
+  target_weight_slots: 25
+  cap_percentile_low: 0.70
+  cap_percentile_high: 1.00
+  score_profile: low_vol_value_momentum
+  use_market_timing: true

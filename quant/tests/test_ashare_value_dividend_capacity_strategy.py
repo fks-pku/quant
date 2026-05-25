@@ -1,6 +1,6 @@
-from datetime import date
+﻿from datetime import date
 
-from quant.features.strategies.ashare_value_dividend_capacity.strategy import (
+from quant.features.strategies.reject.ashare_value_dividend_capacity.strategy import (
     AShareValueDividendCapacityStrategy,
 )
 

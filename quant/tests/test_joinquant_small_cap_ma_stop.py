@@ -1,6 +1,6 @@
-from datetime import date
+﻿from datetime import date
 
-from quant.features.strategies.joinquant_small_cap_ma_stop.strategy import JoinquantSmallCapMaStopStrategy
+from quant.features.strategies.reject.joinquant_small_cap_ma_stop.strategy import JoinquantSmallCapMaStopStrategy
 
 
 class _Portfolio:

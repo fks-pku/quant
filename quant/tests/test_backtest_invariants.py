@@ -685,6 +685,207 @@ class TestCase7BCNDividendTax:
 
 
 # ---------------------------------------------------------------------------
+# CASE-7C: Strict research provider dividend bridge
+# ---------------------------------------------------------------------------
+
+
+class TestCase7CStrictResearchDividendProvider:
+    def test_c7c_01_streaming_provider_exposes_cn_corporate_actions(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        market_db = tmp_path / "market.duckdb"
+        actions_db = tmp_path / "cn_corporate_actions.duckdb"
+
+        conn = duckdb.connect(str(market_db))
+        conn.execute(
+            """
+            CREATE TABLE daily_cn_ochl (
+                timestamp TIMESTAMP,
+                symbol VARCHAR,
+                open DOUBLE,
+                high DOUBLE,
+                low DOUBLE,
+                close DOUBLE,
+                volume BIGINT,
+                turnover DOUBLE,
+                adj_open DOUBLE,
+                adj_high DOUBLE,
+                adj_low DOUBLE,
+                adj_close DOUBLE,
+                adj_factor DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            ('2024-06-03', '600519', 100, 101, 99, 100, 10000, 1000000, 100, 101, 99, 100, 1)
+            """
+        )
+        conn.close()
+
+        conn = duckdb.connect(str(actions_db))
+        conn.execute(
+            """
+            CREATE TABLE cn_dividends (
+                symbol VARCHAR,
+                ex_date TIMESTAMP,
+                cash_dividend DOUBLE,
+                stock_dividend DOUBLE,
+                allotment_ratio DOUBLE,
+                allotment_price DOUBLE,
+                record_date VARCHAR,
+                pay_date VARCHAR,
+                ann_date VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_dividends VALUES
+            ('600519', '2024-06-03', 2.0, 0.1, 0.0, 0.0, '2024-05-31', '2024-06-05', '2024-05-20')
+            """
+        )
+        conn.close()
+
+        from quant.api.research_bp import _DuckDBDailyDateProvider
+
+        provider = _DuckDBDailyDateProvider(
+            ["600519"],
+            datetime(2024, 6, 3),
+            datetime(2024, 6, 3),
+            db_path=str(market_db),
+            status_db_path=str(tmp_path / "missing_status.duckdb"),
+            daily_basic_db_path=str(tmp_path / "missing_basic.duckdb"),
+            corporate_actions_db_path=str(actions_db),
+            cache_enabled=False,
+        )
+        try:
+            dividend = provider.get_dividend_for_date("600519", datetime(2024, 6, 3))
+            missing = provider.get_dividend_for_date("600000", datetime(2024, 6, 3))
+        finally:
+            provider.close()
+
+        assert dividend["cash_dividend"] == pytest.approx(2.0)
+        assert dividend["stock_dividend"] == pytest.approx(0.1)
+        assert dividend["pay_date"] == "2024-06-05"
+        assert missing is None
+
+
+# ---------------------------------------------------------------------------
+# CASE-7D: Strict research provider normalizes CN ETF fund actions
+# ---------------------------------------------------------------------------
+
+
+class TestCase7DStrictResearchEtfNavAdjustment:
+    def test_c7d_01_streaming_provider_uses_fund_nav_for_etf_total_return_bars(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        market_db = tmp_path / "market.duckdb"
+        etf_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        fund_nav_db = tmp_path / "cn_fund_nav.duckdb"
+
+        conn = duckdb.connect(str(market_db))
+        conn.execute(
+            """
+            CREATE TABLE daily_cn_ochl (
+                timestamp TIMESTAMP,
+                symbol VARCHAR,
+                open DOUBLE,
+                high DOUBLE,
+                low DOUBLE,
+                close DOUBLE,
+                volume BIGINT,
+                turnover DOUBLE,
+                adj_open DOUBLE,
+                adj_high DOUBLE,
+                adj_low DOUBLE,
+                adj_close DOUBLE,
+                adj_factor DOUBLE
+            )
+            """
+        )
+        conn.close()
+
+        conn = duckdb.connect(str(etf_db))
+        conn.execute(
+            """
+            CREATE TABLE daily_cn_ochl (
+                timestamp TIMESTAMP,
+                symbol VARCHAR,
+                open DOUBLE,
+                high DOUBLE,
+                low DOUBLE,
+                close DOUBLE,
+                volume BIGINT,
+                turnover DOUBLE,
+                adj_open DOUBLE,
+                adj_high DOUBLE,
+                adj_low DOUBLE,
+                adj_close DOUBLE,
+                adj_factor DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            ('2022-01-13', '513100', 5.05, 5.10, 5.00, 5.05, 10000, 5000, 5.05, 5.10, 5.00, 5.05, 1),
+            ('2022-01-14', '513100', 1.01, 1.02, 1.00, 1.015, 10000, 1015, 1.01, 1.02, 1.00, 1.015, 1)
+            """
+        )
+        conn.close()
+
+        conn = duckdb.connect(str(fund_nav_db))
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                unit_nav DOUBLE,
+                accum_nav DOUBLE,
+                adj_nav DOUBLE,
+                net_asset DOUBLE,
+                total_netasset DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_nav VALUES
+            ('513100', '2022-01-13', 1.01, 5.05, 5.05, NULL, NULL),
+            ('513100', '2022-01-14', 1.015, 5.075, 5.075, NULL, NULL)
+            """
+        )
+        conn.close()
+
+        from quant.api.research_bp import _DuckDBDailyDateProvider
+
+        provider = _DuckDBDailyDateProvider(
+            ["513100"],
+            datetime(2022, 1, 13),
+            datetime(2022, 1, 14),
+            db_path=str(market_db),
+            etf_db_path=str(etf_db),
+            fund_nav_db_path=str(fund_nav_db),
+            status_db_path=str(tmp_path / "missing_status.duckdb"),
+            daily_basic_db_path=str(tmp_path / "missing_basic.duckdb"),
+            include_execution_liquidity_features=True,
+            cache_enabled=False,
+        )
+        try:
+            rows = provider.get_bars_for_date(datetime(2022, 1, 14))
+        finally:
+            provider.close()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["raw_close"] == pytest.approx(1.015)
+        assert row["close"] == pytest.approx(5.075)
+        assert row["adj_close"] == pytest.approx(5.075)
+        assert row["nav_adjustment_factor"] == pytest.approx(5.0)
+        assert row["adv20_value"] == pytest.approx(5_000_000.0)
+
+
+# ---------------------------------------------------------------------------
 # CASE-8: Comprehensive integration
 # ---------------------------------------------------------------------------
 

@@ -1,0 +1,14 @@
+strategy:
+  name: ashare_csi300_low_turnover_multifactor
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  holding_days: 20
+  max_positions: 7
+  target_weight_slots: 7
+  cap_percentile_low: 0.90
+  cap_percentile_high: 1.00
+  max_replacements_per_rebalance: 1
+  score_profile: csi300_low_turnover_multifactor

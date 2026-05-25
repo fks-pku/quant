@@ -1,12 +1,12 @@
-from datetime import date
+﻿from datetime import date
 
-from quant.features.strategies.ashare_mid_cap_dividend_low_vol_capacity.strategy import (
+from quant.features.strategies.reject.ashare_mid_cap_dividend_low_vol_capacity.strategy import (
     AShareMidCapDividendLowVolCapacityStrategy,
 )
-from quant.features.strategies.ashare_mid_cap_low_vol_value.strategy import (
+from quant.features.strategies.reject.ashare_mid_cap_low_vol_value.strategy import (
     AShareMidCapLowVolValueStrategy,
 )
-from quant.features.strategies.ashare_mid_cap_momentum_value_guard.strategy import (
+from quant.features.strategies.reject.ashare_mid_cap_momentum_value_guard.strategy import (
     AShareMidCapMomentumValueGuardStrategy,
 )
 

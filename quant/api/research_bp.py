@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import hashlib
 import inspect
 import json
@@ -18,12 +19,14 @@ from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
 from quant.infrastructure.research.asset_paths import (
+    FULL_REPORT_HTML,
     IDEA_BANK_JSON,
     IDEA_BANK_MD,
     LATEST_REPORT_METADATA,
     LEGACY_IDEA_BANK_JSON,
     LEGACY_IDEA_BANK_MD,
     STAGE_REPORT_HTML,
+    latest_full_report_html_path,
     latest_stage_report_html_path,
 )
 
@@ -398,15 +401,25 @@ def _add_execution_liquidity_features(data_df, execution_cost_model):
     frame = frame.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
     close = pd.to_numeric(frame["close"], errors="coerce")
     volume = pd.to_numeric(frame["volume"], errors="coerce")
+    turnover_close = (
+        pd.to_numeric(frame["raw_close"], errors="coerce")
+        if "raw_close" in frame.columns
+        else close
+    )
+    turnover_volume = (
+        pd.to_numeric(frame["raw_volume"], errors="coerce")
+        if "raw_volume" in frame.columns
+        else volume
+    )
     if "turnover" in frame.columns:
         value = pd.to_numeric(frame["turnover"], errors="coerce")
-        implied = close * volume
+        implied = turnover_close * turnover_volume
         ratio = implied / value.where(value > 0)
         tushare_amount_units = ratio.between(5.0, 20.0) | ratio.between(500.0, 2000.0)
         value = value.where(~tushare_amount_units, value * 1000.0)
         value = value.where(value > 0, implied)
     else:
-        value = close * volume
+        value = turnover_close * turnover_volume
     frame["adv20_value"] = value.groupby(frame["symbol"]).transform(
         lambda item: item.shift(1).rolling(20, min_periods=1).mean()
     )
@@ -726,19 +739,40 @@ def _merge_archived_candidate_defaults(sid, info):
     archived = _archived_candidate_info(sid)
     if not archived:
         return info
+    archived_uses_pit_universe = _archived_candidate_uses_pit_universe(archived)
     merged = dict(archived)
     merged.update(dict(info or {}))
     archived_params = dict(archived.get("parameters") or {})
     params = dict((info or {}).get("parameters") or {})
-    merged["parameters"] = {**archived_params, **params}
+    if archived_uses_pit_universe:
+        merged["parameters"] = _drop_fixed_symbol_parameters({**params, **archived_params})
+    else:
+        merged["parameters"] = {**archived_params, **params}
     archived_meta = dict(archived.get("research_meta") or {})
     meta = dict((info or {}).get("research_meta") or {})
     archived_spec = dict(archived_meta.get("strategy_spec") or {})
     spec = dict(meta.get("strategy_spec") or {})
     meta = {**archived_meta, **meta}
-    meta["strategy_spec"] = {**archived_spec, **spec}
+    if archived_uses_pit_universe:
+        meta["strategy_spec"] = _drop_fixed_symbol_parameters({**spec, **archived_spec})
+    else:
+        meta["strategy_spec"] = {**archived_spec, **spec}
     merged["research_meta"] = meta
     return merged
+
+
+def _archived_candidate_uses_pit_universe(info):
+    params = dict((info or {}).get("parameters") or {})
+    meta = dict((info or {}).get("research_meta") or {})
+    spec = dict(meta.get("strategy_spec") or {})
+    return bool(params.get("pit_universe_enabled")) or bool(params.get("risk_category_symbols")) or bool(spec.get("risk_category_symbols"))
+
+
+def _drop_fixed_symbol_parameters(values):
+    cleaned = dict(values or {})
+    for key in ("symbols", "risk_symbols", "defensive_symbols"):
+        cleaned.pop(key, None)
+    return cleaned
 
 
 def _archived_candidate_info(sid, strategy_archive_dir=None):
@@ -757,11 +791,54 @@ def _archived_candidate_info(sid, strategy_archive_dir=None):
     except Exception:
         config = {}
     params = dict(config.get("parameters") or {})
+    params, pit_symbols = _archived_pit_universe_parameters(sid, params)
     strategy_cfg = dict(config.get("strategy") or {})
-    symbols = [str(symbol) for symbol in params.get("symbols") or [] if _is_a_share_symbol(str(symbol))]
+    symbols = pit_symbols or [str(symbol) for symbol in params.get("symbols") or [] if _is_a_share_symbol(str(symbol))]
     formula_key = "joinquant_small_cap_size_factor"
     if "low_price" in str(sid):
         formula_key = "joinquant_small_cap_low_price_factor"
+    strategy_spec = {
+        "strategy_id": str(sid),
+        "strategy_type": "factor",
+        "signal_formula_key": formula_key,
+        "required_fields": ["close", "market_cap", "turnover"],
+        "lookback_days": int(params.get("lookback", 1) or 1),
+        "horizon_days": int(params.get("holding_days", 5) or 5),
+        "execution_lag_days": 1,
+        "universe": symbols,
+    }
+    if str(sid) == "ashare_gold_equity_barbell_timing":
+        strategy_spec = {
+            "strategy_id": str(sid),
+            "strategy_type": "etf_timing_rotation",
+            "signal_formula_key": "ashare_gold_equity_barbell_timing",
+            "required_fields": [
+                "open",
+                "high",
+                "low",
+                "close",
+                "adj_close",
+                "volume",
+                "turnover",
+                "total_netasset",
+                "net_asset",
+            ],
+            "lookback_days": int(params.get("trend_window", params.get("momentum_lookback", 120)) or 120),
+            "horizon_days": int(params.get("holding_days", 20) or 20),
+            "execution_lag_days": 1,
+            "universe": symbols,
+            "timing_symbol": str(params.get("timing_symbol") or "000300"),
+            "risk_category_symbols": params.get("risk_category_symbols") or {},
+            "defensive_category_symbols": params.get("defensive_category_symbols") or {},
+            "pit_universe_enabled": bool(params.get("pit_universe_enabled", False)),
+            "universe_construction": (
+                "Point-in-time ETF category universe: each category is represented by the ETF "
+                "with the largest available as-of fund size before applying timing and momentum rules."
+            ),
+            "rebalance_frequency": f"{int(params.get('holding_days', 20) or 20)} trading days",
+            "target_exposure": float(params.get("target_exposure", 1.0) or 1.0),
+            "max_position_pct": 1.0,
+        }
     return {
         "id": str(sid),
         "name": strategy_cfg.get("name") or str(sid),
@@ -771,18 +848,50 @@ def _archived_candidate_info(sid, strategy_archive_dir=None):
         "research_meta": {
             "source": "archived_rejected_strategy",
             "rejected_strategy_dir": str(archive_dir),
-            "strategy_spec": {
-                "strategy_id": str(sid),
-                "strategy_type": "factor",
-                "signal_formula_key": formula_key,
-                "required_fields": ["close", "market_cap", "turnover"],
-                "lookback_days": int(params.get("lookback", 1) or 1),
-                "horizon_days": int(params.get("holding_days", 5) or 5),
-                "execution_lag_days": 1,
-                "universe": symbols,
-            },
+            "strategy_spec": strategy_spec,
         },
     }
+
+
+_ARCHIVED_PIT_UNIVERSE_CACHE = {}
+_ARCHIVED_PIT_UNIVERSE_LOCK = threading.RLock()
+
+
+def _archived_pit_universe_parameters(sid, params):
+    if str(sid) != "ashare_gold_equity_barbell_timing":
+        return params, []
+    if not bool(params.get("pit_universe_enabled", False)):
+        return params, []
+    try:
+        universe = _gold_equity_barbell_pit_universe()
+    except Exception:
+        return params, []
+    symbols = [str(symbol) for symbol in universe.get("symbols") or [] if _is_a_share_symbol(str(symbol))]
+    timing_symbol = str(params.get("timing_symbol") or "000300")
+    if timing_symbol and timing_symbol not in symbols:
+        symbols.append(timing_symbol)
+    if not symbols:
+        return params, []
+    merged = dict(params)
+    merged["risk_category_symbols"] = universe.get("risk_category_symbols") or {}
+    merged["defensive_category_symbols"] = universe.get("defensive_category_symbols") or {}
+    merged["timing_symbol"] = timing_symbol
+    merged["require_pit_size"] = True
+    merged.setdefault("pit_size_fields", ["total_netasset", "net_asset", "fund_size", "aum", "total_net_asset", "net_assets"])
+    return merged, sorted(set(symbols))
+
+
+def _gold_equity_barbell_pit_universe():
+    cache_key = "default"
+    with _ARCHIVED_PIT_UNIVERSE_LOCK:
+        cached = _ARCHIVED_PIT_UNIVERSE_CACHE.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+        from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
+
+        universe = build_gold_equity_barbell_pit_universe()
+        _ARCHIVED_PIT_UNIVERSE_CACHE[cache_key] = copy.deepcopy(universe)
+        return copy.deepcopy(universe)
 
 
 class _BarRecordBatch:
@@ -799,7 +908,7 @@ class _BarRecordBatch:
         return self.records[index]
 
 
-_STREAMING_PROVIDER_CACHE_VERSION = 1
+_STREAMING_PROVIDER_CACHE_VERSION = 2
 _STREAMING_PROVIDER_CACHE_MIN_SYMBOLS = 1000
 
 
@@ -831,7 +940,9 @@ class _DuckDBDailyDateProvider:
         status_db_path=None,
         daily_basic_db_path=None,
         financial_indicator_db_path=None,
+        corporate_actions_db_path=None,
         etf_db_path=None,
+        fund_nav_db_path=None,
         index_db_path=None,
         include_daily_basic=True,
         include_financial_indicators=False,
@@ -846,11 +957,16 @@ class _DuckDBDailyDateProvider:
             _DEFAULT_DB,
             _DEFAULT_ETF_DB,
             _DEFAULT_FINANCIAL_INDICATOR_DB,
+            _DEFAULT_FUND_NAV_DB,
             _DEFAULT_INDEX_DB,
             _DEFAULT_STATUS_DB,
+            _CORPORATE_ACTIONS_SCHEMA,
+            _DEFAULT_CORPORATE_ACTIONS_DB,
             _ETF_SCHEMA,
             _FINANCIAL_INDICATOR_SCHEMA,
             _FINANCIAL_INDICATOR_TABLE,
+            _FUND_NAV_SCHEMA,
+            _FUND_NAV_TABLE,
             _INDEX_SCHEMA,
         )
 
@@ -870,13 +986,19 @@ class _DuckDBDailyDateProvider:
             status_db_path=status_db_path or _DEFAULT_STATUS_DB,
             daily_basic_db_path=daily_basic_db_path or _DEFAULT_DAILY_BASIC_DB,
             financial_indicator_db_path=financial_indicator_db_path or _DEFAULT_FINANCIAL_INDICATOR_DB,
+            corporate_actions_db_path=corporate_actions_db_path or _DEFAULT_CORPORATE_ACTIONS_DB,
             etf_db_path=etf_db_path or _DEFAULT_ETF_DB,
+            fund_nav_db_path=fund_nav_db_path or _DEFAULT_FUND_NAV_DB,
             index_db_path=index_db_path or _DEFAULT_INDEX_DB,
         )
+        self._corporate_actions_schema = _CORPORATE_ACTIONS_SCHEMA
         self._etf_schema = _ETF_SCHEMA
+        self._fund_nav_schema = _FUND_NAV_SCHEMA
+        self._fund_nav_table = _FUND_NAV_TABLE
         self._index_schema = _INDEX_SCHEMA
         self._bar_columns = self._resolve_bar_columns()
         self._stock_symbols, self._etf_symbols, self._index_symbols = self._split_symbols_by_market_table()
+        self._dividends_by_key = self._load_dividends(self._stock_symbols)
         self._trading_dates_list = self._load_trading_dates(start, end)
         self.trading_dates = set(self._trading_dates_list)
         self._chunk_size = 63
@@ -942,6 +1064,12 @@ class _DuckDBDailyDateProvider:
             self._load_chunk(day)
         return self._cached_rows_by_date.get(day, [])
 
+    def get_dividend_for_date(self, symbol, trading_date):
+        import pandas as pd
+
+        key = (str(symbol), pd.Timestamp(trading_date).date())
+        return self._dividends_by_key.get(key)
+
     def _load_chunk(self, day):
         import bisect
         import pandas as pd
@@ -1003,6 +1131,7 @@ class _DuckDBDailyDateProvider:
             "financial_indicator_available": bool(include_financial),
             "market_db": _file_fingerprint(self._storage.db_path),
             "etf_db": _file_fingerprint(self._storage._etf_db_path) if self._etf_symbols else None,
+            "fund_nav_db": _file_fingerprint(self._storage._fund_nav_db_path) if self._etf_symbols else None,
             "index_db": _file_fingerprint(self._storage._index_db_path) if self._index_symbols else None,
             "status_db": _file_fingerprint(self._storage._status_db_path) if status_available else None,
             "daily_basic_db": _file_fingerprint(self._storage._daily_basic_db_path) if include_basic else None,
@@ -1189,11 +1318,33 @@ class _DuckDBDailyDateProvider:
         if not symbols or not self._storage._table_exists(table_name):
             return None
         placeholders = ", ".join("?" for _ in symbols)
-        select_cols = ", ".join(f"b.{column}" for column in self._storage._read_bar_columns(table_name))
+        is_etf_table = str(table_name) == f"{self._etf_schema}.daily_cn_ochl"
+        select_columns = [f"b.{column}" for column in self._storage._read_bar_columns(table_name)]
+        joins = []
+        if is_etf_table and self._storage._fund_nav_available():
+            select_columns.extend(
+                [
+                    "n.unit_nav",
+                    "n.accum_nav",
+                    "n.adj_nav",
+                    "n.net_asset",
+                    "n.total_netasset",
+                    "CASE WHEN n.unit_nav > 0 THEN b.close / n.unit_nav - 1 ELSE NULL END AS premium_rate",
+                ]
+            )
+            joins.append(
+                f"""
+                LEFT JOIN {self._fund_nav_schema}.{self._fund_nav_table} n
+                  ON b.symbol = n.symbol
+                 AND CAST(b.timestamp AS DATE) = n.nav_date
+                """
+            )
+        select_cols = ", ".join(select_columns)
         frame = self._storage.conn.execute(
             f"""
             SELECT {select_cols}
             FROM {table_name} b
+            {" ".join(joins)}
             WHERE CAST(b.timestamp AS DATE) BETWEEN ? AND ?
               AND b.symbol IN ({placeholders})
             ORDER BY b.symbol ASC, b.timestamp ASC
@@ -1201,10 +1352,109 @@ class _DuckDBDailyDateProvider:
             [start_day, end_day, *symbols],
         ).fetchdf()
         if frame is not None and not frame.empty:
+            if is_etf_table:
+                frame = self._normalize_etf_total_return_bars(frame)
             frame["tradable"] = True
             frame["has_daily_bar"] = True
             frame["_suspended"] = False
         return frame
+
+    @staticmethod
+    def _normalize_etf_total_return_bars(frame):
+        if frame is None or frame.empty or not {"unit_nav", "adj_nav"}.issubset(frame.columns):
+            return frame
+        import pandas as pd
+
+        result = frame.copy()
+        unit_nav = pd.to_numeric(result["unit_nav"], errors="coerce")
+        adj_nav = pd.to_numeric(result["adj_nav"], errors="coerce")
+        factor = (adj_nav / unit_nav).where((unit_nav > 0) & (adj_nav > 0))
+        valid = factor.notna() & factor.map(lambda value: value == value and value > 0)
+        if not valid.any():
+            return result
+        result["nav_adjustment_factor"] = factor.where(valid, 1.0)
+        for field in ("open", "high", "low", "close"):
+            if field not in result.columns:
+                continue
+            raw_field = f"raw_{field}"
+            result[raw_field] = result[field]
+            values = pd.to_numeric(result[field], errors="coerce")
+            adjusted = values * factor
+            result[field] = adjusted.where(valid & adjusted.notna(), values)
+            adj_field = f"adj_{field}"
+            if adj_field in result.columns:
+                result[adj_field] = result[field]
+        if "adj_factor" in result.columns:
+            result["adj_factor"] = factor.where(valid, result["adj_factor"])
+        if "volume" in result.columns:
+            result["raw_volume"] = result["volume"]
+            volume = pd.to_numeric(result["volume"], errors="coerce")
+            adjusted_volume = volume / factor
+            result["volume"] = adjusted_volume.where(valid & adjusted_volume.notna(), volume)
+        return result
+
+    def _load_dividends(self, stock_symbols):
+        if not stock_symbols:
+            return {}
+        if not self._storage._corporate_actions_db_path.exists():
+            return {}
+        if not self._storage._ensure_sidecar_attached(
+            self._corporate_actions_schema,
+            self._storage._corporate_actions_db_path,
+        ):
+            return {}
+        table_name = f"{self._corporate_actions_schema}.cn_dividends"
+        if not self._storage._table_exists(table_name):
+            return {}
+        placeholders = ", ".join("?" for _ in stock_symbols)
+        frame = self._storage.conn.execute(
+            f"""
+            SELECT
+                symbol,
+                CAST(ex_date AS DATE) AS ex_date,
+                cash_dividend,
+                stock_dividend,
+                allotment_ratio,
+                allotment_price,
+                record_date,
+                pay_date,
+                ann_date
+            FROM {table_name}
+            WHERE CAST(ex_date AS DATE) BETWEEN ? AND ?
+              AND symbol IN ({placeholders})
+              AND (
+                COALESCE(cash_dividend, 0) > 0
+                OR COALESCE(stock_dividend, 0) > 0
+                OR COALESCE(allotment_ratio, 0) > 0
+              )
+            """,
+            [self._start_day, self._end_day, *stock_symbols],
+        ).fetchdf()
+        if frame is None or frame.empty:
+            return {}
+        import pandas as pd
+
+        result = {}
+        for record in frame.to_dict("records"):
+            key = (str(record.get("symbol")), pd.Timestamp(record.get("ex_date")).date())
+            result[key] = {
+                "cash_dividend": self._number_or_zero(record.get("cash_dividend")),
+                "stock_dividend": self._number_or_zero(record.get("stock_dividend")),
+                "allotment_ratio": self._number_or_zero(record.get("allotment_ratio")),
+                "allotment_price": self._number_or_zero(record.get("allotment_price")),
+                "record_date": record.get("record_date") or "",
+                "pay_date": record.get("pay_date") or "",
+                "ann_date": record.get("ann_date") or "",
+            }
+        return result
+
+    @staticmethod
+    def _number_or_zero(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return 0.0 if number != number else number
 
     def _financial_indicator_available(self):
         if not self._include_financial_indicators:
@@ -2016,6 +2266,10 @@ def _update_hypothesis_backtest(pool, sid, strict_report, status, stage, reason)
     if store is None or not hasattr(store, "list_hypotheses"):
         return
     try:
+        candidate = store.get_candidate(sid) if hasattr(store, "get_candidate") else None
+        candidate = _merge_archived_candidate_defaults(sid, candidate) if candidate is not None else _archived_candidate_info(sid)
+        meta = dict((candidate or {}).get("research_meta") or {})
+        spec = dict(meta.get("strategy_spec") or {})
         matched = False
         for row in store.list_hypotheses():
             if row.get("strategy_id") != sid:
@@ -2034,12 +2288,13 @@ def _update_hypothesis_backtest(pool, sid, strict_report, status, stage, reason)
             updated["status"] = status
             updated["stage"] = stage
             updated["decision_reason"] = reason
+            evidence = dict(updated.get("evidence") or {})
+            if spec:
+                evidence["strategy_spec"] = spec
+            updated["evidence"] = evidence
             store.upsert_hypothesis(updated)
         if matched or not hasattr(store, "upsert_hypothesis"):
             return
-        candidate = store.get_candidate(sid) if hasattr(store, "get_candidate") else None
-        meta = dict((candidate or {}).get("research_meta") or {})
-        spec = dict(meta.get("strategy_spec") or {})
         metrics = {
             "strict_backtest": strict_report,
             "backtest_sharpe": strict_report.get("metrics", {}).get("sharpe", 0.0),
@@ -2288,44 +2543,62 @@ def _safe_float(value) -> float:
 def _make_walkforward_runner():
     from quant.features.backtest.engine import Backtester
     from quant.features.strategies.registry import StrategyRegistry
-    from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
     from quant.features.backtest.walkforward import DataFrameProvider
     from quant.features.trading.portfolio import Portfolio
     from quant.features.trading.risk import RiskEngine
     from quant.features.trading.sub_portfolio import SubPortfolio
     from quant.domain.models.market import is_cn_symbol
+    from quant.infrastructure.data.providers import duckdb_provider as duckdb_provider_module
     import pandas as pd
 
     data_cache = {}
     cache_lock = threading.RLock()
-    thread_data = threading.local()
-
     def _empty_walkforward_response():
         return {"metrics": {"sharpe": 0.0, "max_dd": 0.0, "cagr": 0.0, "win_rate": 0.0}, "returns": pd.Series(dtype=float)}
 
     def _cache_key(symbols, start, end):
         return (tuple(symbols), start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
 
-    def _thread_db_provider():
-        db_provider = getattr(thread_data, "db_provider", None)
-        if db_provider is not None:
-            if not hasattr(db_provider, "is_connected") or db_provider.is_connected():
-                return db_provider
-        db_provider = DuckDBProvider()
-        db_provider.connect()
-        thread_data.db_provider = db_provider
-        return db_provider
-
     def _load_uncached_data_bundle(symbols, fetch_start, fetch_end):
-        db_provider = _thread_db_provider()
-        data_df = db_provider.get_bars_for_symbols(symbols, fetch_start, fetch_end, "1d")
-        if not data_df.empty and "timestamp" in data_df.columns and not pd.api.types.is_datetime64_any_dtype(data_df["timestamp"]):
-            data_df = data_df.copy()
-            data_df["timestamp"] = pd.to_datetime(data_df["timestamp"])
-        if not data_df.empty and "timestamp" in data_df.columns:
-            data_df = data_df.sort_values(["timestamp", "symbol"]).set_index("timestamp", drop=False)
-        lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
-        return {"data": data_df, "lot_sizes": lot_sizes}
+        provider_cls = duckdb_provider_module.DuckDBProvider
+        if getattr(provider_cls, "__module__", "") != "quant.infrastructure.data.providers.duckdb_provider":
+            db_provider = provider_cls()
+            try:
+                db_provider.connect()
+                data_df = db_provider.get_bars_for_symbols(symbols, fetch_start, fetch_end, "1d")
+                if not data_df.empty and "timestamp" in data_df.columns and not pd.api.types.is_datetime64_any_dtype(data_df["timestamp"]):
+                    data_df = data_df.copy()
+                    data_df["timestamp"] = pd.to_datetime(data_df["timestamp"])
+                if not data_df.empty and "timestamp" in data_df.columns:
+                    data_df = data_df.sort_values(["timestamp", "symbol"]).set_index("timestamp", drop=False)
+                lot_sizes = _load_lot_sizes(db_provider, symbols, is_cn_symbol)
+                return {"data": data_df, "lot_sizes": lot_sizes}
+            finally:
+                db_provider.disconnect()
+
+        data_provider = _DuckDBDailyDateProvider(
+            symbols,
+            fetch_start,
+            fetch_end,
+            include_daily_basic=True,
+            include_execution_liquidity_features=False,
+            cache_enabled=True,
+        )
+        try:
+            data_df = data_provider._fetch_frame(data_provider._start_day, data_provider._end_day)
+            if not data_df.empty and "timestamp" in data_df.columns and not pd.api.types.is_datetime64_any_dtype(data_df["timestamp"]):
+                data_df = data_df.copy()
+                data_df["timestamp"] = pd.to_datetime(data_df["timestamp"])
+            if not data_df.empty and "timestamp" in data_df.columns:
+                data_df = data_df.sort_values(["timestamp", "symbol"]).set_index("timestamp", drop=False)
+
+            class _StorageProvider:
+                storage = data_provider._storage
+
+            lot_sizes = _load_lot_sizes(_StorageProvider(), symbols, is_cn_symbol)
+            return {"data": data_df, "lot_sizes": lot_sizes}
+        finally:
+            data_provider.close()
 
     def _load_data_bundle(symbols, fetch_start, fetch_end, cache_enabled=False):
         if not cache_enabled:
@@ -2377,11 +2650,7 @@ def _make_walkforward_runner():
         if data_df.empty:
             return _empty_walkforward_response()
 
-        info = _archived_candidate_info(sid, archive_dir) or {
-            "id": str(sid),
-            "name": str(sid),
-            "research_meta": {"strategy_spec": {"strategy_id": str(sid), "universe": list(symbols)}},
-        }
+        info = _candidate_info_for_walkforward(sid, archive_dir, symbols)
         is_cn = any(is_cn_symbol(sym) for sym in symbols)
         execution_cost_model = _strict_execution_cost_model(sid, info, is_cn)
         data_df = _add_execution_liquidity_features(data_df, execution_cost_model)
@@ -2430,6 +2699,24 @@ def _walkforward_strategy_class(sid, registry, strategy_archive_dir=None):
     if strategy_class is not None:
         return strategy_class
     return _load_archived_strategy_class(sid, strategy_archive_dir)
+
+
+def _candidate_info_for_walkforward(sid, strategy_archive_dir=None, symbols=None):
+    return _archived_candidate_info(sid, strategy_archive_dir) or _stored_candidate_info(sid) or {
+        "id": str(sid),
+        "name": str(sid),
+        "research_meta": {"strategy_spec": {"strategy_id": str(sid), "universe": list(symbols or [])}},
+    }
+
+
+def _stored_candidate_info(sid):
+    try:
+        from quant.infrastructure.research.repository import FileResearchStore
+
+        root_dir = Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research"
+        return FileResearchStore(root_dir).get_candidate(str(sid))
+    except Exception:
+        return None
 
 
 def _load_archived_strategy_class(sid, strategy_archive_dir=None):
@@ -2494,6 +2781,9 @@ def _latest_report_payload(cfg: ResearchConfig) -> dict:
     root = _research_artifact_root(cfg)
     stage_reports = {}
     latest_mtime = None
+    full_path = root / latest_full_report_html_path()
+    if full_path.exists():
+        latest_mtime = full_path.stat().st_mtime
     for stage_key, filename in STAGE_REPORT_HTML.items():
         stage_path = root / latest_stage_report_html_path(stage_key)
         if stage_path.exists():
@@ -2506,8 +2796,14 @@ def _latest_report_payload(cfg: ResearchConfig) -> dict:
             "filename": filename.as_posix(),
         }
     payload = {
-        "available": any(item["available"] for item in stage_reports.values()),
+        "available": full_path.exists() or any(item["available"] for item in stage_reports.values()),
         "reports_root": str(root / "reports"),
+        "full_report": {
+            "available": full_path.exists(),
+            "url": "/api/research/report/latest",
+            "path": str(full_path),
+            "filename": FULL_REPORT_HTML.as_posix(),
+        },
         "stage_reports": stage_reports,
     }
     metadata_path = root / LATEST_REPORT_METADATA
@@ -2622,7 +2918,7 @@ def _make_factor_data(cfg: ResearchConfig):
 def _validation_config(cfg: ResearchConfig) -> dict:
     validation_cfg = dict(getattr(cfg, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(cfg, "validation_min_obs", 252))
-    validation_cfg.setdefault("start_date", getattr(cfg, "default_backtest_start", "2012-01-01"))
+    validation_cfg.setdefault("start_date", getattr(cfg, "default_backtest_start", "2016-01-01"))
     validation_cfg.setdefault("end_date", getattr(cfg, "default_backtest_end", "2025-12-31"))
     return validation_cfg
 
@@ -2749,6 +3045,7 @@ def _get_scheduler() -> ResearchScheduler:
             benchmark_data_loader=_make_benchmark_data_loader(cfg) if cfg.rigor_enabled else None,
             spec_builder=spec_builder,
             validator=validator,
+            archived_candidate_resolver=_archived_candidate_info,
         )
         if experiment_store:
             engine._experiment_store = experiment_store
@@ -2764,32 +3061,12 @@ def _get_scheduler() -> ResearchScheduler:
 
 def _load_research_config() -> ResearchConfig:
     from quant.shared.utils.config_loader import ConfigLoader
+    from quant.features.research.configuration import research_config_kwargs_from_data
     try:
         data = _load_research_config_data(ConfigLoader)
     except FileNotFoundError:
         return ResearchConfig()
-    research_cfg = data.get("research", {})
-    validation_cfg = data.get("validation", {})
-    evaluation_cfg = data.get("evaluation", {})
-    pit_cfg = data.get("pit", {})
-    llm_cfg = data.get("llm", {})
-    merged_validation = dict(research_cfg.get("validation_config", {}) or {})
-    merged_validation.update(validation_cfg or {})
-    research_cfg["validation_config"] = merged_validation
-    merged_evaluation = dict(research_cfg.get("evaluation_config", {}) or {})
-    merged_evaluation.update(evaluation_cfg or {})
-    research_cfg["evaluation_config"] = merged_evaluation
-    if "enabled" in pit_cfg:
-        research_cfg["pit_enabled"] = bool(pit_cfg.get("enabled"))
-    if "universe_snapshot_dir" in pit_cfg:
-        research_cfg["pit_universe_snapshot_dir"] = pit_cfg.get("universe_snapshot_dir")
-    research_cfg.setdefault("llm_provider", llm_cfg.get("provider", "minimax"))
-    research_cfg.setdefault("llm_model", llm_cfg.get("model", "MiniMax-M2.7"))
-    research_cfg.setdefault("llm_api_key", llm_cfg.get("api_key"))
-    research_cfg.setdefault("llm_temperature", llm_cfg.get("temperature", 0.3))
-    research_cfg.setdefault("llm_base_url", llm_cfg.get("base_url"))
-    research_cfg.setdefault("llm_group_id", llm_cfg.get("group_id"))
-    return ResearchConfig(**research_cfg)
+    return ResearchConfig(**research_config_kwargs_from_data(data))
 
 
 def _load_research_config_data(loader_cls=None) -> dict:
@@ -2856,6 +3133,7 @@ def run_research():
         benchmark_data_loader=_make_benchmark_data_loader(cfg) if cfg.rigor_enabled else None,
         spec_builder=spec_builder,
         validator=validator,
+        archived_candidate_resolver=_archived_candidate_info,
     )
 
     def _run():
@@ -2967,10 +3245,14 @@ def get_latest_report_info():
 
 @research_bp.route("/api/research/report/latest")
 def get_latest_report():
-    return jsonify({
-        "error": "Full research report has been removed; use /api/research/report/stage/<stage_key>.",
-        "stage_reports": _latest_report_payload(_load_research_config()).get("stage_reports", {}),
-    }), 410
+    cfg = _load_research_config()
+    path = _research_artifact_root(cfg) / latest_full_report_html_path()
+    if not path.exists():
+        return jsonify({
+            "error": "Full research report not found",
+            "stage_reports": _latest_report_payload(cfg).get("stage_reports", {}),
+        }), 404
+    return send_file(str(path), mimetype="text/html")
 
 
 @research_bp.route("/api/research/report/stage/<stage_key>")

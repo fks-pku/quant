@@ -89,7 +89,11 @@ def _corr_tstat(corr: float, n_observations: int) -> float:
 
 
 def _signal_error(formula_key: str) -> str:
-    if formula_key in {"joinquant_small_cap_size_factor", "joinquant_small_cap_low_price_factor"}:
+    if formula_key in {
+        "joinquant_small_cap_size_factor",
+        "joinquant_small_cap_low_price_factor",
+        "ashare_small_cap_guarded_size_factor",
+    }:
         return "Missing point-in-time market cap field: expected one of total_mv, circ_mv, market_cap, total_market_cap"
     return f"Unsupported formula: {formula_key}"
 
@@ -111,7 +115,7 @@ class FactorValidator:
         self._top_bucket_size = max(1, int(self._config.get("top_bucket_size", 20) or 20))
         self._factor_validation_enabled = bool(self._config.get("factor_validation_enabled", False))
         self._sensitivity_enabled = bool(self._config.get("sensitivity_enabled", False))
-        self._start_date = str(self._config.get("start_date", "2012-01-01"))
+        self._start_date = str(self._config.get("start_date", "2016-01-01"))
         self._end_date = str(self._config.get("end_date", "2025-12-31"))
 
     def validate(self, spec: StrategySpec) -> ValidationReport:

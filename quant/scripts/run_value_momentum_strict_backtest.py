@@ -1,4 +1,4 @@
-"""Run strict backtest for the A-share value momentum filter candidate."""
+﻿"""Run strict backtest for the A-share value momentum filter candidate."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
-from quant.features.strategies.ashare_value_momentum_filter.strategy import (
+from quant.features.strategies.reject.ashare_value_momentum_filter.strategy import (
     AShareValueMomentumFilterStrategy,
 )
 from quant.features.trading.portfolio import Portfolio
@@ -28,7 +28,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 
-START = datetime(2012, 1, 1)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000.0
 STRATEGY_ID = "ashare_value_momentum_filter"

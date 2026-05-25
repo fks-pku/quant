@@ -1,4 +1,4 @@
-"""Run strict backtests for large-cap A-share ETF defensive rotation."""
+﻿"""Run strict backtests for large-cap A-share ETF defensive rotation."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
-from quant.features.strategies.joinquant_qixing_daily_etf_rotation.strategy import (
+from quant.features.strategies.reject.joinquant_qixing_daily_etf_rotation.strategy import (
     DEFAULT_RISK_SYMBOLS,
     JoinquantQixingDailyEtfRotationStrategy,
 )
@@ -33,7 +33,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.reporting import build_research_stage_report_html
 
 
-START = datetime(2013, 5, 15)
+START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
 INITIAL_CASH = 500000.0
 STRATEGY_ID = "large_cap_etf_defensive_rotation"
@@ -108,7 +108,7 @@ SCENARIOS: List[Dict[str, Any]] = [
 DETAIL_SECTION = """
 <h3>策略执行流程</h3>
 <div class="table-wrap"><table><thead><tr><th>步骤</th><th>执行逻辑</th><th>本次约束</th></tr></thead><tbody>
-<tr><td>1. 大市值 ETF 池</td><td>只在沪深 300、上证 50、红利、创业板/创业板 50 等高流动性大盘 ETF 中轮动；防守腿使用货币 ETF。</td><td>候选从 2013-05-15 起具备连续 ETF/现金腿数据。</td></tr>
+<tr><td>1. 大市值 ETF 池</td><td>只在沪深 300、上证 50、红利、创业板/创业板 50 等高流动性大盘 ETF 中轮动；防守腿使用货币 ETF。</td><td>默认严格回测从 2016-01-01 开始。</td></tr>
 <tr><td>2. 动量打分</td><td>每天用最近 N 日收盘价做加权 log-price 回归，年化斜率乘 R² 得到趋势质量分。</td><td>默认 score_window=24；只用当日及历史收盘。</td></tr>
 <tr><td>3. 流动性与异常量过滤</td><td>候选必须满足 20 日平均成交额下限，且当日成交量不能显著高于过去均值。</td><td>min_avg_turnover=2000 万；max_volume_multiple=2.5。</td></tr>
 <tr><td>4. 风控切现金</td><td>若现持有风险 ETF 触发近 3 日回撤或入场后固定止损，则次日切换到现金 ETF。</td><td>网格测试 5%/8% 与 3.5%/6% 两档止损。</td></tr>

@@ -1,7 +1,10 @@
 from html.parser import HTMLParser
 
 from quant.infrastructure.research.asset_paths import report_id_for_result
-from quant.infrastructure.research.reporting import build_research_stage_report_html
+from quant.infrastructure.research.reporting import (
+    build_research_full_report_html,
+    build_research_stage_report_html,
+)
 
 REQUIRED_TOP_LEVEL_SECTIONS = [
     "1. 本阶段结论",
@@ -59,6 +62,310 @@ def test_report_id_ignores_none_run_id():
     assert report_id_for_result(data, []) == "research_pipeline"
 
 
+def test_full_report_combines_all_stage_reports_with_metric_checklist():
+    result = {
+        "run_id": "full_contract",
+        "backtested": 1,
+        "walkforward_passed": 0,
+        "saved_at": "2026-05-24T00:00:00+00:00",
+    }
+    rows = [
+        {
+            "title": "Full Contract",
+            "strategy_id": "full_contract_strategy",
+            "status": "rejected",
+            "stage": "go_no_go",
+            "decision_reason": "strict and capacity failed",
+            "metrics": {
+                "rank_ic": 0.031,
+                "rank_ic_ir": 0.35,
+                "rank_ic_tstat": 2.3,
+                "hit_rate": 0.56,
+                "strict_backtest": {
+                    "initial_cash": 500000,
+                    "benchmark": {
+                        "symbol": "000300",
+                        "benchmark_yearly_returns": {"2025": 0.06},
+                    },
+                    "metrics": {
+                        "sharpe": 0.62,
+                        "cagr": 0.07,
+                        "max_drawdown_pct": -0.24,
+                        "calmar_ratio": 0.29,
+                        "profit_factor": 1.21,
+                        "total_trades": 64,
+                    },
+                    "equity_curve": {
+                        "strategy": [
+                            {"date": "2024-12-31", "value": 500000},
+                            {"date": "2025-01-31", "value": 510000},
+                            {"date": "2025-12-31", "value": 580000},
+                        ],
+                        "benchmark": [
+                            {"date": "2024-12-31", "value": 500000},
+                            {"date": "2025-01-31", "value": 495000},
+                            {"date": "2025-12-31", "value": 530000},
+                        ],
+                    },
+                    "yearly_returns": {"2025": 0.16},
+                    "constraints": {
+                        "execution_cost_model": {
+                            "enabled": True,
+                            "name": "small_cap_realistic",
+                            "max_participation_rate": 0.01,
+                        },
+                        "t_plus_1": True,
+                        "cn_lot_size": 100,
+                    },
+                },
+                "walkforward": {
+                    "verdict": "fail",
+                    "aggregate_oos_sharpe": 0.91,
+                    "worst_oos_sharpe": 0.18,
+                    "pct_profitable_splits": 0.60,
+                    "capacity_ok": False,
+                },
+                "research_stage_conclusions": {
+                    "fast_research": {"label": "Fast", "verdict": "pass", "conclusion": "fast pass"},
+                    "strict_backtest": {"label": "Strict", "verdict": "fail", "conclusion": "strict fail"},
+                    "walkforward_strict_audit": {"label": "WF", "verdict": "fail", "conclusion": "wf fail"},
+                    "final_decision": {"label": "Final", "verdict": "rejected", "conclusion": "reject"},
+                },
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "full_contract_strategy", "universe": ["000300"]}},
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    _assert_clean_html(html)
+    assert "End-to-End Research Report" in html
+    assert "Metric Checklist" in html
+    assert "Fast Research Evidence" in html
+    assert "Strict Backtest Evidence" in html
+    assert "Walk-forward Audit Evidence" in html
+    assert "Evidence Map" in html
+    assert "full_research_report.html" in html
+    assert "fast_research_report.html" in html
+    assert "strict_backtest_report.html" in html
+    assert "walkforward_audit_report.html" in html
+    assert '<figure class="equity-chart">' in html
+    assert '<path class="strategy-line"' in html
+    assert '<path class="benchmark-line"' in html
+    assert '<figure class="return-calendar-chart">' in html
+    assert '<details class="return-cell positive">' in html
+    assert "Backtest Configuration" in html
+    assert "Data Quality Audit" in html
+    assert "Drawdown Episodes" in html
+    assert "Cost Decomposition" in html
+    assert "<td>rank_ic</td><td>0.0310</td><td>&gt;=0.0200</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>strict_sharpe</td><td>0.6200</td><td>&gt;=0.8000</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "<td>capacity_ok</td><td>false</td><td>must pass</td><td><span class=\"badge fail\">fail</span></td>" in html
+
+
+def test_full_report_marks_missing_fast_research_metrics_as_failures():
+    result = {
+        "run_id": "strict_only_contract",
+        "backtested": 1,
+        "walkforward_passed": 0,
+        "saved_at": "2026-05-24T00:00:00+00:00",
+    }
+    rows = [
+        {
+            "title": "Strict Only Contract",
+            "strategy_id": "strict_only_strategy",
+            "status": "rejected",
+            "stage": "go_no_go",
+            "decision_reason": "strict failed",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": -1.04,
+                        "cagr": -0.3064,
+                        "max_drawdown_pct": -0.9819,
+                        "calmar_ratio": -0.312,
+                        "profit_factor": 0.61,
+                        "total_trades": 1235,
+                    }
+                },
+                "walkforward": {
+                    "aggregate_oos_sharpe": -1.47,
+                    "worst_oos_sharpe": -6.16,
+                    "pct_profitable_splits": 0.31,
+                    "capacity_ok": False,
+                    "splits": [
+                        {
+                            "split": 1,
+                            "train_start": "2024-01-01",
+                            "train_end": "2024-06-30",
+                            "test_start": "2024-07-01",
+                            "test_end": "2024-07-31",
+                            "oos_sharpe": -0.9,
+                            "verdict": "fail",
+                        }
+                    ],
+                },
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "strict_only_strategy", "universe": ["000300"]}},
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    _assert_clean_html(html)
+    assert "Rank IC=n/a" not in html
+    assert "not_recorded" not in html
+    assert "<td>rank_ic</td><td>missing</td><td>&gt;=0.0200</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "fast research admission</td><td>missing" in html
+    assert "HFQ signal validation</td><td>missing" in html
+    assert "vectorized portfolio diagnostics</td><td>missing" in html
+    assert "PnL attribution bridge</td><td>missing" in html
+    assert (
+        "<td>1</td><td>2024-01-01 - 2024-06-30</td><td>2024-07-01 - 2024-07-31</td>"
+        "<td>frozen parameters</td><td>-0.9000</td><td>fail</td>"
+    ) in html
+
+
+def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
+    result = {
+        "run_id": "etf_timing_contract",
+        "backtested": 1,
+        "walkforward_passed": 0,
+        "saved_at": "2026-05-24T00:00:00+00:00",
+    }
+    rows = [
+        {
+            "title": "ETF Timing Contract",
+            "strategy_id": "ashare_gold_equity_barbell_timing",
+            "status": "rejected",
+            "stage": "go_no_go",
+            "decision_reason": "walk-forward failed",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 1.18,
+                        "cagr": 0.1424,
+                        "max_drawdown_pct": -0.1575,
+                        "calmar_ratio": 0.904,
+                        "profit_factor": 7.14,
+                        "total_trades": 204,
+                    }
+                },
+                "walkforward": {
+                    "aggregate_oos_sharpe": 0.665,
+                    "worst_oos_sharpe": -3.31,
+                    "pct_profitable_splits": 0.615,
+                    "capacity_ok": False,
+                },
+            },
+            "evidence": {
+                "source": "local_strategy",
+                "strategy_spec": {
+                    "strategy_id": "ashare_gold_equity_barbell_timing",
+                    "strategy_type": "etf_momentum_rotation",
+                    "signal_formula_key": "etf_barbell_timing",
+                    "universe": ["510050", "510300", "159915", "159949", "510880", "518880"],
+                },
+            },
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    _assert_clean_html(html)
+    assert "not_recorded" not in html
+    assert "fast_signal_validation_scope" in html
+    assert "ETF timing/rotation" in html
+    assert "需要重跑 fast/full research" not in html
+    assert "<td>rank_ic</td>" not in html
+    assert "HFQ signal validation</td><td>n/a" in html
+    assert "vectorized portfolio diagnostics</td><td>n/a" in html
+    assert "PnL attribution bridge</td><td>n/a" in html
+    assert "<td>strict_sharpe</td><td>1.1800</td><td>&gt;=0.8000</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>worst_oos_sharpe</td><td>-3.3100</td><td>&gt;=0.3000</td><td><span class=\"badge fail\">fail</span></td>" in html
+
+
+def test_full_report_preserves_strict_evidence_when_walkforward_stage_rerenders():
+    result = {
+        "run_id": "walkforward_contract",
+        "backtested": 0,
+        "walkforward_passed": 0,
+        "saved_at": "2026-05-24T00:00:00+00:00",
+    }
+    rows = [
+        {
+            "title": "Walkforward Contract",
+            "strategy_id": "walkforward_contract_strategy",
+            "status": "rejected",
+            "stage": "go_no_go",
+            "decision_reason": "walk-forward failed",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 1.18,
+                        "cagr": 0.142,
+                        "max_drawdown_pct": -0.158,
+                        "calmar_ratio": 0.90,
+                        "profit_factor": 7.15,
+                        "total_trades": 204,
+                    }
+                },
+                "walkforward": {
+                    "verdict": "fail",
+                    "aggregate_oos_sharpe": 0.6654,
+                    "worst_oos_sharpe": -3.3176,
+                    "pct_profitable_splits": 0.6154,
+                    "capacity_ok": False,
+                },
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "walkforward_contract_strategy", "universe": ["510300"]}},
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    assert "<td>strict_sharpe</td><td>1.1800</td><td>&gt;=0.8000</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>strict_cagr</td><td>14.20%</td><td>&gt;=5.00%</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>strict_max_drawdown</td><td>15.80%</td><td>&lt;=25.00% abs</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "strict_sharpe</td><td>not_recorded" not in html
+    assert "Sharpe=1.18" in html
+
+
+def test_small_cap_strict_grid_best_respects_drawdown_constraint_before_return():
+    from quant.scripts.run_ashare_small_cap_pure_baseline_strict_backtest import _select_best
+
+    rows = [
+        {"scenario": "high_return_high_drawdown", "cagr": 0.14, "max_drawdown_pct": -0.54, "sharpe": 0.70},
+        {"scenario": "return_target_but_drawdown_breach", "cagr": 0.103, "max_drawdown_pct": -0.305, "sharpe": 0.73},
+        {"scenario": "drawdown_controlled_goal_candidate", "cagr": 0.1001, "max_drawdown_pct": -0.299, "sharpe": 0.72},
+        {"scenario": "drawdown_controlled_low_sharpe", "cagr": 0.06, "max_drawdown_pct": -0.25, "sharpe": 0.50},
+    ]
+
+    assert _select_best(rows)["scenario"] == "drawdown_controlled_goal_candidate"
+
+
+def test_small_cap_strict_grid_accepts_runtime_drawdown_threshold():
+    from quant.scripts.run_ashare_small_cap_pure_baseline_strict_backtest import _select_best
+
+    rows = [
+        {"scenario": "old_target_candidate", "cagr": 0.11, "max_drawdown_pct": -0.28, "sharpe": 0.90},
+        {"scenario": "tighter_risk_candidate", "cagr": 0.08, "max_drawdown_pct": -0.24, "sharpe": 0.70},
+    ]
+
+    assert _select_best(rows, target_cagr=0.10, target_max_drawdown=-0.25)["scenario"] == "tighter_risk_candidate"
+
+
+def test_small_cap_strict_grid_keeps_scenario_symbol_scope_isolated():
+    from quant.scripts.run_ashare_small_cap_pure_baseline_strict_backtest import _scenario_symbols
+
+    stock_symbols = ["600001", "600002"]
+    pure_scenario = {"market_timing_symbol": "", "broad_index_symbols": []}
+    blend_scenario = {"market_timing_symbol": "", "broad_index_symbols": ["510300", "159915"]}
+
+    assert _scenario_symbols(stock_symbols, pure_scenario) == ["600001", "600002"]
+    assert _scenario_symbols(stock_symbols, blend_scenario) == ["600001", "600002", "510300", "159915"]
+
+
 def test_strict_report_includes_strategy_execution_logic_and_signal_explanation():
     result = {
         "run_id": "qixing_execution_logic",
@@ -87,11 +394,21 @@ def test_strict_report_includes_strategy_execution_logic_and_signal_explanation(
                     "rebalance_frequency": "daily",
                     "required_fields": ["adj_close", "volume", "turnover"],
                     "fallback_symbol": "511880",
+                    "strategy_logic": {
+                        "core_idea": "在 ETF/LOF 池中选择趋势更强且拟合质量更好的品种。",
+                        "universe": "A 股 ETF/LOF 日线池。",
+                        "entry_filters": ["成交额过滤", "正动量过滤"],
+                        "ranking_rule": "按 24 日加权对数回归年化收益乘以 R² 排序。",
+                        "portfolio_construction": "只持有最高分标的，候选不足时切换到 511880。",
+                        "rebalance_rule": "每日收盘后计算信号，下一交易日执行。",
+                        "exit_rule": "候选为空或触发风控时退出到防守资产。",
+                        "risk_budget": "以候选过滤、防守资产和 T+1 执行约束控制风险。",
+                    },
                 }
             },
             "metrics": {
                 "strict_backtest": {
-                    "period": "2012-01-01 to 2025-12-31",
+                    "period": "2016-01-01 to 2025-12-31",
                     "metrics": {
                         "sharpe": 0.04,
                         "sortino": 0.06,
@@ -118,12 +435,16 @@ def test_strict_report_includes_strategy_execution_logic_and_signal_explanation(
 
     html = build_research_stage_report_html("strict_backtest", result, rows)
 
+    assert "策略逻辑说明" not in html
+    assert "信号详细说明" in html
+    assert "核心假设" in html
+    assert "在 ETF/LOF 池中选择趋势更强且拟合质量更好的品种" in html
     assert "策略执行逻辑" in html
     assert "每日运行步骤" in html
-    assert "信号解释" in html
+    assert "执行约束摘要" in html
     assert "on_after_trading" in html
     assert "T+1" in html
-    assert "24日加权对数回归年化收益 × R²" in html
+    assert "24 日加权对数回归年化收益乘以 R²" in html
     assert "511880" in html
 
 
@@ -322,7 +643,7 @@ def test_generated_stage_reports_match_contract():
                         ],
                     },
                     "strict_backtest": {
-                        "period": "2012-01-01 to 2025-12-31",
+                        "period": "2016-01-01 to 2025-12-31",
                         "metrics": {
                             "sharpe": 0.57,
                             "sortino": 0.84,
@@ -638,7 +959,7 @@ def test_generated_stage_reports_match_contract():
     assert "<td>test_window</td><td>63 trading days</td>" in wf_html
     assert "<td>worst_oos_sharpe</td><td>0.2000</td><td>&gt;=0.3000</td><td><span class=\"badge fail\">fail</span></td>" in wf_html
     assert "<td>pct_profitable_splits</td><td>66.00%</td><td>&gt;=50.00%</td><td><span class=\"badge pass\">pass</span></td>" in wf_html
-    assert "<td>deflated_sharpe_ratio</td><td>n/a</td><td>&gt;=0.9500；缺失时不触发 DSR 警告</td><td><span class=\"badge warn\">not_recorded</span></td>" in wf_html
+    assert "<td>deflated_sharpe_ratio</td><td>n/a</td><td>&gt;=0.9500；缺失时不触发 DSR 警告</td><td><span class=\"badge warn\">missing</span></td>" in wf_html
     assert "<td>capacity_viability</td><td>未通过</td><td>所有交易可估算成交量且单笔参与率 &lt;=5.00% ADV</td><td><span class=\"badge fail\">fail</span></td>" in wf_html
     assert "<td>0.7000</td><td>-3.00%</td><td>12.00%</td><td>warn</td>" in wf_html
     assert "-9.9000" not in fast_html

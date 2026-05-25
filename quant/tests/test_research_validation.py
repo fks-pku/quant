@@ -713,6 +713,32 @@ class TestResearchAdjustedPrices:
         assert pd.isna(signal.loc[dates[-1], "600002"])
         assert pd.isna(signal.loc[dates[-1], "600003"])
 
+    def test_ashare_small_cap_guarded_size_factor_applies_basic_trade_guards(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=3, freq="B")
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 4,
+                "symbol": ["600001"] * 3 + ["600002"] * 3 + ["600003"] * 3 + ["600004"] * 3,
+                "close": [10.0] * 6 + [4.0] * 3 + [10.0] * 3,
+                "adj_close": [10.0] * 12,
+                "turnover": [30000.0] * 6 + [30000.0] * 3 + [1000.0] * 3,
+                "total_mv": [100.0] * 3 + [500.0] * 3 + [50.0] * 3 + [30.0] * 3,
+                "is_st": [False] * 12,
+                "tradable": [True] * 12,
+                "has_daily_bar": [True] * 12,
+                "is_listed": [True] * 12,
+                "list_status": ["L"] * 12,
+            }
+        )
+
+        signal = compute_signal("ashare_small_cap_guarded_size_factor", frame, lookback=1)
+
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600002"]
+        assert pd.isna(signal.loc[dates[-1], "600003"])
+        assert pd.isna(signal.loc[dates[-1], "600004"])
+
     def test_worldquant_alpha_001_returns_cross_sectional_rank_signal(self):
         from quant.features.research.validation.signal_library import compute_signal
 

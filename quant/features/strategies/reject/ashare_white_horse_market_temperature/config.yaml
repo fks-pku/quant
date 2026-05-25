@@ -1,0 +1,16 @@
+strategy:
+  name: ashare_white_horse_market_temperature
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  holding_days: 20
+  max_positions: 18
+  target_weight_slots: 18
+  cap_percentile_low: 0.85
+  cap_percentile_high: 1.00
+  score_profile: white_horse_temperature
+  use_market_timing: true
+  min_roe: 5.0
+  max_debt_to_assets: 75.0

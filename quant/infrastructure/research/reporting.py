@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from html import escape
 from typing import Any, Dict, Iterable, List
 
-from quant.infrastructure.research.asset_paths import STAGE_REPORT_HTML
+from quant.infrastructure.research.asset_paths import FULL_REPORT_HTML, STAGE_REPORT_HTML
 
 _REQUIRED_CHART_STYLE = """
 .equity-chart {
@@ -329,6 +329,98 @@ def build_research_stage_report_html(
     return _html_document(title, "\n".join(body))
 
 
+def build_research_full_report_html(
+    result: Any,
+    hypotheses: Iterable[Dict[str, Any]],
+    generated_at: str | None = None,
+) -> str:
+    data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+    rows = list(hypotheses or [])
+    generated = generated_at or data.get("saved_at") or datetime.now(timezone.utc).isoformat()
+    title = f"{_report_subject(rows)} End-to-End Research Report"
+    body = [
+        '<section class="hero">',
+        "<p class=\"eyebrow\">Fast + Strict Backtest + Walk-forward</p>",
+        f"<h1>{escape(title)}</h1>",
+        f"<p>Generated at {escape(str(generated))}. This report combines fast research, strict Backtester evidence, walk-forward strict audit evidence, and the final Go / No-Go checklist.</p>",
+        _report_metric_grid(rows, str(generated)),
+        "</section>",
+        '<section class="panel">',
+        "<h2>1. Final Decision</h2>",
+        _conclusion_paragraph(data, rows),
+        _stage_conclusion_table(data, rows),
+        _judgement_table(data, rows),
+        "</section>",
+        '<section class="panel">',
+        "<h2>2. Metric Checklist</h2>",
+        _end_to_end_checklist_table(data, rows),
+        "<h3>Evidence Map</h3>",
+        _full_report_evidence_map(data, rows),
+        "</section>",
+        '<section class="panel">',
+        "<h2>3. Fast Research Evidence</h2>",
+        "<h3>Idea Source</h3>",
+        _idea_source_overview_table(rows),
+        "<h3>Admission And Signal Contract</h3>",
+        _source_quality_score_table(data, rows),
+        _strategy_spec_contract_table(rows),
+        _formula_block(rows),
+        "<h3>Signal Validation</h3>",
+        _signal_validation_contract_table(data, rows),
+        "<h3>Portfolio Diagnostics</h3>",
+        _portfolio_diagnostics_contract_table(data, rows),
+        "<h3>PnL Attribution Bridge</h3>",
+        _pnl_attribution_bridge_contract_table(data, rows),
+        "</section>",
+        '<section class="panel">',
+        "<h2>4. Strict Backtest Evidence</h2>",
+        "<h3>4.1 Strategy Execution Logic</h3>",
+        _strategy_execution_logic_contract(data, rows),
+        "<h3>4.2 Equity Curve</h3>",
+        _equity_curve_chart(data, rows),
+        "<h3>4.3 Yearly / Monthly Return Calendar</h3>",
+        _yearly_return_calendar(data, rows),
+        "<h3>4.4 Backtest Configuration</h3>",
+        _backtest_config_contract_table(data, rows),
+        "<h3>4.5 Data Quality Audit</h3>",
+        _data_quality_contract_table(data, rows),
+        "<h3>4.6 Core Performance</h3>",
+        _core_performance_contract_table(data, rows),
+        "<h3>4.7 Trade And Cost Diagnostics</h3>",
+        _trade_cost_contract_table(data, rows),
+        "<h3>4.8 Turnover And Exposure</h3>",
+        _turnover_exposure_contract_table(data, rows),
+        "<h3>4.9 Capacity And Liquidity</h3>",
+        _capacity_contract_table(data, rows),
+        "<h3>4.10 Guard Attribution</h3>",
+        _guard_attribution_contract_table(data, rows),
+        "<h3>4.11 Drawdown Episodes</h3>",
+        _drawdown_episode_contract_table(data, rows),
+        "<h3>4.12 Trade Distribution</h3>",
+        _trade_distribution_contract_table(data, rows),
+        "<h3>4.13 Rolling Stability And Regime</h3>",
+        _rolling_regime_contract_table(data, rows),
+        "<h3>4.14 Cost Decomposition</h3>",
+        _cost_decomposition_contract_table(data, rows),
+        "</section>",
+        '<section class="panel">',
+        "<h2>5. Walk-forward Audit Evidence</h2>",
+        "<h3>Methodology</h3>",
+        _walkforward_methodology_contract_table(rows),
+        "<h3>Summary</h3>",
+        _walkforward_summary_contract_table(data, rows),
+        "<h3>Split Details</h3>",
+        _walkforward_split_contract_table(data, rows),
+        "</section>",
+        '<section class="panel">',
+        "<h2>6. Report Navigation</h2>",
+        _full_report_link_table(data, rows),
+        _artifact_links(rows),
+        "</section>",
+    ]
+    return _html_document(title, "\n".join(body))
+
+
 def _report_subject(rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     title = str(row.get("title") or "").strip()
@@ -345,6 +437,45 @@ def _primary_row(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _row_strategy_id(row: Dict[str, Any]) -> str:
     spec = (row.get("evidence") or {}).get("strategy_spec") or {}
     return str(row.get("strategy_id") or spec.get("strategy_id") or "not_integrated")
+
+
+def _strategy_spec(row: Dict[str, Any]) -> Dict[str, Any]:
+    return (row.get("evidence") or {}).get("strategy_spec") or {}
+
+
+def _fast_validation_scope(row: Dict[str, Any]) -> str:
+    spec = _strategy_spec(row)
+    text = " ".join(
+        str(part or "")
+        for part in (
+            row.get("strategy_id"),
+            row.get("title"),
+            row.get("thesis"),
+            spec.get("strategy_id"),
+            spec.get("strategy_type"),
+            spec.get("signal_formula_key"),
+        )
+    ).lower()
+    if any(token in text for token in ("etf", "rotation", "timing", "barbell", "asset_allocation", "asset allocation", "rsrs")):
+        return "etf_timing_rotation"
+    return "cross_sectional_alpha"
+
+
+def _uses_cross_sectional_fast_validation(row: Dict[str, Any]) -> bool:
+    return _fast_validation_scope(row) == "cross_sectional_alpha"
+
+
+def _fast_validation_scope_text(row: Dict[str, Any]) -> str:
+    if _uses_cross_sectional_fast_validation(row):
+        return "cross-sectional alpha: Rank IC / ICIR / hit-rate evidence is required."
+    return "ETF timing/rotation: cross-sectional Rank IC is not applicable; strict Backtester and walk-forward OOS gates are the required evidence."
+
+
+def _local_strategy_rerun(row: Dict[str, Any]) -> bool:
+    evidence = row.get("evidence") or {}
+    metadata = evidence.get("metadata") or {}
+    source = str(row.get("source") or evidence.get("source") or metadata.get("source") or "").lower()
+    return source == "local_strategy" or bool(evidence.get("local_strategy"))
 
 
 def _report_status(rows: List[Dict[str, Any]]) -> str:
@@ -404,7 +535,22 @@ def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> s
     aggregate = _fmt(wf_scores.get("aggregate_oos_sharpe"))
     worst = _fmt(wf_scores.get("worst_oos_sharpe"))
     if status == "rejected":
-        if _signal_badge_class(metrics) == "fail":
+        if not _has_signal_validation_metrics(metrics):
+            if _uses_cross_sectional_fast_validation(row):
+                text = (
+                    f"{strategy_id} 当前 full report 缺少快研究 / HFQ 信号验证指标；"
+                    f"本轮可审计证据来自 strict Backtester 与 purged walk-forward："
+                    f"严格回测 Sharpe={sharpe}、CAGR={cagr}，样本外 aggregate OOS Sharpe={aggregate}、worst={worst}。"
+                    "最终结论是不进入策略池或 paper trading；需要重跑 fast/full research 才能补齐 Rank IC、FDR、admission 和 PnL bridge。"
+                )
+            else:
+                text = (
+                    f"{strategy_id} 是 ETF timing/rotation 策略，横截面 Rank IC、Top bucket 和 PnL bridge 不适用；"
+                    f"本轮可审计证据来自 strict Backtester 与 purged walk-forward："
+                    f"严格回测 Sharpe={sharpe}、CAGR={cagr}，样本外 aggregate OOS Sharpe={aggregate}、worst={worst}。"
+                    "最终结论是不进入策略池或 paper trading，原因是 walk-forward strict audit 未通过。"
+                )
+        elif _signal_badge_class(metrics) == "fail":
             text = (
                 f"{strategy_id} 未通过真实 A 股 HFQ 信号验证，Rank IC={rank_ic}、FDR={fdr}。"
                 f"流水线仍完成策略集成、严格 Backtester 与 purged walk-forward 审计，"
@@ -437,14 +583,15 @@ def _judgement_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     strict = _strict_backtest_for_report(data, row)
     strict_metrics = strict.get("metrics") or {}
     wf_scores, wf_reason, _ = _walkforward_scores(row)
-    signal_class = _signal_badge_class(metrics)
+    signal_class = _signal_badge_class(metrics) if _uses_cross_sectional_fast_validation(row) or _has_signal_validation_metrics(metrics) else "n/a"
+    signal_badge_class = _stage_badge_class(signal_class) if signal_class == "n/a" else signal_class
     strict_class = _strict_badge_class(strict_metrics)
     walk_class = _walkforward_badge_class(wf_scores)
     deploy_class = _status_badge_class(_report_status(rows))
     body = [
         "<tr><td>信号验证</td>"
-        + f"<td>{_badge(signal_class, signal_class)}</td>"
-        + f"<td>{escape(_signal_validation_summary(metrics))}</td></tr>",
+        + f"<td>{_badge(signal_class, signal_badge_class)}</td>"
+        + f"<td>{escape(_signal_validation_summary(metrics, row))}</td></tr>",
         "<tr><td>严格回测</td>"
         + f"<td>{_badge(strict_class, strict_class)}</td>"
         + f"<td>{escape(_strict_backtest_summary(strict_metrics))}</td></tr>",
@@ -523,6 +670,208 @@ def _stage_report_link_table(
             + "</tr>"
         )
     return _table(["阶段", "结论", "HTML", "摘要"], body)
+
+
+def _full_report_link_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    stages = _stage_conclusions_for_report(data, row) if row else {}
+    final_stage = stages.get("final_decision") or {}
+    final_verdict = str(final_stage.get("verdict") or _report_status(rows))
+    body = [
+        "<tr>"
+        + "<td>End-to-end</td>"
+        + f"<td>{_badge(final_verdict, _stage_badge_class(final_verdict))}</td>"
+        + f'<td><a href="{escape(FULL_REPORT_HTML.as_posix())}">{escape(FULL_REPORT_HTML.as_posix())}</a></td>'
+        + f"<td>{escape(str(final_stage.get('conclusion') or _deployment_summary(row)))}</td>"
+        + "</tr>"
+    ]
+    for key, path in STAGE_REPORT_HTML.items():
+        meta = _STAGE_REPORT_META[key]
+        stage = stages.get(key) or {}
+        verdict = str(stage.get("verdict") or "not_run")
+        label = str(stage.get("label") or meta["label"])
+        body.append(
+            "<tr>"
+            + f"<td>{escape(label)}</td>"
+            + f"<td>{_badge(verdict, _stage_badge_class(verdict))}</td>"
+            + f'<td><a href="{escape(path.as_posix())}">{escape(path.as_posix())}</a></td>'
+            + f"<td>{escape(str(stage.get('conclusion') or 'not_run'))}</td>"
+            + "</tr>"
+        )
+    return _table(["Report", "Verdict", "HTML", "Summary"], body)
+
+
+def _full_report_evidence_map(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    stages = _stage_conclusions_for_report(data, row) if row else {}
+    items = [
+        (
+            "Final Decision",
+            "1",
+            str((stages.get("final_decision") or {}).get("verdict") or _report_status(rows)),
+            "Deployment conclusion, stage verdicts, and reviewer judgement.",
+        ),
+        (
+            "Go / No-Go Checklist",
+            "2",
+            "listed",
+            "Observed value, recommended threshold, and pass/fail marker for each production gate metric.",
+        ),
+        (
+            "Fast Research",
+            "3",
+            str((stages.get("fast_research") or {}).get("verdict") or "not_run"),
+            "Idea source, signal definition, HFQ validation, portfolio diagnostics, and PnL bridge.",
+        ),
+        (
+            "Strict Backtest",
+            "4",
+            str((stages.get("strict_backtest") or {}).get("verdict") or "not_run"),
+            "Execution logic, equity curve, return calendar, config, data audit, performance, costs, capacity, drawdown, trades, regimes, and cost decomposition.",
+        ),
+        (
+            "Walk-forward Audit",
+            "5",
+            str((stages.get("walkforward_strict_audit") or {}).get("verdict") or "not_run"),
+            "Purged rolling OOS method, aggregate stability, worst split, profitable split ratio, and split-level diagnostics.",
+        ),
+        (
+            "Artifacts",
+            "6",
+            "linked",
+            "Standalone stage reports and generated strategy/report artifact paths.",
+        ),
+    ]
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(area)}</td>"
+        + f"<td>{escape(section)}</td>"
+        + f"<td>{_evidence_map_badge(verdict)}</td>"
+        + f"<td>{escape(coverage)}</td>"
+        + "</tr>"
+        for area, section, verdict, coverage in items
+    )
+    return _table(["Area", "Section", "Stage / Availability", "Evidence Coverage"], [body])
+
+
+def _evidence_map_badge(value: str) -> str:
+    if value in {"listed", "linked"}:
+        return _badge(value, "pass")
+    return _badge(value, _stage_badge_class(value))
+
+
+def _end_to_end_checklist_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    if not row:
+        return "<p>No hypothesis row was recorded, so the end-to-end checklist cannot be evaluated.</p>"
+    metrics = row.get("metrics") or {}
+    strict = _strict_backtest_for_report(data, row)
+    strict_metrics = strict.get("metrics") or {}
+    wf_scores, _, _ = _walkforward_scores(row)
+    body = []
+    if _uses_cross_sectional_fast_validation(row):
+        body.extend(
+            [
+                _checklist_min_row("rank_ic", metrics.get("rank_ic"), 0.02),
+                _checklist_min_row("rank_ic_ir", metrics.get("rank_ic_ir"), 0.30),
+                _checklist_min_row("rank_ic_tstat", _first_present(metrics, "rank_ic_tstat", "rank_ic_t_stat"), 2.00),
+                _checklist_pct_min_row("hit_rate", metrics.get("hit_rate"), 0.55),
+            ]
+        )
+    else:
+        body.append(
+            _checklist_row(
+                "fast_signal_validation_scope",
+                _fast_validation_scope_text(row),
+                "strategy-specific scope documented",
+                "n/a",
+            )
+        )
+    body.extend([
+        _checklist_min_row("strict_sharpe", strict_metrics.get("sharpe"), 0.80),
+        _checklist_pct_min_row("strict_cagr", strict_metrics.get("cagr"), 0.05),
+        _checklist_abs_pct_max_row("strict_max_drawdown", strict_metrics.get("max_drawdown_pct"), 0.25),
+        _checklist_min_row("strict_calmar", strict_metrics.get("calmar_ratio"), 0.70),
+        _checklist_min_row("profit_factor", strict_metrics.get("profit_factor"), 1.20),
+        _checklist_int_min_row("total_trades", strict_metrics.get("total_trades"), 50),
+        _checklist_min_row("aggregate_oos_sharpe", wf_scores.get("aggregate_oos_sharpe"), 0.80),
+        _checklist_min_row("worst_oos_sharpe", wf_scores.get("worst_oos_sharpe"), 0.30),
+        _checklist_pct_min_row("pct_profitable_splits", wf_scores.get("pct_profitable_splits"), 0.55),
+        _checklist_bool_row("capacity_ok", _first_present(wf_scores, "capacity_ok", "capacity_viability", "capacity_passed")),
+    ])
+    correlation = _first_present(metrics, "mean_correlation", "portfolio_correlation", "max_correlation")
+    if correlation is not None:
+        body.append(_checklist_abs_max_row("mean_correlation", correlation, 0.30))
+    return _table(["Metric", "Observed", "Threshold", "Result"], body)
+
+
+def _checklist_min_row(metric: str, value: Any, minimum: float) -> str:
+    number = _safe_float(value)
+    verdict = "fail" if number is None else ("pass" if number >= minimum else "fail")
+    observed = "missing" if number is None else _fmt(value)
+    return _checklist_row(metric, observed, f">={minimum:.4f}", verdict)
+
+
+def _checklist_int_min_row(metric: str, value: Any, minimum: int) -> str:
+    number = _safe_float(value)
+    observed = "missing" if number is None else str(int(number))
+    verdict = "fail" if number is None else ("pass" if number >= minimum else "fail")
+    return _checklist_row(metric, observed, f">={minimum}", verdict)
+
+
+def _checklist_pct_min_row(metric: str, value: Any, minimum: float) -> str:
+    number = _safe_float(value)
+    verdict = "fail" if number is None else ("pass" if number >= minimum else "fail")
+    observed = "missing" if number is None else _pct(value)
+    return _checklist_row(metric, observed, f">={minimum * 100:.2f}%", verdict)
+
+
+def _checklist_abs_pct_max_row(metric: str, value: Any, maximum: float) -> str:
+    number = _safe_float(value)
+    observed = "missing" if number is None else _pct(abs(number))
+    verdict = "fail" if number is None else ("pass" if abs(number) <= maximum else "fail")
+    return _checklist_row(metric, observed, f"<={maximum * 100:.2f}% abs", verdict)
+
+
+def _checklist_abs_max_row(metric: str, value: Any, maximum: float) -> str:
+    number = _safe_float(value)
+    verdict = "fail" if number is None else ("pass" if abs(number) <= maximum else "fail")
+    observed = "missing" if number is None else _fmt(value)
+    return _checklist_row(metric, observed, f"<={maximum:.4f} abs", verdict)
+
+
+def _checklist_bool_row(metric: str, value: Any) -> str:
+    verdict_bool = _coerce_check_bool(value)
+    if verdict_bool is None:
+        return _checklist_row(metric, "missing", "must pass", "fail")
+    return _checklist_row(metric, str(verdict_bool).lower(), "must pass", "pass" if verdict_bool else "fail")
+
+
+def _coerce_check_bool(value: Any) -> bool | None:
+    if value is True:
+        return True
+    if value is False:
+        return False
+    if value is None or value == "":
+        return None
+    text = str(value).strip().lower()
+    if text in {"true", "pass", "passed", "ok", "yes", "viable"}:
+        return True
+    if text in {"false", "fail", "failed", "no", "not_viable", "not viable"}:
+        return False
+    return None
+
+
+def _checklist_row(metric: str, observed: str, threshold: str, verdict: str) -> str:
+    klass = "pass" if verdict == "pass" else ("warn" if verdict == "n/a" else "fail")
+    return (
+        "<tr>"
+        + f"<td>{escape(metric)}</td>"
+        + f"<td>{escape(observed)}</td>"
+        + f"<td>{escape(threshold)}</td>"
+        + f"<td>{_badge(verdict, klass)}</td>"
+        + "</tr>"
+    )
 
 
 def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[str]:
@@ -605,11 +954,15 @@ def _stage_conclusions_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> 
         "fast_research",
         {
             "label": "快研究",
-            "verdict": _signal_badge_class(metrics) if metrics.get("rank_ic") is not None else "warn",
-            "conclusion": (
-                _signal_validation_summary(metrics)
+            "verdict": (
+                _signal_badge_class(metrics)
                 if metrics.get("rank_ic") is not None
-                else "快研究未保存结构化 HFQ 信号验证结果；不能形成独立通过结论。"
+                else ("fail" if _uses_cross_sectional_fast_validation(row) else "n/a")
+            ),
+            "conclusion": (
+                _signal_validation_summary(metrics, row)
+                if metrics.get("rank_ic") is not None
+                else _signal_validation_summary(metrics, row)
             ),
             "method": "来源/admission、StrategySpec、HFQ 信号验证和向量化组合诊断。",
         },
@@ -656,7 +1009,7 @@ def _stage_badge_class(verdict: str) -> str:
     value = str(verdict or "").lower()
     if value in {"pass", "candidate", "paper_trading_candidate"}:
         return "pass"
-    if value in {"warn", "warning", "needs_more_validation", "validated", "idea_candidate", "not_run"}:
+    if value in {"warn", "warning", "needs_more_validation", "validated", "idea_candidate", "not_run", "n/a"}:
         return "warn"
     return "fail"
 
@@ -723,6 +1076,25 @@ def _source_quality_score_table(data: Dict[str, Any], rows: List[Dict[str, Any]]
     evidence = row.get("evidence") or {}
     quality = evidence.get("discovery_quality") or {}
     metrics = row.get("metrics") or {}
+    if not quality and not any(
+        _first_present(metrics, *keys) is not None
+        for keys in (
+            ("data_availability_score", "cost_capacity_score", "implementation_score"),
+            ("admission_score",),
+        )
+    ):
+        status = "n/a" if _local_strategy_rerun(row) or not _uses_cross_sectional_fast_validation(row) else "missing"
+        reason = (
+            "Existing local ETF timing/rotation strategy rerun: idea discovery/admission scoring is not the governing evidence; strict Backtester and walk-forward OOS gates are shown below."
+            if status == "n/a"
+            else "Fast research admission evidence is missing; rerun fast/full research before treating this cross-sectional alpha as complete."
+        )
+        return _message_table(
+            ["维度", "状态", "解释"],
+            "fast research admission",
+            status,
+            reason,
+        )
     score_rows = [
         ("source_quality", _first_present(quality, "source_quality_score", "source_quality"), "来源是否可信、是否有正式论文或可复现材料"),
         ("recency", _first_present(quality, "recency_score", "recency"), "发布时间与当前研究窗口的关系"),
@@ -898,6 +1270,19 @@ def _signal_validation_contract_table(data: Dict[str, Any], rows: List[Dict[str,
     row = _primary_row(rows)
     metrics = row.get("metrics") or {}
     wf_scores, _, wf_verdict = _walkforward_scores(row)
+    if not _has_signal_validation_metrics(metrics):
+        status = "missing" if _uses_cross_sectional_fast_validation(row) else "n/a"
+        reason = (
+            "Rank IC / ICIR / hit-rate evidence is missing; this is a failed evidence gate for cross-sectional alpha research."
+            if status == "missing"
+            else _fast_validation_scope_text(row)
+        )
+        return _message_table(
+            ["Metric", "数值", "通常有意义/较好水平", "解释"],
+            "HFQ signal validation",
+            status,
+            reason,
+        )
     rows_data = [
         (
             "Rank IC",
@@ -974,6 +1359,19 @@ def _portfolio_diagnostics_contract_table(data: Dict[str, Any], rows: List[Dict[
     strict = _strict_backtest_for_report(data, row)
     strict_metrics = strict.get("metrics") or {}
     benchmark = strict.get("benchmark") or {}
+    if not diag:
+        status = "missing" if _uses_cross_sectional_fast_validation(row) else "n/a"
+        reason = (
+            f"Vectorized portfolio diagnostics are missing for cross-sectional fast research; benchmark={_report_benchmark(row)}."
+            if status == "missing"
+            else f"ETF timing/rotation rerun uses strict Backtester results as the portfolio evidence; separate Top-bucket cross-sectional diagnostics are not applicable. benchmark={_report_benchmark(row)}."
+        )
+        return _message_table(
+            ["组合", "年化", "Sharpe", "MaxDD", "Calmar Ratio", "换手", "成本后年化", "用途"],
+            "vectorized portfolio diagnostics",
+            status,
+            reason,
+        )
     rows_data = [
         (
             _top_bucket_label(diag),
@@ -1042,10 +1440,17 @@ def _pnl_attribution_bridge_contract_table(data: Dict[str, Any], rows: List[Dict
     diag = metrics.get("portfolio_diagnostics") or {}
     bridge = list(diag.get("pnl_attribution_bridge") or [])
     if not bridge:
-        return _not_run_table(
+        status = "missing" if _uses_cross_sectional_fast_validation(row) else "n/a"
+        reason = (
+            "Signal -> portfolio -> strict Backtester attribution bridge is missing; rerun fast/full research to localize execution degradation."
+            if status == "missing"
+            else "Signal -> portfolio -> strict Backtester bridge is not applicable to this local ETF timing/rotation rerun; strict execution and walk-forward evidence are the attribution path."
+        )
+        return _message_table(
             ["层", "年化", "Δ年化", "Sharpe", "ΔSharpe", "MaxDD", "换手", "选股数", "说明"],
-            "本轮未生成 PnL 归因桥",
-            "轻量归因桥来自 signal/price/status 近似矩阵，不替代 strict Backtester。",
+            "PnL attribution bridge",
+            status,
+            reason,
         )
     body = "".join(
         "<tr>"
@@ -1073,16 +1478,97 @@ def _selected_count_text(layer: Dict[str, Any]) -> str:
     return f"{_fmt(mean)} ({_cell(min_count)}-{_cell(max_count)})"
 
 
+def _strategy_logic_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    if not row:
+        return "<p>本次没有可展示的策略逻辑。</p>"
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    values = [
+        ("核心假设", logic.get("core_idea") or _strict_signal_plaintext(row), "解释为什么这个信号可能产生收益。"),
+        ("交易范围", logic.get("universe") or spec.get("universe") or "StrategySpec 未记录", "说明策略在哪个标的池内做选择。"),
+        ("入选过滤", _join_text(logic.get("entry_filters") or _logic_filters_from_spec(spec)), "这些条件决定哪些标的有资格被买入或继续持有。"),
+        ("排序/信号", logic.get("ranking_rule") or _signal_construction_steps(row), "说明从输入字段到截面排名的路径。"),
+        ("组合构建", logic.get("portfolio_construction") or _logic_portfolio_construction(spec), "说明目标持仓数量、目标敞口和现金处理。"),
+        ("调仓与成交", logic.get("rebalance_rule") or _logic_rebalance_rule(spec), "说明信号日、下单日和成交日的时间关系。"),
+        ("退出与风控", logic.get("exit_rule") or _logic_exit_rule(spec), "说明持仓触发风险时如何离场。"),
+        ("风险预算", logic.get("risk_budget") or _logic_risk_budget(spec), "说明回撤控制主要来自哪里。"),
+    ]
+    body = [
+        "<tr>"
+        + f"<td>{escape(label)}</td>"
+        + f"<td>{escape(_cell(value))}</td>"
+        + f"<td>{escape(note)}</td>"
+        + "</tr>"
+        for label, value, note in values
+    ]
+    return _table(["项目", "当前策略逻辑", "阅读提示"], body)
+
+
+def _logic_filters_from_spec(spec: Dict[str, Any]) -> List[str]:
+    controls = spec.get("risk_controls") if isinstance(spec.get("risk_controls"), dict) else {}
+    filters = []
+    min_price = controls.get("min_price")
+    if min_price is not None:
+        filters.append(f"价格 >= {_fmt(min_price)}")
+    min_adv = controls.get("min_adv_value")
+    if min_adv is not None:
+        filters.append(f"20日均成交额 >= {_fmt(min_adv)}")
+    if controls.get("stock_trend_window"):
+        filters.append(f"个股收盘价不低于 {controls.get('stock_trend_window')} 日均线")
+    if not filters:
+        filters = ["按 StrategySpec 的可交易、状态和字段完整性约束过滤"]
+    return filters
+
+
+def _logic_portfolio_construction(spec: Dict[str, Any]) -> str:
+    controls = spec.get("risk_controls") if isinstance(spec.get("risk_controls"), dict) else {}
+    max_positions = controls.get("max_positions") or spec.get("max_positions") or "StrategySpec"
+    exposure = controls.get("target_exposure")
+    if exposure is not None:
+        return f"目标持仓 {max_positions} 只，组合总目标敞口 {_pct(exposure)}，每只目标权重约为总敞口 / 持仓数，剩余资金保留现金。"
+    return f"目标持仓 {max_positions} 只；具体权重按策略实现或风险配置决定。"
+
+
+def _logic_rebalance_rule(spec: Dict[str, Any]) -> str:
+    frequency = spec.get("rebalance_frequency") or "StrategySpec 未记录"
+    lag = spec.get("execution_lag_days") or 1
+    return f"{frequency}；收盘后生成信号，新订单按 execution_lag={lag} 在后续交易日执行。"
+
+
+def _logic_exit_rule(spec: Dict[str, Any]) -> str:
+    controls = spec.get("risk_controls") if isinstance(spec.get("risk_controls"), dict) else {}
+    pieces = ["持仓每日先做风险检查，触发不可交易、状态异常、价格或流动性规则时提交退出订单"]
+    if controls.get("market_timing_symbol"):
+        pieces.append(f"市场风控标的 {controls.get('market_timing_symbol')} 触发 risk-off 时降低或清空风险敞口")
+    return "；".join(pieces) + "。"
+
+
+def _logic_risk_budget(spec: Dict[str, Any]) -> str:
+    controls = spec.get("risk_controls") if isinstance(spec.get("risk_controls"), dict) else {}
+    exposure = controls.get("target_exposure")
+    max_positions = controls.get("max_positions")
+    min_adv = controls.get("min_adv_value")
+    parts = []
+    if exposure is not None:
+        parts.append(f"总敞口 {_pct(exposure)}")
+    if max_positions is not None:
+        parts.append(f"分散到 {max_positions} 只")
+    if min_adv is not None:
+        parts.append(f"流动性下限 {_fmt(min_adv)}")
+    return "；".join(parts) if parts else "风险预算来自 StrategySpec 和 Backtester 的执行约束。"
+
+
 def _strategy_execution_logic_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     if not rows:
         return "<p>本次没有可展示的策略执行逻辑。</p>"
     return "\n".join(
         [
             '<div class="execution-logic">',
+            "<h4>信号详细说明</h4>",
+            _strict_signal_detail_table(data, rows),
             "<h4>每日运行步骤</h4>",
             _daily_execution_steps_table(data, rows),
-            "<h4>信号解释</h4>",
-            _strict_signal_explanation_table(data, rows),
             "<h4>执行约束摘要</h4>",
             _strict_execution_constraint_table(data, rows),
             "</div>",
@@ -1113,6 +1599,42 @@ def _daily_execution_steps_table(data: Dict[str, Any], rows: List[Dict[str, Any]
         for number, action, boundary in steps
     ]
     return _table(["步骤", "每日动作", "信息边界 / 执行约束"], body)
+
+
+def _strict_signal_detail_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    formula = str(spec.get("signal_formula_key") or "")
+    lookback = spec.get("lookback_days") or "StrategySpec"
+    horizon = spec.get("horizon_days") or "StrategySpec"
+    lag = spec.get("execution_lag_days") or 1
+    fields = _join_text(spec.get("required_fields") or [])
+    fallback = spec.get("fallback_symbol") or spec.get("cash_symbol") or "未设置"
+    values = [
+        ("信号公式", formula or "StrategySpec declared signal", "用于追溯报告解释和策略实现。"),
+        ("核心假设", logic.get("core_idea") or _strict_signal_plaintext(row), "说明为什么这个信号可能产生收益。"),
+        ("交易范围", logic.get("universe") or spec.get("universe") or "StrategySpec 未记录", "说明策略在哪个标的池内做选择。"),
+        ("输入字段", fields or "StrategySpec 未列出", "缺少字段时不能静默通过研究结论。"),
+        ("入选过滤", _join_text(logic.get("entry_filters") or _logic_filters_from_spec(spec)), "这里必须展示状态、流动性、质量控制等所有买入前过滤。"),
+        ("排序/信号", logic.get("ranking_rule") or _signal_construction_steps(row), "说明从输入字段到截面排名的路径。"),
+        ("组合构建", logic.get("portfolio_construction") or _logic_portfolio_construction(spec), "说明目标持仓数量、目标敞口和现金处理。"),
+        ("调仓与信号时点", logic.get("rebalance_rule") or _logic_rebalance_rule(spec), "说明信号日、下单日和成交日的时间关系。"),
+        ("退出/风控信号", logic.get("exit_rule") or _logic_exit_rule(spec), "说明持仓触发风险时如何离场。"),
+        ("风险预算", logic.get("risk_budget") or _logic_risk_budget(spec), "说明回撤控制主要来自哪里。"),
+        ("预测方向", _prediction_direction(row), "解释信号值越高或越低时代表的预期收益方向。"),
+        ("时间结构", f"lookback={lookback}; horizon={horizon}; execution_lag={lag}", "信号日与成交日分离，避免 look-ahead。"),
+        ("防御/空仓腿", str(fallback), "候选不足、风险触发或信号不达标时使用的退路。"),
+    ]
+    body = [
+        "<tr>"
+        + f"<td>{escape(label)}</td>"
+        + f"<td>{escape(_cell(value))}</td>"
+        + f"<td>{escape(note)}</td>"
+        + "</tr>"
+        for label, value, note in values
+    ]
+    return _table(["项目", "内容", "说明"], body)
 
 
 def _strict_signal_explanation_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -1164,6 +1686,8 @@ def _strict_signal_plaintext(row: Dict[str, Any]) -> str:
         return "低价小市值信号先限定可交易、非 ST、未停牌且价格处于低价区间的股票，再优先选择市值更小的标的。"
     if formula == "joinquant_small_cap_size_factor":
         return "小市值信号将市值作为核心截面排序变量，市值越小信号越高，用于捕捉小盘风格暴露。"
+    if formula == "ashare_small_cap_guarded_size_factor":
+        return "小市值防护基线在全 A 股中先排除 ST、停牌、非上市状态、低价、低流动性和缺失市值的股票，再按当前可见市值从小到大排序；市值越小越优先进入组合。"
     if formula.startswith("worldquant_alpha_"):
         return "WorldQuant 因子按公开公式构造截面信号，并在 A 股 long-only 约束下只选择高分端。"
     if "momentum" in formula:
@@ -1976,6 +2500,8 @@ def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[st
 def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     detail, reason, verdict = _walkforward_scores(row)
+    include_maxdd = False
+    include_turnover = False
     split_rows = []
     if isinstance(detail, dict):
         raw_splits = detail.get("splits") or detail.get("split_results") or []
@@ -1983,6 +2509,10 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
             for idx, split in enumerate(raw_splits[:12], start=1):
                 if not isinstance(split, dict):
                     continue
+                maxdd_value = _first_present(split, "max_drawdown", "maxdd")
+                turnover_value = split.get("turnover")
+                include_maxdd = include_maxdd or _safe_float(maxdd_value) is not None
+                include_turnover = include_turnover or _safe_float(turnover_value) is not None
                 split_rows.append(
                     (
                         str(split.get("split") or idx),
@@ -1990,8 +2520,8 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                         _range_text(split, "test_start", "test_end"),
                         _cell(split.get("params") or split.get("parameters") or "frozen parameters"),
                         _fmt(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe")),
-                        _pct(split.get("max_drawdown") or split.get("maxdd")),
-                        _pct(split.get("turnover")),
+                        _pct(maxdd_value),
+                        _pct(turnover_value),
                         _split_verdict(split),
                     )
                 )
@@ -2004,20 +2534,35 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                 "rolling OOS windows",
                 "frozen parameters",
                 _fmt(scores.get("aggregate_oos_sharpe")),
-                "n/a",
-                "n/a",
+                "missing",
+                "missing",
                 verdict or ("fail" if _walkforward_badge_class(scores) == "fail" else "pass"),
             )
         ]
         if reason:
-            split_rows.append(("原因", "n/a", "n/a", reason, _fmt(scores.get("worst_oos_sharpe")), "n/a", "n/a", "fail"))
-    body = "".join(
-        "<tr>"
-        + f"<td>{escape(split)}</td><td>{escape(train)}</td><td>{escape(test)}</td><td>{escape(params)}</td>"
-        + f"<td>{escape(sharpe)}</td><td>{escape(maxdd)}</td><td>{escape(turnover)}</td><td>{escape(result)}</td></tr>"
-        for split, train, test, params, sharpe, maxdd, turnover, result in split_rows
-    )
-    return _table(["Split", "Train", "Test", "参数", "OOS Sharpe", "MaxDD", "Turnover", "结论"], body)
+            split_rows.append(("原因", "missing", "missing", reason, _fmt(scores.get("worst_oos_sharpe")), "missing", "missing", "fail"))
+    headers = ["Split", "Train", "Test", "参数", "OOS Sharpe"]
+    if include_maxdd:
+        headers.append("MaxDD")
+    if include_turnover:
+        headers.append("Turnover")
+    headers.append("结论")
+    body_rows = []
+    for split, train, test, params, sharpe, maxdd, turnover, result in split_rows:
+        cells = [
+            escape(split),
+            escape(train),
+            escape(test),
+            escape(params),
+            escape(sharpe),
+        ]
+        if include_maxdd:
+            cells.append(escape(maxdd))
+        if include_turnover:
+            cells.append(escape(turnover))
+        cells.append(escape(result))
+        body_rows.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
+    return _table(headers, body_rows)
 
 
 def _decision_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -2069,9 +2614,12 @@ def _template_style() -> str:
 
 
 def _strict_backtest_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
+    strict = (row.get("metrics") or {}).get("strict_backtest") or {}
+    if strict:
+        return strict
     if int(data.get("backtested", 0) or 0) <= 0:
         return {}
-    return (row.get("metrics") or {}).get("strict_backtest") or {}
+    return strict
 
 
 def _not_run_table(headers: List[str], item: str, reason: str) -> str:
@@ -2079,6 +2627,18 @@ def _not_run_table(headers: List[str], item: str, reason: str) -> str:
     while body.count("<td>") < len(headers):
         body = body.replace("</tr>", "<td>n/a</td></tr>")
     return _table(headers, [body])
+
+
+def _message_table(headers: List[str], item: str, status: str, reason: str) -> str:
+    if len(headers) <= 2:
+        cells = f"<td>{escape(item)}</td><td>{escape(reason)}</td>"
+    else:
+        cells = (
+            f"<td>{escape(item)}</td>"
+            f"<td>{escape(status)}</td>"
+            f'<td colspan="{len(headers) - 2}">{escape(reason)}</td>'
+        )
+    return _table(headers, [f"<tr>{cells}</tr>"])
 
 
 def _stage1_score(data: Dict[str, Any], key: str, fallback: Any) -> Any:
@@ -2248,21 +2808,21 @@ def _threshold_int(thresholds: Dict[str, Any], key: str, fallback: Any = None) -
 def _min_threshold_verdict(value: Any, minimum: float) -> str:
     number = _safe_float(value)
     if number is None:
-        return "not_recorded"
+        return "missing"
     return "pass" if number >= minimum else "fail"
 
 
 def _reference_verdict(value: Any) -> str:
     number = _safe_float(value)
     if number is None:
-        return "not_recorded"
+        return "missing"
     return "参考-正" if number > 0 else "参考-弱"
 
 
 def _dsr_threshold_verdict(value: Any, minimum: float) -> str:
     number = _safe_float(value)
     if number is None:
-        return "not_recorded"
+        return "missing"
     return "pass" if number >= minimum else "warn"
 
 
@@ -2271,7 +2831,7 @@ def _regime_threshold_verdict(scores: Dict[str, Any]) -> str:
         return "warn"
     if scores.get("regime_breakdown"):
         return "pass"
-    return "not_recorded"
+    return "missing"
 
 
 def _walkforward_capacity_value(scores: Dict[str, Any]) -> str:
@@ -2290,11 +2850,11 @@ def _capacity_threshold_verdict(scores: Dict[str, Any]) -> str:
         return "pass"
     if scores.get("capacity_ok") is False:
         return "fail"
-    return "not_recorded"
+    return "missing"
 
 
 def _threshold_badge(verdict: str) -> str:
-    value = str(verdict or "not_recorded")
+    value = str(verdict or "missing")
     klass = "pass" if value == "pass" else "fail" if value == "fail" else "warn"
     return _badge(value, klass)
 
@@ -2304,7 +2864,7 @@ def _signal_badge_class(metrics: Dict[str, Any]) -> str:
     fdr = _safe_float(metrics.get("fdr_adjusted_p"))
     hit = _safe_float(metrics.get("hit_rate"))
     if rank_ic is None:
-        return "fail"
+        return "warn"
     if rank_ic < 0.02:
         return "fail"
     if (fdr is None or fdr <= 0.05) and (hit is None or hit >= 0.5):
@@ -2312,6 +2872,22 @@ def _signal_badge_class(metrics: Dict[str, Any]) -> str:
     if rank_ic > 0:
         return "warn"
     return "fail"
+
+
+def _has_signal_validation_metrics(metrics: Dict[str, Any]) -> bool:
+    return any(
+        metrics.get(key) is not None
+        for key in (
+            "rank_ic",
+            "rank_ic_ir",
+            "rank_ic_tstat",
+            "rank_ic_t_stat",
+            "fdr_adjusted_p",
+            "hit_rate",
+            "ic_decay",
+            "rank_ic_p_value",
+        )
+    )
 
 
 def _strict_badge_class(metrics: Dict[str, Any]) -> str:
@@ -2363,7 +2939,11 @@ def _status_badge_class(status: str) -> str:
     return "fail"
 
 
-def _signal_validation_summary(metrics: Dict[str, Any]) -> str:
+def _signal_validation_summary(metrics: Dict[str, Any], row: Dict[str, Any] | None = None) -> str:
+    if not _has_signal_validation_metrics(metrics):
+        if row is not None and not _uses_cross_sectional_fast_validation(row):
+            return _fast_validation_scope_text(row)
+        return "Fast research / HFQ signal validation evidence is missing; this is a failed evidence gate for cross-sectional alpha research."
     return (
         f"Rank IC={_fmt(metrics.get('rank_ic'))}，FDR={_fmt(metrics.get('fdr_adjusted_p'))}，"
         f"ICIR={_fmt(metrics.get('rank_ic_ir'))}，hit rate={_pct(metrics.get('hit_rate'))}，"
@@ -2409,7 +2989,7 @@ def _decision_reasons(data: Dict[str, Any], row: Dict[str, Any]) -> List[str]:
     strict_metrics = strict.get("metrics") or {}
     wf_scores, wf_reason, _ = _walkforward_scores(row)
     reasons = [
-        _signal_validation_summary(metrics),
+        _signal_validation_summary(metrics, row),
         _strict_backtest_summary(strict_metrics),
         _walkforward_summary_sentence(wf_scores, wf_reason),
     ]
@@ -2689,6 +3269,8 @@ def _signal_construction_steps(row: Dict[str, Any]) -> str:
         return f"1. 用后复权价格计算过去 {lookback} 日收益；2. 截面排序；3. 选择高动量标的；4. 下一交易日执行。"
     if "reversal" in formula or "mean" in formula:
         return f"1. 计算价格相对均值或近期收益偏离；2. 截面排序；3. 选择反转概率最高标的；4. 下一交易日执行。"
+    if formula == "ashare_small_cap_guarded_size_factor":
+        return "1. 使用全 A 股日线和 daily_basic 字段；2. 过滤 ST、停牌、非 L 上市状态、价格低于下限、成交额低于下限和市值缺失标的；3. 按 point-in-time 市值升序排列；4. 选择最小的 20 只；5. 按目标总敞口等权分配，剩余资金留现金；6. 信号在收盘后生成，下一交易日执行。"
     return "1. 使用 StrategySpec 声明字段构造信号；2. 只用当日及以前数据；3. 截面排序；4. 下一交易日按 long-only 约束执行。"
 
 

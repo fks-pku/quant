@@ -1,9 +1,9 @@
-from datetime import date, timedelta
+﻿from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from quant.features.strategies.joinquant_value_rsrs_timing.strategy import (
+from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import (
     JoinquantValueRsrsTimingStrategy,
 )
 from quant.features.strategies.registry import StrategyRegistry

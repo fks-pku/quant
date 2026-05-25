@@ -1,0 +1,17 @@
+strategy:
+  name: ashare_etf_rsrs_momentum_rotation
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  symbols: [510050, 510300, 510500, 512100, 159915, 159949, 510880, 518880, 513100, 159920]
+  timing_symbol: "000300"
+  momentum_lookback: 180
+  trend_window: 120
+  volatility_window: 60
+  max_positions: 2
+  target_exposure: 0.85
+  holding_days: 40
+  rsrs_window: 18
+  rsrs_zscore_window: 120

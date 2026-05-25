@@ -28,7 +28,7 @@ STOCKS_15 = [
     "000538", "000895", "000725", "000625", "000878",
     "000709", "000876", "000786", "000063", "000938",
 ]
-START = "2015-01-01"
+START = "2016-01-01"
 END = "2024-12-31"
 CASH = 1_000_000
 
@@ -148,7 +148,7 @@ def run_backtest(strategy_name, symbols, extra_kwargs=None):
 
 def main():
     print("=" * 60)
-    print("A-SHARE STRATEGY BACKTESTS (2015-2024)")
+    print("A-SHARE STRATEGY BACKTESTS (2016-2024)")
     print("=" * 60)
 
     results = []
