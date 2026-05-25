@@ -117,6 +117,7 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
                         "t_plus_1": True,
                         "cn_lot_size": 100,
                     },
+                    "capacity": {"max_adv_participation": 0.04},
                 },
                 "walkforward": {
                     "verdict": "fail",
@@ -141,10 +142,14 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
     _assert_clean_html(html)
     assert "End-to-End Research Report" in html
     assert "Metric Checklist" in html
-    assert "Fast Research Evidence" in html
-    assert "Strict Backtest Evidence" in html
-    assert "Walk-forward Audit Evidence" in html
-    assert "Evidence Map" in html
+    assert "Strategy Logic And Core Evidence" in html
+    assert "Key Risks" in html
+    assert "Audit Appendix" in html
+    assert "A. Fast research input and signal diagnostics" in html
+    assert "B. Strict backtest full diagnostics" in html
+    assert "C. Walk-forward audit evidence" in html
+    assert "Evidence Map" not in html
+    assert 'class="audit-details"' in html
     assert "full_research_report.html" in html
     assert "fast_research_report.html" in html
     assert "strict_backtest_report.html" in html
@@ -158,9 +163,9 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
     assert "Data Quality Audit" in html
     assert "Drawdown Episodes" in html
     assert "Cost Decomposition" in html
-    assert "<td>rank_ic</td><td>0.0310</td><td>&gt;=0.0200</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>strict_sharpe</td><td>0.6200</td><td>&gt;=0.8000</td><td><span class=\"badge fail\">fail</span></td>" in html
-    assert "<td>capacity_ok</td><td>false</td><td>must pass</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "<td>max_adv_participation</td><td>4.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>total_trades</td><td>64</td><td>&gt;50</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>cagr_drawdown_tier</td><td>CAGR=7.00%; MaxDD=24.00%</td><td>CAGR 5.00%-10.00% requires MaxDD &lt;=15.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
 
 
 def test_full_report_marks_missing_fast_research_metrics_as_failures():
@@ -215,7 +220,8 @@ def test_full_report_marks_missing_fast_research_metrics_as_failures():
     _assert_clean_html(html)
     assert "Rank IC=n/a" not in html
     assert "not_recorded" not in html
-    assert "<td>rank_ic</td><td>missing</td><td>&gt;=0.0200</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "<td>max_adv_participation</td><td>missing</td><td>&lt;=5.00% ADV</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "<td>cagr_drawdown_tier</td><td>CAGR=-30.64%; MaxDD=98.19%</td><td>CAGR &gt;=5.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
     assert "fast research admission</td><td>missing" in html
     assert "HFQ signal validation</td><td>missing" in html
     assert "vectorized portfolio diagnostics</td><td>missing" in html
@@ -249,7 +255,20 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
                         "calmar_ratio": 0.904,
                         "profit_factor": 7.14,
                         "total_trades": 204,
-                    }
+                    },
+                    "capacity": {"max_adv_participation": 0.02},
+                    "data_quality": {
+                        "survivorship_audit": {
+                            "kind": "etf_metadata_survivorship_audit",
+                            "material": True,
+                            "reason": "ETF metadata fixture gap",
+                            "etf_bar_symbols": 221,
+                            "fund_meta_etf_symbols": 1497,
+                            "bar_symbols_missing_fund_meta": 13,
+                            "fund_meta_delisted_symbols": 0,
+                            "bar_symbols_missing_fund_meta_sample": [{"symbol": "160706"}],
+                        }
+                    },
                 },
                 "walkforward": {
                     "aggregate_oos_sharpe": 0.665,
@@ -265,6 +284,14 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
                     "strategy_type": "etf_momentum_rotation",
                     "signal_formula_key": "etf_barbell_timing",
                     "universe": ["510050", "510300", "159915", "159949", "510880", "518880"],
+                    "pit_universe_enabled": True,
+                    "risk_category_symbols": {"csi300": ["510300"], "sse50": ["510050"]},
+                    "defensive_category_symbols": {"gold": ["518880"]},
+                    "universe_selection_policy": "dynamic_pit_category_wide",
+                    "universe_start": "2016-01-01",
+                    "universe_end": "2025-12-31",
+                    "universe_min_history_days_as_of": 0,
+                    "universe_max_symbols_per_category": 0,
                 },
             },
         }
@@ -274,14 +301,26 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
 
     _assert_clean_html(html)
     assert "not_recorded" not in html
-    assert "fast_signal_validation_scope" in html
+    assert "fast_signal_validation_scope" not in html
     assert "ETF timing/rotation" in html
     assert "需要重跑 fast/full research" not in html
     assert "<td>rank_ic</td>" not in html
     assert "HFQ signal validation</td><td>n/a" in html
     assert "vectorized portfolio diagnostics</td><td>n/a" in html
     assert "PnL attribution bridge</td><td>n/a" in html
-    assert "<td>strict_sharpe</td><td>1.1800</td><td>&gt;=0.8000</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "动态 PIT ETF 类别宽 universe" in html
+    assert "窗口=2016-01-01~2025-12-31" in html
+    assert "每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤" in html
+    assert "持仓由信号从宽池中选择" in html
+    assert "每类只保留起点主代表" not in html
+    assert "etf_metadata_survivorship_audit" in html
+    assert "bar_symbols_missing_fund_meta</td><td>13" in html
+    assert 'class="logic-plain"' in html
+    assert "白话版：" in html
+    assert "这套策略先把仓位思路分成两部分" in html
+    assert "顺风期组合同时拿权益 ETF 和黄金 ETF" in html
+    assert "<td>max_adv_participation</td><td>2.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>cagr_drawdown_tier</td><td>CAGR=14.24%; MaxDD=15.75%</td><td>CAGR 10.00%-15.00% requires MaxDD &lt;=25.00%</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>worst_oos_sharpe</td><td>-3.3100</td><td>&gt;=0.3000</td><td><span class=\"badge fail\">fail</span></td>" in html
 
 
@@ -308,7 +347,8 @@ def test_full_report_preserves_strict_evidence_when_walkforward_stage_rerenders(
                         "calmar_ratio": 0.90,
                         "profit_factor": 7.15,
                         "total_trades": 204,
-                    }
+                    },
+                    "capacity": {"max_adv_participation": 0.02},
                 },
                 "walkforward": {
                     "verdict": "fail",
@@ -324,11 +364,73 @@ def test_full_report_preserves_strict_evidence_when_walkforward_stage_rerenders(
 
     html = build_research_full_report_html(result, rows)
 
-    assert "<td>strict_sharpe</td><td>1.1800</td><td>&gt;=0.8000</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>strict_cagr</td><td>14.20%</td><td>&gt;=5.00%</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>strict_max_drawdown</td><td>15.80%</td><td>&lt;=25.00% abs</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>max_adv_participation</td><td>2.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>total_trades</td><td>204</td><td>&gt;50</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>cagr_drawdown_tier</td><td>CAGR=14.20%; MaxDD=15.80%</td><td>CAGR 10.00%-15.00% requires MaxDD &lt;=25.00%</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "strict_sharpe</td><td>not_recorded" not in html
     assert "Sharpe=1.18" in html
+
+
+def test_walkforward_report_shows_effective_split_denominator_and_no_trade_exclusions():
+    result = {
+        "run_id": "walkforward_no_trade_contract",
+        "walkforward_passed": 0,
+        "saved_at": "2026-05-24T00:00:00+00:00",
+    }
+    rows = [
+        {
+            "title": "Walkforward No Trade Contract",
+            "strategy_id": "walkforward_no_trade_strategy",
+            "status": "rejected",
+            "stage": "go_no_go",
+            "decision_reason": "walk-forward failed",
+            "metrics": {
+                "walkforward": {
+                    "verdict": "fail",
+                    "aggregate_oos_sharpe": 0.7,
+                    "worst_oos_sharpe": 0.4,
+                    "pct_profitable_splits": 1.0,
+                    "capacity_ok": True,
+                    "total_splits": 3,
+                    "evaluated_splits": 2,
+                    "no_trade_splits": 1,
+                    "n_splits": 2,
+                    "splits": [
+                        {
+                            "split": 1,
+                            "train_start": "2024-01-01",
+                            "train_end": "2024-06-30",
+                            "test_start": "2024-07-01",
+                            "test_end": "2024-07-31",
+                            "oos_sharpe": -9.0,
+                            "trade_count": 0,
+                            "has_trades": False,
+                        },
+                        {
+                            "split": 2,
+                            "train_start": "2024-02-01",
+                            "train_end": "2024-07-31",
+                            "test_start": "2024-08-01",
+                            "test_end": "2024-08-31",
+                            "oos_sharpe": 0.7,
+                            "trade_count": 3,
+                            "has_trades": True,
+                        },
+                    ],
+                },
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "walkforward_no_trade_strategy", "universe": ["510300"]}},
+        }
+    ]
+
+    html = build_research_stage_report_html("walkforward_strict_audit", result, rows)
+
+    assert "<td>total_splits</td><td>3</td><td>&gt;0</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>evaluated_splits</td><td>2</td><td>&gt;0</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>no_trade_splits</td><td>1</td><td>excluded from OOS stats</td><td><span class=\"badge warn\">excluded</span></td>" in html
+    assert "aggregate/worst/profitable/DSR 只统计这些区间" in html
+    assert "<td>1</td><td>2024-01-01 - 2024-06-30</td><td>2024-07-01 - 2024-07-31</td><td>frozen parameters</td><td>n/a (no trades)</td><td>0</td><td>excluded_no_trade</td>" in html
+    assert "-9.0000</td><td>0</td><td>excluded_no_trade" not in html
 
 
 def test_small_cap_strict_grid_best_respects_drawdown_constraint_before_return():

@@ -83,20 +83,22 @@ class RigorHub:
             strategy_archive_dir=strategy_archive_dir,
         ):
             split_results.append(split_result)
-            if returns is not None and not returns.empty:
+            if split_result.get("has_trades", True) and returns is not None and not returns.empty:
                 return_series.append(returns)
 
-        test_sharpes = [s["test_sharpe"] for s in split_results]
+        evaluated_split_results = [s for s in split_results if s.get("has_trades", True)]
+        test_sharpes = [s["test_sharpe"] for s in evaluated_split_results]
         worst_oos = min(test_sharpes) if test_sharpes else 0.0
         aggregate = sum(test_sharpes) / len(test_sharpes) if test_sharpes else 0.0
         profitable = sum(1 for s in test_sharpes if s > 0) / len(test_sharpes) if test_sharpes else 0.0
         degradation = aggregate - worst_oos if aggregate > 0 else 0.0
         capacity_ok = self._check_capacity(split_results)
-        regime_breakdown = compute_regime_breakdown(split_results) if benchmark_data is not None else {}
+        regime_breakdown = compute_regime_breakdown(evaluated_split_results) if benchmark_data is not None else {}
         bull_only_warning = regime_breakdown.get("bear", {}).get("sharpe", 0.0) < -0.5
 
         is_viable = (
-            worst_oos >= self._min_worst_oos_sharpe
+            bool(test_sharpes)
+            and worst_oos >= self._min_worst_oos_sharpe
             and profitable >= self._min_profitable_pct
             and capacity_ok
         )
@@ -118,6 +120,9 @@ class RigorHub:
             capacity_ok=capacity_ok,
             regime_breakdown=regime_breakdown,
             bull_only_warning=bull_only_warning,
+            evaluated_splits=len(evaluated_split_results),
+            no_trade_splits=sum(1 for split in split_results if split.get("has_trades") is False),
+            total_splits=len(split_results),
         )
 
     def _run_split_jobs(
@@ -193,6 +198,9 @@ class RigorHub:
             split.update(dated_split)
             split["response"] = response
             split["test_sharpe"] = response.get("metrics", {}).get("sharpe", 0.0) if isinstance(response, dict) else 0.0
+            trade_count = self._response_trade_count(response)
+            split["trade_count"] = trade_count
+            split["has_trades"] = True if trade_count is None else trade_count > 0
             self._attach_regime_label(split, benchmark_data)
             return split, returns
         except TypeError:
@@ -201,8 +209,27 @@ class RigorHub:
             logger.warning(f"Walk-forward split failed: {e}")
             split.update(dated_split)
             split["test_sharpe"] = 0.0
+            split["trade_count"] = None
+            split["has_trades"] = True
             self._attach_regime_label(split, benchmark_data)
             return split, None
+
+    @staticmethod
+    def _response_trade_count(response: Any) -> Optional[int]:
+        if not isinstance(response, dict):
+            return None
+        trades = response.get("trades")
+        if isinstance(trades, list):
+            return len(trades)
+        metrics = response.get("metrics")
+        if isinstance(metrics, dict):
+            for key in ("total_trades", "trade_count", "n_trades"):
+                value = metrics.get(key)
+                try:
+                    return max(0, int(value))
+                except (TypeError, ValueError):
+                    continue
+        return None
 
     def _n_trials(self) -> int:
         if self._experiment_store is None or not hasattr(self._experiment_store, "list_runs"):

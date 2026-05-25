@@ -46,6 +46,9 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
+UNIVERSE_AS_OF = None
+UNIVERSE_MIN_HISTORY_DAYS_AS_OF = 0
+UNIVERSE_MAX_SYMBOLS_PER_CATEGORY = 0
 INITIAL_CASH = 500000.0
 STRATEGY_ID = "ashare_gold_equity_barbell_timing"
 TITLE = "黄金-大盘 ETF 杠铃择时"
@@ -134,7 +137,13 @@ DETAIL_SECTION = """
 
 
 def main() -> None:
-    universe = build_gold_equity_barbell_pit_universe(START, END)
+    universe = build_gold_equity_barbell_pit_universe(
+        universe_as_of=UNIVERSE_AS_OF,
+        min_history_days_as_of=UNIVERSE_MIN_HISTORY_DAYS_AS_OF,
+        max_symbols_per_category=UNIVERSE_MAX_SYMBOLS_PER_CATEGORY,
+        universe_start=START,
+        universe_end=END,
+    )
     _validate_pit_universe(universe)
     scenarios = [_with_pit_universe(scenario, universe) for scenario in SCENARIOS]
     all_symbols = sorted({symbol for scenario in scenarios for symbol in scenario["symbols"]})

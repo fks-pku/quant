@@ -192,6 +192,90 @@ class TestRigorHub:
         )
         assert result.worst_oos_sharpe == pytest.approx(min(sharpes[:len(result.splits)]))
 
+    def test_walkforward_oos_stats_exclude_explicit_no_trade_splits(self):
+        call_idx = 0
+
+        def fake_runner(strategy_id, request):
+            nonlocal call_idx
+            call_idx += 1
+            if call_idx == 1:
+                return {"metrics": {"sharpe": -9.0, "total_trades": 0}, "trades": []}
+            return {
+                "metrics": {"sharpe": 0.6, "total_trades": 1},
+                "trades": [{"trade_value": 100.0, "avg_daily_volume": 100_000.0, "price": 10.0}],
+            }
+
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                },
+                "thresholds": {
+                    "min_worst_oos_sharpe": 0.3,
+                    "min_profitable_splits_pct": 0.5,
+                },
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+        )
+
+        assert result.total_splits == len(result.splits)
+        assert result.no_trade_splits == 1
+        assert result.evaluated_splits == len(result.splits) - 1
+        assert result.splits[0]["has_trades"] is False
+        assert result.splits[0]["trade_count"] == 0
+        assert result.aggregate_oos_sharpe == pytest.approx(0.6)
+        assert result.worst_oos_sharpe == pytest.approx(0.6)
+        assert result.pct_profitable_splits == pytest.approx(1.0)
+        assert result.is_viable is True
+
+    def test_walkforward_all_no_trade_splits_are_not_viable(self):
+        def fake_runner(strategy_id, request):
+            return {"metrics": {"sharpe": 9.0, "total_trades": 0}, "trades": []}
+
+        hub = self._make_hub(
+            fake_runner,
+            config={
+                "purged_walkforward": {
+                    "train_window_days": 100,
+                    "test_window_days": 30,
+                    "step_days": 30,
+                    "purge_days": 5,
+                    "embargo_days": 10,
+                    "min_train_observations": 50,
+                },
+                "thresholds": {
+                    "min_worst_oos_sharpe": 0.3,
+                    "min_profitable_splits_pct": 0.5,
+                },
+            },
+        )
+
+        result = hub.run_walkforward(
+            strategy_id="test_strat",
+            symbols=["SPY"],
+            start="2020-01-01",
+            end="2021-01-01",
+        )
+
+        assert result.evaluated_splits == 0
+        assert result.no_trade_splits == len(result.splits)
+        assert result.aggregate_oos_sharpe == 0.0
+        assert result.worst_oos_sharpe == 0.0
+        assert result.pct_profitable_splits == 0.0
+        assert result.is_viable is False
+
     def test_deflated_sharpe_ratio_is_none_in_mvp(self):
         def fake_runner(strategy_id, request):
             return {"metrics": {"sharpe": 0.5}}

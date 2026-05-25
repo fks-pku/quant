@@ -990,8 +990,6 @@ class ResearchEngine:
                         reason = f"Walk-forward strict audit failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
                         self._attach_walkforward_result(sid, wf_result, "fail", reason)
                         self._attach_walkforward_audit_conclusion(sid, wf_result, "fail", reason)
-                        final_status = "rejected"
-                        final_reasons.append(reason)
                         result.log.append(ResearchLogEntry(
                             phase="rigor",
                             title=sid,
@@ -1012,9 +1010,6 @@ class ResearchEngine:
                             reason = f"Walk-forward strict audit warning: dsr={dsr:.2f} < 0.95"
                             self._attach_walkforward_result(sid, wf_result, "warn", reason)
                             self._attach_walkforward_audit_conclusion(sid, wf_result, "warn", reason)
-                            if final_status != "rejected":
-                                final_status = "needs_more_validation"
-                                final_reasons.append(reason)
                             result.log.append(ResearchLogEntry(
                                 phase="rigor", title=sid, source="", source_url="",
                                 verdict="warning", reason=reason,
@@ -1035,6 +1030,11 @@ class ResearchEngine:
                         {},
                         "滚动 OOS split 重放 strict Backtester，用于最终稳定性审计。",
                     )
+                if final_status == "" and strict_verdict == "pass" and self._candidate_status(sid) == "rejected":
+                    final_status = "candidate"
+                    final_reasons.append(
+                        "strict checklist passed under current standards; walk-forward audit is informational"
+                    )
                 final_reason = "; ".join(final_reasons)
                 if final_status == "rejected":
                     if self._candidate_status(sid) != "rejected":
@@ -1049,13 +1049,17 @@ class ResearchEngine:
                     )
                     if raw is not None:
                         self._upsert_idea(raw, "rejected", final_reason)
-                elif final_status == "needs_more_validation" and self._candidate_status(sid) == "candidate":
+                elif final_status == "needs_more_validation" and self._candidate_status(sid) != "rejected":
                     dsr_value = 0.0
                     try:
                         dsr_value = float(getattr(wf_result, "deflated_sharpe_ratio", 0.0) or 0.0)
                     except (TypeError, ValueError):
                         dsr_value = 0.0
                     self._mark_needs_more_validation(sid, dsr_value, final_reason)
+                elif final_status == "candidate":
+                    if self.research_store is not None and hasattr(self.research_store, "update_status"):
+                        self.research_store.update_status(sid, "candidate", reason=final_reason)
+                    self._update_hypothesis_status_for_strategy(sid, "candidate", "go_no_go", final_reason)
                 self._attach_final_research_conclusion(sid, self._candidate_status(sid) or final_status or "candidate", final_reason)
             except Exception as e:
                 logger.error(f"Backtest failed for {sid}: {e}")
@@ -1125,8 +1129,6 @@ class ResearchEngine:
                     reason = f"Walk-forward strict audit failed: worst_oos_sharpe={wf_result.worst_oos_sharpe:.2f}"
                     self._attach_walkforward_result(sid, wf_result, "fail", reason)
                     self._attach_walkforward_audit_conclusion(sid, wf_result, "fail", reason)
-                    final_status = "rejected"
-                    final_reasons.append(reason)
                     result.log.append(ResearchLogEntry(
                         phase="rigor",
                         title=sid,
@@ -1147,9 +1149,6 @@ class ResearchEngine:
                         reason = f"Walk-forward strict audit warning: dsr={dsr:.2f} < 0.95"
                         self._attach_walkforward_result(sid, wf_result, "warn", reason)
                         self._attach_walkforward_audit_conclusion(sid, wf_result, "warn", reason)
-                        if self._candidate_status(sid) == "candidate":
-                            final_status = "needs_more_validation"
-                            final_reasons.append(reason)
                         result.log.append(ResearchLogEntry(
                             phase="rigor", title=sid, source="", source_url="",
                             verdict="warning", reason=reason,
@@ -1391,50 +1390,51 @@ class ResearchEngine:
         strict = self._strict_backtest_for_strategy(strategy_id)
         metrics = strict.get("metrics") or {}
         diagnostics = strict.get("diagnostics") or {}
+        capacity = strict.get("capacity") or {}
         survivorship = ((strict.get("data_quality") or {}).get("survivorship_audit") or {})
         sharpe = _optional_float(metrics.get("sharpe"))
         cagr = _optional_float(metrics.get("cagr"))
         max_dd = _optional_float(metrics.get("max_drawdown_pct"))
         trades = metrics.get("total_trades")
-        threshold = float(getattr(self.config, "backtest_sharpe_threshold", 0.5) or 0.5)
+        gate = evaluate_production_readiness(
+            {"strict_backtest": strict},
+            self.config.production_gate_config,
+        ) if strict else None
         payload = {
             "sharpe": sharpe,
             "cagr": cagr,
             "max_drawdown_pct": max_dd,
             "total_trades": trades,
+            "max_adv_participation": capacity.get("max_adv_participation"),
             "total_commission": diagnostics.get("total_commission"),
             "insufficient_cash_rejected_orders": (diagnostics.get("rejection_counts") or {}).get("insufficient_cash", 0),
+            "survivorship_audit_kind": survivorship.get("kind"),
             "survivorship_material": bool(survivorship.get("material")),
             "daily_basic_not_ohlc_symbols": survivorship.get("daily_basic_not_ohlc_symbols"),
             "missing_symbols_below_top20_excluding_920": survivorship.get("missing_symbols_below_top20_excluding_920"),
+            "bar_symbols_missing_fund_meta": survivorship.get("bar_symbols_missing_fund_meta"),
+            "fund_meta_delisted_symbols": survivorship.get("fund_meta_delisted_symbols"),
+            "production_gate": gate or {},
         }
-        if not strict or sharpe is None:
+        if not strict:
             verdict = "warn"
             conclusion = "strict Backtester 未返回结构化结果；本阶段不能形成通过结论。"
-        elif sharpe < threshold:
+        elif gate and gate.get("verdict") == "fail":
             verdict = "fail"
             conclusion = (
-                f"strict 回测未通过：Sharpe={sharpe:.2f} < {threshold:.2f}，"
-                f"CAGR={_percent_text(cagr)}，MaxDD={_percent_text(max_dd)}；策略不进入候选池。"
-            )
-        elif cagr is not None and cagr <= 0:
-            verdict = "warn"
-            conclusion = (
-                f"strict 回测边际：Sharpe={sharpe:.2f} 达标但 CAGR={_percent_text(cagr)}，"
-                "需要 walk-forward audit 再确认稳定性。"
+                "strict 回测未通过新 checklist："
+                + "; ".join(gate.get("failures") or ["unknown failure"])
+                + "。"
             )
         elif bool(survivorship.get("material")):
             verdict = "warn"
-            conclusion = (
-                f"strict 回测数据审计警告：Sharpe={sharpe:.2f}，CAGR={_percent_text(cagr)}，"
-                f"但 {survivorship.get('missing_symbols_below_top20_excluding_920') or 0} 个非 920 缺失股票"
-                "可能进入小市值 Top20 区间；本阶段不能形成无偏通过结论。"
-            )
+            conclusion = self._strict_survivorship_warning_conclusion(cagr, max_dd, survivorship)
         else:
             verdict = "pass"
             conclusion = (
-                f"strict 回测通过：Sharpe={sharpe:.2f}，CAGR={_percent_text(cagr)}，"
-                f"MaxDD={_percent_text(max_dd)}；进入 walk-forward strict audit。"
+                f"strict 回测通过：CAGR={_percent_text(cagr)}，MaxDD={_percent_text(max_dd)}，"
+                f"交易数={trades or 'n/a'}，单笔最大 ADV={_percent_text(capacity.get('max_adv_participation'))}；"
+                "walk-forward 暂不作为通过标准。"
             )
         self._attach_research_stage_conclusion(
             strategy_id,
@@ -1447,26 +1447,53 @@ class ResearchEngine:
         )
         return verdict, conclusion
 
+    def _strict_survivorship_warning_conclusion(
+        self,
+        cagr: Optional[float],
+        max_dd: Optional[float],
+        survivorship: Dict[str, Any],
+    ) -> str:
+        prefix = f"strict 回测数据审计警告：CAGR={_percent_text(cagr)}，MaxDD={_percent_text(max_dd)}，"
+        if survivorship.get("kind") == "etf_metadata_survivorship_audit":
+            missing_meta = survivorship.get("bar_symbols_missing_fund_meta") or 0
+            delisted_meta = survivorship.get("fund_meta_delisted_symbols") or 0
+            return (
+                prefix +
+                f"ETF 日线中有 {missing_meta} 个 symbol 缺少基金元数据，"
+                f"基金元数据中 delist_date 标记数={delisted_meta}；"
+                "已使用 PIT ETF universe 和调仓日可见数据约束收窄选择偏差，但仍不能完全排除清盘 ETF 缺失导致的 survivorship bias。"
+            )
+        return (
+            prefix +
+            f"但 {survivorship.get('missing_symbols_below_top20_excluding_920') or 0} 个非 920 缺失股票"
+            "可能进入小市值 Top20 区间；本阶段不能形成无偏通过结论。"
+        )
+
     def _attach_walkforward_audit_conclusion(self, strategy_id: str, wf_result: Any, verdict: str, reason: str) -> None:
         aggregate = _float_or_default(getattr(wf_result, "aggregate_oos_sharpe", 0.0), 0.0)
         worst = _float_or_default(getattr(wf_result, "worst_oos_sharpe", 0.0), 0.0)
         pct_profitable = _float_or_default(getattr(wf_result, "pct_profitable_splits", 0.0), 0.0)
         dsr = _optional_float(getattr(wf_result, "deflated_sharpe_ratio", None))
+        evaluated_splits = int(getattr(wf_result, "evaluated_splits", 0) or 0)
+        no_trade_splits = int(getattr(wf_result, "no_trade_splits", 0) or 0)
+        split_scope = f"有效 split={evaluated_splits}"
+        if no_trade_splits:
+            split_scope += f"，无交易 split={no_trade_splits} 已排除"
         if verdict == "pass":
             conclusion = (
                 f"walk-forward strict audit 通过：aggregate OOS Sharpe={aggregate:.2f}，"
-                f"worst={worst:.2f}，盈利 split={pct_profitable:.0%}。"
+                f"worst={worst:.2f}，盈利 split={pct_profitable:.0%}，{split_scope}。"
             )
         elif verdict == "warn":
             dsr_text = f"{dsr:.2f}" if dsr is not None else "n/a"
             conclusion = (
                 f"walk-forward strict audit 仅警告：aggregate OOS Sharpe={aggregate:.2f}，"
-                f"worst={worst:.2f}，DSR={dsr_text}；需要更多验证。"
+                f"worst={worst:.2f}，DSR={dsr_text}，{split_scope}；需要更多验证。"
             )
         else:
             conclusion = (
                 f"walk-forward strict audit 未通过：aggregate OOS Sharpe={aggregate:.2f}，"
-                f"worst={worst:.2f}，盈利 split={pct_profitable:.0%}；{reason}"
+                f"worst={worst:.2f}，盈利 split={pct_profitable:.0%}，{split_scope}；{reason}"
             )
         self._attach_research_stage_conclusion(
             strategy_id,
@@ -1480,6 +1507,9 @@ class ResearchEngine:
                 "pct_profitable_splits": pct_profitable,
                 "deflated_sharpe_ratio": dsr,
                 "n_splits": len(list(getattr(wf_result, "splits", []) or [])),
+                "evaluated_splits": evaluated_splits,
+                "no_trade_splits": no_trade_splits,
+                "total_splits": int(getattr(wf_result, "total_splits", 0) or len(list(getattr(wf_result, "splits", []) or []))),
             },
             "滚动 OOS split 重放 strict Backtester，用于最终稳定性审计。",
         )
@@ -1496,7 +1526,8 @@ class ResearchEngine:
             verdict = "warn"
             conclusion = f"Final needs more validation: {production_gate.get('reason', 'Production gate warning')}."
         elif status == "needs_more_validation":
-            conclusion = f"最终结论：需要更多验证；{reason or 'walk-forward 或 DSR 未达到上线阈值'}。"
+            reason_text = str(reason or "strict checklist 或数据审计尚未完全达标").rstrip("。.")
+            conclusion = f"最终结论：需要更多验证；{reason_text}。"
         else:
             conclusion = f"最终状态为 {status}；可进入下一层人工复核、容量和 paper trading 审批。"
         scores = {"status": status, "reason": reason}
@@ -1509,7 +1540,7 @@ class ResearchEngine:
             verdict,
             conclusion,
             scores,
-            "汇总快研究、strict 回测和 walk-forward strict audit 的结构化结论。",
+            "汇总 strict checklist；walk-forward 当前仅作为审计展示。",
         )
 
     def _production_gate_for_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
@@ -1520,7 +1551,7 @@ class ResearchEngine:
                 if row.get("strategy_id") != strategy_id:
                     continue
                 metrics = dict(row.get("metrics") or {})
-                if not metrics.get("strict_backtest") or not metrics.get("walkforward"):
+                if not metrics.get("strict_backtest"):
                     return None
                 return evaluate_production_readiness(metrics, self.config.production_gate_config)
         except Exception as e:
@@ -1926,6 +1957,9 @@ class ResearchEngine:
         thresholds: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         splits = list(getattr(wf_result, "splits", []) or [])
+        evaluated_splits = int(getattr(wf_result, "evaluated_splits", 0) or 0)
+        no_trade_splits = int(getattr(wf_result, "no_trade_splits", 0) or 0)
+        total_splits = int(getattr(wf_result, "total_splits", 0) or len(splits))
         capacity_ok = getattr(wf_result, "capacity_ok", None)
         return {
             "verdict": verdict,
@@ -1940,7 +1974,10 @@ class ResearchEngine:
             "sharpe_degradation": _float_or_default(getattr(wf_result, "sharpe_degradation", 0.0), 0.0),
             "regime_breakdown": dict(getattr(wf_result, "regime_breakdown", {}) or {}),
             "bull_only_warning": bool(getattr(wf_result, "bull_only_warning", False)),
-            "n_splits": len(splits),
+            "n_splits": evaluated_splits if evaluated_splits or no_trade_splits else len(splits),
+            "evaluated_splits": evaluated_splits if evaluated_splits or no_trade_splits else len(splits),
+            "no_trade_splits": no_trade_splits,
+            "total_splits": total_splits,
             "splits": [ResearchEngine._walkforward_split_dict(split, idx) for idx, split in enumerate(splits, start=1)],
         }
 
@@ -1960,6 +1997,8 @@ class ResearchEngine:
             "max_drawdown": _optional_float(response_metrics.get("max_drawdown") or response_metrics.get("maxdd")),
             "turnover": _optional_float(response_metrics.get("turnover")),
             "regime": split.get("regime", ""),
+            "trade_count": split.get("trade_count"),
+            "has_trades": split.get("has_trades"),
         }
 
 

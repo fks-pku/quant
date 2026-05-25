@@ -108,3 +108,14 @@ S6-02  顶层每个含 strategy.py 的策略目录都必须有 strict last_resul
 S6-03  顶层策略的 CAGR 必须 > 0.10
 S6-04  `strategies/reject/<strategy_id>/strategy.py` 不参与默认目录自动发现
 ```
+
+## CASE-7: PIT wide universe candidate selection
+
+点时间 universe 的正确语义不是把候选池在回测起点压窄成少数代表，也不是用当前存续名单直接回溯。允许预先解析一个覆盖回测窗口的符号 superset，但每个调仓点只能让当时可见、已有 bar、PIT 数据、流动性和 lookback 证据的候选进入排序；持仓必须由信号从这个当时可见的宽候选池中选择。
+
+### 断言
+
+```
+S7-01  同一类别中，调仓日可见的宽候选必须按策略信号排序，不得先按规模预选单个主代表再排序
+S7-02  未来新发或当日无 current bar 的 symbol 即使在窗口 superset 中，也不得进入该调仓日的可选候选
+```

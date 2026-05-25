@@ -340,82 +340,109 @@ def build_research_full_report_html(
     title = f"{_report_subject(rows)} End-to-End Research Report"
     body = [
         '<section class="hero">',
-        "<p class=\"eyebrow\">Fast + Strict Backtest + Walk-forward</p>",
+        "<p class=\"eyebrow\">Executive Summary + Audit Appendix</p>",
         f"<h1>{escape(title)}</h1>",
-        f"<p>Generated at {escape(str(generated))}. This report combines fast research, strict Backtester evidence, walk-forward strict audit evidence, and the final Go / No-Go checklist.</p>",
+        f"<p>Generated at {escape(str(generated))}. The main report focuses on the current Go / No-Go checklist, strict Backtester evidence, capacity, and key residual risks. Detailed audit tables are folded into appendices.</p>",
         _report_metric_grid(rows, str(generated)),
         "</section>",
         '<section class="panel">',
         "<h2>1. Final Decision</h2>",
         _conclusion_paragraph(data, rows),
-        _stage_conclusion_table(data, rows),
-        _judgement_table(data, rows),
+        _executive_snapshot_table(data, rows),
         "</section>",
         '<section class="panel">',
         "<h2>2. Metric Checklist</h2>",
         _end_to_end_checklist_table(data, rows),
-        "<h3>Evidence Map</h3>",
-        _full_report_evidence_map(data, rows),
         "</section>",
         '<section class="panel">',
-        "<h2>3. Fast Research Evidence</h2>",
-        "<h3>Idea Source</h3>",
-        _idea_source_overview_table(rows),
-        "<h3>Admission And Signal Contract</h3>",
-        _source_quality_score_table(data, rows),
-        _strategy_spec_contract_table(rows),
-        _formula_block(rows),
-        "<h3>Signal Validation</h3>",
-        _signal_validation_contract_table(data, rows),
-        "<h3>Portfolio Diagnostics</h3>",
-        _portfolio_diagnostics_contract_table(data, rows),
-        "<h3>PnL Attribution Bridge</h3>",
-        _pnl_attribution_bridge_contract_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>4. Strict Backtest Evidence</h2>",
-        "<h3>4.1 Strategy Execution Logic</h3>",
-        _strategy_execution_logic_contract(data, rows),
-        "<h3>4.2 Equity Curve</h3>",
+        "<h2>3. Strategy Logic And Core Evidence</h2>",
+        _strategy_logic_plain_paragraph(data, rows),
+        _strategy_logic_summary_table(data, rows),
+        "<h3>Equity Curve</h3>",
         _equity_curve_chart(data, rows),
-        "<h3>4.3 Yearly / Monthly Return Calendar</h3>",
-        _yearly_return_calendar(data, rows),
-        "<h3>4.4 Backtest Configuration</h3>",
-        _backtest_config_contract_table(data, rows),
-        "<h3>4.5 Data Quality Audit</h3>",
-        _data_quality_contract_table(data, rows),
-        "<h3>4.6 Core Performance</h3>",
+        "<h3>Core Performance</h3>",
         _core_performance_contract_table(data, rows),
-        "<h3>4.7 Trade And Cost Diagnostics</h3>",
-        _trade_cost_contract_table(data, rows),
-        "<h3>4.8 Turnover And Exposure</h3>",
-        _turnover_exposure_contract_table(data, rows),
-        "<h3>4.9 Capacity And Liquidity</h3>",
-        _capacity_contract_table(data, rows),
-        "<h3>4.10 Guard Attribution</h3>",
-        _guard_attribution_contract_table(data, rows),
-        "<h3>4.11 Drawdown Episodes</h3>",
-        _drawdown_episode_contract_table(data, rows),
-        "<h3>4.12 Trade Distribution</h3>",
-        _trade_distribution_contract_table(data, rows),
-        "<h3>4.13 Rolling Stability And Regime</h3>",
-        _rolling_regime_contract_table(data, rows),
-        "<h3>4.14 Cost Decomposition</h3>",
-        _cost_decomposition_contract_table(data, rows),
+        "<h3>Cost And Capacity</h3>",
+        _cost_capacity_summary_table(data, rows),
         "</section>",
         '<section class="panel">',
-        "<h2>5. Walk-forward Audit Evidence</h2>",
-        "<h3>Methodology</h3>",
-        _walkforward_methodology_contract_table(rows),
-        "<h3>Summary</h3>",
-        _walkforward_summary_contract_table(data, rows),
-        "<h3>Split Details</h3>",
-        _walkforward_split_contract_table(data, rows),
+        "<h2>4. Key Risks</h2>",
+        _key_risk_table(data, rows),
         "</section>",
-        '<section class="panel">',
-        "<h2>6. Report Navigation</h2>",
-        _full_report_link_table(data, rows),
-        _artifact_links(rows),
+        '<section class="panel appendix-panel">',
+        "<h2>5. Audit Appendix</h2>",
+        _details_block(
+            "A. Fast research input and signal diagnostics",
+            "\n".join(
+                [
+                    "<h3>Idea Source</h3>",
+                    _idea_source_overview_table(rows),
+                    "<h3>Admission And Signal Contract</h3>",
+                    _source_quality_score_table(data, rows),
+                    _strategy_spec_contract_table(rows),
+                    _formula_block(rows),
+                    "<h3>Signal Validation</h3>",
+                    _signal_validation_contract_table(data, rows),
+                    "<h3>Portfolio Diagnostics</h3>",
+                    _portfolio_diagnostics_contract_table(data, rows),
+                    "<h3>PnL Attribution Bridge</h3>",
+                    _pnl_attribution_bridge_contract_table(data, rows),
+                ]
+            ),
+        ),
+        _details_block(
+            "B. Strict backtest full diagnostics",
+            "\n".join(
+                [
+                    "<h3>Strategy Execution Logic</h3>",
+                    _strategy_execution_logic_contract(data, rows),
+                    "<h3>Yearly / Monthly Return Calendar</h3>",
+                    _yearly_return_calendar(data, rows),
+                    "<h3>Backtest Configuration</h3>",
+                    _backtest_config_contract_table(data, rows),
+                    "<h3>Data Quality Audit</h3>",
+                    _data_quality_contract_table(data, rows),
+                    "<h3>Trade And Cost Diagnostics</h3>",
+                    _trade_cost_contract_table(data, rows),
+                    "<h3>Turnover And Exposure</h3>",
+                    _turnover_exposure_contract_table(data, rows),
+                    "<h3>Capacity And Liquidity</h3>",
+                    _capacity_contract_table(data, rows),
+                    "<h3>Guard Attribution</h3>",
+                    _guard_attribution_contract_table(data, rows),
+                    "<h3>Drawdown Episodes</h3>",
+                    _drawdown_episode_contract_table(data, rows),
+                    "<h3>Trade Distribution</h3>",
+                    _trade_distribution_contract_table(data, rows),
+                    "<h3>Rolling Stability And Regime</h3>",
+                    _rolling_regime_contract_table(data, rows),
+                    "<h3>Cost Decomposition</h3>",
+                    _cost_decomposition_contract_table(data, rows),
+                ]
+            ),
+        ),
+        _details_block(
+            "C. Walk-forward audit evidence",
+            "\n".join(
+                [
+                    "<h3>Methodology</h3>",
+                    _walkforward_methodology_contract_table(rows),
+                    "<h3>Summary</h3>",
+                    _walkforward_summary_contract_table(data, rows),
+                    "<h3>Split Details</h3>",
+                    _walkforward_split_contract_table(data, rows),
+                ]
+            ),
+        ),
+        _details_block(
+            "D. Report navigation and artifact links",
+            "\n".join(
+                [
+                    _full_report_link_table(data, rows),
+                    _artifact_links(rows),
+                ]
+            ),
+        ),
         "</section>",
     ]
     return _html_document(title, "\n".join(body))
@@ -468,7 +495,7 @@ def _uses_cross_sectional_fast_validation(row: Dict[str, Any]) -> bool:
 def _fast_validation_scope_text(row: Dict[str, Any]) -> str:
     if _uses_cross_sectional_fast_validation(row):
         return "cross-sectional alpha: Rank IC / ICIR / hit-rate evidence is required."
-    return "ETF timing/rotation: cross-sectional Rank IC is not applicable; strict Backtester and walk-forward OOS gates are the required evidence."
+    return "ETF timing/rotation: cross-sectional Rank IC is not applicable; strict Backtester checklist is the required production evidence."
 
 
 def _local_strategy_rerun(row: Dict[str, Any]) -> bool:
@@ -518,6 +545,225 @@ def _report_metric_grid(rows: List[Dict[str, Any]], generated: str) -> str:
     return f'<div class="grid">{cells}</div>'
 
 
+def _executive_snapshot_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    metrics = strict.get("metrics") or {}
+    benchmark = strict.get("benchmark") or {}
+    capacity = strict.get("capacity") or {}
+    wf_scores, wf_reason, _ = _walkforward_scores(row)
+    drawdown = _safe_float(metrics.get("max_drawdown_pct"))
+    values = [
+        (
+            "当前结论",
+            _report_status(rows),
+            "正式 Go / No-Go 只看当前 checklist；walk-forward 保留为审计证据。",
+        ),
+        (
+            "收益 / 回撤",
+            f"CAGR={_pct(metrics.get('cagr'))}; MaxDD={_pct(abs(drawdown)) if drawdown is not None else 'n/a'}",
+            "按 CAGR 所在区间匹配最大回撤门槛。",
+        ),
+        (
+            "Benchmark",
+            f"000300 CAGR={_pct(benchmark.get('benchmark_cagr'))}; MaxDD={_pct(benchmark.get('benchmark_max_drawdown_pct'))}",
+            "用于判断收益是否只是市场 beta。",
+        ),
+        (
+            "容量",
+            f"max ADV={_pct(capacity.get('max_adv_participation'))}; 5% ADV 资金容量={_capacity_at_adv_limit(capacity, strict, 0.05)}",
+            "以当前回测交易形态线性放大估算，实盘前仍需盘口复核。",
+        ),
+        (
+            "Walk-forward 审计",
+            _walkforward_summary_sentence(wf_scores, wf_reason) if wf_scores else "not_run",
+            "当前不纳入 checklist；若后续恢复为门槛，应重新评估 candidate 状态。",
+        ),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for label, value, note in values
+    )
+    return _table(["项目", "当前值", "阅读结论"], body)
+
+
+def _strategy_logic_summary_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    values = [
+        ("核心假设", logic.get("core_idea") or _strict_signal_plaintext(row)),
+        ("交易范围", logic.get("universe") or _universe_summary(row)),
+        ("信号与排序", logic.get("ranking_rule") or _signal_construction_steps(row)),
+        ("调仓与执行", logic.get("rebalance_rule") or _logic_rebalance_rule(spec)),
+        ("组合构建", logic.get("portfolio_construction") or _logic_portfolio_construction(spec)),
+        ("风控/防御", logic.get("exit_rule") or _logic_exit_rule(spec)),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(_cell(value))}</td></tr>"
+        for label, value in values
+    )
+    return _table(["策略逻辑", "摘要"], body)
+
+
+def _strategy_logic_plain_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    text = _strategy_logic_plain_text(_primary_row(rows))
+    if not text:
+        return ""
+    return f'<p class="logic-plain"><b>白话版：</b>{escape(text)}</p>'
+
+
+def _strategy_logic_plain_text(row: Dict[str, Any]) -> str:
+    if not row:
+        return ""
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    strategy_id = str(spec.get("strategy_id") or row.get("strategy_id") or "").lower()
+    formula = str(spec.get("signal_formula_key") or "").lower()
+    if "ashare_gold_equity_barbell_timing" in strategy_id or "ashare_gold_equity_barbell_timing" in formula:
+        return (
+            "这套策略先把仓位思路分成两部分：一部分承担 A 股大盘权益风险，另一部分用黄金 ETF 做防守。"
+            "每天收盘后，它先看沪深300是否处在顺风期：价格在长期均线之上、动量也为正，就允许持有权益腿；"
+            "否则就把主要仓位切到黄金。权益腿不是挑个股，而是在回测起点前已经存在、且有足够历史数据的宽基、创业板、红利等 ETF 类别里，"
+            "先用当时能看到的基金规模选出各类别代表，再用动量除以波动率挑出最强的一只。"
+            "顺风期组合同时拿权益 ETF 和黄金 ETF，逆风期主要拿黄金；所有信号都在收盘后生成，下一交易日执行，并受手数、现金、5% ADV、费用和冲击成本约束。"
+        )
+    if logic:
+        core = _cell(logic.get("core_idea") or _strict_signal_plaintext(row))
+        universe = _cell(logic.get("universe") or _universe_summary(row))
+        ranking = _cell(logic.get("ranking_rule") or _signal_construction_steps(row))
+        portfolio = _cell(logic.get("portfolio_construction") or _logic_portfolio_construction(spec))
+        rebalance = _cell(logic.get("rebalance_rule") or _logic_rebalance_rule(spec))
+        exit_rule = _cell(logic.get("exit_rule") or _logic_exit_rule(spec))
+        return (
+            f"这套策略的核心想法是：{core} 它先限定交易范围为 {universe}，"
+            f"再按 {ranking} 决定买什么。组合层面，{portfolio} "
+            f"调仓方式是：{rebalance} 如果条件不满足或触发风险，处理方式是：{exit_rule}"
+        )
+    return _strict_signal_plaintext(row)
+
+
+def _cost_capacity_summary_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    diagnostics = strict.get("diagnostics") or {}
+    capacity = strict.get("capacity") or {}
+    values = [
+        ("显式佣金税费", _money(diagnostics.get("total_commission")), "只含佣金/税费；滑点和冲击体现在成交价。"),
+        ("成本拖累", _pct(_cost_drag_value(diagnostics)), "显式成本相对交易毛 PnL 的拖累。"),
+        ("ADV 参与率", f"p95={_pct(capacity.get('p95_adv_participation'))}; max={_pct(capacity.get('max_adv_participation'))}", "当前 checklist 使用单笔 max ADV <= 5%。"),
+        ("估算资金容量", _capacity_at_adv_limit(capacity, strict, 0.05), "按最大 ADV 参与率反推，超过后单笔订单会触及 5% ADV。"),
+        ("冲击成本", f"max impact={_fmt(capacity.get('max_impact_bps'))} bps", "来自执行冲击模型。"),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for label, value, note in values
+    )
+    return _table(["项目", "当前值", "说明"], body)
+
+
+def _key_risk_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    strict = _strict_backtest_for_report(data, row)
+    metrics = strict.get("metrics") or {}
+    diagnostics = strict.get("diagnostics") or {}
+    spec = ((row.get("evidence") or {}).get("strategy_spec") or {})
+    wf_scores, wf_reason, _ = _walkforward_scores(row)
+    values = [
+        (
+            "Walk-forward 稳定性",
+            _walkforward_summary_sentence(wf_scores, wf_reason) if wf_scores else "not_run",
+            "当前已降为审计项；若以后恢复上线门槛，这是最大弱点。",
+        ),
+        (
+            "策略规则可解释性",
+            _strict_signal_plaintext(row),
+            _strategy_logic_risk_note(spec),
+        ),
+        (
+            "Universe 选择偏差",
+            _universe_bias_observation(row),
+            _universe_bias_recommendation(spec),
+        ),
+        (
+            "执行摩擦",
+            f"insufficient_cash_rejections={_insufficient_cash_rejected_orders(diagnostics)}; total_trades={metrics.get('total_trades') or 'n/a'}",
+            "拒单和现金约束会影响复现实盘仓位，建议保留在附录审计。",
+        ),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for label, value, note in values
+    )
+    return _table(["风险点", "观察", "处理建议"], body)
+
+
+def _details_block(title: str, body: str) -> str:
+    return (
+        '<details class="audit-details">'
+        f"<summary>{escape(title)}</summary>"
+        f'<div class="audit-body">{body}</div>'
+        "</details>"
+    )
+
+
+def _capacity_at_adv_limit(capacity: Dict[str, Any], strict: Dict[str, Any], limit: float) -> str:
+    max_adv = _safe_float(capacity.get("max_adv_participation")) if isinstance(capacity, dict) else None
+    initial_cash = _safe_float(strict.get("initial_cash"))
+    if max_adv is None or max_adv <= 0 or initial_cash is None:
+        return "n/a"
+    return _money(initial_cash * limit / max_adv)
+
+
+def _compact_universe_text(value: Any, limit: int = 8) -> str:
+    if isinstance(value, (list, tuple, set)):
+        items = [str(item) for item in value]
+        sample = ", ".join(items[:limit])
+        suffix = f"; sample={sample}" if sample else ""
+        return f"{len(items)} symbols{suffix}"
+    return str(value or "StrategySpec 未记录")
+
+
+def _universe_bias_observation(row: Dict[str, Any]) -> str:
+    spec = ((row.get("evidence") or {}).get("strategy_spec") or {})
+    if spec.get("pit_universe_enabled") or spec.get("risk_category_symbols"):
+        policy = str(spec.get("universe_selection_policy") or "")
+        as_of = str(spec.get("universe_as_of") or "未记录")
+        start = str(spec.get("universe_start") or "")
+        end = str(spec.get("universe_end") or "")
+        min_history = spec.get("universe_min_history_days_as_of")
+        category_cap = spec.get("universe_max_symbols_per_category")
+        universe = spec.get("universe")
+        if policy == "dynamic_pit_category_wide":
+            window = f"{start or '未记录'}~{end or '未记录'}"
+            return (
+                f"{_compact_universe_text(universe)}; 动态PIT类别宽池; "
+                f"回测窗口={window}; 每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤; 每类最多={category_cap or '不限'}"
+            )
+        return (
+            f"{_compact_universe_text(universe)}; PIT类别池已锁定 as-of={as_of}; "
+            f"起点前最少历史={min_history or 0}日; 每类最多={category_cap or '不限'}"
+        )
+    return _compact_universe_text(spec.get("universe"))
+
+
+def _universe_bias_recommendation(spec: Dict[str, Any]) -> str:
+    if spec.get("pit_universe_enabled") or spec.get("risk_category_symbols"):
+        if str(spec.get("universe_selection_policy") or "") == "dynamic_pit_category_wide":
+            return "候选池采用每个调仓点当时可见的宽 ETF universe；未来新发 ETF 只在上市并满足当日数据/规模/流动性/lookback 后进入，持仓由信号从宽池中选择。剩余风险取决于底层元数据是否覆盖清盘 ETF。"
+        if int(spec.get("universe_max_symbols_per_category") or 0) == 1:
+            return "已避免未来新发 ETF 进入历史候选池，并且每类只保留起点主代表以减少幸存池择优；剩余风险取决于底层元数据是否覆盖清盘 ETF。"
+        return "已避免未来新发 ETF 进入历史候选池；剩余风险是数据源缺少已清盘/退市 ETF 时仍会有 survivorship bias。"
+    return "需要确认 ETF/LOF 池是否按历史可得规则冻结，而不是用当前存续名单回溯。"
+
+
+def _strategy_logic_risk_note(spec: Dict[str, Any]) -> str:
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    if logic:
+        return "StrategySpec.strategy_logic 已记录资产桶、切换条件、组合构建和防守腿；报告可直接审计规则。"
+    return "建议把 gold/equity barbell 的资产桶、切换条件、现金/防御腿写入 StrategySpec.strategy_logic，避免报告只显示泛化描述。"
+
+
 def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     if not rows:
         return "<p>本次运行没有形成可审计的 hypothesis 记录，因此不能给出策略推荐。</p>"
@@ -546,9 +792,9 @@ def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> s
             else:
                 text = (
                     f"{strategy_id} 是 ETF timing/rotation 策略，横截面 Rank IC、Top bucket 和 PnL bridge 不适用；"
-                    f"本轮可审计证据来自 strict Backtester 与 purged walk-forward："
-                    f"严格回测 Sharpe={sharpe}、CAGR={cagr}，样本外 aggregate OOS Sharpe={aggregate}、worst={worst}。"
-                    "最终结论是不进入策略池或 paper trading，原因是 walk-forward strict audit 未通过。"
+                    f"本轮正式 checklist 证据来自 strict Backtester：严格回测 Sharpe={sharpe}、CAGR={cagr}。"
+                    f"purged walk-forward 仍作为审计展示，不纳入当前 Go / No-Go checklist：aggregate OOS Sharpe={aggregate}、worst={worst}。"
+                    "最终结论以 strict checklist、交易笔数和单笔 ADV 约束为准。"
                 )
         elif _signal_badge_class(metrics) == "fail":
             text = (
@@ -566,8 +812,8 @@ def _conclusion_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> s
             )
     elif status in {"candidate", "paper_trading_candidate"}:
         text = (
-            f"{strategy_id} 当前状态为 {status}，已完成信号验证、严格回测和样本外稳定性审查。"
-            "进入下一阶段前仍需人工复核容量、组合相关性、风控预算和实盘执行细节。"
+            f"{strategy_id} 当前状态为 {status}，已通过当前 strict checklist。"
+            "walk-forward 仍作为审计风险展示，不参与当前 Go / No-Go；进入下一阶段前仍需人工复核容量、组合相关性、风控预算和实盘执行细节。"
         )
     else:
         text = (
@@ -597,7 +843,7 @@ def _judgement_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
         + f"<td>{escape(_strict_backtest_summary(strict_metrics))}</td></tr>",
         "<tr><td>Walk-forward</td>"
         + f"<td>{_badge(walk_class, walk_class)}</td>"
-        + f"<td>{escape(_walkforward_summary_sentence(wf_scores, wf_reason))}</td></tr>",
+        + f"<td>{escape(_walkforward_summary_sentence(wf_scores, wf_reason) + '；当前不纳入 Go / No-Go checklist')}</td></tr>",
         "<tr><td>部署建议</td>"
         + f"<td>{_badge(_report_status(rows), deploy_class)}</td>"
         + f"<td>{escape(_deployment_summary(row))}</td></tr>",
@@ -733,7 +979,7 @@ def _full_report_evidence_map(data: Dict[str, Any], rows: List[Dict[str, Any]]) 
             "Walk-forward Audit",
             "5",
             str((stages.get("walkforward_strict_audit") or {}).get("verdict") or "not_run"),
-            "Purged rolling OOS method, aggregate stability, worst split, profitable split ratio, and split-level diagnostics.",
+            "Purged rolling OOS diagnostics retained for audit; currently excluded from Go / No-Go checklist.",
         ),
         (
             "Artifacts",
@@ -767,41 +1013,13 @@ def _end_to_end_checklist_table(data: Dict[str, Any], rows: List[Dict[str, Any]]
     metrics = row.get("metrics") or {}
     strict = _strict_backtest_for_report(data, row)
     strict_metrics = strict.get("metrics") or {}
-    wf_scores, _, _ = _walkforward_scores(row)
     body = []
-    if _uses_cross_sectional_fast_validation(row):
-        body.extend(
-            [
-                _checklist_min_row("rank_ic", metrics.get("rank_ic"), 0.02),
-                _checklist_min_row("rank_ic_ir", metrics.get("rank_ic_ir"), 0.30),
-                _checklist_min_row("rank_ic_tstat", _first_present(metrics, "rank_ic_tstat", "rank_ic_t_stat"), 2.00),
-                _checklist_pct_min_row("hit_rate", metrics.get("hit_rate"), 0.55),
-            ]
-        )
-    else:
-        body.append(
-            _checklist_row(
-                "fast_signal_validation_scope",
-                _fast_validation_scope_text(row),
-                "strategy-specific scope documented",
-                "n/a",
-            )
-        )
+    capacity = strict.get("capacity") or {}
     body.extend([
-        _checklist_min_row("strict_sharpe", strict_metrics.get("sharpe"), 0.80),
-        _checklist_pct_min_row("strict_cagr", strict_metrics.get("cagr"), 0.05),
-        _checklist_abs_pct_max_row("strict_max_drawdown", strict_metrics.get("max_drawdown_pct"), 0.25),
-        _checklist_min_row("strict_calmar", strict_metrics.get("calmar_ratio"), 0.70),
-        _checklist_min_row("profit_factor", strict_metrics.get("profit_factor"), 1.20),
-        _checklist_int_min_row("total_trades", strict_metrics.get("total_trades"), 50),
-        _checklist_min_row("aggregate_oos_sharpe", wf_scores.get("aggregate_oos_sharpe"), 0.80),
-        _checklist_min_row("worst_oos_sharpe", wf_scores.get("worst_oos_sharpe"), 0.30),
-        _checklist_pct_min_row("pct_profitable_splits", wf_scores.get("pct_profitable_splits"), 0.55),
-        _checklist_bool_row("capacity_ok", _first_present(wf_scores, "capacity_ok", "capacity_viability", "capacity_passed")),
+        _checklist_adv_participation_row(capacity),
+        _checklist_int_gt_row("total_trades", strict_metrics.get("total_trades"), 50),
+        _checklist_cagr_drawdown_tier_row(strict_metrics),
     ])
-    correlation = _first_present(metrics, "mean_correlation", "portfolio_correlation", "max_correlation")
-    if correlation is not None:
-        body.append(_checklist_abs_max_row("mean_correlation", correlation, 0.30))
     return _table(["Metric", "Observed", "Threshold", "Result"], body)
 
 
@@ -817,6 +1035,40 @@ def _checklist_int_min_row(metric: str, value: Any, minimum: int) -> str:
     observed = "missing" if number is None else str(int(number))
     verdict = "fail" if number is None else ("pass" if number >= minimum else "fail")
     return _checklist_row(metric, observed, f">={minimum}", verdict)
+
+
+def _checklist_int_gt_row(metric: str, value: Any, minimum: int) -> str:
+    number = _safe_float(value)
+    observed = "missing" if number is None else str(int(number))
+    verdict = "fail" if number is None else ("pass" if number > minimum else "fail")
+    return _checklist_row(metric, observed, f">{minimum}", verdict)
+
+
+def _checklist_adv_participation_row(capacity: Dict[str, Any]) -> str:
+    value = capacity.get("max_adv_participation") if isinstance(capacity, dict) else None
+    number = _safe_float(value)
+    observed = "missing" if number is None else _pct(number)
+    verdict = "fail" if number is None else ("pass" if number <= 0.05 else "fail")
+    return _checklist_row("max_adv_participation", observed, "<=5.00% ADV", verdict)
+
+
+def _checklist_cagr_drawdown_tier_row(metrics: Dict[str, Any]) -> str:
+    cagr = _safe_float(metrics.get("cagr"))
+    drawdown = _safe_float(metrics.get("max_drawdown_pct"))
+    if cagr is None or drawdown is None:
+        return _checklist_row("cagr_drawdown_tier", "missing", "CAGR/MaxDD required", "fail")
+    observed = f"CAGR={_pct(cagr)}; MaxDD={_pct(abs(drawdown))}"
+    tier = _cagr_drawdown_tier(cagr)
+    if tier is None:
+        return _checklist_row("cagr_drawdown_tier", observed, "CAGR >=5.00%", "fail")
+    label, max_drawdown = tier
+    verdict = "pass" if abs(drawdown) <= max_drawdown else "fail"
+    return _checklist_row(
+        "cagr_drawdown_tier",
+        observed,
+        f"CAGR {label} requires MaxDD <={_pct(max_drawdown)}",
+        verdict,
+    )
 
 
 def _checklist_pct_min_row(metric: str, value: Any, minimum: float) -> str:
@@ -860,6 +1112,18 @@ def _coerce_check_bool(value: Any) -> bool | None:
     if text in {"false", "fail", "failed", "no", "not_viable", "not viable"}:
         return False
     return None
+
+
+def _cagr_drawdown_tier(cagr: float) -> tuple[str, float] | None:
+    if cagr < 0.05:
+        return None
+    if cagr < 0.10:
+        return "5.00%-10.00%", 0.15
+    if cagr < 0.15:
+        return "10.00%-15.00%", 0.25
+    if cagr < 0.20:
+        return "15.00%-20.00%", 0.30
+    return ">=20.00%", 0.50
 
 
 def _checklist_row(metric: str, observed: str, threshold: str, verdict: str) -> str:
@@ -999,7 +1263,7 @@ def _stage_conclusions_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> 
             "label": "最终 Go / No-Go",
             "verdict": _report_status([row]),
             "conclusion": _deployment_summary(row),
-            "method": "汇总快研究、strict 回测和 walk-forward strict audit。",
+            "method": "汇总 strict checklist；walk-forward 当前仅作为审计展示。",
         },
     )
     return stages
@@ -1244,7 +1508,7 @@ def _data_source_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]
     body = [
         f"<tr><td>行情表</td><td>DuckDB <code>daily_cn_ochl</code></td><td>{escape(str(data_start))} - {escape(str(data_end))}, {escape(str(data_rows))} symbol-date rows, {escape(str(n_obs))} valid IC dates</td></tr>",
         "<tr><td>价格口径</td><td>HFQ 后复权</td><td>优先 adj_*；缺失时 raw price * adj_factor，不允许静默切换</td></tr>",
-        f"<tr><td>Universe</td><td>{escape(_universe_summary(row))}</td><td>当前报告按 A 股 long-only 约束审计；PIT 成分股限制需在后续增强</td></tr>",
+        f"<tr><td>Universe</td><td>{escape(_universe_summary(row))}</td><td>当前报告按 A 股 long-only 和 PIT universe 约束审计；清盘 ETF 覆盖取决于底层元数据</td></tr>",
         f"<tr><td>Benchmark</td><td>{escape(str(benchmark_symbol))} 沪深 300</td><td>{escape(str(benchmark.get('coverage_start') or '未记录'))} - {escape(str(benchmark.get('coverage_end') or '未记录'))}, {escape(str(benchmark.get('rows') or '未记录'))} rows</td></tr>",
         f"<tr><td>Fallback</td><td>510300</td><td>{escape(fallback_note)}</td></tr>",
     ]
@@ -1668,6 +1932,9 @@ def _strict_signal_explanation_table(data: Dict[str, Any], rows: List[Dict[str, 
 
 def _strict_signal_plaintext(row: Dict[str, Any]) -> str:
     spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    if logic.get("core_idea"):
+        return str(logic.get("core_idea"))
     formula = str(spec.get("signal_formula_key") or "").lower()
     strategy_type = str(spec.get("strategy_type") or "").lower()
     fallback = str(spec.get("fallback_symbol") or spec.get("cash_symbol") or "防御资产")
@@ -2128,6 +2395,23 @@ def _data_quality_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]
             "未记录 survivorship audit",
             "报告缺少 daily_basic 与 OHLC/status universe 的覆盖对账。",
         )
+    if audit.get("kind") == "etf_metadata_survivorship_audit":
+        samples = audit.get("bar_symbols_missing_fund_meta_sample") or []
+        sample_text = ", ".join(str(item.get("symbol")) for item in samples[:8] if isinstance(item, dict) and item.get("symbol"))
+        rows_data = [
+            ("kind", str(audit.get("kind") or ""), "ETF survivorship audit 类型"),
+            ("material", "是" if audit.get("material") else "否", audit.get("reason") or "是否足以影响 strict 结论"),
+            ("etf_bar_symbols", str(audit.get("etf_bar_symbols") or 0), "ETF 日线表中本回测期出现过的 symbol 数"),
+            ("fund_meta_etf_symbols", str(audit.get("fund_meta_etf_symbols") or 0), "基金元数据表中标记为 ETF 的 symbol 数"),
+            ("bar_symbols_missing_fund_meta", str(audit.get("bar_symbols_missing_fund_meta") or 0), "有 ETF 日线但缺少基金元数据的 symbol 数"),
+            ("fund_meta_delisted_symbols", str(audit.get("fund_meta_delisted_symbols") or 0), "基金元数据中带 delist_date 的 ETF 数"),
+            ("bar_symbols_missing_fund_meta_sample", sample_text or "-", "样例 bar-only symbol；无法分类时不进入策略候选池"),
+        ]
+        body = "".join(
+            f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(_cell(note))}</td></tr>"
+            for item, value, note in rows_data
+        )
+        return _table(["审计项", "数值", "解释"], body)
     samples = audit.get("sample_missing_symbols") or []
     sample_text = ", ".join(str(item.get("symbol")) for item in samples[:8] if isinstance(item, dict) and item.get("symbol"))
     rows_data = [
@@ -2438,34 +2722,51 @@ def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[st
     min_profitable = _threshold_float(thresholds, "min_profitable_splits_pct")
     min_dsr = _threshold_float(thresholds, "min_deflated_sharpe_ratio")
     max_adv = _threshold_float(thresholds, "max_adv_pct")
+    total_splits = _first_present(scores, "total_splits", "generated_splits")
+    evaluated_splits = _first_present(scores, "evaluated_splits", "n_splits")
+    no_trade_splits = scores.get("no_trade_splits")
     rows_data = [
         (
-            "n_splits",
-            _int_cell(scores.get("n_splits")),
+            "total_splits",
+            _int_cell(total_splits),
             ">0",
-            _min_threshold_verdict(scores.get("n_splits"), 1.0),
-            "必须实际生成样本外 split",
+            _min_threshold_verdict(total_splits, 1.0),
+            "实际生成的样本外 split 总数",
+        ),
+        (
+            "evaluated_splits",
+            _int_cell(evaluated_splits),
+            ">0",
+            _min_threshold_verdict(evaluated_splits, 1.0),
+            "有交易的 OOS split；aggregate/worst/profitable/DSR 只统计这些区间",
+        ),
+        (
+            "no_trade_splits",
+            _int_cell(no_trade_splits),
+            "excluded from OOS stats",
+            "excluded" if _safe_float(no_trade_splits) else "pass",
+            "无交易 OOS split 保留明细，但不进入样本外统计分母",
         ),
         (
             "aggregate_oos_sharpe",
             _fmt(scores.get("aggregate_oos_sharpe")),
             ">0 作为均值表现参考；不单独决定 pass",
             _reference_verdict(scores.get("aggregate_oos_sharpe")),
-            "所有 OOS split 聚合表现",
+            "有交易 OOS split 的聚合表现",
         ),
         (
             "worst_oos_sharpe",
             _fmt(scores.get("worst_oos_sharpe")),
             f">={_fmt(min_worst)}",
             _min_threshold_verdict(scores.get("worst_oos_sharpe"), min_worst),
-            "最差样本外窗口；正式 Go / No-Go 硬门槛",
+            "有交易 OOS split 中的最差样本外窗口；当前仅作 walk-forward 审计，不进入 Go / No-Go checklist",
         ),
         (
             "pct_profitable_splits",
             _pct(scores.get("pct_profitable_splits")),
             f">={_pct(min_profitable)}",
             _min_threshold_verdict(scores.get("pct_profitable_splits"), min_profitable),
-            "赚钱 split 占比；正式 Go / No-Go 硬门槛",
+            "有交易 OOS split 的赚钱占比；当前仅作 walk-forward 审计，不进入 Go / No-Go checklist",
         ),
         (
             "deflated_sharpe_ratio",
@@ -2486,7 +2787,7 @@ def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[st
             _walkforward_capacity_value(scores),
             f"所有交易可估算成交量且单笔参与率 <={_pct(max_adv)} ADV",
             _capacity_threshold_verdict(scores),
-            "容量和冲击成本是否可接受；正式 Go / No-Go 硬门槛",
+            "walk-forward 容量审计；当前 checklist 使用 strict 回测的 max_adv_participation",
         ),
     ]
     body = "".join(
@@ -2502,6 +2803,7 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
     detail, reason, verdict = _walkforward_scores(row)
     include_maxdd = False
     include_turnover = False
+    include_trade_count = False
     split_rows = []
     if isinstance(detail, dict):
         raw_splits = detail.get("splits") or detail.get("split_results") or []
@@ -2513,15 +2815,18 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                 turnover_value = split.get("turnover")
                 include_maxdd = include_maxdd or _safe_float(maxdd_value) is not None
                 include_turnover = include_turnover or _safe_float(turnover_value) is not None
+                trade_count = split.get("trade_count")
+                include_trade_count = include_trade_count or trade_count is not None
                 split_rows.append(
                     (
                         str(split.get("split") or idx),
                         _range_text(split, "train_start", "train_end"),
                         _range_text(split, "test_start", "test_end"),
                         _cell(split.get("params") or split.get("parameters") or "frozen parameters"),
-                        _fmt(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe")),
+                        _split_oos_sharpe_cell(split),
                         _pct(maxdd_value),
                         _pct(turnover_value),
+                        _int_cell(trade_count),
                         _split_verdict(split),
                     )
                 )
@@ -2536,19 +2841,22 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                 _fmt(scores.get("aggregate_oos_sharpe")),
                 "missing",
                 "missing",
+                "missing",
                 verdict or ("fail" if _walkforward_badge_class(scores) == "fail" else "pass"),
             )
         ]
         if reason:
-            split_rows.append(("原因", "missing", "missing", reason, _fmt(scores.get("worst_oos_sharpe")), "missing", "missing", "fail"))
+            split_rows.append(("原因", "missing", "missing", reason, _fmt(scores.get("worst_oos_sharpe")), "missing", "missing", "missing", "fail"))
     headers = ["Split", "Train", "Test", "参数", "OOS Sharpe"]
     if include_maxdd:
         headers.append("MaxDD")
     if include_turnover:
         headers.append("Turnover")
+    if include_trade_count:
+        headers.append("Trades")
     headers.append("结论")
     body_rows = []
-    for split, train, test, params, sharpe, maxdd, turnover, result in split_rows:
+    for split, train, test, params, sharpe, maxdd, turnover, trade_count, result in split_rows:
         cells = [
             escape(split),
             escape(train),
@@ -2560,9 +2868,19 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
             cells.append(escape(maxdd))
         if include_turnover:
             cells.append(escape(turnover))
+        if include_trade_count:
+            cells.append(escape(trade_count))
         cells.append(escape(result))
         body_rows.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
     return _table(headers, body_rows)
+
+
+def _split_oos_sharpe_cell(split: Dict[str, Any]) -> str:
+    if split.get("has_trades") is False:
+        return "n/a (no trades)"
+    if _safe_int(split.get("trade_count")) == 0:
+        return "n/a (no trades)"
+    return _fmt(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe"))
 
 
 def _decision_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -2608,7 +2926,7 @@ def _next_steps_contract_table(rows: List[Dict[str, Any]]) -> str:
 def _template_style() -> str:
     base_style = (
         ":root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}"
-        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.hypothesis-list{margin:0;padding-left:20px}.hypothesis-list li{margin:0 0 6px}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.logic-plain{margin:10px 0 14px;padding:14px 16px;background:#f8fafc;border:1px solid var(--line);color:#334155}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.hypothesis-list{margin:0;padding-left:20px}.hypothesis-list li{margin:0 0 6px}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}.audit-details{margin:12px 0;border:1px solid var(--line);background:#fff}.audit-details>summary{cursor:pointer;padding:12px 14px;font-weight:800;background:var(--soft)}.audit-details[open]>summary{border-bottom:1px solid var(--line)}.audit-body{padding:14px}.appendix-panel h3{margin-top:18px}"
     )
     return base_style + "\n" + _REQUIRED_CHART_STYLE
 
@@ -2691,6 +3009,27 @@ def _universe_summary(row: Dict[str, Any]) -> str:
     source = str(metrics.get("universe_source") or "")
     if spec_universe and len(spec_universe) > 20:
         size = size or len(spec_universe)
+    if spec.get("pit_universe_enabled") or spec.get("risk_category_symbols"):
+        size = size or len(spec_universe)
+        sample_text = ", ".join(str(symbol) for symbol in sample[:8])
+        actual = f"，实际取数 {data_symbol_count} 个 symbol" if data_symbol_count else ""
+        suffix = f"；样例：{sample_text}" if sample_text else ""
+        as_of = str(spec.get("universe_as_of") or "未记录")
+        start = str(spec.get("universe_start") or "")
+        end = str(spec.get("universe_end") or "")
+        min_history = spec.get("universe_min_history_days_as_of") or 0
+        category_cap = spec.get("universe_max_symbols_per_category") or "不限"
+        policy = str(spec.get("universe_selection_policy") or "pit_category")
+        if policy == "dynamic_pit_category_wide":
+            window = f"{start or '未记录'}~{end or '未记录'}"
+            return (
+                f"动态 PIT ETF 类别宽 universe（策略={policy}，窗口={window}，"
+                f"每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤，每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{suffix}）"
+            )
+        return (
+            f"PIT ETF 类别 universe（策略={policy}，as-of={as_of}，"
+            f"起点前最少历史={min_history}日，每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{suffix}）"
+        )
     if size and (size > 20 or size > len(spec_universe)):
         sample_text = ", ".join(str(symbol) for symbol in sample[:8])
         actual = f"，实际取数 {data_symbol_count} 个 symbol" if data_symbol_count else ""
@@ -2770,6 +3109,8 @@ def _split_verdict(split: Dict[str, Any]) -> str:
     explicit = split.get("verdict") or split.get("result")
     if explicit:
         return str(explicit)
+    if split.get("has_trades") is False or _safe_int(split.get("trade_count")) == 0:
+        return "excluded_no_trade"
     sharpe = _safe_float(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe"))
     return "pass" if sharpe is not None and sharpe > 0 else "fail"
 
@@ -2891,14 +3232,15 @@ def _has_signal_validation_metrics(metrics: Dict[str, Any]) -> bool:
 
 
 def _strict_badge_class(metrics: Dict[str, Any]) -> str:
-    sharpe = _safe_float(metrics.get("sharpe"))
-    total_return = _safe_float(metrics.get("total_return"))
     cagr = _safe_float(metrics.get("cagr"))
-    if sharpe is None:
+    drawdown = _safe_float(metrics.get("max_drawdown_pct"))
+    trades = _safe_float(metrics.get("total_trades"))
+    if cagr is None or drawdown is None:
         return "fail"
-    if sharpe >= 1.0 and (cagr is None or cagr > 0.03):
+    tier = _cagr_drawdown_tier(cagr)
+    if tier is not None and abs(drawdown) <= tier[1] and (trades is None or trades > 50):
         return "pass"
-    if sharpe > 0 and (total_return is None or total_return > 0):
+    if cagr > 0:
         return "warn"
     return "fail"
 

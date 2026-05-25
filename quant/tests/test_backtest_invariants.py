@@ -1698,6 +1698,59 @@ class TestCase17VolumeLimit:
 
 
 # ============================================================================
+# CASE-17A: ADV order participation limit
+# ============================================================================
+
+CASE17A_CONFIG = {
+    "backtest": {
+        "slippage_bps": 0,
+        "execution_cost_model": {
+            "enabled": True,
+            "markets": ["US"],
+            "max_participation_rate": 0.05,
+            "impact_coefficient": 0.0,
+        },
+    },
+    "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+@pytest.fixture
+def case17a_result():
+    data = _make_bars(
+        "AAPL",
+        [
+            (datetime(2024, 6, 3), 100.00, 102.00, 1_000_000),
+            (datetime(2024, 6, 4), 105.00, 106.00, 1_000_000),
+        ],
+    )
+    data["adv20_volume"] = [200.0, 200.0]
+    bt = make_backtester(CASE17A_CONFIG)
+    provider = DataFrameProvider(data)
+    strat = _signal_strategy("Case17A", "AAPL", buy_on={0}, sell_on=set(), qty=500)
+    return bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat], initial_cash=100_000,
+        data_provider=provider, symbols=["AAPL"],
+    )
+
+
+class TestCase17AAdvOrderLimit:
+    def test_c17a_01_adv_limited(self, case17a_result):
+        assert case17a_result.diagnostics.volume_limited_trades >= 1
+
+    def test_c17a_02_quantity_capped_to_five_pct_adv(self, case17a_result):
+        assert case17a_result.trades[0].quantity == pytest.approx(10, rel=1e-4)
+
+    def test_c17a_03_adv_participation_recorded(self, case17a_result):
+        observation = case17a_result.diagnostics.execution_observations[0]
+        assert observation["adv_volume"] == pytest.approx(200.0)
+        assert observation["adv_volume_participation"] <= 0.050001
+        assert observation["participation_limit"] == pytest.approx(0.05)
+
+
+# ============================================================================
 # CASE-18: Price deviation rejection
 # ============================================================================
 

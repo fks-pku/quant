@@ -344,24 +344,101 @@ def test_update_hypothesis_backtest_refreshes_pit_strategy_spec(monkeypatch):
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_persist_candidate_backtest_refreshes_archived_pit_candidate_metadata():
+    from quant.api import research_bp as research_module
+
+    tmp_path = _test_root()
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate(
+            {
+                "id": "ashare_gold_equity_barbell_timing",
+                "status": "candidate",
+                "parameters": {"risk_symbols": ["510050", "510300"]},
+                "research_meta": {"strategy_spec": {"universe": ["510050", "510300", "518880"]}},
+            }
+        )
+        pool = CandidatePool(research_store=research_store)
+        merged = {
+            "id": "ashare_gold_equity_barbell_timing",
+            "status": "candidate",
+            "parameters": {
+                "pit_universe_enabled": True,
+                "risk_category_symbols": {"csi300": ["510300"]},
+                "defensive_category_symbols": {"gold": ["518880"]},
+                "universe_as_of": "2016-01-01",
+            },
+            "research_meta": {
+                "strategy_spec": {
+                    "universe": ["000300", "510300", "518880"],
+                    "risk_category_symbols": {"csi300": ["510300"]},
+                    "defensive_category_symbols": {"gold": ["518880"]},
+                    "pit_universe_enabled": True,
+                    "universe_as_of": "2016-01-01",
+                }
+            },
+        }
+
+        research_module._persist_candidate_backtest(
+            pool,
+            "ashare_gold_equity_barbell_timing",
+            merged,
+            {"metrics": {"sharpe": 1.2}},
+        )
+
+        stored = research_store.get_candidate("ashare_gold_equity_barbell_timing")
+        assert "risk_symbols" not in stored["parameters"]
+        assert stored["parameters"]["risk_category_symbols"] == {"csi300": ["510300"]}
+        assert stored["parameters"]["universe_as_of"] == "2016-01-01"
+        assert stored["research_meta"]["strategy_spec"]["universe"] == ["000300", "510300", "518880"]
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_archived_pit_universe_resolution_is_cached(monkeypatch):
     from quant.api import research_bp as research_module
     from quant.infrastructure.research import cn_etf_universe as universe_module
 
     calls = {"count": 0}
 
-    def fake_build():
+    def fake_build(
+        *,
+        universe_as_of=None,
+        min_history_days_as_of=0,
+        max_symbols_per_category=0,
+        universe_start=None,
+        universe_end=None,
+    ):
         calls["count"] += 1
+        assert universe_as_of in (None, "")
+        assert min_history_days_as_of == 0
+        assert max_symbols_per_category == 0
+        assert universe_start == "2016-01-01"
+        assert universe_end == "2025-12-31"
         return {
-            "symbols": ["510300", "518880"],
-            "risk_category_symbols": {"csi300": ["510300"]},
+            "symbols": ["510300", "159919", "518880"],
+            "risk_category_symbols": {"csi300": ["510300", "159919"]},
             "defensive_category_symbols": {"gold": ["518880"]},
+            "universe_selection_policy": "dynamic_pit_category_wide",
+            "universe_as_of": "",
+            "universe_start": "2016-01-01",
+            "universe_end": "2025-12-31",
+            "universe_min_history_days_as_of": 0,
+            "universe_max_symbols_per_category": 0,
         }
 
     monkeypatch.setattr(universe_module, "build_gold_equity_barbell_pit_universe", fake_build)
     research_module._ARCHIVED_PIT_UNIVERSE_CACHE.clear()
 
-    params = {"pit_universe_enabled": True, "timing_symbol": "000300"}
+    params = {
+        "pit_universe_enabled": True,
+        "timing_symbol": "000300",
+        "universe_selection_policy": "dynamic_pit_category_wide",
+        "universe_start": "2016-01-01",
+        "universe_end": "2025-12-31",
+        "universe_min_history_days_as_of": 0,
+        "universe_max_symbols_per_category": 0,
+    }
     first_params, first_symbols = research_module._archived_pit_universe_parameters(
         "ashare_gold_equity_barbell_timing",
         params,
@@ -372,8 +449,450 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
     )
 
     assert calls["count"] == 1
-    assert first_symbols == second_symbols == ["000300", "510300", "518880"]
+    assert first_symbols == second_symbols == ["000300", "159919", "510300", "518880"]
     assert first_params["risk_category_symbols"] == second_params["risk_category_symbols"]
+    assert first_params["universe_selection_policy"] == "dynamic_pit_category_wide"
+    assert first_params["universe_start"] == "2016-01-01"
+    assert first_params["universe_end"] == "2025-12-31"
+    assert first_params["universe_max_symbols_per_category"] == 0
+
+
+def test_gold_equity_pit_universe_attaches_sidecar_paths(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('510300', '沪深300ETF', '沪深300', DATE '2015-01-01', NULL, 'ETF'),
+            ('518880', '黄金ETF', '黄金9999', DATE '2015-01-01', NULL, 'ETF')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2020-01-02', '510300'),
+            (TIMESTAMP '2020-01-02', '518880')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_nav VALUES
+            ('510300', DATE '2020-01-02', 100000000.0, NULL),
+            ('518880', DATE '2020-01-02', 90000000.0, NULL)
+            """
+        )
+    finally:
+        conn.close()
+
+    universe = build_gold_equity_barbell_pit_universe(
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+    )
+
+    assert universe["risk_category_symbols"]["csi300"] == ["510300"]
+    assert universe["defensive_category_symbols"]["gold"] == ["518880"]
+
+
+def test_gold_equity_pit_universe_can_lock_candidates_to_as_of(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('510300', '沪深300ETF', '沪深300', DATE '2015-01-01', NULL, 'ETF'),
+            ('515300', '沪深300ETF新发', '沪深300', DATE '2020-01-01', NULL, 'ETF'),
+            ('518880', '黄金ETF', '黄金9999', DATE '2015-01-01', NULL, 'ETF')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2015-12-30', '510300'),
+            (TIMESTAMP '2020-01-02', '515300'),
+            (TIMESTAMP '2015-12-30', '518880')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_nav VALUES
+            ('510300', DATE '2015-12-30', 100000000.0, NULL),
+            ('515300', DATE '2020-01-02', 900000000.0, NULL),
+            ('518880', DATE '2015-12-30', 80000000.0, NULL)
+            """
+        )
+    finally:
+        conn.close()
+
+    universe = build_gold_equity_barbell_pit_universe(
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+        universe_as_of="2016-01-01",
+        min_history_days_as_of=1,
+    )
+
+    assert universe["risk_category_symbols"]["csi300"] == ["510300"]
+    assert "515300" not in universe["symbols"]
+    assert universe["universe_selection_policy"] == "inception_locked_pit_category"
+    assert universe["universe_as_of"] == "2016-01-01"
+
+
+def test_gold_equity_dynamic_pit_universe_keeps_wide_backtest_window_candidates(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('510300', '沪深300ETF', '沪深300', DATE '2015-01-01', NULL, 'ETF'),
+            ('515300', '沪深300ETF新发', '沪深300', DATE '2020-01-01', NULL, 'ETF'),
+            ('518880', '黄金ETF', '黄金9999', DATE '2015-01-01', NULL, 'ETF')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2016-01-04', '510300'),
+            (TIMESTAMP '2020-01-02', '515300'),
+            (TIMESTAMP '2016-01-04', '518880')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_nav VALUES
+            ('510300', DATE '2016-01-04', 100000000.0, NULL),
+            ('515300', DATE '2020-01-02', 900000000.0, NULL),
+            ('518880', DATE '2016-01-04', 80000000.0, NULL)
+            """
+        )
+    finally:
+        conn.close()
+
+    universe = build_gold_equity_barbell_pit_universe(
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+        universe_start="2016-01-01",
+        universe_end="2025-12-31",
+    )
+
+    assert universe["risk_category_symbols"]["csi300"] == ["510300", "515300"]
+    assert universe["universe_selection_policy"] == "dynamic_pit_category_wide"
+    assert universe["universe_start"] == "2016-01-01"
+    assert universe["universe_end"] == "2025-12-31"
+
+
+def test_gold_equity_pit_universe_can_keep_primary_symbol_per_category(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('510300', '沪深300ETF小', '沪深300', DATE '2015-01-01', NULL, 'ETF'),
+            ('159919', '沪深300ETF大', '沪深300', DATE '2015-01-01', NULL, 'ETF'),
+            ('518880', '黄金ETF', '黄金9999', DATE '2015-01-01', NULL, 'ETF')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2015-12-29', '510300'),
+            (TIMESTAMP '2015-12-30', '510300'),
+            (TIMESTAMP '2015-12-29', '159919'),
+            (TIMESTAMP '2015-12-30', '159919'),
+            (TIMESTAMP '2015-12-29', '518880'),
+            (TIMESTAMP '2015-12-30', '518880')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_nav VALUES
+            ('510300', DATE '2015-12-30', 100000000.0, NULL),
+            ('159919', DATE '2015-12-30', 900000000.0, NULL),
+            ('518880', DATE '2015-12-30', 80000000.0, NULL)
+            """
+        )
+    finally:
+        conn.close()
+
+    universe = build_gold_equity_barbell_pit_universe(
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+        universe_as_of="2016-01-01",
+        min_history_days_as_of=1,
+        max_symbols_per_category=1,
+    )
+
+    assert universe["risk_category_symbols"]["csi300"] == ["159919"]
+    assert "510300" not in universe["symbols"]
+    assert universe["universe_selection_policy"] == "inception_locked_primary_per_category"
+    assert universe["universe_max_symbols_per_category"] == 1
+
+
+def test_gold_equity_etf_survivorship_audit_reports_metadata_gaps(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_survivorship_audit
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute("INSERT INTO cn_fund_instruments VALUES ('510300', '沪深300ETF', '沪深300', DATE '2015-01-01', NULL, 'ETF')")
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2020-01-02', '510300'),
+            (TIMESTAMP '2020-01-02', '160706')
+            """
+        )
+    finally:
+        conn.close()
+
+    audit = build_gold_equity_barbell_survivorship_audit(
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+    )
+
+    assert audit["kind"] == "etf_metadata_survivorship_audit"
+    assert audit["material"] is True
+    assert audit["bar_symbols_missing_fund_meta"] == 1
+    assert audit["fund_meta_delisted_symbols"] == 0
+    assert audit["bar_symbols_missing_fund_meta_sample"][0]["symbol"] == "160706"
+
+
+def test_strict_stage_uses_etf_survivorship_warning_copy():
+    tmp_path = _test_root()
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_hypothesis({
+            "hypothesis_id": "h1",
+            "strategy_id": "ashare_gold_equity_barbell_timing",
+            "title": "ETF Timing",
+            "status": "candidate",
+            "stage": "strict_backtest",
+            "source": "fixture",
+            "source_url": "https://example.test",
+            "thesis": "fixture",
+            "decision_reason": "",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "cagr": 0.1144,
+                        "max_drawdown_pct": -0.1968,
+                        "total_trades": 198,
+                    },
+                    "capacity": {"max_adv_participation": 0.02},
+                    "data_quality": {
+                        "survivorship_audit": {
+                            "kind": "etf_metadata_survivorship_audit",
+                            "material": True,
+                            "bar_symbols_missing_fund_meta": 13,
+                            "fund_meta_delisted_symbols": 0,
+                        }
+                    },
+                }
+            },
+        })
+        engine = ResearchEngine(config=ResearchConfig(), research_store=research_store)
+
+        verdict, conclusion = engine._attach_strict_backtest_conclusion("ashare_gold_equity_barbell_timing")
+
+        stages = research_store.list_hypotheses()[0]["metrics"]["research_stage_conclusions"]
+        scores = stages["strict_backtest"]["scores"]
+        assert verdict == "warn"
+        assert "ETF 日线中有 13 个 symbol 缺少基金元数据" in conclusion
+        assert "PIT ETF universe 和调仓日可见数据约束" in conclusion
+        assert "起点主代表 ETF universe" not in conclusion
+        assert "小市值 Top20" not in conclusion
+        assert scores["survivorship_audit_kind"] == "etf_metadata_survivorship_audit"
+        assert scores["bar_symbols_missing_fund_meta"] == 13
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 def test_evaluator_parses_extended_json_report():
@@ -690,6 +1209,69 @@ def test_research_engine_strict_stage_runs_without_fast_or_walkforward():
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "strict_backtest_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "fast_research_report.html").exists()
         assert (tmp_path / "research" / "reports" / "daily_momentum_breakout" / "walkforward_audit_report.html").exists()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_strict_stage_refreshes_existing_needs_more_validation_reason():
+    tmp_path = _test_root()
+
+    def record_backtest(sid, result, config, integrator, pool):
+        result.backtested += 1
+
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        research_store.upsert_candidate({
+            "id": "ashare_gold_equity_barbell_timing",
+            "name": "ETF Timing",
+            "status": "needs_more_validation",
+            "research_meta": {"needs_more_validation_reason": "old small cap reason"},
+        })
+        research_store.upsert_hypothesis({
+            "hypothesis_id": "h1",
+            "strategy_id": "ashare_gold_equity_barbell_timing",
+            "title": "ETF Timing",
+            "status": "needs_more_validation",
+            "stage": "rigor",
+            "source": "fixture",
+            "source_url": "https://example.test",
+            "thesis": "fixture",
+            "decision_reason": "",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "cagr": 0.1144,
+                        "max_drawdown_pct": -0.1968,
+                        "total_trades": 198,
+                    },
+                    "capacity": {"max_adv_participation": 0.02},
+                    "data_quality": {
+                        "survivorship_audit": {
+                            "kind": "etf_metadata_survivorship_audit",
+                            "material": True,
+                            "bar_symbols_missing_fund_meta": 13,
+                            "fund_meta_delisted_symbols": 0,
+                        }
+                    },
+                }
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "ashare_gold_equity_barbell_timing", "universe": ["510050"]}},
+        })
+        engine = ResearchEngine(
+            config=ResearchConfig(auto_backtest=True, rigor_enabled=True),
+            research_store=research_store,
+            backtest_fn=record_backtest,
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        engine.run_strict_backtest_stage(strategy_ids=["ashare_gold_equity_barbell_timing"])
+
+        candidate = research_store.get_candidate("ashare_gold_equity_barbell_timing")
+        reason = candidate["research_meta"]["needs_more_validation_reason"]
+        assert "ETF 日线中有 13 个 symbol 缺少基金元数据" in reason
+        assert "old small cap reason" not in reason
+        assert "起点主代表 ETF universe" not in reason
+        assert "小市值 Top20" not in reason
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -1311,14 +1893,14 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
         candidate = research_store.get_candidate("daily_momentum_breakout")
         hypothesis = research_store.list_hypotheses()[0]
         idea = research_store.list_ideas()[0]
-        assert result.rejected == 1
+        assert result.rejected == 0
         assert result.backtested == 1
-        assert candidate["status"] == "rejected"
-        assert not (tmp_path / "strategies" / "daily_momentum_breakout" / "strategy.py").exists()
-        assert (tmp_path / "rejected_strategy" / "daily_momentum_breakout" / "strategy.py").exists()
-        assert hypothesis["status"] == "rejected"
-        assert hypothesis["stage"] == "go_no_go"
-        assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
+        assert candidate["status"] == "needs_more_validation"
+        assert (tmp_path / "strategies" / "daily_momentum_breakout" / "strategy.py").exists()
+        assert not (tmp_path / "rejected_strategy" / "daily_momentum_breakout" / "strategy.py").exists()
+        assert hypothesis["status"] == "needs_more_validation"
+        assert hypothesis["stage"] == "rigor"
+        assert "strict Backtester 未返回结构化结果" in hypothesis["decision_reason"]
         walkforward = hypothesis["metrics"]["walkforward"]
         assert walkforward["aggregate_oos_sharpe"] == pytest.approx(-1.2)
         assert walkforward["worst_oos_sharpe"] == pytest.approx(-4.6)
@@ -1332,8 +1914,8 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
         assert stages["fast_research"]["verdict"] == "pass"
         assert stages["strict_backtest"]["verdict"] == "warn"
         assert stages["walkforward_strict_audit"]["verdict"] == "fail"
-        assert stages["final_decision"]["verdict"] == "fail"
-        assert idea["status"] == "rejected"
+        assert stages["final_decision"]["verdict"] == "warn"
+        assert idea["status"] != "rejected"
         assert any(entry.phase == "stage2_validation" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "info" for entry in result.log)
         assert any(entry.phase == "rigor" and entry.verdict == "fail" for entry in result.log)
@@ -1881,7 +2463,7 @@ def test_api_load_research_config_reads_feature_yaml():
     assert cfg.default_backtest_end == "2025-12-31"
     assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
-    assert cfg.rigor_config["thresholds"]["min_profitable_splits_pct"] == 0.55
+    assert cfg.production_gate_config["max_drawdown_cagr_10_15"] == 0.25
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
 
 
@@ -2598,7 +3180,5 @@ def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
 
     assert cfg.default_backtest_start == "2016-01-01"
     assert cfg.default_backtest_end == "2025-12-31"
-    assert cfg.production_gate_config["min_profitable_splits_pct"] == 0.55
-    assert cfg.rigor_config["thresholds"]["min_profitable_splits_pct"] == 0.55
-    assert cfg.rigor_config["thresholds"]["min_deflated_sharpe_ratio"] == 0.95
+    assert cfg.production_gate_config["max_drawdown_cagr_15_20"] == 0.30
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05

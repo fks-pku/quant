@@ -2,6 +2,7 @@ import pytest
 
 from quant.api.research_bp import _add_execution_liquidity_features
 from quant.features.backtest.order_executor import (
+    _execution_adv_quantity,
     _execution_adv_value,
     _execution_bar_volume,
     compute_execution_impact,
@@ -19,6 +20,18 @@ def test_cn_tushare_amount_turnover_is_normalized_to_cash_value():
 
     assert _execution_adv_value(bar, 15.16) == pytest.approx(227563714.5)
     assert _execution_bar_volume(bar, 15.16, "CN") == pytest.approx(14791100.0)
+
+
+def test_execution_adv_quantity_prefers_explicit_adv_volume():
+    bar = {"symbol": "000001", "volume": 100_000, "adv20_volume": 12_345, "adv20_value": 9_999_999}
+
+    assert _execution_adv_quantity(bar, 10.0) == pytest.approx(12_345)
+
+
+def test_execution_adv_quantity_falls_back_to_cash_adv():
+    bar = {"symbol": "000001", "adv20_value": 1_000_000}
+
+    assert _execution_adv_quantity(bar, 10.0) == pytest.approx(100_000)
 
 
 def test_cn_small_cap_impact_uses_normalized_turnover_units():
@@ -60,6 +73,22 @@ def test_research_liquidity_features_normalize_cn_turnover_units():
     enriched = _add_execution_liquidity_features(frame, {"enabled": True, "markets": ["CN"]})
 
     assert enriched.loc[1, "adv20_value"] == pytest.approx(10000.0)
+    assert enriched.loc[1, "adv20_volume"] == pytest.approx(1000.0)
+
+
+def test_research_liquidity_features_normalize_cn_volume_hands_to_shares():
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        [
+            {"timestamp": "2026-01-01", "symbol": "000001", "close": 10.0, "volume": 1000, "turnover": 1000.0},
+            {"timestamp": "2026-01-02", "symbol": "000001", "close": 10.0, "volume": 1000, "turnover": 1000.0},
+        ]
+    )
+
+    enriched = _add_execution_liquidity_features(frame, {"enabled": True, "markets": ["CN"]})
+
+    assert enriched.loc[1, "adv20_value"] == pytest.approx(1_000_000.0)
+    assert enriched.loc[1, "adv20_volume"] == pytest.approx(100_000.0)
 
 
 def test_research_liquidity_features_skip_when_execution_model_disabled():
@@ -74,4 +103,5 @@ def test_research_liquidity_features_skip_when_execution_model_disabled():
     enriched = _add_execution_liquidity_features(frame, None)
 
     assert "adv20_value" not in enriched.columns
+    assert "adv20_volume" not in enriched.columns
     assert "volatility20" not in enriched.columns

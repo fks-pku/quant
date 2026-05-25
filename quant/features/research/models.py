@@ -228,6 +228,9 @@ class PurgedWalkForwardResult:
     capacity_ok: bool = False
     regime_breakdown: Dict[str, Dict[str, float]] = field(default_factory=dict)
     bull_only_warning: bool = False
+    evaluated_splits: int = 0
+    no_trade_splits: int = 0
+    total_splits: int = 0
 
 
 @dataclass(frozen=True)

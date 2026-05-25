@@ -137,7 +137,7 @@ def test_risk_off_buys_gold_only():
     ]
 
 
-def test_pit_category_universe_uses_largest_as_of_size_before_momentum():
+def test_pit_category_universe_ranks_visible_wide_candidates_by_signal():
     strategy = AShareGoldEquityBarbellTimingStrategy(
         risk_category_symbols={
             "csi300": ["510300", "159919"],
@@ -160,18 +160,54 @@ def test_pit_category_universe_uses_largest_as_of_size_before_momentum():
     strategy.on_start(context)
 
     _feed(strategy, "000300", [10.0, 10.2, 10.4, 10.5, 10.7, 10.9, 11.1, 11.3])
-    _feed(strategy, "510300", [10.0, 10.1, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2], total_netasset=100_000_000_000)
-    _feed(strategy, "159919", [10.0, 10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1], total_netasset=None)
+    _feed(strategy, "510300", [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.1, 10.2], total_netasset=100_000_000_000)
+    _feed(strategy, "159919", [10.0, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2, 11.4], total_netasset=50_000_000_000)
     _feed(strategy, "510050", [10.0, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3], total_netasset=80_000_000_000)
     _feed(strategy, "518880", [5.0, 5.05, 5.1, 5.15, 5.2, 5.25, 5.3, 5.35], total_netasset=70_000_000_000)
 
     strategy.on_after_trading(context, date(2026, 5, 20))
 
+    assert "159919" in {order["symbol"] for order in context.orders}
+    assert "510300" not in {order["symbol"] for order in context.orders}
+
+
+def test_pit_category_universe_does_not_select_future_unlisted_symbol():
+    strategy = AShareGoldEquityBarbellTimingStrategy(
+        risk_category_symbols={"csi300": ["510300", "515300"]},
+        defensive_category_symbols={"gold": ["518880"]},
+        timing_symbol="000300",
+        momentum_lookback=6,
+        momentum_skip=1,
+        trend_window=5,
+        volatility_window=5,
+        liquidity_window=3,
+        min_avg_turnover=1000.0,
+        target_exposure=0.98,
+        risk_leg_weight=0.50,
+        holding_days=1,
+        require_pit_size=True,
+    )
+    context = _Context()
+    strategy.on_start(context)
+
+    _feed(strategy, "000300", [10.0, 10.2, 10.4, 10.5, 10.7, 10.9, 11.1, 11.3])
+    _feed(strategy, "510300", [10.0, 10.1, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2], total_netasset=100_000_000_000)
+    _feed(
+        strategy,
+        "515300",
+        [10.0, 10.4, 10.8, 11.2, 11.6, 12.0, 12.4, 12.8],
+        last_date=date(2026, 5, 19),
+        total_netasset=200_000_000_000,
+    )
+    _feed(strategy, "518880", [5.0, 5.05, 5.1, 5.15, 5.2, 5.25, 5.3, 5.35], total_netasset=70_000_000_000)
+
+    strategy.on_after_trading(context, date(2026, 5, 20))
+
     assert "510300" in {order["symbol"] for order in context.orders}
-    assert "159919" not in {order["symbol"] for order in context.orders}
+    assert "515300" not in {order["symbol"] for order in context.orders}
 
 
-def test_pit_defensive_category_uses_largest_gold_etf():
+def test_pit_defensive_category_ranks_visible_gold_candidates_by_signal():
     strategy = AShareGoldEquityBarbellTimingStrategy(
         risk_category_symbols={"csi300": ["510300"]},
         defensive_category_symbols={"gold": ["518800", "518880"]},
@@ -190,9 +226,9 @@ def test_pit_defensive_category_uses_largest_gold_etf():
 
     _feed(strategy, "000300", [10.0, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3])
     _feed(strategy, "510300", [10.0, 10.1, 10.2, 10.2, 10.3, 10.4, 10.5, 10.6], total_netasset=100_000_000_000)
-    _feed(strategy, "518800", [4.0, 4.05, 4.1, 4.15, 4.2, 4.25, 4.3, 4.35], total_netasset=120_000_000_000)
+    _feed(strategy, "518800", [4.0, 4.0, 4.0, 4.0, 4.01, 4.01, 4.01, 4.02], total_netasset=120_000_000_000)
     _feed(strategy, "518880", [5.0, 5.05, 5.1, 5.15, 5.2, 5.25, 5.3, 5.35], total_netasset=70_000_000_000)
 
     strategy.on_after_trading(context, date(2026, 5, 20))
 
-    assert context.orders[0]["symbol"] == "518800"
+    assert context.orders[0]["symbol"] == "518880"

@@ -89,8 +89,8 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
             "risk_off_count": 0,
             "last_risk_on": False,
             "last_selected": [],
-            "last_risk_category_representatives": {},
-            "last_defensive_category_representatives": {},
+            "last_risk_category_candidates": {},
+            "last_defensive_category_candidates": {},
             "entry_rejections": {},
         }
 
@@ -287,48 +287,44 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
     def _risk_candidate_symbols(self, trading_date: date) -> List[str]:
         if not self._risk_category_mode:
             return list(self.risk_symbols)
-        representatives = self._largest_symbols_by_category(
+        candidates = self._visible_symbols_by_category(
             self.risk_category_symbols,
             trading_date,
             "risk",
         )
-        self._diagnostics["last_risk_category_representatives"] = dict(representatives)
-        return list(representatives.values())
+        self._diagnostics["last_risk_category_candidates"] = {key: list(value) for key, value in candidates.items()}
+        return self._flatten_category_symbols(candidates)
 
     def _defensive_candidate_symbols(self, trading_date: date) -> List[str]:
         if not self._defensive_category_mode:
             return list(self.defensive_symbols)
-        representatives = self._largest_symbols_by_category(
+        candidates = self._visible_symbols_by_category(
             self.defensive_category_symbols,
             trading_date,
             "defensive",
         )
-        self._diagnostics["last_defensive_category_representatives"] = dict(representatives)
-        return list(representatives.values())
+        self._diagnostics["last_defensive_category_candidates"] = {key: list(value) for key, value in candidates.items()}
+        return self._flatten_category_symbols(candidates)
 
-    def _largest_symbols_by_category(
+    def _visible_symbols_by_category(
         self,
         category_symbols: Dict[str, List[str]],
         trading_date: date,
         bucket: str,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, List[str]]:
         selected = {}
         for category, symbols in category_symbols.items():
-            ranked = []
+            visible = []
             for symbol in symbols:
                 bar = self._get_last_bar(symbol)
                 if not bar or not self._is_current_bar(bar, trading_date):
                     self._count("entry_rejections", f"{bucket}_category_stale_or_missing_bar")
                     continue
-                size = self._pit_size(symbol, trading_date)
-                if size is None:
-                    if self.require_pit_size:
-                        self._count("entry_rejections", f"{bucket}_category_missing_pit_size")
-                        continue
-                    size = 0.0
-                ranked.append((size, symbol))
-            if ranked:
-                selected[str(category)] = sorted(ranked, key=lambda item: (-item[0], item[1]))[0][1]
+                if self.require_pit_size and self._pit_size(symbol, trading_date) is None:
+                    self._count("entry_rejections", f"{bucket}_category_missing_pit_size")
+                    continue
+                visible.append(str(symbol))
+            selected[str(category)] = list(dict.fromkeys(visible))
         return selected
 
     def _pit_size(self, symbol: str, trading_date: date) -> Optional[float]:

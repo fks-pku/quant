@@ -35,17 +35,6 @@ def _base_metrics():
                 "cost_drag_pct": 0.08,
             },
         },
-        "walkforward": {
-            "aggregate_oos_sharpe": 0.92,
-            "worst_oos_sharpe": 0.34,
-            "pct_profitable_splits": 0.62,
-            "deflated_sharpe_ratio": 0.96,
-            "capacity_ok": True,
-            "bull_only_warning": False,
-        },
-        "ensemble": {
-            "mean_correlation": 0.28,
-        },
     }
 
 
@@ -55,8 +44,9 @@ def test_production_gate_passes_professional_daily_strategy():
     assert gate["verdict"] == "pass"
     assert gate["status"] == "paper_trading_candidate"
     assert gate["failures"] == []
-    assert gate["thresholds"]["min_strict_sharpe"] == pytest.approx(0.8)
-    assert gate["metrics"]["strict_sharpe"] == pytest.approx(1.12)
+    assert gate["thresholds"]["max_drawdown_cagr_10_15"] == pytest.approx(0.25)
+    assert gate["metrics"]["strict_cagr"] == pytest.approx(0.13)
+    assert gate["metrics"]["max_adv_participation"] == pytest.approx(0.021)
 
 
 def test_production_gate_rejects_when_core_online_standards_fail():
@@ -67,42 +57,31 @@ def test_production_gate_rejects_when_core_online_standards_fail():
             "cagr": 0.02,
             "max_drawdown_pct": -0.34,
             "profit_factor": 1.08,
-            "total_trades": 24,
+            "total_trades": 50,
         }
     )
-    metrics["walkforward"].update(
-        {
-            "aggregate_oos_sharpe": 0.44,
-            "worst_oos_sharpe": -0.12,
-            "pct_profitable_splits": 0.48,
-            "capacity_ok": False,
-        }
-    )
-    metrics["ensemble"]["mean_correlation"] = 0.68
+    metrics["strict_backtest"]["capacity"]["max_adv_participation"] = 0.061
 
     gate = evaluate_production_readiness(metrics)
 
     assert gate["verdict"] == "fail"
     assert gate["status"] == "rejected"
-    assert "strict_sharpe=0.61 < 0.80" in gate["failures"]
     assert "strict_cagr=2.00% < 5.00%" in gate["failures"]
-    assert "strict_max_drawdown=34.00% > 25.00%" in gate["failures"]
-    assert "total_trades=24 < 50" in gate["failures"]
-    assert "aggregate_oos_sharpe=0.44 < 0.80" in gate["failures"]
-    assert "capacity_ok=False" in gate["failures"]
-    assert "mean_correlation=0.68 > 0.50" in gate["failures"]
+    assert "total_trades=50 <= 50" in gate["failures"]
+    assert "max_adv_participation=6.10% > 5.00%" in gate["failures"]
 
 
-def test_production_gate_warns_when_preferred_correlation_is_not_low():
+def test_production_gate_rejects_drawdown_by_cagr_tier():
     metrics = _base_metrics()
-    metrics["ensemble"]["mean_correlation"] = 0.38
+    metrics["strict_backtest"]["metrics"]["max_drawdown_pct"] = -0.26
 
     gate = evaluate_production_readiness(metrics)
 
-    assert gate["verdict"] == "warn"
-    assert gate["status"] == "needs_more_validation"
-    assert gate["failures"] == []
-    assert gate["warnings"] == ["mean_correlation=0.38 > preferred 0.30"]
+    assert gate["verdict"] == "fail"
+    assert gate["status"] == "rejected"
+    assert gate["failures"] == [
+        "strict_max_drawdown=26.00% > 25.00% for strict_cagr=13.00%"
+    ]
 
 
 def test_final_decision_attaches_production_gate_verdict(tmp_path):
@@ -131,13 +110,13 @@ def test_final_decision_attaches_production_gate_verdict(tmp_path):
     gate = final["scores"]["production_gate"]
     assert final["verdict"] == "pass"
     assert gate["verdict"] == "pass"
-    assert gate["thresholds"]["min_aggregate_oos_sharpe"] == pytest.approx(0.8)
+    assert gate["thresholds"]["max_adv_participation"] == pytest.approx(0.05)
 
 
 def test_final_decision_downgrades_candidate_when_production_gate_fails(tmp_path):
     metrics = _base_metrics()
-    metrics["strict_backtest"]["metrics"]["sharpe"] = 0.62
-    metrics["walkforward"]["aggregate_oos_sharpe"] = 0.49
+    metrics["strict_backtest"]["metrics"]["max_drawdown_pct"] = -0.28
+    metrics["strict_backtest"]["capacity"]["max_adv_participation"] = 0.06
     research_store = FileResearchStore(tmp_path / "research")
     research_store.upsert_hypothesis(
         {
@@ -163,6 +142,6 @@ def test_final_decision_downgrades_candidate_when_production_gate_fails(tmp_path
     assert final["verdict"] == "fail"
     assert "Production gate failed" in final["conclusion"]
     assert final["scores"]["production_gate"]["failures"] == [
-        "strict_sharpe=0.62 < 0.80",
-        "aggregate_oos_sharpe=0.49 < 0.80",
+        "strict_max_drawdown=28.00% > 25.00% for strict_cagr=13.00%",
+        "max_adv_participation=6.00% > 5.00%",
     ]

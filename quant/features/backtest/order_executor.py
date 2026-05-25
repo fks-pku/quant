@@ -122,6 +122,17 @@ def _execution_bar_volume(bar: "BacktestBar", price: float, market: str) -> floa
     return volume
 
 
+def _execution_adv_quantity(bar: "BacktestBar", price: float) -> float:
+    for key in ("adv20_volume", "adv_volume", "avg_volume_20", "volume20", "avg_daily_volume", "avg_volume"):
+        value = _safe_number(bar.get(key))
+        if value is not None:
+            return value
+    adv_value = _execution_adv_value(bar, price)
+    if adv_value > 0 and price > 0:
+        return adv_value / price
+    return 0.0
+
+
 def _model_slippage_bps(price: float, base_bps: float, market: str, model: Optional[Dict[str, Any]]) -> float:
     if not _cost_model_enabled(model, market):
         return base_bps
@@ -149,6 +160,9 @@ def _liquidity_quantity_cap(
     candidates = []
     if bar_volume > 0:
         candidates.append(bar_volume * participation_limit)
+    adv_quantity = _execution_adv_quantity(bar, fill_price)
+    if adv_quantity > 0:
+        candidates.append(adv_quantity * participation_limit)
     adv_value = _execution_adv_value(bar, fill_price)
     if adv_value > 0 and fill_price > 0:
         candidates.append(adv_value * participation_limit / fill_price)
@@ -291,6 +305,7 @@ def execute_order(
     enforce_limit_after_impact(order, fill_price, order_type)
 
     adv_value = _execution_adv_value(bar, fill_price)
+    adv_quantity = _execution_adv_quantity(bar, fill_price)
     observation = {
         "symbol": symbol,
         "side": order.side,
@@ -300,8 +315,10 @@ def execute_order(
         "notional": float(abs(quantity * fill_price)),
         "bar_volume": float(bar_volume or 0.0),
         "adv_value": float(adv_value or 0.0),
+        "adv_volume": float(adv_quantity or 0.0),
         "volume_participation": float(abs(quantity) / bar_volume) if bar_volume and bar_volume > 0 else 0.0,
         "adv_participation": float(abs(quantity * fill_price) / adv_value) if adv_value and adv_value > 0 else 0.0,
+        "adv_volume_participation": float(abs(quantity) / adv_quantity) if adv_quantity and adv_quantity > 0 else 0.0,
         "participation_limit": float(participation_limit or 0.0),
         "impact_bps": float(impact_bps or 0.0),
         "slippage_bps": float(effective_slippage_bps or 0.0),

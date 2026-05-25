@@ -129,6 +129,7 @@ def _make_backtest_fn():
                     start,
                     end,
                     formula_key=_candidate_formula_key(info),
+                    strategy_info=info,
                 )
         finally:
             db_provider.disconnect()
@@ -416,10 +417,16 @@ def _add_execution_liquidity_features(data_df, execution_cost_model):
         implied = turnover_close * turnover_volume
         ratio = implied / value.where(value > 0)
         tushare_amount_units = ratio.between(5.0, 20.0) | ratio.between(500.0, 2000.0)
+        tushare_volume_hands = ratio.between(5.0, 20.0)
         value = value.where(~tushare_amount_units, value * 1000.0)
         value = value.where(value > 0, implied)
+        share_volume = turnover_volume.where(~tushare_volume_hands, turnover_volume * 100.0)
     else:
         value = turnover_close * turnover_volume
+        share_volume = turnover_volume
+    frame["adv20_volume"] = share_volume.groupby(frame["symbol"]).transform(
+        lambda item: item.shift(1).rolling(20, min_periods=1).mean()
+    )
     frame["adv20_value"] = value.groupby(frame["symbol"]).transform(
         lambda item: item.shift(1).rolling(20, min_periods=1).mean()
     )
@@ -447,7 +454,7 @@ def _available_market_cap_columns(db_provider):
     return [column for column in sorted(columns) if column in wanted]
 
 
-def _cn_survivorship_audit(db_provider, start, end, formula_key=""):
+def _cn_survivorship_audit(db_provider, start, end, formula_key="", strategy_info=None):
     storage = getattr(db_provider, "storage", db_provider)
     conn = getattr(storage, "conn", None)
     audit = {
@@ -455,6 +462,16 @@ def _cn_survivorship_audit(db_provider, start, end, formula_key=""):
         "material": False,
         "formula_key": str(formula_key or ""),
     }
+    if str(formula_key or "") == "ashare_gold_equity_barbell_timing":
+        try:
+            from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_survivorship_audit
+
+            audit = build_gold_equity_barbell_survivorship_audit(start=start, end=end)
+            audit["formula_key"] = str(formula_key or "")
+            return audit
+        except Exception as exc:
+            audit["reason"] = f"ETF survivorship audit failed: {exc}"
+            return audit
     if conn is None:
         audit["reason"] = "DuckDB connection unavailable; survivorship audit not run."
         return audit
@@ -828,13 +845,40 @@ def _archived_candidate_info(sid, strategy_archive_dir=None):
             "execution_lag_days": 1,
             "universe": symbols,
             "timing_symbol": str(params.get("timing_symbol") or "000300"),
+            "fallback_symbol": "gold ETF category",
             "risk_category_symbols": params.get("risk_category_symbols") or {},
             "defensive_category_symbols": params.get("defensive_category_symbols") or {},
             "pit_universe_enabled": bool(params.get("pit_universe_enabled", False)),
-            "universe_construction": (
-                "Point-in-time ETF category universe: each category is represented by the ETF "
-                "with the largest available as-of fund size before applying timing and momentum rules."
+            "universe_selection_policy": str(
+                params.get("universe_selection_policy") or "dynamic_pit_category_wide"
             ),
+            "universe_as_of": str(params.get("universe_as_of") or ""),
+            "universe_start": str(params.get("universe_start") or ""),
+            "universe_end": str(params.get("universe_end") or ""),
+            "universe_min_history_days_as_of": int(params.get("universe_min_history_days_as_of") or 0),
+            "universe_max_symbols_per_category": int(params.get("universe_max_symbols_per_category") or 0),
+            "universe_construction": (
+                "Dynamic point-in-time ETF category universe: on each rebalance date, candidates are "
+                "the broad category ETFs with bars, PIT fund size, liquidity, and lookback data visible "
+                "by that date; holdings are then selected by the strategy signal from that visible universe."
+            ),
+            "strategy_logic": {
+                "core_idea": "黄金与 A 股大盘权益长期相关性较低；大盘趋势向上时保留权益暴露并配置黄金，趋势转弱时切到黄金防守。",
+                "universe": "动态 PIT ETF 类别宽池：每个调仓日只使用当时已有 bar、PIT 规模、流动性和足够 lookback 的类别 ETF，加黄金 ETF 防守腿。",
+                "entry_filters": [
+                    "候选 ETF 必须在调仓日已经有当日 bar，未来新发 ETF 不会进入过去的候选池",
+                    "调仓日必须有当日 bar",
+                    "必须有截至调仓日可见的 fund size / NAV 规模字段",
+                    "20 日均成交额不低于 min_avg_turnover",
+                ],
+                "ranking_rule": "不预先每类挑主代表；在调仓日可见的宽 ETF universe 中，用后复权动量 / 波动率打分选择权益腿；沪深300趋势和动量同时为正才 risk-on。",
+                "portfolio_construction": (
+                    "risk-on 时目标敞口按 risk_leg_weight 分给权益腿，其余给黄金腿；risk-off 时目标敞口全部由黄金腿承担。"
+                ),
+                "rebalance_rule": "每 holding_days 个交易日收盘后评估，订单按 execution_lag=1 在下一交易日执行。",
+                "exit_rule": "当 risk-off 或候选腿变化时卖出不在目标权重内的持仓；无有效候选时保持现金。",
+                "risk_budget": "回撤控制主要来自大盘趋势门控、黄金防守腿、流动性过滤、单笔 5% ADV 限制和 ETF 冲击成本模型。",
+            },
             "rebalance_frequency": f"{int(params.get('holding_days', 20) or 20)} trading days",
             "target_exposure": float(params.get("target_exposure", 1.0) or 1.0),
             "max_position_pct": 1.0,
@@ -863,7 +907,16 @@ def _archived_pit_universe_parameters(sid, params):
     if not bool(params.get("pit_universe_enabled", False)):
         return params, []
     try:
-        universe = _gold_equity_barbell_pit_universe()
+        configured_min_history = params.get("universe_min_history_days_as_of")
+        if configured_min_history is None:
+            configured_min_history = params.get("trend_window") if params.get("universe_as_of") else 0
+        universe = _gold_equity_barbell_pit_universe(
+            params.get("universe_as_of"),
+            configured_min_history or 0,
+            params.get("universe_max_symbols_per_category") or 0,
+            params.get("universe_start"),
+            params.get("universe_end"),
+        )
     except Exception:
         return params, []
     symbols = [str(symbol) for symbol in universe.get("symbols") or [] if _is_a_share_symbol(str(symbol))]
@@ -878,18 +931,42 @@ def _archived_pit_universe_parameters(sid, params):
     merged["timing_symbol"] = timing_symbol
     merged["require_pit_size"] = True
     merged.setdefault("pit_size_fields", ["total_netasset", "net_asset", "fund_size", "aum", "total_net_asset", "net_assets"])
+    merged["universe_selection_policy"] = universe.get("universe_selection_policy") or "dynamic_pit_category_wide"
+    merged["universe_as_of"] = universe.get("universe_as_of") or str(params.get("universe_as_of") or "")
+    merged["universe_start"] = universe.get("universe_start") or str(params.get("universe_start") or "")
+    merged["universe_end"] = universe.get("universe_end") or str(params.get("universe_end") or "")
+    merged["universe_min_history_days_as_of"] = int(universe.get("universe_min_history_days_as_of") or 0)
+    merged["universe_max_symbols_per_category"] = int(universe.get("universe_max_symbols_per_category") or 0)
     return merged, sorted(set(symbols))
 
 
-def _gold_equity_barbell_pit_universe():
-    cache_key = "default"
+def _gold_equity_barbell_pit_universe(
+    universe_as_of=None,
+    min_history_days_as_of=0,
+    max_symbols_per_category=0,
+    universe_start=None,
+    universe_end=None,
+):
+    cache_key = (
+        str(universe_as_of or ""),
+        int(min_history_days_as_of or 0),
+        int(max_symbols_per_category or 0),
+        str(universe_start or ""),
+        str(universe_end or ""),
+    )
     with _ARCHIVED_PIT_UNIVERSE_LOCK:
         cached = _ARCHIVED_PIT_UNIVERSE_CACHE.get(cache_key)
         if cached is not None:
             return copy.deepcopy(cached)
         from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
 
-        universe = build_gold_equity_barbell_pit_universe()
+        universe = build_gold_equity_barbell_pit_universe(
+            universe_as_of=universe_as_of,
+            min_history_days_as_of=int(min_history_days_as_of or 0),
+            max_symbols_per_category=int(max_symbols_per_category or 0),
+            universe_start=universe_start,
+            universe_end=universe_end,
+        )
         _ARCHIVED_PIT_UNIVERSE_CACHE[cache_key] = copy.deepcopy(universe)
         return copy.deepcopy(universe)
 
@@ -908,7 +985,7 @@ class _BarRecordBatch:
         return self.records[index]
 
 
-_STREAMING_PROVIDER_CACHE_VERSION = 2
+_STREAMING_PROVIDER_CACHE_VERSION = 3
 _STREAMING_PROVIDER_CACHE_MIN_SYMBOLS = 1000
 
 
@@ -2251,7 +2328,8 @@ def _persist_candidate_backtest(pool, sid, info, strict_report):
     if store is None or not hasattr(store, "upsert_candidate"):
         return
     try:
-        stored = store.get_candidate(sid) or dict(info or {"id": sid})
+        stored = dict(store.get_candidate(sid) or {})
+        stored.update(dict(info or {"id": sid}))
         stored["backtest"] = strict_report
         meta = stored.setdefault("research_meta", {})
         meta["backtest_result"] = strict_report
@@ -2493,7 +2571,7 @@ def _trade_date(trade):
 
 
 def _average_daily_volume(data_df, symbol, trade_date=None) -> float:
-    if data_df is None or not hasattr(data_df, "empty") or data_df.empty or "volume" not in data_df.columns:
+    if data_df is None or not hasattr(data_df, "empty") or data_df.empty:
         return 0.0
     try:
         import pandas as pd
@@ -2516,11 +2594,27 @@ def _average_daily_volume(data_df, symbol, trade_date=None) -> float:
                 dated_days = dated[date_col].dt.normalize()
                 exact = dated[dated_days == trade_ts]
                 if not exact.empty:
-                    return float(exact["volume"].mean())
+                    return _preferred_average_volume(exact)
                 prior = dated[dated[date_col] <= pd.Timestamp(trade_date)].tail(63)
                 if not prior.empty:
-                    return float(prior["volume"].median())
-            return float(dated.tail(63)["volume"].median())
+                    return _preferred_average_volume(prior, prefer_last=True)
+            return _preferred_average_volume(dated.tail(63), prefer_last=True)
+        return _median_volume(data)
+    except Exception:
+        return 0.0
+
+
+def _preferred_average_volume(data, prefer_last=False) -> float:
+    try:
+        import pandas as pd
+
+        for column in ("adv20_volume", "adv_volume", "avg_volume_20", "volume20", "avg_daily_volume", "avg_volume"):
+            if column not in data.columns:
+                continue
+            series = pd.to_numeric(data[column], errors="coerce")
+            positive = series[series > 0]
+            if not positive.empty:
+                return float(positive.iloc[-1] if prefer_last else positive.mean())
         return _median_volume(data)
     except Exception:
         return 0.0
@@ -2528,9 +2622,28 @@ def _average_daily_volume(data_df, symbol, trade_date=None) -> float:
 
 def _median_volume(data) -> float:
     try:
-        return float(data["volume"].median())
+        volume = _normalized_volume_series(data)
+        if volume is None:
+            return 0.0
+        return float(volume.median())
     except Exception:
         return 0.0
+
+
+def _normalized_volume_series(data):
+    if "volume" not in data.columns:
+        return None
+    import pandas as pd
+
+    volume_source = data["raw_volume"] if "raw_volume" in data.columns else data["volume"]
+    volume = pd.to_numeric(volume_source, errors="coerce")
+    price_column = "raw_close" if "raw_close" in data.columns else "close" if "close" in data.columns else None
+    if "turnover" in data.columns and price_column is not None:
+        price = pd.to_numeric(data[price_column], errors="coerce")
+        turnover = pd.to_numeric(data["turnover"], errors="coerce")
+        ratio = price * volume / turnover.where(turnover > 0)
+        volume = volume.where(~ratio.between(5.0, 20.0), volume * 100.0)
+    return volume[volume > 0]
 
 
 def _safe_float(value) -> float:

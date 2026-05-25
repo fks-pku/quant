@@ -1,5 +1,7 @@
 """Invariant tests for strategies module — Registry, Strategy base, _adj."""
-from datetime import date
+from __future__ import annotations
+
+from datetime import date, timedelta
 import json
 import math
 from pathlib import Path
@@ -17,6 +19,9 @@ from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy 
 )
 from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
 from quant.features.strategies.registry import StrategyRegistry, strategy
+from quant.features.rejected_strategy.ashare_gold_equity_barbell_timing.strategy import (
+    AShareGoldEquityBarbellTimingStrategy,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +353,132 @@ class TestCase6TopLevelStrategyPromotionGate:
                 violations.append((item.name, cagr))
 
         assert violations == []
+
+
+# ---------------------------------------------------------------------------
+# CASE-7: PIT wide universe candidate selection
+# ---------------------------------------------------------------------------
+
+
+class TestCase7PitWideUniverseCandidateSelection:
+    def test_s7_01_visible_candidates_are_ranked_by_signal_not_preselected_by_size(self):
+        strategy = AShareGoldEquityBarbellTimingStrategy(
+            risk_category_symbols={"csi300": ["510300", "159919"]},
+            defensive_category_symbols={"gold": ["518880"]},
+            timing_symbol="000300",
+            momentum_lookback=6,
+            momentum_skip=1,
+            trend_window=5,
+            volatility_window=5,
+            liquidity_window=3,
+            min_avg_turnover=1000.0,
+            target_exposure=0.98,
+            risk_leg_weight=0.50,
+            holding_days=1,
+            require_pit_size=True,
+        )
+        context = _InvariantContext()
+        strategy.on_start(context)
+
+        _feed_pit_barbell(strategy, "000300", [10.0, 10.2, 10.4, 10.5, 10.7, 10.9, 11.1, 11.3])
+        _feed_pit_barbell(strategy, "510300", [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.1, 10.2], total_netasset=100_000_000_000)
+        _feed_pit_barbell(strategy, "159919", [10.0, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2, 11.4], total_netasset=50_000_000_000)
+        _feed_pit_barbell(strategy, "518880", [5.0, 5.05, 5.1, 5.15, 5.2, 5.25, 5.3, 5.35], total_netasset=70_000_000_000)
+
+        strategy.on_after_trading(context, date(2026, 5, 20))
+
+        ordered = {order["symbol"] for order in context.orders}
+        assert "159919" in ordered
+        assert "510300" not in ordered
+
+    def test_s7_02_future_unlisted_symbol_is_not_visible_before_current_bar_exists(self):
+        strategy = AShareGoldEquityBarbellTimingStrategy(
+            risk_category_symbols={"csi300": ["510300", "515300"]},
+            defensive_category_symbols={"gold": ["518880"]},
+            timing_symbol="000300",
+            momentum_lookback=6,
+            momentum_skip=1,
+            trend_window=5,
+            volatility_window=5,
+            liquidity_window=3,
+            min_avg_turnover=1000.0,
+            target_exposure=0.98,
+            risk_leg_weight=0.50,
+            holding_days=1,
+            require_pit_size=True,
+        )
+        context = _InvariantContext()
+        strategy.on_start(context)
+
+        _feed_pit_barbell(strategy, "000300", [10.0, 10.2, 10.4, 10.5, 10.7, 10.9, 11.1, 11.3])
+        _feed_pit_barbell(strategy, "510300", [10.0, 10.1, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2], total_netasset=100_000_000_000)
+        _feed_pit_barbell(
+            strategy,
+            "515300",
+            [10.0, 10.4, 10.8, 11.2, 11.6, 12.0, 12.4, 12.8],
+            last_date=date(2026, 5, 19),
+            total_netasset=200_000_000_000,
+        )
+        _feed_pit_barbell(strategy, "518880", [5.0, 5.05, 5.1, 5.15, 5.2, 5.25, 5.3, 5.35], total_netasset=70_000_000_000)
+
+        strategy.on_after_trading(context, date(2026, 5, 20))
+
+        ordered = {order["symbol"] for order in context.orders}
+        assert "510300" in ordered
+        assert "515300" not in ordered
+
+
+class _InvariantPortfolio:
+    nav = 100000.0
+
+
+class _InvariantContext:
+    def __init__(self):
+        self.portfolio = _InvariantPortfolio()
+        self.orders = []
+
+    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+        self.orders.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "side": side,
+                "order_type": order_type,
+                "price": price,
+                "strategy_name": strategy_name,
+            }
+        )
+        return f"order-{len(self.orders)}"
+
+
+def _feed_pit_barbell(
+    strategy,
+    symbol,
+    closes,
+    *,
+    last_date=date(2026, 5, 20),
+    turnover=50000000.0,
+    volume=100000,
+    total_netasset=None,
+):
+    first_date = last_date - timedelta(days=len(closes) - 1)
+    for index, close in enumerate(closes):
+        strategy.on_data(
+            None,
+            {
+                "symbol": symbol,
+                "timestamp": first_date + timedelta(days=index),
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "adj_close": close,
+                "adj_factor": 1.0,
+                "volume": volume,
+                "turnover": turnover,
+                "total_netasset": total_netasset,
+            },
+        )
 
 
 def _strict_report_cagr(reports_root: Path, strategy_id: str) -> float | None:

@@ -1002,6 +1002,46 @@ C17-04  diag.fill_count == 1
 
 ---
 
+## CASE-17A: ADV 单笔订单上限 (ADV Order Participation Limit)
+
+验证订单量超过 20 日 ADV 的 5% 时被截断；当行情携带 `adv20_volume` 时，回测执行层必须优先使用 ADV 股数口径，而不是只看当天成交量。
+
+### 配置 (零摩擦 US + execution_cost_model)
+
+`max_participation_rate = 0.05`
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume    | adv20_volume |
+| ---------- | --- | ----- | ----- | --------- | ------------ |
+| 2024-06-03 | D0  | 100.0 | 102.0 | 1,000,000 | 200          |
+| 2024-06-04 | D1  | 105.0 | 106.0 | 1,000,000 | 200          |
+
+### 信号
+
+D0: BUY 500 AAPL → D1 执行
+
+### 推导
+
+```
+D1 Step4 execute_order:
+  adv20_volume = 200, quantity = 500
+  500 > 200 * 0.05 = 10 → max_qty = 10
+  quantity = 10, diag.volume_limited_trades += 1
+  execution_observations[0].adv_volume_participation <= 0.05
+```
+
+### 断言
+
+```
+C17A-01  diag.volume_limited_trades >= 1
+C17A-02  trades[0].quantity == 10 (ADV 5% 截断)
+C17A-03  execution_observations[0].adv_volume == 200
+C17A-04  execution_observations[0].adv_volume_participation <= 0.05
+```
+
+---
+
 ## CASE-18: 价格偏离拒绝 (Price Deviation)
 
 验证执行价与风控检查价偏差 >15% 时拒绝。
