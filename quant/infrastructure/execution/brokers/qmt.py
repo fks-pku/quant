@@ -128,9 +128,10 @@ class QMTBroker(BrokerAdapter):
         if self._trade_mode == "REAL" and self._password:
             self._unlock_trade()
 
-        self._connected = True
-        self._refresh_account()
-        self._refresh_positions()
+        with self._lock:
+            self._connected = True
+            self._refresh_account()
+            self._refresh_positions()
         self.logger.info(f"QMT broker connected (account={self._account}, mode={self._trade_mode})")
 
     def _import_xtquant(self) -> None:
@@ -202,7 +203,7 @@ class QMTBroker(BrokerAdapter):
                 order.remark if hasattr(order, 'remark') else "",
             )
 
-            if result is None or (isinstance(result, int) and result != 0):
+            if result is None or not isinstance(result, int) or result <= 0:
                 raise RuntimeError(
                     f"QMT order_stock failed for {order.symbol}: result={result}"
                 )
