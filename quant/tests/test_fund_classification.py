@@ -3,7 +3,9 @@ from quant.infrastructure.research.cn_etf_universe import classify_gold_equity_b
 
 
 def test_fund_classification_maps_core_rotation_categories():
-    assert classify_cn_fund({"name": "沪深300ETF", "index_code": "000300.SH"}).fund_category == "equity_cn_broad_csi300"
+    classification = classify_cn_fund({"name": "沪深300ETF", "index_code": "000300.SH"})
+    assert classification.fund_category == "equity_cn_broad_csi300"
+    assert classification.classification_version == "cn_fund_taxonomy_v1"
     assert classify_cn_fund({"name": "创业板50ETF", "index_name": "创业板50指数"}).category_group == "chinext50"
     assert classify_cn_fund({"name": "黄金ETF", "index_name": "黄金9999"}).fund_category == "commodity_gold"
     assert classify_cn_fund({"name": "红利ETF", "index_code": "000922.CSI"}).category_group == "dividend"
@@ -20,7 +22,7 @@ def test_fund_classification_excludes_enhanced_and_feeder_from_core_groups():
     assert classify_gold_equity_barbell_category("沪深300ETF", "沪深300指数") == "csi300"
 
 
-def test_fund_classification_uses_tushare_benchmark_category_for_unknown_index():
+def test_fund_classification_does_not_use_unavailable_benchmark_category_for_unknown_index():
     classification = classify_cn_fund(
         {
             "name": "核心宽基ETF",
@@ -32,14 +34,12 @@ def test_fund_classification_uses_tushare_benchmark_category_for_unknown_index()
         }
     )
 
-    assert classification.classification_source == "mkt_idx_bmk"
-    assert classification.fund_strategy == "broad"
-    assert classification.fund_category == "equity_cn_broad_index"
-    assert classification.category_group == "broad_index"
-    assert classification.classification_confidence == 0.95
+    assert classification.classification_source == "metadata_rules"
+    assert classification.fund_category == "equity_cn_other"
+    assert classification.category_group == "equity_cn_other"
 
 
-def test_fund_classification_uses_tushare_benchmark_asset_class_before_equity_fallback():
+def test_fund_classification_uses_metadata_tokens_for_bond_fallback():
     classification = classify_cn_fund(
         {
             "name": "核心固收ETF",
@@ -50,7 +50,7 @@ def test_fund_classification_uses_tushare_benchmark_asset_class_before_equity_fa
         }
     )
 
-    assert classification.classification_source == "mkt_idx_bmk"
+    assert classification.classification_source == "metadata_rules"
     assert classification.asset_class == "bond"
     assert classification.fund_category == "bond_credit_or_aggregate"
     assert classification.category_group == "bond"

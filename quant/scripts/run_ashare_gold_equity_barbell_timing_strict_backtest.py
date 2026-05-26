@@ -161,6 +161,8 @@ def main() -> None:
             "risk_category_symbols": scenario["risk_category_symbols"],
             "defensive_category_symbols": scenario["defensive_category_symbols"],
             "timing_symbol": scenario["timing_symbol"],
+            "registered_universe_counts": scenario.get("registered_universe_counts", {}),
+            "universe_registry_version": scenario.get("universe_registry_version", "audited_stable_etf_registry_v1"),
             "sharpe": metrics.get("sharpe"),
             "cagr": metrics.get("cagr"),
             "total_return": metrics.get("total_return"),
@@ -194,6 +196,8 @@ def _with_pit_universe(scenario: Dict[str, Any], universe: Dict[str, Any]) -> Di
             ]
         )
     )
+    result["registered_universe_counts"] = dict(universe.get("registered_universe_counts") or {})
+    result["universe_registry_version"] = universe.get("universe_registry_version") or "audited_stable_etf_registry_v1"
     return result
 
 
@@ -202,7 +206,7 @@ def _validate_pit_universe(universe: Dict[str, Any]) -> None:
     defensive = universe.get("defensive_category_symbols") or {}
     missing = [key for key, values in {**risk, **defensive}.items() if not values]
     if missing:
-        raise RuntimeError(f"PIT ETF universe missing required categories: {', '.join(missing)}")
+        raise RuntimeError(f"Audited ETF registry universe missing required categories: {', '.join(missing)}")
 
 
 def _load_shared_inputs(symbols: List[str]) -> Tuple[Dict[str, int], BenchmarkProvider, Dict[str, Any], Dict[str, Any]]:
@@ -373,7 +377,11 @@ def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict
                 "risk_category_symbols": best.get("risk_category_symbols", {}),
                 "defensive_category_symbols": best.get("defensive_category_symbols", {}),
                 "timing_symbol": best.get("timing_symbol", "000300"),
-                "universe_construction": "point-in-time ETF category universe; each category representative is the largest ETF by as-of total_netasset/net_asset before momentum scoring",
+                "pit_universe_enabled": True,
+                "universe_selection_policy": "audited_stable_etf_registry",
+                "universe_registry_version": best.get("universe_registry_version", "audited_stable_etf_registry_v1"),
+                "registered_universe_counts": best.get("registered_universe_counts", {}),
+                "universe_construction": "audited stable ETF registry; each category can only use user-approved representative ETFs and new categories require explicit registration",
                 "goal": {"cagr_gt": 0.10, "max_drawdown_gte": -0.30},
             }
         },
@@ -416,11 +424,20 @@ def _pit_universe_table(universe: Dict[str, Any]) -> str:
             f"<td>{escape(str(category))}</td>"
             f"<td>{len(symbols)}</td>"
             f"<td>{escape(sample)}</td>"
-            "<td>按每个调仓日 as-of total_netasset/net_asset 选当时规模最大的 ETF；缺规模数据不入选。</td>"
+            "<td>只允许用户审计注册的稳定代表 ETF；调仓日缺 bar/NAV/规模/流动性/lookback 不入选。</td>"
             "</tr>"
         )
+    counts = universe.get("registered_universe_counts") or {}
+    rows.append(
+        "<tr>"
+        "<td>registry_quality</td>"
+        f"<td>{int(counts.get('active_symbol_count') or 0)} active / {int(counts.get('registered_symbol_count') or 0)} registered</td>"
+        f"<td>missing_data={int(counts.get('missing_data_count') or 0)}</td>"
+        "<td>候选类别来自 audited_stable_etf_registry；新增 ETF 类别必须经人工审计后注册。</td>"
+        "</tr>"
+    )
     return (
-        "<h3>PIT ETF Universe</h3><div class=\"table-wrap\"><table>"
+        "<h3>Audited Stable ETF Universe</h3><div class=\"table-wrap\"><table>"
         "<thead><tr><th>类别</th><th>候选数</th><th>样例</th><th>选择规则</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )

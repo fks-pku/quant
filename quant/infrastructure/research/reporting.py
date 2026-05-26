@@ -734,26 +734,44 @@ def _universe_bias_observation(row: Dict[str, Any]) -> str:
         min_history = spec.get("universe_min_history_days_as_of")
         category_cap = spec.get("universe_max_symbols_per_category")
         universe = spec.get("universe")
+        counts = spec.get("registered_universe_counts") or {}
+        quality_note = ""
+        if counts:
+            quality_note = (
+                f"; 注册池 active={int(counts.get('active_symbol_count') or 0)}"
+                f"/registered={int(counts.get('registered_symbol_count') or 0)}"
+                f"/missing_data={int(counts.get('missing_data_count') or 0)}"
+            )
+        if policy == "audited_stable_etf_registry":
+            return (
+                f"{_compact_universe_text(universe)}; 已审计稳定 ETF 注册池; "
+                f"新增 ETF 类别必须人工审计注册; 每类最多={category_cap or '不限'}{quality_note}"
+            )
         if policy == "dynamic_pit_category_wide":
             window = f"{start or '未记录'}~{end or '未记录'}"
             return (
                 f"{_compact_universe_text(universe)}; 动态PIT类别宽池; "
-                f"回测窗口={window}; 每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤; 每类最多={category_cap or '不限'}"
+                f"回测窗口={window}; 每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤; 每类最多={category_cap or '不限'}{quality_note}"
             )
         return (
             f"{_compact_universe_text(universe)}; PIT类别池已锁定 as-of={as_of}; "
-            f"起点前最少历史={min_history or 0}日; 每类最多={category_cap or '不限'}"
+            f"起点前最少历史={min_history or 0}日; 每类最多={category_cap or '不限'}{quality_note}"
         )
     return _compact_universe_text(spec.get("universe"))
 
 
 def _universe_bias_recommendation(spec: Dict[str, Any]) -> str:
     if spec.get("pit_universe_enabled") or spec.get("risk_category_symbols"):
+        counts = spec.get("registered_universe_counts") or {}
+        missing = int(counts.get("missing_data_count") or 0) if counts else 0
+        quality_tail = "；注册 ETF 缺少数据时必须保留为 warning/fail。" if missing else ""
+        if str(spec.get("universe_selection_policy") or "") == "audited_stable_etf_registry":
+            return "候选池采用人工审计注册的稳定 ETF 代表池；不会从当前全市场 ETF 分类自动扩展历史候选，新增类别必须先注册并审计。" + quality_tail
         if str(spec.get("universe_selection_policy") or "") == "dynamic_pit_category_wide":
-            return "候选池采用每个调仓点当时可见的宽 ETF universe；未来新发 ETF 只在上市并满足当日数据/规模/流动性/lookback 后进入，持仓由信号从宽池中选择。剩余风险取决于底层元数据是否覆盖清盘 ETF。"
+            return "候选池采用每个调仓点当时可见的宽 ETF universe；未来新发 ETF 只在上市并满足当日数据/规模/流动性/lookback 后进入，持仓由信号从宽池中选择。剩余风险取决于底层元数据是否覆盖清盘 ETF。" + quality_tail
         if int(spec.get("universe_max_symbols_per_category") or 0) == 1:
-            return "已避免未来新发 ETF 进入历史候选池，并且每类只保留起点主代表以减少幸存池择优；剩余风险取决于底层元数据是否覆盖清盘 ETF。"
-        return "已避免未来新发 ETF 进入历史候选池；剩余风险是数据源缺少已清盘/退市 ETF 时仍会有 survivorship bias。"
+            return "已避免未来新发 ETF 进入历史候选池，并且每类只保留起点主代表以减少幸存池择优；剩余风险取决于底层元数据是否覆盖清盘 ETF。" + quality_tail
+        return "已避免未来新发 ETF 进入历史候选池；剩余风险是数据源缺少已清盘/退市 ETF 时仍会有 survivorship bias。" + quality_tail
     return "需要确认 ETF/LOF 池是否按历史可得规则冻结，而不是用当前存续名单回溯。"
 
 
@@ -2406,7 +2424,11 @@ def _data_quality_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]
             ("bar_symbols_missing_fund_meta", str(audit.get("bar_symbols_missing_fund_meta") or 0), "有 ETF/LOF 日线但缺少基金元数据的 symbol 数"),
             ("fund_bar_symbols_with_non_etf_metadata", str(audit.get("fund_bar_symbols_with_non_etf_metadata") or 0), "ETF/LOF 日线表中元数据标记为非 ETF 的 symbol 数"),
             ("fund_meta_delisted_symbols", str(audit.get("fund_meta_delisted_symbols") or 0), "基金元数据中带 delist_date 的 ETF 数"),
-            ("bar_symbols_missing_fund_meta_sample", sample_text or "-", "样例 bar-only symbol；无法分类时不进入策略候选池"),
+            ("universe_registry_version", str(audit.get("universe_registry_version") or "-"), "ETF 类别注册表版本；新增类别必须人工审计注册"),
+            ("registered_universe_symbol_count", str(audit.get("registered_universe_symbol_count") or 0), "本策略注册 ETF 代表池 symbol 数"),
+            ("registered_universe_symbols_with_bars", str(audit.get("registered_universe_symbols_with_bars") or 0), "回测窗口内有日线数据的注册 ETF 数"),
+            ("registered_universe_missing_bar_count", str(audit.get("registered_universe_missing_bar_count") or 0), "注册 ETF 中缺少回测窗口日线的 symbol 数"),
+            ("bar_symbols_missing_fund_meta_sample", sample_text or "-", "样例 bar-only symbol；不会自动扩入注册策略候选池"),
         ]
         body = "".join(
             f"<tr><td>{escape(item)}</td><td>{escape(value)}</td><td>{escape(_cell(note))}</td></tr>"
@@ -3021,15 +3043,28 @@ def _universe_summary(row: Dict[str, Any]) -> str:
         min_history = spec.get("universe_min_history_days_as_of") or 0
         category_cap = spec.get("universe_max_symbols_per_category") or "不限"
         policy = str(spec.get("universe_selection_policy") or "pit_category")
+        counts = spec.get("registered_universe_counts") or {}
+        quality_text = ""
+        if counts:
+            quality_text = (
+                f"，注册池 active={int(counts.get('active_symbol_count') or 0)}"
+                f"/registered={int(counts.get('registered_symbol_count') or 0)}"
+                f"/missing_data={int(counts.get('missing_data_count') or 0)}"
+            )
+        if policy == "audited_stable_etf_registry":
+            return (
+                f"已审计稳定 ETF 注册池（策略={policy}，新增类别必须人工审计注册，"
+                f"每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{quality_text}{suffix}）"
+            )
         if policy == "dynamic_pit_category_wide":
             window = f"{start or '未记录'}~{end or '未记录'}"
             return (
                 f"动态 PIT ETF 类别宽 universe（策略={policy}，窗口={window}，"
-                f"每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤，每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{suffix}）"
+                f"每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤，每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{quality_text}{suffix}）"
             )
         return (
             f"PIT ETF 类别 universe（策略={policy}，as-of={as_of}，"
-            f"起点前最少历史={min_history}日，每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{suffix}）"
+            f"起点前最少历史={min_history}日，每类最多={category_cap}，解析 {size or len(spec_universe)} 个 symbol{actual}{quality_text}{suffix}）"
         )
     if size and (size > 20 or size > len(spec_universe)):
         sample_text = ", ".join(str(symbol) for symbol in sample[:8])

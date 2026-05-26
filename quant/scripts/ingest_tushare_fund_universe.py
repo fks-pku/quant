@@ -17,7 +17,6 @@ from quant.infrastructure.data.storage_duckdb import (
     DuckDBStorage,
     _CN_DAILY_TABLE,
     _ETF_SCHEMA,
-    _FUND_ETF_SHARE_SIZE_TABLE,
     _FUND_NAV_SCHEMA,
     _FUND_NAV_TABLE,
 )
@@ -213,25 +212,6 @@ def _nav_coverage(storage: DuckDBStorage, symbol: str) -> Optional[Dict[str, obj
     return {"start": row[0], "end": row[1], "rows": int(row[2])}
 
 
-def _share_size_coverage(storage: DuckDBStorage, symbol: str) -> Optional[Dict[str, object]]:
-    if not storage._ensure_sidecar_attached(_FUND_NAV_SCHEMA, storage._fund_nav_db_path):
-        return None
-    table_name = f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}"
-    if not storage._table_exists(table_name):
-        return None
-    row = storage.conn.execute(
-        f"""
-        SELECT MIN(trade_date), MAX(trade_date), COUNT(*)
-        FROM {table_name}
-        WHERE symbol = ?
-        """,
-        [symbol],
-    ).fetchone()
-    if row is None or row[2] == 0:
-        return None
-    return {"start": row[0], "end": row[1], "rows": int(row[2])}
-
-
 def _coverage_covers(coverage: Optional[Dict[str, object]], start: datetime, end: datetime) -> bool:
     if not coverage:
         return False
@@ -254,17 +234,13 @@ def ingest_symbol(
     end: datetime,
     resume: bool,
     skip_nav: bool,
-    fetch_share_size: bool,
 ) -> Dict[str, object]:
     bar_cov = _bar_coverage(storage, symbol)
     nav_cov = None if skip_nav else _nav_coverage(storage, symbol)
-    share_size_cov = _share_size_coverage(storage, symbol) if fetch_share_size else None
     bars_skipped = resume and _coverage_covers(bar_cov, start, end)
     nav_skipped = skip_nav or (resume and _coverage_covers(nav_cov, start, end))
-    share_size_skipped = (not fetch_share_size) or (resume and _coverage_covers(share_size_cov, start, end))
     bars_saved = 0
     nav_saved = 0
-    share_size_saved = 0
 
     if not bars_skipped:
         bars = provider.fetch_daily_with_hfq(symbol, start, end)
@@ -274,19 +250,13 @@ def ingest_symbol(
         nav = provider.fetch_fund_nav(symbol, start, end)
         if not nav.empty:
             nav_saved = storage.save_cn_fund_nav(nav)
-    if not share_size_skipped:
-        share_size = provider.fetch_etf_share_size(symbol, start, end)
-        if not share_size.empty:
-            share_size_saved = storage.save_cn_etf_share_size(share_size)
 
     return {
         "symbol": symbol,
         "bars_saved": bars_saved,
         "nav_saved": nav_saved,
-        "share_size_saved": share_size_saved,
         "bars_skipped": bars_skipped,
         "nav_skipped": nav_skipped,
-        "share_size_skipped": share_size_skipped,
     }
 
 
@@ -362,8 +332,6 @@ def main() -> None:
     parser.add_argument("--no-resume", action="store_true", help="Refetch symbols even if local coverage reaches --end")
     parser.add_argument("--metadata-only", action="store_true", help="Only refresh fund metadata and research state")
     parser.add_argument("--skip-nav", action="store_true", help="Do not fetch fund_nav")
-    parser.add_argument("--fetch-share-size", action="store_true", help="Fetch Tushare etf_share_size into the fund NAV sidecar")
-    parser.add_argument("--include-benchmark-indices", action="store_true", help="Refresh Tushare mkt_idx_bmk ETF benchmark index library")
     parser.add_argument("--update-research-state", action="store_true", help="Register the selected universe for research reports")
     parser.add_argument("--source-url", default=DEFAULT_SOURCE_URL, help="Source URL stored in research metadata")
     args = parser.parse_args()
@@ -384,10 +352,6 @@ def main() -> None:
         metadata = fetch_fund_metadata(provider, metadata_statuses)
         if not metadata.empty:
             storage.save_cn_fund_instruments(metadata)
-        if args.include_benchmark_indices:
-            benchmark_indices = provider.fetch_etf_benchmark_indices()
-            if not benchmark_indices.empty:
-                storage.save_cn_etf_benchmark_indices(benchmark_indices)
         explicit = _normalize_symbols([*_parse_symbols(args.symbols), *_load_symbol_file(args.symbol_file)])
         if explicit:
             symbols = _normalize_symbols([*explicit, args.cash_symbol])
@@ -429,9 +393,8 @@ def main() -> None:
                     end,
                     resume=not args.no_resume,
                     skip_nav=args.skip_nav,
-                    fetch_share_size=args.fetch_share_size,
                 )
-                if result["bars_skipped"] and result["nav_skipped"] and result["share_size_skipped"]:
+                if result["bars_skipped"] and result["nav_skipped"]:
                     skipped += 1
                 else:
                     done += 1
@@ -440,8 +403,7 @@ def main() -> None:
                 remaining = (len(symbols) - index) / rate if rate > 0 else 0.0
                 logger.info(
                     f"[{index}/{len(symbols)}] {symbol}: bars={result['bars_saved']} "
-                    f"nav={result['nav_saved']} share_size={result['share_size_saved']} "
-                    f"skipped=({result['bars_skipped']},{result['nav_skipped']},{result['share_size_skipped']}) "
+                    f"nav={result['nav_saved']} skipped=({result['bars_skipped']},{result['nav_skipped']}) "
                     f"eta={remaining / 60:.1f}m"
                 )
             except Exception as exc:

@@ -266,6 +266,10 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
                             "fund_meta_etf_symbols": 1497,
                             "bar_symbols_missing_fund_meta": 13,
                             "fund_meta_delisted_symbols": 0,
+                            "universe_registry_version": "audited_stable_etf_registry_v1",
+                            "registered_universe_symbol_count": 6,
+                            "registered_universe_symbols_with_bars": 6,
+                            "registered_universe_missing_bar_count": 0,
                             "bar_symbols_missing_fund_meta_sample": [{"symbol": "160706"}],
                         }
                     },
@@ -287,11 +291,16 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
                     "pit_universe_enabled": True,
                     "risk_category_symbols": {"csi300": ["510300"], "sse50": ["510050"]},
                     "defensive_category_symbols": {"gold": ["518880"]},
-                    "universe_selection_policy": "dynamic_pit_category_wide",
+                    "universe_selection_policy": "audited_stable_etf_registry",
                     "universe_start": "2016-01-01",
                     "universe_end": "2025-12-31",
                     "universe_min_history_days_as_of": 0,
                     "universe_max_symbols_per_category": 0,
+                    "registered_universe_counts": {
+                        "registered_symbol_count": 6,
+                        "active_symbol_count": 6,
+                        "missing_data_count": 0,
+                    },
                 },
             },
         }
@@ -308,13 +317,14 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
     assert "HFQ signal validation</td><td>n/a" in html
     assert "vectorized portfolio diagnostics</td><td>n/a" in html
     assert "PnL attribution bridge</td><td>n/a" in html
-    assert "动态 PIT ETF 类别宽 universe" in html
-    assert "窗口=2016-01-01~2025-12-31" in html
-    assert "每个调仓点按当时可见 bar/PIT规模/流动性/lookback 过滤" in html
-    assert "持仓由信号从宽池中选择" in html
+    assert "已审计稳定 ETF 注册池" in html
+    assert "新增类别必须人工审计注册" in html
+    assert "注册池 active=6/registered=6/missing_data=0" in html
     assert "每类只保留起点主代表" not in html
     assert "etf_metadata_survivorship_audit" in html
     assert "bar_symbols_missing_fund_meta</td><td>13" in html
+    assert "registered_universe_symbol_count</td><td>6" in html
+    assert "registered_universe_missing_bar_count</td><td>0" in html
     assert 'class="logic-plain"' in html
     assert "白话版：" in html
     assert "这套策略先把仓位思路分成两部分" in html
@@ -439,22 +449,24 @@ def test_small_cap_strict_grid_best_respects_drawdown_constraint_before_return()
     rows = [
         {"scenario": "high_return_high_drawdown", "cagr": 0.14, "max_drawdown_pct": -0.54, "sharpe": 0.70},
         {"scenario": "return_target_but_drawdown_breach", "cagr": 0.103, "max_drawdown_pct": -0.305, "sharpe": 0.73},
-        {"scenario": "drawdown_controlled_goal_candidate", "cagr": 0.1001, "max_drawdown_pct": -0.299, "sharpe": 0.72},
+        {"scenario": "drawdown_controlled_goal_candidate", "cagr": 0.1001, "max_drawdown_pct": -0.249, "sharpe": 0.72, "total_trades": 100},
         {"scenario": "drawdown_controlled_low_sharpe", "cagr": 0.06, "max_drawdown_pct": -0.25, "sharpe": 0.50},
     ]
 
     assert _select_best(rows)["scenario"] == "drawdown_controlled_goal_candidate"
 
 
-def test_small_cap_strict_grid_accepts_runtime_drawdown_threshold():
-    from quant.scripts.run_ashare_small_cap_pure_baseline_strict_backtest import _select_best
+def test_small_cap_strict_grid_uses_current_cagr_drawdown_tiers():
+    from quant.scripts.run_ashare_small_cap_pure_baseline_strict_backtest import _meets_goal, _select_best
 
     rows = [
-        {"scenario": "old_target_candidate", "cagr": 0.11, "max_drawdown_pct": -0.28, "sharpe": 0.90},
-        {"scenario": "tighter_risk_candidate", "cagr": 0.08, "max_drawdown_pct": -0.24, "sharpe": 0.70},
+        {"scenario": "old_30pct_drawdown_candidate", "cagr": 0.11, "max_drawdown_pct": -0.28, "sharpe": 0.90, "total_trades": 100},
+        {"scenario": "tier_pass_candidate", "cagr": 0.08, "max_drawdown_pct": -0.14, "sharpe": 0.70, "total_trades": 100},
     ]
 
-    assert _select_best(rows, target_cagr=0.10, target_max_drawdown=-0.25)["scenario"] == "tighter_risk_candidate"
+    assert _meets_goal(rows[0]) is False
+    assert _meets_goal(rows[1]) is True
+    assert _select_best(rows)["scenario"] == "tier_pass_candidate"
 
 
 def test_small_cap_strict_grid_keeps_scenario_symbol_scope_isolated():

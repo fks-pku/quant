@@ -1,6 +1,7 @@
 import json
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -416,15 +417,17 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
         assert universe_start == "2016-01-01"
         assert universe_end == "2025-12-31"
         return {
-            "symbols": ["510300", "159919", "518880"],
-            "risk_category_symbols": {"csi300": ["510300", "159919"]},
+            "symbols": ["510300", "518880"],
+            "risk_category_symbols": {"csi300": ["510300"]},
             "defensive_category_symbols": {"gold": ["518880"]},
-            "universe_selection_policy": "dynamic_pit_category_wide",
+            "universe_selection_policy": "audited_stable_etf_registry",
             "universe_as_of": "",
             "universe_start": "2016-01-01",
             "universe_end": "2025-12-31",
             "universe_min_history_days_as_of": 0,
             "universe_max_symbols_per_category": 0,
+            "universe_registry_version": "audited_stable_etf_registry_v1",
+            "registered_universe_counts": {"registered_symbol_count": 2, "active_symbol_count": 2, "missing_data_count": 0},
         }
 
     monkeypatch.setattr(universe_module, "build_gold_equity_barbell_pit_universe", fake_build)
@@ -433,7 +436,7 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
     params = {
         "pit_universe_enabled": True,
         "timing_symbol": "000300",
-        "universe_selection_policy": "dynamic_pit_category_wide",
+        "universe_selection_policy": "audited_stable_etf_registry",
         "universe_start": "2016-01-01",
         "universe_end": "2025-12-31",
         "universe_min_history_days_as_of": 0,
@@ -449,9 +452,9 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
     )
 
     assert calls["count"] == 1
-    assert first_symbols == second_symbols == ["000300", "159919", "510300", "518880"]
+    assert first_symbols == second_symbols == ["000300", "510300", "518880"]
     assert first_params["risk_category_symbols"] == second_params["risk_category_symbols"]
-    assert first_params["universe_selection_policy"] == "dynamic_pit_category_wide"
+    assert first_params["universe_selection_policy"] == "audited_stable_etf_registry"
     assert first_params["universe_start"] == "2016-01-01"
     assert first_params["universe_end"] == "2025-12-31"
     assert first_params["universe_max_symbols_per_category"] == 0
@@ -616,11 +619,11 @@ def test_gold_equity_pit_universe_can_lock_candidates_to_as_of(tmp_path):
 
     assert universe["risk_category_symbols"]["csi300"] == ["510300"]
     assert "515300" not in universe["symbols"]
-    assert universe["universe_selection_policy"] == "inception_locked_pit_category"
+    assert universe["universe_selection_policy"] == "audited_stable_etf_registry"
     assert universe["universe_as_of"] == "2016-01-01"
 
 
-def test_gold_equity_dynamic_pit_universe_keeps_wide_backtest_window_candidates(tmp_path):
+def test_gold_equity_registered_universe_does_not_auto_expand_same_category_candidates(tmp_path):
     import duckdb
 
     from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_pit_universe
@@ -699,8 +702,9 @@ def test_gold_equity_dynamic_pit_universe_keeps_wide_backtest_window_candidates(
         universe_end="2025-12-31",
     )
 
-    assert universe["risk_category_symbols"]["csi300"] == ["510300", "515300"]
-    assert universe["universe_selection_policy"] == "dynamic_pit_category_wide"
+    assert universe["risk_category_symbols"]["csi300"] == ["510300"]
+    assert "515300" not in universe["symbols"]
+    assert universe["universe_selection_policy"] == "audited_stable_etf_registry"
     assert universe["universe_start"] == "2016-01-01"
     assert universe["universe_end"] == "2025-12-31"
 
@@ -791,9 +795,11 @@ def test_pit_fund_category_universe_selects_stable_categories(tmp_path):
     assert universe["category_symbols"]["equity_cn_strategy_dividend"] == ["510880"]
     assert universe["category_symbols"]["commodity_gold"] == ["518880"]
     assert "515300" not in universe["symbols"]
+    assert universe["registered_universe_counts"]["registered_symbol_count"] == 3
+    assert universe["registered_universe_counts"]["active_symbol_count"] == 3
 
 
-def test_pit_fund_category_universe_joins_tushare_benchmark_classification(tmp_path):
+def test_pit_fund_category_universe_ignores_unregistered_benchmark_classification(tmp_path):
     import duckdb
 
     from quant.infrastructure.research.cn_etf_universe import build_pit_fund_category_universe
@@ -819,28 +825,8 @@ def test_pit_fund_category_universe_joins_tushare_benchmark_classification(tmp_p
         )
         conn.execute(
             """
-            CREATE TABLE cn_etf_benchmark_indices (
-                ts_code VARCHAR,
-                symbol VARCHAR,
-                name VARCHAR,
-                fullname VARCHAR,
-                bmk_level VARCHAR,
-                bmk_type VARCHAR,
-                bmk_src VARCHAR,
-                idx_type VARCHAR
-            )
-            """
-        )
-        conn.execute(
-            """
             INSERT INTO cn_fund_instruments VALUES
             ('560999', '核心宽基ETF', '核心宽基指数', '000999.SH', DATE '2020-01-01', NULL, 'ETF')
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO cn_etf_benchmark_indices VALUES
-            ('000999.SH', '000999', '核心宽基', '核心宽基指数', '一类库', '宽基', '中证指数', '规模类指数')
             """
         )
     finally:
@@ -876,9 +862,76 @@ def test_pit_fund_category_universe_joins_tushare_benchmark_classification(tmp_p
         fund_nav_db_path=str(nav_path),
     )
 
-    assert universe["category_symbols"]["equity_cn_broad_index"] == ["560999"]
-    assert universe["audit"][0]["classification_source"] == "mkt_idx_bmk"
-    assert universe["audit"][0]["classification_reason"] == "mkt_idx_bmk bmk_type=宽基 idx_type=规模类指数"
+    assert universe["category_symbols"]["equity_cn_broad_index"] == []
+    assert "560999" not in universe["symbols"]
+
+
+def test_pit_fund_category_universe_ignores_unregistered_static_category(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_pit_fund_category_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                index_code VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('560999', '核心宽基ETF', '核心宽基指数', '000999.SH', DATE '2020-01-01', NULL, 'ETF')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute("INSERT INTO daily_cn_ochl VALUES (TIMESTAMP '2020-01-03', '560999')")
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute("INSERT INTO cn_fund_nav VALUES ('560999', DATE '2020-01-03', 100000000.0, NULL)")
+    finally:
+        conn.close()
+
+    universe = build_pit_fund_category_universe(
+        ["equity_cn_broad_index"],
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+        universe_as_of="2020-01-03",
+    )
+
+    assert universe["category_symbols"]["equity_cn_broad_index"] == []
+    assert "560999" not in universe["symbols"]
 
 
 def test_gold_equity_pit_universe_can_keep_primary_symbol_per_category(tmp_path):
@@ -964,9 +1017,9 @@ def test_gold_equity_pit_universe_can_keep_primary_symbol_per_category(tmp_path)
         max_symbols_per_category=1,
     )
 
-    assert universe["risk_category_symbols"]["csi300"] == ["159919"]
-    assert "510300" not in universe["symbols"]
-    assert universe["universe_selection_policy"] == "inception_locked_primary_per_category"
+    assert universe["risk_category_symbols"]["csi300"] == ["510300"]
+    assert "159919" not in universe["symbols"]
+    assert universe["universe_selection_policy"] == "audited_stable_etf_registry"
     assert universe["universe_max_symbols_per_category"] == 1
 
 
@@ -1021,6 +1074,66 @@ def test_gold_equity_etf_survivorship_audit_reports_metadata_gaps(tmp_path):
     assert audit["bar_symbols_missing_fund_meta_sample"][0]["symbol"] == "160706"
 
 
+def test_gold_equity_etf_survivorship_audit_reports_registered_universe_coverage(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_gold_equity_barbell_survivorship_audit
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR,
+                fund_category VARCHAR,
+                category_group VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('510300', '沪深300ETF', '沪深300', DATE '2015-01-01', NULL, 'ETF', 'equity_cn_broad_csi300', 'csi300'),
+            ('159915', '创业板ETF', '创业板', DATE '2015-01-01', NULL, 'ETF', 'equity_cn_broad_chinext', 'chinext')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2020-01-02', '510300'),
+            (TIMESTAMP '2020-01-02', '159915')
+            """
+        )
+    finally:
+        conn.close()
+
+    audit = build_gold_equity_barbell_survivorship_audit(
+        start=datetime(2020, 1, 1),
+        end=datetime(2020, 1, 3),
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+    )
+
+    assert audit["universe_registry_version"] == "audited_stable_etf_registry_v1"
+    assert audit["registered_universe_symbol_count"] == 6
+    assert audit["registered_universe_symbols_with_bars"] == 2
+    assert audit["registered_universe_missing_bar_count"] == 4
+
+
 def test_strict_stage_uses_etf_survivorship_warning_copy():
     tmp_path = _test_root()
     try:
@@ -1062,7 +1175,7 @@ def test_strict_stage_uses_etf_survivorship_warning_copy():
         scores = stages["strict_backtest"]["scores"]
         assert verdict == "warn"
         assert "ETF 日线中有 13 个 symbol 缺少基金元数据" in conclusion
-        assert "PIT ETF universe 和调仓日可见数据约束" in conclusion
+        assert "人工审计注册 ETF 代表池和调仓日可见数据约束" in conclusion
         assert "起点主代表 ETF universe" not in conclusion
         assert "小市值 Top20" not in conclusion
         assert scores["survivorship_audit_kind"] == "etf_metadata_survivorship_audit"
@@ -3358,3 +3471,49 @@ def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
     assert cfg.default_backtest_end == "2025-12-31"
     assert cfg.production_gate_config["max_drawdown_cagr_15_20"] == 0.30
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
+
+
+def test_cli_full_and_formal_modes_enable_full_report_execution_defaults():
+    from quant.scripts import run_research as cli
+
+    for mode in ("full", "formal"):
+        cfg = ResearchConfig(auto_backtest=False, rigor_enabled=False)
+        cli._apply_mode_defaults(cfg, mode)
+
+        assert cfg.auto_backtest is True
+        assert cfg.rigor_enabled is True
+        assert cli._mode_requires_backtest_runner(mode) is True
+
+    fast_cfg = ResearchConfig(auto_backtest=True, rigor_enabled=True)
+    cli._apply_mode_defaults(fast_cfg, "fast")
+    assert fast_cfg.auto_backtest is False
+    assert fast_cfg.rigor_enabled is False
+    assert cli._mode_requires_backtest_runner("fast") is False
+
+    strict_cfg = ResearchConfig(auto_backtest=False, rigor_enabled=True)
+    cli._apply_mode_defaults(strict_cfg, "strict")
+    assert strict_cfg.auto_backtest is True
+    assert strict_cfg.rigor_enabled is False
+    assert cli._mode_requires_backtest_runner("strict") is True
+
+    walkforward_cfg = ResearchConfig(auto_backtest=True, rigor_enabled=False)
+    cli._apply_mode_defaults(walkforward_cfg, "walkforward")
+    assert walkforward_cfg.auto_backtest is False
+    assert walkforward_cfg.rigor_enabled is True
+    assert cli._mode_requires_backtest_runner("walkforward") is True
+
+
+def test_api_full_and_formal_modes_enable_full_report_execution_defaults():
+    from quant.api import research_bp as research_module
+
+    for mode in ("full", "formal", "from_bank", "formal_research"):
+        cfg = ResearchConfig(auto_backtest=False, rigor_enabled=False)
+        research_module._apply_research_mode_defaults(cfg, mode)
+
+        assert cfg.auto_backtest is True
+        assert cfg.rigor_enabled is True
+
+    fast_cfg = ResearchConfig(auto_backtest=True, rigor_enabled=True)
+    research_module._apply_research_mode_defaults(fast_cfg, "fast")
+    assert fast_cfg.auto_backtest is False
+    assert fast_cfg.rigor_enabled is False

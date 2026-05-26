@@ -62,7 +62,7 @@ _INDEX_CATEGORY_MAP: dict[str, tuple[str, str, str, str, str, str, float]] = {
 _GOLD_TOKENS = ("黄金9999", "黄金ETF", "金ETF", "上海金", "黄金现货")
 _GOLD_EQUITY_TOKENS = ("黄金股", "金矿", "有色")
 _MONEY_TOKENS = ("货币", "现金", "保证金", "添利", "货基")
-_BOND_TOKENS = ("债", "国债", "政金", "信用", "短融")
+_BOND_TOKENS = ("债", "国债", "政金", "信用", "短融", "固收", "固定收益")
 _CONVERTIBLE_TOKENS = ("可转债", "转债")
 _HK_TOKENS = ("港", "恒生", "H股", "港股", "香港")
 _US_TOKENS = ("纳指", "纳斯达克", "标普", "美国", "道琼斯")
@@ -103,10 +103,7 @@ def classify_cn_fund(row: Mapping[str, Any]) -> FundClassification:
     region = _region(text, fields)
     if index_code in _INDEX_CATEGORY_MAP and not _has_any(text, _ENHANCED_TOKENS + _FEEDER_TOKENS):
         asset_class, region, strategy, category, group, reason, confidence = _INDEX_CATEGORY_MAP[index_code]
-        source = "mkt_idx_bmk_index_code" if _has_benchmark_classification(fields) else "metadata_rules"
-        if source == "mkt_idx_bmk_index_code":
-            reason = f"{reason}; {_benchmark_reason(fields)}"
-        return _classification(asset_class, region, strategy, category, group, reason, confidence, source=source)
+        return _classification(asset_class, region, strategy, category, group, reason, confidence)
 
     if _has_any(text, _GOLD_TOKENS) and not _has_any(text, _GOLD_EQUITY_TOKENS):
         return _classification(
@@ -119,9 +116,6 @@ def classify_cn_fund(row: Mapping[str, Any]) -> FundClassification:
             0.95,
             excluded,
         )
-    benchmark_classification = _classify_benchmark(fields, region, excluded)
-    if benchmark_classification is not None and not enhanced:
-        return benchmark_classification
     if _has_any(text, _MONEY_TOKENS):
         return _classification("cash", "cn", "money_market", "cash_money_market", "cash", "money-market tokens", 0.9, excluded)
     if _has_any(text, _CONVERTIBLE_TOKENS):
@@ -185,40 +179,6 @@ def _classification(
         classification_reason=reason,
         classification_excluded=bool(excluded),
     )
-
-
-def _classify_benchmark(fields: Mapping[str, str], region: str, excluded: bool) -> FundClassification | None:
-    if not _has_benchmark_classification(fields):
-        return None
-    bmk_type = fields.get("bmk_type", "")
-    idx_type = fields.get("idx_type", "")
-    benchmark_text = " ".join((bmk_type, idx_type, fields.get("bmk_name", ""), fields.get("bmk_fullname", "")))
-    reason = _benchmark_reason(fields)
-    if _has_any(benchmark_text, ("货币", "现金")):
-        return _classification("cash", "cn", "money_market", "cash_money_market", "cash", reason, 0.95, excluded, "mkt_idx_bmk")
-    if _has_any(benchmark_text, ("债", "固收", "固定收益", "利率")):
-        category = "bond_rate" if _has_any(benchmark_text, ("国债", "政金", "利率")) else "bond_credit_or_aggregate"
-        group = "bond_rate" if category == "bond_rate" else "bond"
-        return _classification("bond", "cn", "fixed_income", category, group, reason, 0.95, excluded, "mkt_idx_bmk")
-    if _has_any(benchmark_text, ("黄金",)):
-        return _classification("commodity", "cn", "physical", "commodity_gold", "gold", reason, 0.95, excluded, "mkt_idx_bmk")
-    if "宽基" in bmk_type or "规模" in idx_type or "综合" in idx_type:
-        return _classification("equity", region, "broad", f"equity_{region}_broad_index", "broad_index", reason, 0.95, excluded, "mkt_idx_bmk")
-    if "策略" in bmk_type or "策略" in idx_type or "风格" in idx_type:
-        return _classification("equity", region, "strategy", f"equity_{region}_strategy_index", "strategy_index", reason, 0.95, excluded, "mkt_idx_bmk")
-    if "行业" in bmk_type or "主题" in bmk_type or "行业" in idx_type or "主题" in idx_type:
-        return _classification("equity", region, "sector_theme", f"equity_{region}_sector_theme", "sector_theme", reason, 0.95, excluded, "mkt_idx_bmk")
-    return _classification("equity", region, "benchmark_index", f"equity_{region}_benchmark_index", "benchmark_index", reason, 0.8, excluded, "mkt_idx_bmk")
-
-
-def _has_benchmark_classification(fields: Mapping[str, str]) -> bool:
-    return bool(fields.get("bmk_type") or fields.get("idx_type"))
-
-
-def _benchmark_reason(fields: Mapping[str, str]) -> str:
-    bmk_type = fields.get("bmk_type", "")
-    idx_type = fields.get("idx_type", "")
-    return f"mkt_idx_bmk bmk_type={bmk_type} idx_type={idx_type}"
 
 
 def _fields(row: Mapping[str, Any]) -> dict[str, str]:

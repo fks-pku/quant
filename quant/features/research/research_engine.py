@@ -1461,7 +1461,7 @@ class ResearchEngine:
                 prefix +
                 f"ETF 日线中有 {missing_meta} 个 symbol 缺少基金元数据，"
                 f"基金元数据中 delist_date 标记数={delisted_meta}；"
-                "已使用 PIT ETF universe 和调仓日可见数据约束收窄选择偏差，但仍不能完全排除清盘 ETF 缺失导致的 survivorship bias。"
+                "已使用人工审计注册 ETF 代表池和调仓日可见数据约束收窄选择偏差，但仍需关注注册 ETF 自身数据覆盖。"
             )
         return (
             prefix +

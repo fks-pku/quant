@@ -48,8 +48,6 @@ _FUND_NAV_SCHEMA = "fund_nav"
 _CN_DAILY_TABLE = "daily_cn_ochl"
 _FUND_INSTRUMENTS_TABLE = "cn_fund_instruments"
 _FUND_NAV_TABLE = "cn_fund_nav"
-_FUND_ETF_SHARE_SIZE_TABLE = "cn_etf_share_size"
-_FUND_ETF_BENCHMARK_TABLE = "cn_etf_benchmark_indices"
 _FUND_CLASSIFICATION_COLUMNS = (
     "classification_version",
     "asset_class",
@@ -412,20 +410,6 @@ class DuckDBStorage(Storage):
                     "classification_excluded": "BOOLEAN DEFAULT FALSE",
                 },
             )
-        elif table_name == f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}":
-            self._conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    ts_code VARCHAR PRIMARY KEY,
-                    symbol VARCHAR DEFAULT '',
-                    name VARCHAR DEFAULT '',
-                    fullname VARCHAR DEFAULT '',
-                    bmk_level VARCHAR DEFAULT '',
-                    bmk_type VARCHAR DEFAULT '',
-                    bmk_src VARCHAR DEFAULT '',
-                    idx_type VARCHAR DEFAULT '',
-                    updated_at TIMESTAMP
-                )
-            """)
         elif table_name == f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}":
             self._conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {table_name} (
@@ -448,21 +432,6 @@ class DuckDBStorage(Storage):
                     "accum_div": "DOUBLE",
                 },
             )
-        elif table_name == f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}":
-            self._conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    symbol VARCHAR,
-                    trade_date DATE,
-                    etf_name VARCHAR DEFAULT '',
-                    total_share DOUBLE,
-                    total_size DOUBLE,
-                    nav DOUBLE,
-                    close DOUBLE,
-                    exchange VARCHAR DEFAULT '',
-                    updated_at TIMESTAMP,
-                    PRIMARY KEY (symbol, trade_date)
-                )
-            """)
 
     @property
     def conn(self) -> duckdb.DuckDBPyConnection:
@@ -679,13 +648,6 @@ class DuckDBStorage(Storage):
             return False
         return self._table_exists(f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}")
 
-    def _fund_etf_share_size_available(self) -> bool:
-        if not self._fund_nav_db_path.exists():
-            return False
-        if not self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path):
-            return False
-        return self._table_exists(f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}")
-
     def _get_fund_enriched_bars(
         self,
         symbols: List[str],
@@ -694,8 +656,7 @@ class DuckDBStorage(Storage):
     ) -> Optional[pd.DataFrame]:
         meta_available = self._fund_meta_available()
         nav_available = self._fund_nav_available()
-        size_available = self._fund_etf_share_size_available()
-        if not meta_available and not nav_available and not size_available:
+        if not meta_available and not nav_available:
             return None
         table_symbols = list(dict.fromkeys(symbols))
         placeholders = ", ".join("?" for _ in table_symbols)
@@ -764,35 +725,11 @@ class DuckDBStorage(Storage):
                  AND CAST(b.timestamp AS DATE) = n.nav_date
                 """
             )
-        if size_available:
-            select_columns.extend(
-                [
-                    "s.etf_name",
-                    "s.total_share",
-                    "s.total_size",
-                    "s.nav AS etf_nav",
-                    "s.close AS etf_size_close",
-                    "s.exchange AS etf_size_exchange",
-                ]
-            )
-            joins.append(
-                f"""
-                LEFT JOIN {_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE} s
-                  ON b.symbol = s.symbol
-                 AND CAST(b.timestamp AS DATE) = s.trade_date
-                """
-            )
         nav_value_expr = None
         size_expr = None
-        if nav_available and size_available:
-            nav_value_expr = "COALESCE(n.unit_nav, s.nav)"
-            size_expr = "COALESCE(s.total_size, n.total_netasset, n.net_asset)"
-        elif nav_available:
+        if nav_available:
             nav_value_expr = "n.unit_nav"
             size_expr = "COALESCE(n.total_netasset, n.net_asset)"
-        elif size_available:
-            nav_value_expr = "s.nav"
-            size_expr = "s.total_size"
         if nav_value_expr:
             select_columns.append(f"CASE WHEN {nav_value_expr} > 0 THEN b.close / {nav_value_expr} - 1 ELSE NULL END AS premium_rate")
         if size_expr:
@@ -1336,7 +1273,6 @@ class DuckDBStorage(Storage):
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
         if "classification_excluded" not in frame.columns:
             frame["classification_excluded"] = False
-        frame = self._attach_benchmark_fields_for_classification(frame)
         classifications = frame.apply(lambda row: classify_cn_fund(row.to_dict()).as_dict(), axis=1)
         for idx, classification in classifications.items():
             for col, value in classification.items():
@@ -1400,72 +1336,15 @@ class DuckDBStorage(Storage):
         self.logger.info(f"Saved {len(frame)} CN fund instruments")
         return len(frame)
 
-    def _attach_benchmark_fields_for_classification(self, frame: pd.DataFrame) -> pd.DataFrame:
-        table_name = f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}"
-        if "index_code" not in frame.columns or not self._table_exists(table_name):
-            return frame
-        try:
-            benchmarks = self.conn.execute(
-                f"""
-                SELECT
-                    UPPER(CAST(ts_code AS VARCHAR)) AS index_code_key,
-                    bmk_level,
-                    bmk_type,
-                    bmk_src,
-                    idx_type,
-                    name AS bmk_name,
-                    fullname AS bmk_fullname
-                FROM {table_name}
-                """
-            ).fetchdf()
-        except Exception:
-            return frame
-        if benchmarks.empty:
-            return frame
-        result = frame.copy()
-        result["_index_code_key"] = result["index_code"].fillna("").astype(str).str.upper()
-        for col in ("bmk_level", "bmk_type", "bmk_src", "idx_type", "bmk_name", "bmk_fullname"):
-            value_map = dict(zip(benchmarks["index_code_key"], benchmarks[col]))
-            if col not in result.columns:
-                result[col] = ""
-            existing = result[col].fillna("").astype(str)
-            mapped = result["_index_code_key"].map(value_map).fillna("").astype(str)
-            result[col] = existing.where(existing != "", mapped)
-        return result.drop(columns=["_index_code_key"])
-
     def refresh_cn_fund_classifications(self) -> int:
         table_name = f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}"
-        benchmark_table = f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}"
         self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
         if not self._table_exists(table_name):
             return 0
-        benchmark_join = ""
-        benchmark_select = """
-                '' AS bmk_level,
-                '' AS bmk_type,
-                '' AS bmk_src,
-                '' AS idx_type,
-                '' AS bmk_name,
-                '' AS bmk_fullname
-        """
-        if self._table_exists(benchmark_table):
-            benchmark_join = f"""
-            LEFT JOIN {benchmark_table} b
-              ON UPPER(CAST(f.index_code AS VARCHAR)) = UPPER(CAST(b.ts_code AS VARCHAR))
-            """
-            benchmark_select = """
-                b.bmk_level AS bmk_level,
-                b.bmk_type AS bmk_type,
-                b.bmk_src AS bmk_src,
-                b.idx_type AS idx_type,
-                b.name AS bmk_name,
-                b.fullname AS bmk_fullname
-            """
         frame = self.conn.execute(
             f"""
-            SELECT f.*, {benchmark_select}
-            FROM {table_name} f
-            {benchmark_join}
+            SELECT *
+            FROM {table_name}
             """
         ).fetchdf()
         if frame.empty:
@@ -1486,27 +1365,6 @@ class DuckDBStorage(Storage):
             )
         self.logger.info(f"Refreshed CN fund classifications for {len(update_frame)} instruments")
         return len(update_frame)
-
-    def save_cn_etf_benchmark_indices(self, df: pd.DataFrame) -> int:
-        if df is None or df.empty:
-            return 0
-        table_name = f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}"
-        self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
-        self._ensure_table(table_name)
-        frame = df.copy()
-        for col in ("ts_code", "symbol", "name", "fullname", "bmk_level", "bmk_type", "bmk_src", "idx_type"):
-            if col not in frame.columns:
-                frame[col] = ""
-            frame[col] = frame[col].fillna("").astype(str)
-        frame["updated_at"] = pd.Timestamp.now("UTC").tz_localize(None)
-        cols = ["ts_code", "symbol", "name", "fullname", "bmk_level", "bmk_type", "bmk_src", "idx_type", "updated_at"]
-        frame = frame[cols].dropna(subset=["ts_code"]).drop_duplicates(subset=["ts_code"], keep="last")
-        col_sql = ", ".join(cols)
-        with self._lock:
-            self.conn.execute(f"INSERT OR REPLACE INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
-        self.logger.info(f"Saved {len(frame)} CN ETF benchmark index rows")
-        self.refresh_cn_fund_classifications()
-        return len(frame)
 
     def save_cn_fund_nav(self, df: pd.DataFrame) -> int:
         if df is None or df.empty:
@@ -1536,38 +1394,6 @@ class DuckDBStorage(Storage):
             col_sql = ", ".join(cols)
             self.conn.execute(f"INSERT INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
         self.logger.info(f"Saved {len(frame)} CN fund NAV rows")
-        return len(frame)
-
-    def save_cn_etf_share_size(self, df: pd.DataFrame) -> int:
-        if df is None or df.empty:
-            return 0
-        table_name = f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}"
-        self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path)
-        self._ensure_table(table_name)
-        frame = df.copy()
-        if "symbol" not in frame.columns and "ts_code" in frame.columns:
-            frame["symbol"] = frame["ts_code"].astype(str).str.split(".").str[0]
-        if "trade_date" not in frame.columns and "nav_date" in frame.columns:
-            frame["trade_date"] = frame["nav_date"]
-        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
-        for col in ("etf_name", "exchange"):
-            if col not in frame.columns:
-                frame[col] = ""
-            frame[col] = frame[col].fillna("").astype(str)
-        for col in ("total_share", "total_size", "nav", "close"):
-            if col not in frame.columns:
-                frame[col] = pd.NA
-            frame[col] = pd.to_numeric(frame[col], errors="coerce")
-        frame["updated_at"] = pd.Timestamp.now("UTC").tz_localize(None)
-        cols = ["symbol", "trade_date", "etf_name", "total_share", "total_size", "nav", "close", "exchange", "updated_at"]
-        frame = frame[cols].dropna(subset=["symbol", "trade_date"]).drop_duplicates(subset=["symbol", "trade_date"], keep="last")
-        with self._lock:
-            self.conn.execute(
-                f"DELETE FROM {table_name} WHERE (symbol, trade_date) IN (SELECT symbol, trade_date FROM frame)"
-            )
-            col_sql = ", ".join(cols)
-            self.conn.execute(f"INSERT INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
-        self.logger.info(f"Saved {len(frame)} CN ETF share-size rows")
         return len(frame)
 
     def get_cn_dividends(

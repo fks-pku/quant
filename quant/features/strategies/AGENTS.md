@@ -39,7 +39,7 @@
 - 新增未验证策略或回测年化不超过 10% 的策略：放入 `strategies/reject/<name>/`，不得进入顶层自动发现区；通过严格回测后再 promote
 - Large-cap forum strategies should reuse `_large_cap_forum_common.py` for shared daily-bar factor/risk mechanics, while preserving separate candidate directories, configs, and README files for each thesis.
 - 非小市值 ETF 轮动策略应通过资产类别与流动性定义 universe；除非用户明确要求，不要把中证1000或其它小盘 proxy ETF 混入默认池。
-- 黄金-权益 ETF 杠铃类策略可以使用黄金 ETF 作为防守资产，但权益腿仍应通过大盘/宽基 ETF 规则选择，不能退化为单只股票或小盘 proxy；回测时默认使用动态 PIT ETF 类别宽池，每个调仓点只允许当时可见且满足数据、规模、流动性和 lookback 约束的候选进入，再由信号从宽池中选择持仓。起点锁定或每类单主代表 ETF 只能作为稳健性/压力测试，不应替代主报告。
+- 黄金-权益 ETF 杠铃类策略可以使用黄金 ETF 作为防守资产，但权益腿只能来自已审计稳定 ETF 注册池，不能从当前全市场 ETF taxonomy 自动扩候选，也不能退化为单只股票或小盘 proxy；新增 ETF 类别必须先经用户审计同意并注册到 `audited_stable_etf_registry_v1`。每个调仓点仍必须满足当前 bar、NAV/规模、流动性和 lookback 约束。
 - 只有当策略有额外本地约束或复杂审计要求时才新增策略目录级 `AGENTS.md`
 - 新增或修复策略框架/日线策略状态机语义时，必须在 `quant/tests/test_strategies_invariants.py` 增加对应 CASE，并同步 `quant/features/strategies/docs/strategy-invariants.md`；单策略测试只能作为补充
 

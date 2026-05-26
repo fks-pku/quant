@@ -850,28 +850,29 @@ def _archived_candidate_info(sid, strategy_archive_dir=None):
             "defensive_category_symbols": params.get("defensive_category_symbols") or {},
             "pit_universe_enabled": bool(params.get("pit_universe_enabled", False)),
             "universe_selection_policy": str(
-                params.get("universe_selection_policy") or "dynamic_pit_category_wide"
+                params.get("universe_selection_policy") or "audited_stable_etf_registry"
             ),
             "universe_as_of": str(params.get("universe_as_of") or ""),
             "universe_start": str(params.get("universe_start") or ""),
             "universe_end": str(params.get("universe_end") or ""),
             "universe_min_history_days_as_of": int(params.get("universe_min_history_days_as_of") or 0),
             "universe_max_symbols_per_category": int(params.get("universe_max_symbols_per_category") or 0),
+            "universe_registry_version": str(params.get("universe_registry_version") or "audited_stable_etf_registry_v1"),
+            "registered_universe_counts": dict(params.get("registered_universe_counts") or {}),
             "universe_construction": (
-                "Dynamic point-in-time ETF category universe: on each rebalance date, candidates are "
-                "the broad category ETFs with bars, PIT fund size, liquidity, and lookback data visible "
-                "by that date; holdings are then selected by the strategy signal from that visible universe."
+                "Audited stable ETF registry universe: candidates are limited to user-approved representative "
+                "ETFs for each registered category; new ETF categories require explicit registry review."
             ),
             "strategy_logic": {
                 "core_idea": "黄金与 A 股大盘权益长期相关性较低；大盘趋势向上时保留权益暴露并配置黄金，趋势转弱时切到黄金防守。",
-                "universe": "动态 PIT ETF 类别宽池：每个调仓日只使用当时已有 bar、PIT 规模、流动性和足够 lookback 的类别 ETF，加黄金 ETF 防守腿。",
+                "universe": "已审计注册 ETF 代表池：权益腿只使用上证50、沪深300、创业板、创业板50、红利的注册代表 ETF，防守腿只使用注册黄金 ETF；新增类别必须人工审计后进注册表。",
                 "entry_filters": [
-                    "候选 ETF 必须在调仓日已经有当日 bar，未来新发 ETF 不会进入过去的候选池",
+                    "候选 ETF 必须来自 audited stable ETF registry",
                     "调仓日必须有当日 bar",
-                    "必须有截至调仓日可见的 fund size / NAV 规模字段",
+                    "必须有截至调仓日可见的 fund NAV / total_netasset 规模字段",
                     "20 日均成交额不低于 min_avg_turnover",
                 ],
-                "ranking_rule": "不预先每类挑主代表；在调仓日可见的宽 ETF universe 中，用后复权动量 / 波动率打分选择权益腿；沪深300趋势和动量同时为正才 risk-on。",
+                "ranking_rule": "在注册代表 ETF 中，用后复权动量 / 波动率打分选择权益腿；沪深300趋势和动量同时为正才 risk-on。",
                 "portfolio_construction": (
                     "risk-on 时目标敞口按 risk_leg_weight 分给权益腿，其余给黄金腿；risk-off 时目标敞口全部由黄金腿承担。"
                 ),
@@ -931,12 +932,14 @@ def _archived_pit_universe_parameters(sid, params):
     merged["timing_symbol"] = timing_symbol
     merged["require_pit_size"] = True
     merged.setdefault("pit_size_fields", ["total_netasset", "net_asset", "fund_size", "aum", "total_net_asset", "net_assets"])
-    merged["universe_selection_policy"] = universe.get("universe_selection_policy") or "dynamic_pit_category_wide"
+    merged["universe_selection_policy"] = universe.get("universe_selection_policy") or "audited_stable_etf_registry"
     merged["universe_as_of"] = universe.get("universe_as_of") or str(params.get("universe_as_of") or "")
     merged["universe_start"] = universe.get("universe_start") or str(params.get("universe_start") or "")
     merged["universe_end"] = universe.get("universe_end") or str(params.get("universe_end") or "")
     merged["universe_min_history_days_as_of"] = int(universe.get("universe_min_history_days_as_of") or 0)
     merged["universe_max_symbols_per_category"] = int(universe.get("universe_max_symbols_per_category") or 0)
+    merged["registered_universe_counts"] = dict(universe.get("registered_universe_counts") or {})
+    merged["universe_registry_version"] = universe.get("universe_registry_version") or "audited_stable_etf_registry_v1"
     return merged, sorted(set(symbols))
 
 
@@ -2968,6 +2971,22 @@ def _parse_idea_ids(value):
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _apply_research_mode_defaults(cfg: ResearchConfig, mode: str) -> None:
+    normalized = str(mode or "full").lower().replace("-", "_")
+    if normalized in {"fast", "fast_research", "quick", "quick_research"}:
+        cfg.auto_backtest = False
+        cfg.rigor_enabled = False
+    elif normalized in {"strict", "strict_backtest"}:
+        cfg.auto_backtest = True
+        cfg.rigor_enabled = False
+    elif normalized in {"walkforward", "walkforward_audit", "walkforward_strict_audit"}:
+        cfg.auto_backtest = False
+        cfg.rigor_enabled = True
+    elif normalized in {"full", "formal", "research", "from_bank", "formal_research"}:
+        cfg.auto_backtest = True
+        cfg.rigor_enabled = True
+
+
 def _make_experiment_stores(cfg: ResearchConfig):
     if not getattr(cfg, "tracking_enabled", False):
         return None, None
@@ -3214,15 +3233,7 @@ def run_research():
         cfg.sources = sources
     if max_results is not None:
         cfg.max_results_per_source = int(max_results)
-    if mode in {"fast", "fast_research", "quick", "quick_research"}:
-        cfg.auto_backtest = False
-        cfg.rigor_enabled = False
-    elif mode in {"strict", "strict_backtest"}:
-        cfg.auto_backtest = True
-        cfg.rigor_enabled = False
-    elif mode in {"walkforward", "walkforward_audit", "walkforward_strict_audit"}:
-        cfg.auto_backtest = False
-        cfg.rigor_enabled = True
+    _apply_research_mode_defaults(cfg, mode)
 
     llm_adapter = _create_llm_adapter(cfg)
     from quant.features.research.evaluator import StrategyEvaluator

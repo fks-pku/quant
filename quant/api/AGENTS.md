@@ -49,7 +49,8 @@ Blueprints:
 
 ## Research Report Endpoints
 
-- `/api/research/run` accepts `mode=fast|strict|walkforward` for independently runnable research stages.
-- `/api/research/report` returns latest report metadata, including stage report URLs.
-- `/api/research/report/latest` intentionally returns 410; full reports are no longer generated.
+- `/api/research/run` defaults to `mode=full`; `full` and `formal` run end-to-end full-report research with strict Backtester and walk-forward wiring by default.
+- `/api/research/run` accepts `mode=fast|strict|walkforward` for explicitly single-stage research runs.
+- `/api/research/report` returns latest report metadata, including full-report and stage-report URLs.
+- `/api/research/report/latest` serves the latest `full_research_report.html` when available.
 - `/api/research/report/stage/<stage_key>` serves `fast_research`, `strict_backtest`, or `walkforward_strict_audit` stage HTML.

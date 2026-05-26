@@ -51,9 +51,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `cn_ohlcv.duckdb::daily_cn_ochl` stores CN stock OHLCV only.
 - `cn_etf_ohlcv.duckdb::daily_cn_ochl` stores CN ETF OHLCV and is attached as `cn_etf`.
 - `cn_fund_nav.duckdb::cn_fund_nav` stores ETF/LOF unit NAV, accumulated NAV, adjusted NAV, and asset size fields used to normalize fund splits in strict research providers.
-- `cn_fund_nav.duckdb::cn_etf_share_size` stores Tushare ETF daily share/size snapshots when the upstream endpoint is available; it is preferred for point-in-time ETF size ranking.
 - `cn_fund_meta.duckdb::cn_fund_instruments` stores full Tushare fund/ETF lifecycle metadata across listed, delisted, issuing, and pending statuses, including delist dates, manager/custodian, benchmark, invest type, ETF tracking index fields, and the stable `cn_fund_taxonomy_v1` classification columns.
-- `cn_fund_meta.duckdb::cn_etf_benchmark_indices` stores the Tushare ETF benchmark index library when the upstream endpoint is available.
 - `cn_index_ohlcv.duckdb::daily_cn_ochl` stores CN index OHLCV and is attached as `cn_index`.
 - `cn_daily_basic.duckdb::cn_daily_basic` stores Tushare daily valuation, shares, market cap, and turnover sidecar fields.
 - `cn_status.duckdb::cn_security_status_daily` stores daily listing/tradability/ST/suspension/limit status.
@@ -65,5 +63,5 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `quant/scripts/build_cn_security_status.py` rebuilds `var/duckdb/live/cn_status.duckdb::cn_security_status_daily` from read-only stock OHLCV plus Tushare `stock_basic`, `namechange`, `suspend_d`, `stk_limit`, and `trade_cal`.
 - The status table is stored separately from `cn_ohlcv.duckdb`; keep DuckDB market reads `read_only=True` when rebuilding.
 - `DuckDBStorage(use_security_status=True)` attaches the status DB read-only and filters by requested symbols/date range before joining, so backtests do not scan the whole status table unless the requested universe itself is whole-market.
-- `quant.infrastructure.data.fund_classification.classify_cn_fund()` owns stable fund taxonomy. ETF/LOF rotation and barbell universes should consume `fund_category` or `category_group` plus point-in-time bar/size/tradability filters, not hand-picked symbols.
-- Fund classification links `cn_fund_instruments.index_code` to `cn_etf_benchmark_indices.ts_code` and prefers Tushare `mkt_idx_bmk` fields for benchmark asset class/category before falling back to deterministic metadata rules.
+- `quant.infrastructure.data.fund_classification.classify_cn_fund()` owns deterministic metadata taxonomy for inspection only. Strategy universes must not auto-expand from current broad ETF taxonomy when the strategy is promoted.
+- `quant.infrastructure.research.cn_etf_universe` owns `audited_stable_etf_registry_v1`. ETF category strategies that use representative buckets must consume this user-approved registry and report `registered_universe_counts`; adding a new ETF category requires explicit audit and registry update.

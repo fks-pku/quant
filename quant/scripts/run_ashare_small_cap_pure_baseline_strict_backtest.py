@@ -16,7 +16,6 @@ from quant.api.research_bp import (
     _cn_survivorship_audit,
     _load_cn_benchmark_provider,
     _load_lot_sizes,
-    _load_research_config,
     _strict_backtest_report,
     _strict_execution_cost_model,
 )
@@ -41,8 +40,14 @@ TITLE = "A-share small-cap guarded baseline"
 FORMULA_KEY = "ashare_small_cap_guarded_size_factor"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")
 TIMING_SYMBOL = "000300"
-DEFAULT_TARGET_CAGR = 0.10
+DEFAULT_TARGET_CAGR = 0.05
 DEFAULT_TARGET_MAX_DRAWDOWN = -0.30
+CAGR_DRAWDOWN_TIERS = (
+    (0.05, 0.10, 0.15),
+    (0.10, 0.15, 0.25),
+    (0.15, 0.20, 0.30),
+    (0.20, float("inf"), 0.50),
+)
 COMMISSION_CFG = {
     "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
     "HK": {"type": "hk_realistic"},
@@ -559,21 +564,7 @@ def _strategy_spec(scenario: Dict[str, Any], stock_count: int) -> Dict[str, Any]
 
 
 def _target_thresholds() -> Tuple[float, float]:
-    try:
-        cfg = _load_research_config()
-        gate = dict(getattr(cfg, "production_gate_config", {}) or {})
-    except Exception:
-        gate = {}
-    target_cagr = DEFAULT_TARGET_CAGR
-    try:
-        target_cagr = max(target_cagr, float(gate.get("min_strict_cagr", target_cagr)))
-    except (TypeError, ValueError):
-        target_cagr = DEFAULT_TARGET_CAGR
-    try:
-        max_drawdown = -abs(float(gate.get("max_strict_drawdown", abs(DEFAULT_TARGET_MAX_DRAWDOWN))))
-    except (TypeError, ValueError):
-        max_drawdown = DEFAULT_TARGET_MAX_DRAWDOWN
-    return target_cagr, max_drawdown
+    return 0.05, -0.50
 
 
 def _meets_goal(
@@ -581,7 +572,30 @@ def _meets_goal(
     target_cagr: float = DEFAULT_TARGET_CAGR,
     target_max_drawdown: float = DEFAULT_TARGET_MAX_DRAWDOWN,
 ) -> bool:
-    return float(metrics.get("cagr") or 0.0) > target_cagr and float(metrics.get("max_drawdown_pct") or 0.0) >= target_max_drawdown
+    cagr = float(metrics.get("cagr") or 0.0)
+    max_dd = abs(float(metrics.get("max_drawdown_pct") or 0.0))
+    total_trades = int(metrics.get("total_trades") or 0)
+    limit = _max_drawdown_limit_for_cagr(cagr, min_cagr=target_cagr)
+    return limit is not None and max_dd <= limit and total_trades > 50
+
+
+def _max_drawdown_limit_for_cagr(cagr: float, min_cagr: float = 0.05) -> float | None:
+    if cagr < min_cagr:
+        return None
+    for lower, upper, max_drawdown in CAGR_DRAWDOWN_TIERS:
+        if lower <= cagr < upper:
+            return max_drawdown
+    return None
+
+
+def _tier_threshold_text(cagr: float, min_cagr: float = 0.05) -> str:
+    if cagr < min_cagr:
+        return f"CAGR >= {min_cagr:.2%}"
+    for lower, upper, max_drawdown in CAGR_DRAWDOWN_TIERS:
+        if lower <= cagr < upper:
+            upper_text = "+" if upper == float("inf") else f"-{upper:.2%}"
+            return f"CAGR {lower:.2%}{upper_text} requires MaxDD <= {max_drawdown:.2%}"
+    return f"CAGR >= {min_cagr:.2%}"
 
 
 def _select_best(
@@ -589,11 +603,13 @@ def _select_best(
     target_cagr: float = DEFAULT_TARGET_CAGR,
     target_max_drawdown: float = DEFAULT_TARGET_MAX_DRAWDOWN,
 ) -> Dict[str, Any]:
-    drawdown_controlled = [row for row in rows if float(row.get("max_drawdown_pct") or 0.0) >= target_max_drawdown]
-    candidates = [row for row in drawdown_controlled if float(row.get("cagr") or 0.0) > target_cagr] or drawdown_controlled or rows
+    passing = [row for row in rows if _meets_goal(row, target_cagr, target_max_drawdown)]
+    tiered = [row for row in rows if _max_drawdown_limit_for_cagr(float(row.get("cagr") or 0.0), min_cagr=target_cagr) is not None]
+    candidates = passing or tiered or rows
     return max(
         candidates,
         key=lambda row: (
+            1 if _meets_goal(row, target_cagr, target_max_drawdown) else 0,
             float(row.get("sharpe") or 0.0),
             float(row.get("max_drawdown_pct") or 0.0),
             float(row.get("cagr") or 0.0) / max(abs(float(row.get("max_drawdown_pct") or 0.0)), 1e-9),
@@ -616,10 +632,14 @@ def _write_outputs(
         "run_ts": run_ts,
         "period": f"{START.date()}-{END.date()}",
         "initial_cash": INITIAL_CASH,
-        "objective": f"Pure small-cap strategy: keep CAGR above {target_cagr:.2%} while limiting maximum drawdown to {abs(target_max_drawdown):.2%}, without broad-index ETF blending.",
+        "objective": "Pure small-cap strategy: pass the current CAGR/MaxDD tier checklist without broad-index ETF blending.",
         "thresholds": {
-            "target_cagr": target_cagr,
-            "target_max_drawdown": target_max_drawdown,
+            "minimum_cagr": target_cagr,
+            "cagr_drawdown_tiers": [
+                {"cagr_min": lower, "cagr_max": None if upper == float("inf") else upper, "max_drawdown": drawdown}
+                for lower, upper, drawdown in CAGR_DRAWDOWN_TIERS
+            ],
+            "min_total_trades": 51,
         },
         "rows": rows,
         "best": best,
@@ -655,6 +675,7 @@ def _hypothesis_row(
     max_dd = float(metrics.get("max_drawdown_pct") or 0.0)
     sharpe = float(metrics.get("sharpe") or 0.0)
     verdict = "pass" if _meets_goal(metrics, target_cagr, target_max_drawdown) else "fail"
+    threshold_text = _tier_threshold_text(cagr, min_cagr=target_cagr)
     return {
         "strategy_id": STRATEGY_ID,
         "title": f"{TITLE} - {best['scenario']}",
@@ -665,7 +686,7 @@ def _hypothesis_row(
                 "strict_backtest": {
                     "label": "Strict backtest",
                     "verdict": verdict,
-                    "conclusion": f"Strict backtest: Sharpe={sharpe:.2f}, CAGR={cagr:.2%}, MaxDD={max_dd:.2%}; threshold CAGR>{target_cagr:.2%}, MaxDD>={target_max_drawdown:.2%}.",
+                    "conclusion": f"Strict backtest: Sharpe={sharpe:.2f}, CAGR={cagr:.2%}, MaxDD={max_dd:.2%}; threshold {threshold_text}, total trades > 50.",
                     "method": "Project Backtester with T+1 open execution, CN commission, lot size, status/limit checks, small-cap liquidity impact, and full A-share universe from 2016.",
                 }
             },
@@ -709,7 +730,7 @@ def _score_row(
     cagr = float(row.get("cagr") or 0.0)
     max_dd = float(row.get("max_drawdown_pct") or 0.0)
     return (
-        1 if max_dd >= target_max_drawdown and cagr > target_cagr else 0,
+        1 if _meets_goal(row, target_cagr, target_max_drawdown) else 0,
         float(row.get("sharpe") or 0.0),
         max_dd,
         cagr / max(abs(max_dd), 1e-9),

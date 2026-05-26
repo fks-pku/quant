@@ -356,11 +356,11 @@ class TestCase6TopLevelStrategyPromotionGate:
 
 
 # ---------------------------------------------------------------------------
-# CASE-7: PIT wide universe candidate selection
+# CASE-7: Audited ETF registry universe
 # ---------------------------------------------------------------------------
 
 
-class TestCase7PitWideUniverseCandidateSelection:
+class TestCase7AuditedEtfRegistryUniverse:
     def test_s7_01_visible_candidates_are_ranked_by_signal_not_preselected_by_size(self):
         strategy = AShareGoldEquityBarbellTimingStrategy(
             risk_category_symbols={"csi300": ["510300", "159919"]},
@@ -426,6 +426,19 @@ class TestCase7PitWideUniverseCandidateSelection:
         ordered = {order["symbol"] for order in context.orders}
         assert "510300" in ordered
         assert "515300" not in ordered
+
+    def test_s7_03_registered_etf_categories_are_user_approved(self):
+        from quant.infrastructure.research.cn_etf_universe import registered_etf_categories
+
+        registry = registered_etf_categories()
+        assert registry
+        violations = []
+        for category, entries in registry.items():
+            for entry in entries:
+                if entry.get("audit_status") != "user_approved":
+                    violations.append((category, entry.get("symbol"), entry.get("audit_status")))
+
+        assert violations == []
 
 
 class _InvariantPortfolio:

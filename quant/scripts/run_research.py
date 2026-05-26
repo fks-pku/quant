@@ -1,7 +1,7 @@
 """Standalone research pipeline runner.
 
 Usage:
-    python quant/scripts/run_research.py [--mode discover|formal|full] [--source arxiv] [--max 5] [--threshold 6.0] [--backtest]
+    python quant/scripts/run_research.py [--mode discover|formal|full] [--source arxiv] [--max 5] [--threshold 6.0]
 """
 import argparse
 import logging
@@ -15,6 +15,10 @@ sys.path.insert(0, str(_project_root))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("run_research")
+
+
+_FULL_REPORT_MODES = {"full", "formal"}
+_BACKTEST_RUNNER_MODES = {"full", "formal", "strict", "walkforward"}
 
 
 # =============================================================================
@@ -265,6 +269,32 @@ def _default_research_universe(market_data):
         return []
 
 
+def _normalize_mode(mode: str) -> str:
+    return str(mode or "full").lower().replace("-", "_")
+
+
+def _mode_requires_backtest_runner(mode: str, explicit_backtest: bool = False) -> bool:
+    return bool(explicit_backtest) or _normalize_mode(mode) in _BACKTEST_RUNNER_MODES
+
+
+def _apply_mode_defaults(config, mode: str, explicit_backtest: bool = False) -> None:
+    normalized = _normalize_mode(mode)
+    if normalized == "fast":
+        config.auto_backtest = False
+        config.rigor_enabled = False
+    elif normalized == "strict":
+        config.auto_backtest = True
+        config.rigor_enabled = False
+    elif normalized == "walkforward":
+        config.auto_backtest = False
+        config.rigor_enabled = True
+    elif normalized in _FULL_REPORT_MODES:
+        config.auto_backtest = True
+        config.rigor_enabled = True
+    elif explicit_backtest:
+        config.auto_backtest = True
+
+
 def _load_research_config():
     from quant.features.research.configuration import research_config_kwargs_from_data
     from quant.features.research.models import ResearchConfig
@@ -297,12 +327,16 @@ def main():
     parser.add_argument("--strategy-id", action="append", dest="strategy_ids", help="Specific strategy id for strict/walkforward modes")
     parser.add_argument("--idea-status", action="append", dest="idea_statuses", help="Idea bank status to load in formal mode")
     parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
-    parser.add_argument("--backtest", action="store_true", help="Run backtests (requires DuckDB data)")
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="Force strict backtest runner for non-full modes; full/formal enable it by default",
+    )
     parser.add_argument(
         "--walkforward-workers",
         type=int,
         default=min(4, os.cpu_count() or 1),
-        help="Parallel workers for purged walk-forward splits when --backtest is enabled",
+        help="Parallel workers for purged walk-forward splits in full/formal/walkforward modes",
     )
     parser.add_argument("--no-validation", action="store_true", help="Disable statistical validation gate")
     parser.add_argument("--no-heuristic", action="store_true", help="Use LLM evaluator instead of heuristic")
@@ -318,12 +352,11 @@ def main():
     var_root = Path(__file__).resolve().parent.parent / "infrastructure" / "var" / "research"
     var_root.mkdir(parents=True, exist_ok=True)
 
-    needs_backtest_runner = args.backtest or args.mode in {"strict", "walkforward"}
+    needs_backtest_runner = _mode_requires_backtest_runner(args.mode, explicit_backtest=args.backtest)
     config = _load_research_config()
     config.sources = ["arxiv"] if args.source != "all" else ["arxiv"]
     config.max_results_per_source = args.max_results
     config.evaluation_threshold = args.threshold
-    config.auto_backtest = args.backtest or args.mode == "strict"
     config.validation_enabled = not args.no_validation
     if not config.default_symbols:
         config.default_symbols = list(_CN_RESEARCH_SYMBOLS)
@@ -332,11 +365,7 @@ def main():
     purged_walkforward["parallel_workers"] = max(1, args.walkforward_workers)
     rigor_config["purged_walkforward"] = purged_walkforward
     config.rigor_config = rigor_config
-    if args.mode == "fast":
-        config.auto_backtest = False
-        config.rigor_enabled = False
-    elif args.mode == "strict":
-        config.rigor_enabled = False
+    _apply_mode_defaults(config, args.mode, explicit_backtest=args.backtest)
 
     if getattr(config, "tracking_enabled", False) and config.tracking_db_path:
         from quant.infrastructure.research.duckdb_research_store import DuckDBResearchStore
