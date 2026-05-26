@@ -2401,9 +2401,10 @@ def _data_quality_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]
         rows_data = [
             ("kind", str(audit.get("kind") or ""), "ETF survivorship audit 类型"),
             ("material", "是" if audit.get("material") else "否", audit.get("reason") or "是否足以影响 strict 结论"),
-            ("etf_bar_symbols", str(audit.get("etf_bar_symbols") or 0), "ETF 日线表中本回测期出现过的 symbol 数"),
+            ("fund_bar_symbols", str(audit.get("fund_bar_symbols") or audit.get("etf_bar_symbols") or 0), "ETF/LOF 日线表中本回测期出现过的 symbol 数"),
             ("fund_meta_etf_symbols", str(audit.get("fund_meta_etf_symbols") or 0), "基金元数据表中标记为 ETF 的 symbol 数"),
-            ("bar_symbols_missing_fund_meta", str(audit.get("bar_symbols_missing_fund_meta") or 0), "有 ETF 日线但缺少基金元数据的 symbol 数"),
+            ("bar_symbols_missing_fund_meta", str(audit.get("bar_symbols_missing_fund_meta") or 0), "有 ETF/LOF 日线但缺少基金元数据的 symbol 数"),
+            ("fund_bar_symbols_with_non_etf_metadata", str(audit.get("fund_bar_symbols_with_non_etf_metadata") or 0), "ETF/LOF 日线表中元数据标记为非 ETF 的 symbol 数"),
             ("fund_meta_delisted_symbols", str(audit.get("fund_meta_delisted_symbols") or 0), "基金元数据中带 delist_date 的 ETF 数"),
             ("bar_symbols_missing_fund_meta_sample", sample_text or "-", "样例 bar-only symbol；无法分类时不进入策略候选池"),
         ]

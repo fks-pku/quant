@@ -475,6 +475,269 @@ class TestDuckDBStorage:
         assert frame["adj_factor"].iloc[0] == pytest.approx(2.0)
         assert frame["adj_close"].iloc[0] == pytest.approx(2.10)
 
+    def test_tushare_provider_preserves_full_fund_basic_lifecycle_fields(self):
+        class FakeApi:
+            def fund_basic(self, **kwargs):
+                assert "delist_date" in kwargs["fields"]
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "510999.SH",
+                            "name": "Sample ETF",
+                            "management": "Sample Fund",
+                            "custodian": "Sample Bank",
+                            "fund_type": "股票型",
+                            "found_date": "20160101",
+                            "due_date": "",
+                            "list_date": "20160201",
+                            "issue_date": "20160115",
+                            "delist_date": "20200102",
+                            "issue_amount": "10.5",
+                            "m_fee": "0.5",
+                            "c_fee": "0.1",
+                            "duration_year": "",
+                            "p_value": "1.0",
+                            "min_amount": "",
+                            "exp_return": "",
+                            "benchmark": "中证红利指数",
+                            "status": "D",
+                            "invest_type": "被动指数型",
+                            "type": "契约型开放式",
+                            "trustee": "",
+                            "purc_startdate": "20160301",
+                            "redm_startdate": "20160301",
+                            "market": "E",
+                        }
+                    ]
+                )
+
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+
+        frame = provider.fetch_fund_basic(status="D")
+
+        assert frame["symbol"].iloc[0] == "510999"
+        assert frame["delist_date"].iloc[0] == "20200102"
+        assert frame["management"].iloc[0] == "Sample Fund"
+        assert frame["benchmark"].iloc[0] == "中证红利指数"
+
+    def test_tushare_provider_fetches_etf_share_size(self):
+        class FakeApi:
+            def etf_share_size(self, **kwargs):
+                assert kwargs["ts_code"] == "510300.SH"
+                return pd.DataFrame(
+                    [
+                        {
+                            "trade_date": "20240102",
+                            "ts_code": "510300.SH",
+                            "etf_name": "沪深300ETF",
+                            "total_share": "100.5",
+                            "total_size": "250.25",
+                            "nav": "4.0",
+                            "close": "4.1",
+                            "exchange": "SSE",
+                        }
+                    ]
+                )
+
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+
+        frame = provider.fetch_etf_share_size("510300", datetime(2024, 1, 2), datetime(2024, 1, 3))
+
+        assert frame["symbol"].iloc[0] == "510300"
+        assert frame["trade_date"].iloc[0].date().isoformat() == "2024-01-02"
+        assert frame["total_size"].iloc[0] == pytest.approx(250.25)
+
+    def test_tushare_provider_fetches_etf_benchmark_index_library(self):
+        class FakeApi:
+            def mkt_idx_bmk(self, **kwargs):
+                assert "idx_type" in kwargs["fields"]
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000015.SH",
+                            "symbol": "000015",
+                            "name": "红利指数",
+                            "fullname": "上证红利指数",
+                            "bmk_level": "二类库",
+                            "bmk_type": "策略",
+                            "bmk_src": "中证指数",
+                            "idx_type": "策略类指数",
+                        }
+                    ]
+                )
+
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+
+        frame = provider.fetch_etf_benchmark_indices()
+
+        assert frame["ts_code"].iloc[0] == "000015.SH"
+        assert frame["idx_type"].iloc[0] == "策略类指数"
+
+    def test_storage_saves_extended_fund_metadata_and_etf_share_size(self, tmp_path):
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        fund_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        fund_meta_db = tmp_path / "cn_fund_meta.duckdb"
+        fund_nav_db = tmp_path / "cn_fund_nav.duckdb"
+        start = datetime(2024, 1, 2)
+
+        storage = DuckDBStorage(
+            str(stock_db),
+            etf_db_path=str(fund_db),
+            fund_meta_db_path=str(fund_meta_db),
+            fund_nav_db_path=str(fund_nav_db),
+        )
+        try:
+            storage.save_bars(
+                pd.DataFrame(
+                    [
+                        {
+                            "timestamp": start,
+                            "symbol": "510300",
+                            "open": 4.0,
+                            "high": 4.2,
+                            "low": 3.9,
+                            "close": 4.1,
+                            "volume": 1000,
+                            "turnover": 4100,
+                        }
+                    ]
+                ),
+                "1d",
+            )
+            storage.save_cn_fund_instruments(
+                pd.DataFrame(
+                    [
+                        {
+                            "symbol": "510300",
+                            "ts_code": "510300.SH",
+                            "name": "沪深300ETF",
+                            "fund_type": "股票型",
+                            "instrument_type": "ETF",
+                            "status": "L",
+                            "market": "E",
+                            "list_date": "20120528",
+                            "delist_date": "",
+                            "index_code": "000300.SH",
+                            "index_name": "沪深300指数",
+                            "exchange": "SH",
+                            "management": "华泰柏瑞基金",
+                            "benchmark": "沪深300指数",
+                            "m_fee": 0.5,
+                        }
+                    ]
+                )
+            )
+            storage.save_cn_etf_share_size(
+                pd.DataFrame(
+                    [
+                        {
+                            "symbol": "510300",
+                            "trade_date": start,
+                            "etf_name": "沪深300ETF",
+                            "total_share": 100.5,
+                            "total_size": 250.25,
+                            "nav": 4.0,
+                            "close": 4.1,
+                            "exchange": "SSE",
+                        }
+                    ]
+                )
+            )
+            storage.save_cn_etf_benchmark_indices(
+                pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000300.SH",
+                            "symbol": "000300",
+                            "name": "沪深300",
+                            "fullname": "沪深300指数",
+                            "bmk_level": "一类库",
+                            "bmk_type": "宽基",
+                            "bmk_src": "中证指数",
+                            "idx_type": "规模类指数",
+                        }
+                    ]
+                )
+            )
+            bars = storage.get_bars("510300", start, start, "1d")
+            benchmark_rows = storage.conn.execute(
+                "SELECT bmk_type, idx_type FROM fund_meta.cn_etf_benchmark_indices WHERE ts_code = '000300.SH'"
+            ).fetchall()
+        finally:
+            storage.close()
+
+        assert bars["fund_name"].iloc[0] == "沪深300ETF"
+        assert bars["management"].iloc[0] == "华泰柏瑞基金"
+        assert bars["benchmark"].iloc[0] == "沪深300指数"
+        assert bars["fund_category"].iloc[0] == "equity_cn_broad_csi300"
+        assert bars["category_group"].iloc[0] == "csi300"
+        assert bars["classification_version"].iloc[0] == "cn_fund_taxonomy_v1"
+        assert bars["total_size"].iloc[0] == pytest.approx(250.25)
+        assert bars["fund_size"].iloc[0] == pytest.approx(250.25)
+        assert bars["premium_rate"].iloc[0] == pytest.approx(0.025)
+        assert benchmark_rows == [("宽基", "规模类指数")]
+
+    def test_storage_refreshes_fund_classification_after_benchmark_indices_saved(self, tmp_path):
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        fund_db = tmp_path / "cn_etf_ohlcv.duckdb"
+        fund_meta_db = tmp_path / "cn_fund_meta.duckdb"
+        fund_nav_db = tmp_path / "cn_fund_nav.duckdb"
+        storage = DuckDBStorage(
+            str(stock_db),
+            etf_db_path=str(fund_db),
+            fund_meta_db_path=str(fund_meta_db),
+            fund_nav_db_path=str(fund_nav_db),
+        )
+        try:
+            storage.save_cn_fund_instruments(
+                pd.DataFrame(
+                    [
+                        {
+                            "symbol": "560999",
+                            "ts_code": "560999.SH",
+                            "name": "核心宽基ETF",
+                            "fund_type": "股票型",
+                            "instrument_type": "ETF",
+                            "status": "L",
+                            "market": "E",
+                            "list_date": "20200101",
+                            "index_code": "000999.SH",
+                            "index_name": "核心宽基指数",
+                        }
+                    ]
+                )
+            )
+            before = storage.conn.execute(
+                "SELECT fund_category, classification_source FROM fund_meta.cn_fund_instruments WHERE symbol = '560999'"
+            ).fetchone()
+            storage.save_cn_etf_benchmark_indices(
+                pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000999.SH",
+                            "symbol": "000999",
+                            "name": "核心宽基",
+                            "fullname": "核心宽基指数",
+                            "bmk_level": "一类库",
+                            "bmk_type": "宽基",
+                            "bmk_src": "中证指数",
+                            "idx_type": "规模类指数",
+                        }
+                    ]
+                )
+            )
+            after = storage.conn.execute(
+                "SELECT fund_category, category_group, classification_source FROM fund_meta.cn_fund_instruments WHERE symbol = '560999'"
+            ).fetchone()
+        finally:
+            storage.close()
+
+        assert before == ("equity_cn_other", "metadata_rules")
+        assert after == ("equity_cn_broad_index", "broad_index", "mkt_idx_bmk")
+
     def test_get_bars_for_symbols_can_use_cn_security_status(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")
         db_path = tmp_path / "market.duckdb"

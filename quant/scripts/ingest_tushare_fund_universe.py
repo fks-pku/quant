@@ -17,6 +17,7 @@ from quant.infrastructure.data.storage_duckdb import (
     DuckDBStorage,
     _CN_DAILY_TABLE,
     _ETF_SCHEMA,
+    _FUND_ETF_SHARE_SIZE_TABLE,
     _FUND_NAV_SCHEMA,
     _FUND_NAV_TABLE,
 )
@@ -53,6 +54,8 @@ EXCLUDE_KEYWORDS = (
     "货基",
     "保证金",
 )
+FUND_BASIC_STATUSES = {"L", "D", "I"}
+ETF_BASIC_STATUSES = {"L", "D", "P"}
 
 
 def _parse_date(value: str) -> datetime:
@@ -91,17 +94,20 @@ def _normalize_symbols(symbols: Iterable[str]) -> List[str]:
 
 def fetch_fund_metadata(provider: TushareProvider, statuses: Sequence[str]) -> pd.DataFrame:
     frames = []
-    for status in statuses:
-        fund_basic = provider.fetch_fund_basic(status=status)
-        if not fund_basic.empty:
-            fund_basic = fund_basic.copy()
-            fund_basic["_source_priority"] = 1
-            frames.append(fund_basic)
-        etf_basic = provider.fetch_etf_basic(status=status)
-        if not etf_basic.empty:
-            etf_basic = etf_basic.copy()
-            etf_basic["_source_priority"] = 2
-            frames.append(etf_basic)
+    normalized_statuses = [str(status).strip().upper() for status in statuses if str(status).strip()]
+    for status in normalized_statuses:
+        if status in FUND_BASIC_STATUSES:
+            fund_basic = provider.fetch_fund_basic(status=status)
+            if not fund_basic.empty:
+                fund_basic = fund_basic.copy()
+                fund_basic["_source_priority"] = 1
+                frames.append(fund_basic)
+        if status in ETF_BASIC_STATUSES:
+            etf_basic = provider.fetch_etf_basic(status=status)
+            if not etf_basic.empty:
+                etf_basic = etf_basic.copy()
+                etf_basic["_source_priority"] = 2
+                frames.append(etf_basic)
     if not frames:
         return pd.DataFrame()
 
@@ -207,6 +213,25 @@ def _nav_coverage(storage: DuckDBStorage, symbol: str) -> Optional[Dict[str, obj
     return {"start": row[0], "end": row[1], "rows": int(row[2])}
 
 
+def _share_size_coverage(storage: DuckDBStorage, symbol: str) -> Optional[Dict[str, object]]:
+    if not storage._ensure_sidecar_attached(_FUND_NAV_SCHEMA, storage._fund_nav_db_path):
+        return None
+    table_name = f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}"
+    if not storage._table_exists(table_name):
+        return None
+    row = storage.conn.execute(
+        f"""
+        SELECT MIN(trade_date), MAX(trade_date), COUNT(*)
+        FROM {table_name}
+        WHERE symbol = ?
+        """,
+        [symbol],
+    ).fetchone()
+    if row is None or row[2] == 0:
+        return None
+    return {"start": row[0], "end": row[1], "rows": int(row[2])}
+
+
 def _coverage_covers(coverage: Optional[Dict[str, object]], start: datetime, end: datetime) -> bool:
     if not coverage:
         return False
@@ -229,13 +254,17 @@ def ingest_symbol(
     end: datetime,
     resume: bool,
     skip_nav: bool,
+    fetch_share_size: bool,
 ) -> Dict[str, object]:
     bar_cov = _bar_coverage(storage, symbol)
     nav_cov = None if skip_nav else _nav_coverage(storage, symbol)
+    share_size_cov = _share_size_coverage(storage, symbol) if fetch_share_size else None
     bars_skipped = resume and _coverage_covers(bar_cov, start, end)
     nav_skipped = skip_nav or (resume and _coverage_covers(nav_cov, start, end))
+    share_size_skipped = (not fetch_share_size) or (resume and _coverage_covers(share_size_cov, start, end))
     bars_saved = 0
     nav_saved = 0
+    share_size_saved = 0
 
     if not bars_skipped:
         bars = provider.fetch_daily_with_hfq(symbol, start, end)
@@ -245,13 +274,19 @@ def ingest_symbol(
         nav = provider.fetch_fund_nav(symbol, start, end)
         if not nav.empty:
             nav_saved = storage.save_cn_fund_nav(nav)
+    if not share_size_skipped:
+        share_size = provider.fetch_etf_share_size(symbol, start, end)
+        if not share_size.empty:
+            share_size_saved = storage.save_cn_etf_share_size(share_size)
 
     return {
         "symbol": symbol,
         "bars_saved": bars_saved,
         "nav_saved": nav_saved,
+        "share_size_saved": share_size_saved,
         "bars_skipped": bars_skipped,
         "nav_skipped": nav_skipped,
+        "share_size_skipped": share_size_skipped,
     }
 
 
@@ -265,7 +300,7 @@ def update_research_state(symbols: Sequence[str], args: argparse.Namespace, meta
         "daily_adaptable": True,
         "strategy_type": "etf_momentum_rotation",
         "data_requirement": "tushare fund_daily/fund_adj/fund_nav/fund_basic/etf_basic",
-        "required_data_fields": ["close", "adj_close", "turnover", "unit_nav", "premium_rate", "fund_name", "fund_status"],
+        "required_data_fields": ["close", "adj_close", "turnover", "unit_nav", "premium_rate", "fund_name", "fund_status", "total_size"],
         "strategy_spec": {
             "strategy_id": STRATEGY_ID,
             "strategy_type": "etf_momentum_rotation",
@@ -274,7 +309,7 @@ def update_research_state(symbols: Sequence[str], args: argparse.Namespace, meta
             "lookback_days": 25,
             "execution_lag_days": 1,
             "universe": list(symbols),
-            "required_fields": ["close", "adj_close", "turnover", "unit_nav", "premium_rate", "fund_name", "fund_status"],
+            "required_fields": ["close", "adj_close", "turnover", "unit_nav", "premium_rate", "fund_name", "fund_status", "total_size"],
             "max_position_pct": 1.0,
             "fallback_symbol": args.cash_symbol,
             "cash_symbol": args.cash_symbol,
@@ -315,6 +350,7 @@ def main() -> None:
     parser.add_argument("--start", default="2012-01-01", help="Start date YYYY-MM-DD")
     parser.add_argument("--end", default="2025-12-31", help="End date YYYY-MM-DD")
     parser.add_argument("--statuses", default="L", help="Comma-separated fund statuses, e.g. L or L,D")
+    parser.add_argument("--metadata-statuses", default="", help="Statuses fetched into fund metadata; defaults to --statuses")
     parser.add_argument("--listed-before", default=None, help="Keep funds listed on or before this date; defaults to --end")
     parser.add_argument("--listed-after", default=None, help="Keep funds listed on or after this date")
     parser.add_argument("--symbols", default="", help="Comma-separated explicit symbols; bypasses metadata universe selection")
@@ -326,6 +362,8 @@ def main() -> None:
     parser.add_argument("--no-resume", action="store_true", help="Refetch symbols even if local coverage reaches --end")
     parser.add_argument("--metadata-only", action="store_true", help="Only refresh fund metadata and research state")
     parser.add_argument("--skip-nav", action="store_true", help="Do not fetch fund_nav")
+    parser.add_argument("--fetch-share-size", action="store_true", help="Fetch Tushare etf_share_size into the fund NAV sidecar")
+    parser.add_argument("--include-benchmark-indices", action="store_true", help="Refresh Tushare mkt_idx_bmk ETF benchmark index library")
     parser.add_argument("--update-research-state", action="store_true", help="Register the selected universe for research reports")
     parser.add_argument("--source-url", default=DEFAULT_SOURCE_URL, help="Source URL stored in research metadata")
     args = parser.parse_args()
@@ -335,6 +373,7 @@ def main() -> None:
     listed_before = _parse_date(args.listed_before or args.end)
     listed_after = _parse_date(args.listed_after) if args.listed_after else None
     args.statuses = _parse_symbols(args.statuses)
+    metadata_statuses = _parse_symbols(args.metadata_statuses) if args.metadata_statuses else args.statuses
     always_symbols = _normalize_symbols(_parse_symbols(args.always_symbols))
 
     storage = DuckDBStorage()
@@ -342,9 +381,13 @@ def main() -> None:
     provider.connect()
 
     try:
-        metadata = fetch_fund_metadata(provider, args.statuses)
+        metadata = fetch_fund_metadata(provider, metadata_statuses)
         if not metadata.empty:
             storage.save_cn_fund_instruments(metadata)
+        if args.include_benchmark_indices:
+            benchmark_indices = provider.fetch_etf_benchmark_indices()
+            if not benchmark_indices.empty:
+                storage.save_cn_etf_benchmark_indices(benchmark_indices)
         explicit = _normalize_symbols([*_parse_symbols(args.symbols), *_load_symbol_file(args.symbol_file)])
         if explicit:
             symbols = _normalize_symbols([*explicit, args.cash_symbol])
@@ -386,8 +429,9 @@ def main() -> None:
                     end,
                     resume=not args.no_resume,
                     skip_nav=args.skip_nav,
+                    fetch_share_size=args.fetch_share_size,
                 )
-                if result["bars_skipped"] and result["nav_skipped"]:
+                if result["bars_skipped"] and result["nav_skipped"] and result["share_size_skipped"]:
                     skipped += 1
                 else:
                     done += 1
@@ -396,7 +440,8 @@ def main() -> None:
                 remaining = (len(symbols) - index) / rate if rate > 0 else 0.0
                 logger.info(
                     f"[{index}/{len(symbols)}] {symbol}: bars={result['bars_saved']} "
-                    f"nav={result['nav_saved']} skipped=({result['bars_skipped']},{result['nav_skipped']}) "
+                    f"nav={result['nav_saved']} share_size={result['share_size_saved']} "
+                    f"skipped=({result['bars_skipped']},{result['nav_skipped']},{result['share_size_skipped']}) "
                     f"eta={remaining / 60:.1f}m"
                 )
             except Exception as exc:

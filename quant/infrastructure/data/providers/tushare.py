@@ -519,7 +519,8 @@ class TushareProvider(DataFeed):
         frame["instrument_type"] = "ETF"
         frame["status"] = frame["list_status"] if "list_status" in frame.columns else status
         frame["market"] = "E"
-        frame["delist_date"] = ""
+        if "delist_date" not in frame.columns:
+            frame["delist_date"] = ""
         return frame
 
     def fetch_fund_basic(self, status: str = "L") -> pd.DataFrame:
@@ -531,7 +532,12 @@ class TushareProvider(DataFeed):
             df = self._api.fund_basic(
                 market="E",
                 status=status,
-                fields="ts_code,name,fund_type,list_date,status,market,benchmark,type,invest_type",
+                fields=(
+                    "ts_code,name,management,custodian,fund_type,found_date,due_date,list_date,"
+                    "issue_date,delist_date,issue_amount,m_fee,c_fee,duration_year,p_value,"
+                    "min_amount,exp_return,benchmark,status,invest_type,type,trustee,"
+                    "purc_startdate,redm_startdate,market"
+                ),
             )
         except Exception as e:
             self.logger.warning(f"Error fetching fund_basic status={status}: {e}")
@@ -542,10 +548,89 @@ class TushareProvider(DataFeed):
         frame = df.copy()
         frame["symbol"] = frame["ts_code"].apply(self._from_ts_code)
         frame["instrument_type"] = frame["symbol"].apply(lambda value: "ETF" if str(value).startswith(("15", "51", "52", "56", "58")) else "LOF")
-        frame["delist_date"] = ""
+        if "delist_date" not in frame.columns:
+            frame["delist_date"] = ""
         frame["index_code"] = ""
         frame["index_name"] = frame.get("benchmark", "")
         frame["exchange"] = frame["ts_code"].astype(str).str.split(".").str[-1]
+        return frame
+
+    def fetch_etf_benchmark_indices(
+        self,
+        bmk_level: Optional[str] = None,
+        bmk_type: Optional[str] = None,
+        ts_code: Optional[str] = None,
+    ) -> pd.DataFrame:
+        if self._api is None:
+            return pd.DataFrame()
+
+        kwargs: Dict[str, str] = {
+            "fields": "ts_code,symbol,name,fullname,bmk_level,bmk_type,bmk_src,idx_type",
+        }
+        if bmk_level:
+            kwargs["bmk_level"] = str(bmk_level)
+        if bmk_type:
+            kwargs["bmk_type"] = str(bmk_type)
+        if ts_code:
+            kwargs["ts_code"] = str(ts_code)
+
+        self._rate_limit()
+        try:
+            df = self._api.mkt_idx_bmk(**kwargs)
+        except Exception as e:
+            self.logger.warning(f"Error fetching mkt_idx_bmk: {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df.copy()
+
+    def fetch_etf_share_size(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        if self._api is None or not self._is_fund(symbol):
+            return pd.DataFrame()
+
+        ts_code = self._to_ts_code(symbol)
+        total_days = (end - start).days
+        if total_days <= self._MAX_DAYS_PER_REQUEST:
+            return self._fetch_etf_share_size_chunk(ts_code, symbol, start, end)
+
+        chunks: List[pd.DataFrame] = []
+        chunk_start = start
+        from datetime import timedelta
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=self._MAX_DAYS_PER_REQUEST), end)
+            chunk_df = self._fetch_etf_share_size_chunk(ts_code, symbol, chunk_start, chunk_end)
+            if not chunk_df.empty:
+                chunks.append(chunk_df)
+            chunk_start = chunk_end + timedelta(days=1)
+
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).drop_duplicates(
+            subset=["symbol", "trade_date"],
+        ).sort_values("trade_date").reset_index(drop=True)
+
+    def _fetch_etf_share_size_chunk(self, ts_code: str, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        self._rate_limit()
+        try:
+            df = self._api.etf_share_size(
+                ts_code=ts_code,
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                fields="trade_date,ts_code,etf_name,total_share,total_size,nav,close,exchange",
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching etf_share_size for {symbol}: {e}")
+            return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        frame = df.copy()
+        frame["symbol"] = frame["ts_code"].apply(self._from_ts_code)
+        if "trade_date" in frame.columns:
+            frame["trade_date"] = pd.to_datetime(frame["trade_date"], format="%Y%m%d", errors="coerce")
+        for col in ("total_share", "total_size", "nav", "close"):
+            if col in frame.columns:
+                frame[col] = pd.to_numeric(frame[col], errors="coerce")
         return frame
 
     def fetch_fund_nav(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
@@ -577,7 +662,7 @@ class TushareProvider(DataFeed):
                 ts_code=ts_code,
                 start_date=start.strftime("%Y%m%d"),
                 end_date=end.strftime("%Y%m%d"),
-                fields="ts_code,ann_date,nav_date,unit_nav,accum_nav,net_asset,total_netasset,adj_nav",
+                fields="ts_code,ann_date,nav_date,unit_nav,accum_nav,accum_div,net_asset,total_netasset,adj_nav",
             )
         except Exception as e:
             self.logger.warning(f"Error fetching fund_nav for {symbol}: {e}")

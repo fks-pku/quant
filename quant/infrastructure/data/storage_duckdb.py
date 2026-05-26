@@ -21,6 +21,7 @@ import pandas as pd
 
 from quant.domain.models.order import Order
 from quant.domain.ports.storage import Storage
+from quant.infrastructure.data.fund_classification import classify_cn_fund
 from quant.shared.utils.logger import setup_logger
 from quant.shared.utils.symbol_utils import detect_market as _detect_market
 
@@ -47,6 +48,20 @@ _FUND_NAV_SCHEMA = "fund_nav"
 _CN_DAILY_TABLE = "daily_cn_ochl"
 _FUND_INSTRUMENTS_TABLE = "cn_fund_instruments"
 _FUND_NAV_TABLE = "cn_fund_nav"
+_FUND_ETF_SHARE_SIZE_TABLE = "cn_etf_share_size"
+_FUND_ETF_BENCHMARK_TABLE = "cn_etf_benchmark_indices"
+_FUND_CLASSIFICATION_COLUMNS = (
+    "classification_version",
+    "asset_class",
+    "market_region",
+    "fund_strategy",
+    "fund_category",
+    "category_group",
+    "classification_source",
+    "classification_confidence",
+    "classification_reason",
+    "classification_excluded",
+)
 _CN_ETF_PREFIXES = ("15", "16", "50", "51", "52", "56", "58")
 _CN_INDEX_SYMBOLS = {"000300", "399001", "399006", "399673"}
 
@@ -181,6 +196,19 @@ class DuckDBStorage(Storage):
         except Exception:
             return False
 
+    def _ensure_columns(self, table_name: str, columns: Dict[str, str]) -> None:
+        if self._read_only:
+            return
+        try:
+            rows = self.conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+        except Exception:
+            return
+        existing = {str(row[1]) for row in rows}
+        for column_name, column_type in columns.items():
+            if column_name in existing:
+                continue
+            self.conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
     def _ensure_table(self, table_name: str) -> None:
         if self._read_only:
             return
@@ -304,6 +332,97 @@ class DuckDBStorage(Storage):
                     index_code VARCHAR DEFAULT '',
                     index_name VARCHAR DEFAULT '',
                     exchange VARCHAR DEFAULT '',
+                    management VARCHAR DEFAULT '',
+                    custodian VARCHAR DEFAULT '',
+                    found_date VARCHAR DEFAULT '',
+                    due_date VARCHAR DEFAULT '',
+                    issue_date VARCHAR DEFAULT '',
+                    issue_amount DOUBLE,
+                    m_fee DOUBLE,
+                    c_fee DOUBLE,
+                    duration_year DOUBLE,
+                    p_value DOUBLE,
+                    min_amount DOUBLE,
+                    exp_return DOUBLE,
+                    benchmark VARCHAR DEFAULT '',
+                    invest_type VARCHAR DEFAULT '',
+                    type VARCHAR DEFAULT '',
+                    trustee VARCHAR DEFAULT '',
+                    purc_startdate VARCHAR DEFAULT '',
+                    redm_startdate VARCHAR DEFAULT '',
+                    csname VARCHAR DEFAULT '',
+                    extname VARCHAR DEFAULT '',
+                    cname VARCHAR DEFAULT '',
+                    setup_date VARCHAR DEFAULT '',
+                    mgr_name VARCHAR DEFAULT '',
+                    custod_name VARCHAR DEFAULT '',
+                    mgt_fee DOUBLE,
+                    etf_type VARCHAR DEFAULT '',
+                    classification_version VARCHAR DEFAULT '',
+                    asset_class VARCHAR DEFAULT '',
+                    market_region VARCHAR DEFAULT '',
+                    fund_strategy VARCHAR DEFAULT '',
+                    fund_category VARCHAR DEFAULT '',
+                    category_group VARCHAR DEFAULT '',
+                    classification_source VARCHAR DEFAULT '',
+                    classification_confidence DOUBLE,
+                    classification_reason VARCHAR DEFAULT '',
+                    classification_excluded BOOLEAN DEFAULT FALSE,
+                    updated_at TIMESTAMP
+                )
+            """)
+            self._ensure_columns(
+                table_name,
+                {
+                    "management": "VARCHAR DEFAULT ''",
+                    "custodian": "VARCHAR DEFAULT ''",
+                    "found_date": "VARCHAR DEFAULT ''",
+                    "due_date": "VARCHAR DEFAULT ''",
+                    "issue_date": "VARCHAR DEFAULT ''",
+                    "issue_amount": "DOUBLE",
+                    "m_fee": "DOUBLE",
+                    "c_fee": "DOUBLE",
+                    "duration_year": "DOUBLE",
+                    "p_value": "DOUBLE",
+                    "min_amount": "DOUBLE",
+                    "exp_return": "DOUBLE",
+                    "benchmark": "VARCHAR DEFAULT ''",
+                    "invest_type": "VARCHAR DEFAULT ''",
+                    "type": "VARCHAR DEFAULT ''",
+                    "trustee": "VARCHAR DEFAULT ''",
+                    "purc_startdate": "VARCHAR DEFAULT ''",
+                    "redm_startdate": "VARCHAR DEFAULT ''",
+                    "csname": "VARCHAR DEFAULT ''",
+                    "extname": "VARCHAR DEFAULT ''",
+                    "cname": "VARCHAR DEFAULT ''",
+                    "setup_date": "VARCHAR DEFAULT ''",
+                    "mgr_name": "VARCHAR DEFAULT ''",
+                    "custod_name": "VARCHAR DEFAULT ''",
+                    "mgt_fee": "DOUBLE",
+                    "etf_type": "VARCHAR DEFAULT ''",
+                    "classification_version": "VARCHAR DEFAULT ''",
+                    "asset_class": "VARCHAR DEFAULT ''",
+                    "market_region": "VARCHAR DEFAULT ''",
+                    "fund_strategy": "VARCHAR DEFAULT ''",
+                    "fund_category": "VARCHAR DEFAULT ''",
+                    "category_group": "VARCHAR DEFAULT ''",
+                    "classification_source": "VARCHAR DEFAULT ''",
+                    "classification_confidence": "DOUBLE",
+                    "classification_reason": "VARCHAR DEFAULT ''",
+                    "classification_excluded": "BOOLEAN DEFAULT FALSE",
+                },
+            )
+        elif table_name == f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}":
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    ts_code VARCHAR PRIMARY KEY,
+                    symbol VARCHAR DEFAULT '',
+                    name VARCHAR DEFAULT '',
+                    fullname VARCHAR DEFAULT '',
+                    bmk_level VARCHAR DEFAULT '',
+                    bmk_type VARCHAR DEFAULT '',
+                    bmk_src VARCHAR DEFAULT '',
+                    idx_type VARCHAR DEFAULT '',
                     updated_at TIMESTAMP
                 )
             """)
@@ -312,12 +431,36 @@ class DuckDBStorage(Storage):
                 CREATE TABLE IF NOT EXISTS {table_name} (
                     symbol VARCHAR,
                     nav_date DATE,
+                    ann_date VARCHAR DEFAULT '',
                     unit_nav DOUBLE,
                     accum_nav DOUBLE,
+                    accum_div DOUBLE,
                     adj_nav DOUBLE,
                     net_asset DOUBLE,
                     total_netasset DOUBLE,
                     PRIMARY KEY (symbol, nav_date)
+                )
+            """)
+            self._ensure_columns(
+                table_name,
+                {
+                    "ann_date": "VARCHAR DEFAULT ''",
+                    "accum_div": "DOUBLE",
+                },
+            )
+        elif table_name == f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}":
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    symbol VARCHAR,
+                    trade_date DATE,
+                    etf_name VARCHAR DEFAULT '',
+                    total_share DOUBLE,
+                    total_size DOUBLE,
+                    nav DOUBLE,
+                    close DOUBLE,
+                    exchange VARCHAR DEFAULT '',
+                    updated_at TIMESTAMP,
+                    PRIMARY KEY (symbol, trade_date)
                 )
             """)
 
@@ -536,6 +679,13 @@ class DuckDBStorage(Storage):
             return False
         return self._table_exists(f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}")
 
+    def _fund_etf_share_size_available(self) -> bool:
+        if not self._fund_nav_db_path.exists():
+            return False
+        if not self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path):
+            return False
+        return self._table_exists(f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}")
+
     def _get_fund_enriched_bars(
         self,
         symbols: List[str],
@@ -544,7 +694,8 @@ class DuckDBStorage(Storage):
     ) -> Optional[pd.DataFrame]:
         meta_available = self._fund_meta_available()
         nav_available = self._fund_nav_available()
-        if not meta_available and not nav_available:
+        size_available = self._fund_etf_share_size_available()
+        if not meta_available and not nav_available and not size_available:
             return None
         table_symbols = list(dict.fromkeys(symbols))
         placeholders = ", ".join("?" for _ in table_symbols)
@@ -564,6 +715,30 @@ class DuckDBStorage(Storage):
                     "m.index_code",
                     "m.index_name",
                     "m.exchange AS fund_exchange",
+                    "m.management",
+                    "m.custodian",
+                    "m.found_date",
+                    "m.due_date",
+                    "m.issue_date",
+                    "m.benchmark",
+                    "m.invest_type",
+                    "m.type AS fund_contract_type",
+                    "m.purc_startdate",
+                    "m.redm_startdate",
+                    "m.setup_date",
+                    "m.mgr_name",
+                    "m.custod_name",
+                    "m.etf_type",
+                    "m.classification_version",
+                    "m.asset_class",
+                    "m.market_region",
+                    "m.fund_strategy",
+                    "m.fund_category",
+                    "m.category_group",
+                    "m.classification_source",
+                    "m.classification_confidence",
+                    "m.classification_reason",
+                    "m.classification_excluded",
                 ]
             )
             joins.append(
@@ -580,7 +755,6 @@ class DuckDBStorage(Storage):
                     "n.adj_nav",
                     "n.net_asset",
                     "n.total_netasset",
-                    "CASE WHEN n.unit_nav > 0 THEN b.close / n.unit_nav - 1 ELSE NULL END AS premium_rate",
                 ]
             )
             joins.append(
@@ -590,6 +764,39 @@ class DuckDBStorage(Storage):
                  AND CAST(b.timestamp AS DATE) = n.nav_date
                 """
             )
+        if size_available:
+            select_columns.extend(
+                [
+                    "s.etf_name",
+                    "s.total_share",
+                    "s.total_size",
+                    "s.nav AS etf_nav",
+                    "s.close AS etf_size_close",
+                    "s.exchange AS etf_size_exchange",
+                ]
+            )
+            joins.append(
+                f"""
+                LEFT JOIN {_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE} s
+                  ON b.symbol = s.symbol
+                 AND CAST(b.timestamp AS DATE) = s.trade_date
+                """
+            )
+        nav_value_expr = None
+        size_expr = None
+        if nav_available and size_available:
+            nav_value_expr = "COALESCE(n.unit_nav, s.nav)"
+            size_expr = "COALESCE(s.total_size, n.total_netasset, n.net_asset)"
+        elif nav_available:
+            nav_value_expr = "n.unit_nav"
+            size_expr = "COALESCE(n.total_netasset, n.net_asset)"
+        elif size_available:
+            nav_value_expr = "s.nav"
+            size_expr = "s.total_size"
+        if nav_value_expr:
+            select_columns.append(f"CASE WHEN {nav_value_expr} > 0 THEN b.close / {nav_value_expr} - 1 ELSE NULL END AS premium_rate")
+        if size_expr:
+            select_columns.append(f"{size_expr} AS fund_size")
         query = f"""
             SELECT {", ".join(select_columns)}
             FROM {_ETF_SCHEMA}.{_CN_DAILY_TABLE} b
@@ -1069,7 +1276,7 @@ class DuckDBStorage(Storage):
         frame = df.copy()
         if "symbol" not in frame.columns and "ts_code" in frame.columns:
             frame["symbol"] = frame["ts_code"].astype(str).str.split(".").str[0]
-        for col in (
+        text_cols = (
             "ts_code",
             "name",
             "fund_type",
@@ -1081,10 +1288,59 @@ class DuckDBStorage(Storage):
             "index_code",
             "index_name",
             "exchange",
-        ):
+            "management",
+            "custodian",
+            "found_date",
+            "due_date",
+            "issue_date",
+            "benchmark",
+            "invest_type",
+            "type",
+            "trustee",
+            "purc_startdate",
+            "redm_startdate",
+            "csname",
+            "extname",
+            "cname",
+            "setup_date",
+            "mgr_name",
+            "custod_name",
+            "etf_type",
+            "classification_version",
+            "asset_class",
+            "market_region",
+            "fund_strategy",
+            "fund_category",
+            "category_group",
+            "classification_source",
+            "classification_reason",
+        )
+        numeric_cols = (
+            "issue_amount",
+            "m_fee",
+            "c_fee",
+            "duration_year",
+            "p_value",
+            "min_amount",
+            "exp_return",
+            "mgt_fee",
+            "classification_confidence",
+        )
+        for col in text_cols:
             if col not in frame.columns:
                 frame[col] = ""
             frame[col] = frame[col].fillna("").astype(str)
+        for col in numeric_cols:
+            if col not in frame.columns:
+                frame[col] = pd.NA
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        if "classification_excluded" not in frame.columns:
+            frame["classification_excluded"] = False
+        frame = self._attach_benchmark_fields_for_classification(frame)
+        classifications = frame.apply(lambda row: classify_cn_fund(row.to_dict()).as_dict(), axis=1)
+        for idx, classification in classifications.items():
+            for col, value in classification.items():
+                frame.at[idx, col] = value
         frame["updated_at"] = pd.Timestamp.now("UTC").tz_localize(None)
         cols = [
             "symbol",
@@ -1099,12 +1355,157 @@ class DuckDBStorage(Storage):
             "index_code",
             "index_name",
             "exchange",
+            "management",
+            "custodian",
+            "found_date",
+            "due_date",
+            "issue_date",
+            "issue_amount",
+            "m_fee",
+            "c_fee",
+            "duration_year",
+            "p_value",
+            "min_amount",
+            "exp_return",
+            "benchmark",
+            "invest_type",
+            "type",
+            "trustee",
+            "purc_startdate",
+            "redm_startdate",
+            "csname",
+            "extname",
+            "cname",
+            "setup_date",
+            "mgr_name",
+            "custod_name",
+            "mgt_fee",
+            "etf_type",
+            "classification_version",
+            "asset_class",
+            "market_region",
+            "fund_strategy",
+            "fund_category",
+            "category_group",
+            "classification_source",
+            "classification_confidence",
+            "classification_reason",
+            "classification_excluded",
             "updated_at",
         ]
         frame = frame[cols].dropna(subset=["symbol"]).drop_duplicates(subset=["symbol"], keep="last")
+        col_sql = ", ".join(cols)
         with self._lock:
-            self.conn.execute(f"INSERT OR REPLACE INTO {table_name} SELECT * FROM frame")
+            self.conn.execute(f"INSERT OR REPLACE INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
         self.logger.info(f"Saved {len(frame)} CN fund instruments")
+        return len(frame)
+
+    def _attach_benchmark_fields_for_classification(self, frame: pd.DataFrame) -> pd.DataFrame:
+        table_name = f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}"
+        if "index_code" not in frame.columns or not self._table_exists(table_name):
+            return frame
+        try:
+            benchmarks = self.conn.execute(
+                f"""
+                SELECT
+                    UPPER(CAST(ts_code AS VARCHAR)) AS index_code_key,
+                    bmk_level,
+                    bmk_type,
+                    bmk_src,
+                    idx_type,
+                    name AS bmk_name,
+                    fullname AS bmk_fullname
+                FROM {table_name}
+                """
+            ).fetchdf()
+        except Exception:
+            return frame
+        if benchmarks.empty:
+            return frame
+        result = frame.copy()
+        result["_index_code_key"] = result["index_code"].fillna("").astype(str).str.upper()
+        for col in ("bmk_level", "bmk_type", "bmk_src", "idx_type", "bmk_name", "bmk_fullname"):
+            value_map = dict(zip(benchmarks["index_code_key"], benchmarks[col]))
+            if col not in result.columns:
+                result[col] = ""
+            existing = result[col].fillna("").astype(str)
+            mapped = result["_index_code_key"].map(value_map).fillna("").astype(str)
+            result[col] = existing.where(existing != "", mapped)
+        return result.drop(columns=["_index_code_key"])
+
+    def refresh_cn_fund_classifications(self) -> int:
+        table_name = f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}"
+        benchmark_table = f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}"
+        self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
+        if not self._table_exists(table_name):
+            return 0
+        benchmark_join = ""
+        benchmark_select = """
+                '' AS bmk_level,
+                '' AS bmk_type,
+                '' AS bmk_src,
+                '' AS idx_type,
+                '' AS bmk_name,
+                '' AS bmk_fullname
+        """
+        if self._table_exists(benchmark_table):
+            benchmark_join = f"""
+            LEFT JOIN {benchmark_table} b
+              ON UPPER(CAST(f.index_code AS VARCHAR)) = UPPER(CAST(b.ts_code AS VARCHAR))
+            """
+            benchmark_select = """
+                b.bmk_level AS bmk_level,
+                b.bmk_type AS bmk_type,
+                b.bmk_src AS bmk_src,
+                b.idx_type AS idx_type,
+                b.name AS bmk_name,
+                b.fullname AS bmk_fullname
+            """
+        frame = self.conn.execute(
+            f"""
+            SELECT f.*, {benchmark_select}
+            FROM {table_name} f
+            {benchmark_join}
+            """
+        ).fetchdf()
+        if frame.empty:
+            return 0
+        classifications = frame.apply(lambda row: classify_cn_fund(row.to_dict()).as_dict(), axis=1)
+        update_frame = pd.DataFrame([{"symbol": frame.loc[idx, "symbol"], **classification} for idx, classification in classifications.items()])
+        cols = list(_FUND_CLASSIFICATION_COLUMNS)
+        set_sql = ", ".join(f"{col} = c.{col}" for col in cols)
+        select_sql = ", ".join(["symbol", *cols])
+        with self._lock:
+            self.conn.execute(
+                f"""
+                UPDATE {table_name} AS t
+                SET {set_sql}
+                FROM (SELECT {select_sql} FROM update_frame) AS c
+                WHERE t.symbol = c.symbol
+                """
+            )
+        self.logger.info(f"Refreshed CN fund classifications for {len(update_frame)} instruments")
+        return len(update_frame)
+
+    def save_cn_etf_benchmark_indices(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        table_name = f"{_FUND_META_SCHEMA}.{_FUND_ETF_BENCHMARK_TABLE}"
+        self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path)
+        self._ensure_table(table_name)
+        frame = df.copy()
+        for col in ("ts_code", "symbol", "name", "fullname", "bmk_level", "bmk_type", "bmk_src", "idx_type"):
+            if col not in frame.columns:
+                frame[col] = ""
+            frame[col] = frame[col].fillna("").astype(str)
+        frame["updated_at"] = pd.Timestamp.now("UTC").tz_localize(None)
+        cols = ["ts_code", "symbol", "name", "fullname", "bmk_level", "bmk_type", "bmk_src", "idx_type", "updated_at"]
+        frame = frame[cols].dropna(subset=["ts_code"]).drop_duplicates(subset=["ts_code"], keep="last")
+        col_sql = ", ".join(cols)
+        with self._lock:
+            self.conn.execute(f"INSERT OR REPLACE INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
+        self.logger.info(f"Saved {len(frame)} CN ETF benchmark index rows")
+        self.refresh_cn_fund_classifications()
         return len(frame)
 
     def save_cn_fund_nav(self, df: pd.DataFrame) -> int:
@@ -1119,18 +1520,54 @@ class DuckDBStorage(Storage):
         if "nav_date" not in frame.columns and "trade_date" in frame.columns:
             frame["nav_date"] = frame["trade_date"]
         frame["nav_date"] = pd.to_datetime(frame["nav_date"], errors="coerce").dt.date
-        for col in ("unit_nav", "accum_nav", "adj_nav", "net_asset", "total_netasset"):
+        if "ann_date" not in frame.columns:
+            frame["ann_date"] = ""
+        frame["ann_date"] = frame["ann_date"].fillna("").astype(str)
+        for col in ("unit_nav", "accum_nav", "accum_div", "adj_nav", "net_asset", "total_netasset"):
             if col not in frame.columns:
                 frame[col] = pd.NA
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
-        cols = ["symbol", "nav_date", "unit_nav", "accum_nav", "adj_nav", "net_asset", "total_netasset"]
+        cols = ["symbol", "nav_date", "ann_date", "unit_nav", "accum_nav", "accum_div", "adj_nav", "net_asset", "total_netasset"]
         frame = frame[cols].dropna(subset=["symbol", "nav_date"]).drop_duplicates(subset=["symbol", "nav_date"], keep="last")
         with self._lock:
             self.conn.execute(
                 f"DELETE FROM {table_name} WHERE (symbol, nav_date) IN (SELECT symbol, nav_date FROM frame)"
             )
-            self.conn.execute(f"INSERT INTO {table_name} SELECT * FROM frame")
+            col_sql = ", ".join(cols)
+            self.conn.execute(f"INSERT INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
         self.logger.info(f"Saved {len(frame)} CN fund NAV rows")
+        return len(frame)
+
+    def save_cn_etf_share_size(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        table_name = f"{_FUND_NAV_SCHEMA}.{_FUND_ETF_SHARE_SIZE_TABLE}"
+        self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path)
+        self._ensure_table(table_name)
+        frame = df.copy()
+        if "symbol" not in frame.columns and "ts_code" in frame.columns:
+            frame["symbol"] = frame["ts_code"].astype(str).str.split(".").str[0]
+        if "trade_date" not in frame.columns and "nav_date" in frame.columns:
+            frame["trade_date"] = frame["nav_date"]
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
+        for col in ("etf_name", "exchange"):
+            if col not in frame.columns:
+                frame[col] = ""
+            frame[col] = frame[col].fillna("").astype(str)
+        for col in ("total_share", "total_size", "nav", "close"):
+            if col not in frame.columns:
+                frame[col] = pd.NA
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        frame["updated_at"] = pd.Timestamp.now("UTC").tz_localize(None)
+        cols = ["symbol", "trade_date", "etf_name", "total_share", "total_size", "nav", "close", "exchange", "updated_at"]
+        frame = frame[cols].dropna(subset=["symbol", "trade_date"]).drop_duplicates(subset=["symbol", "trade_date"], keep="last")
+        with self._lock:
+            self.conn.execute(
+                f"DELETE FROM {table_name} WHERE (symbol, trade_date) IN (SELECT symbol, trade_date FROM frame)"
+            )
+            col_sql = ", ".join(cols)
+            self.conn.execute(f"INSERT INTO {table_name} ({col_sql}) SELECT {col_sql} FROM frame")
+        self.logger.info(f"Saved {len(frame)} CN ETF share-size rows")
         return len(frame)
 
     def get_cn_dividends(

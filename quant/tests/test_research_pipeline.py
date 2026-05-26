@@ -705,6 +705,182 @@ def test_gold_equity_dynamic_pit_universe_keeps_wide_backtest_window_candidates(
     assert universe["universe_end"] == "2025-12-31"
 
 
+def test_pit_fund_category_universe_selects_stable_categories(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_pit_fund_category_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                index_code VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('510300', '沪深300ETF', '沪深300', '000300.SH', DATE '2015-01-01', NULL, 'ETF'),
+            ('515300', '沪深300ETF增强', '沪深300', '000300.SH', DATE '2019-01-01', NULL, 'ETF'),
+            ('510880', '红利ETF', '上证红利指数', '000015.SH', DATE '2015-01-01', NULL, 'ETF'),
+            ('518880', '黄金ETF', '黄金9999', '', DATE '2015-01-01', NULL, 'ETF')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute(
+            """
+            INSERT INTO daily_cn_ochl VALUES
+            (TIMESTAMP '2020-01-02', '510300'),
+            (TIMESTAMP '2020-01-02', '515300'),
+            (TIMESTAMP '2020-01-02', '510880'),
+            (TIMESTAMP '2020-01-02', '518880')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_nav VALUES
+            ('510300', DATE '2020-01-02', 100000000.0, NULL),
+            ('515300', DATE '2020-01-02', 900000000.0, NULL),
+            ('510880', DATE '2020-01-02', 200000000.0, NULL),
+            ('518880', DATE '2020-01-02', 300000000.0, NULL)
+            """
+        )
+    finally:
+        conn.close()
+
+    universe = build_pit_fund_category_universe(
+        ["equity_cn_broad_csi300", "equity_cn_strategy_dividend", "commodity_gold"],
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+    )
+
+    assert universe["category_symbols"]["equity_cn_broad_csi300"] == ["510300"]
+    assert universe["category_symbols"]["equity_cn_strategy_dividend"] == ["510880"]
+    assert universe["category_symbols"]["commodity_gold"] == ["518880"]
+    assert "515300" not in universe["symbols"]
+
+
+def test_pit_fund_category_universe_joins_tushare_benchmark_classification(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_pit_fund_category_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                index_code VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE cn_etf_benchmark_indices (
+                ts_code VARCHAR,
+                symbol VARCHAR,
+                name VARCHAR,
+                fullname VARCHAR,
+                bmk_level VARCHAR,
+                bmk_type VARCHAR,
+                bmk_src VARCHAR,
+                idx_type VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_fund_instruments VALUES
+            ('560999', '核心宽基ETF', '核心宽基指数', '000999.SH', DATE '2020-01-01', NULL, 'ETF')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_etf_benchmark_indices VALUES
+            ('000999.SH', '000999', '核心宽基', '核心宽基指数', '一类库', '宽基', '中证指数', '规模类指数')
+            """
+        )
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        conn.execute("INSERT INTO daily_cn_ochl VALUES (TIMESTAMP '2021-01-04', '560999')")
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        conn.execute("INSERT INTO cn_fund_nav VALUES ('560999', DATE '2021-01-04', 100000000.0, NULL)")
+    finally:
+        conn.close()
+
+    universe = build_pit_fund_category_universe(
+        ["equity_cn_broad_index"],
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+    )
+
+    assert universe["category_symbols"]["equity_cn_broad_index"] == ["560999"]
+    assert universe["audit"][0]["classification_source"] == "mkt_idx_bmk"
+    assert universe["audit"][0]["classification_reason"] == "mkt_idx_bmk bmk_type=宽基 idx_type=规模类指数"
+
+
 def test_gold_equity_pit_universe_can_keep_primary_symbol_per_category(tmp_path):
     import duckdb
 
