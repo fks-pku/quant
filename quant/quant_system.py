@@ -132,6 +132,25 @@ class QuantSystem:
                 broker.unlock_trade(password=password, trade_mode=trade_mode)
             self.engine.set_broker(broker)
             self.logger.info(f"Futu broker initialized (mode: {trade_mode})")
+        elif broker_name == "qmt":
+            host = self.config_loader.get("brokers.yaml", "qmt", "host", default="127.0.0.1")
+            port = self.config_loader.get("brokers.yaml", "qmt", "port", default=58610)
+            account = self.config_loader.get("brokers.yaml", "qmt", "account", default="")
+            password = self.config_loader.get("brokers.yaml", "qmt", "password", default="")
+            trade_mode = self.config_loader.get("brokers.yaml", "qmt", "trade_mode", default="SIMULATE")
+            mini_qmt_path = self.config_loader.get("brokers.yaml", "qmt", "mini_qmt_path", default="")
+            from quant.infrastructure.execution.brokers.qmt import QMTBroker
+            broker = QMTBroker(
+                host=host,
+                port=port,
+                account=account,
+                password=password,
+                trade_mode=trade_mode,
+                mini_qmt_path=mini_qmt_path,
+            )
+            broker.connect()
+            self.engine.set_broker(broker)
+            self.logger.info(f"QMT broker initialized (mode: {trade_mode})")
 
     def _setup_order_manager(self) -> None:
         """Setup order manager and fill handler, wire to engine."""
@@ -142,8 +161,8 @@ class QuantSystem:
             config=self.config,
         )
         if self.engine.broker:
-            order_manager.register_broker("paper", self.engine.broker)
-            order_manager.register_broker("futu", self.engine.broker)
+            broker_name = getattr(self.engine.broker, '_name', 'paper')
+            order_manager.register_broker(broker_name, self.engine.broker)
         self.engine.set_order_manager(order_manager)
         self.logger.info("OrderManager initialized")
 
