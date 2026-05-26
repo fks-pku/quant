@@ -16,6 +16,20 @@ futu:
   # Trading mode: SIMULATE (paper trading) or REAL (live trading)
   trade_mode: SIMULATE
 
+qmt:
+  # MiniQMT (xtquant) - A-share trading
+  host: "127.0.0.1"
+  port: 58610
+  # 资金账号，留空自动取默认账号
+  account: ""
+  # 交易密码（实盘必填，模拟盘留空）
+  password: ""
+  # 交易模式: SIMULATE (模拟盘) 或 REAL (实盘)
+  trade_mode: SIMULATE
+  # xtquant 库路径（非必填，默认从 QMT 安装目录自动发现）
+  # 示例: "D:/国金证券QMT交易端/bin.x64/Lib/site-packages"
+  mini_qmt_path: ""
+
 ibkr:
   host: "127.0.0.1"
   port: 7497
