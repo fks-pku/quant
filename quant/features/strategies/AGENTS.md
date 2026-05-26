@@ -21,6 +21,7 @@
 
 - 策略层不变量详见 `quant/features/strategies/docs/strategy-invariants.md`；成交、现金、费用、T+1、NAV 等执行语义属于 `quant/features/backtest/docs/backtest-invariants.md`
 - 所有策略必须使用 `@strategy` 装饰器注册
+- 所有策略的买入执行都必须接受框架层 ADV 约束：最终 BUY 成交金额不得超过配置的 `max_participation_rate * ADV value`，研究默认生产门槛为 5% ADV；策略不得用自身下单逻辑绕过该约束
 - 策略 ID 唯一，不区分大小写
 - 策略目录结构: `strategies/<name>/strategy.py`
 - 顶层策略准入门槛：只有严格本地回测证明 `CAGR > 10%` 的策略目录才允许直接放在 `strategies/<name>/`；其余候选必须放在 `strategies/reject/<name>/`

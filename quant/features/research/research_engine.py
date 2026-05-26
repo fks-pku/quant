@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from quant.domain.ports.research_store import ResearchStore
-from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, ResearchConfig, ResearchResult, ResearchLogEntry, RawStrategy
+from quant.features.research.models import (
+    DEFAULT_A_SHARE_SYMBOLS,
+    DEFAULT_RESEARCH_INITIAL_CASH,
+    ResearchConfig,
+    ResearchResult,
+    ResearchLogEntry,
+    RawStrategy,
+)
 from quant.features.research.scout import StrategyScout
 from quant.features.research.evaluator import StrategyEvaluator
 from quant.features.research.integrator import StrategyIntegrator
@@ -1860,7 +1867,7 @@ class ResearchEngine:
             "end": end,
         }
         if any(_is_a_share_symbol(symbol) for symbol in symbols) and self._walkforward_accepts_parameter("initial_cash"):
-            kwargs["initial_cash"] = 500000
+            kwargs["initial_cash"] = self._default_initial_cash()
         archive_dir = self._strategy_archive_dir(strategy_id)
         if archive_dir and self._walkforward_accepts_parameter("strategy_archive_dir"):
             kwargs["strategy_archive_dir"] = archive_dir
@@ -1870,6 +1877,13 @@ class ResearchEngine:
 
     def _walkforward_accepts_benchmark_data(self) -> bool:
         return self._walkforward_accepts_parameter("benchmark_data")
+
+    def _default_initial_cash(self) -> float:
+        try:
+            value = float(getattr(self.config, "default_initial_cash", DEFAULT_RESEARCH_INITIAL_CASH))
+        except (TypeError, ValueError):
+            return DEFAULT_RESEARCH_INITIAL_CASH
+        return value if value > 0 else DEFAULT_RESEARCH_INITIAL_CASH
 
     def _walkforward_accepts_parameter(self, name: str) -> bool:
         try:

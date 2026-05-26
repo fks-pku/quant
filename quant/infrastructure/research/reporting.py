@@ -358,6 +358,8 @@ def build_research_full_report_html(
         "<h2>3. Strategy Logic And Core Evidence</h2>",
         _strategy_logic_plain_paragraph(data, rows),
         _strategy_logic_summary_table(data, rows),
+        "<h3>策略参数列表及解释</h3>",
+        _strategy_parameter_contract_table(data, rows),
         "<h3>Equity Curve</h3>",
         _equity_curve_chart(data, rows),
         "<h3>Core Performance</h3>",
@@ -366,11 +368,15 @@ def build_research_full_report_html(
         _cost_capacity_summary_table(data, rows),
         "</section>",
         '<section class="panel">',
-        "<h2>4. Key Risks</h2>",
+        "<h2>4. Parameter Sensitivity</h2>",
+        _parameter_sensitivity_contract_table(data, rows),
+        "</section>",
+        '<section class="panel">',
+        "<h2>5. Key Risks</h2>",
         _key_risk_table(data, rows),
         "</section>",
         '<section class="panel appendix-panel">',
-        "<h2>5. Audit Appendix</h2>",
+        "<h2>6. Audit Appendix</h2>",
         _details_block(
             "A. Fast research input and signal diagnostics",
             "\n".join(
@@ -604,6 +610,99 @@ def _strategy_logic_summary_table(data: Dict[str, Any], rows: List[Dict[str, Any
         for label, value in values
     )
     return _table(["策略逻辑", "摘要"], body)
+
+
+def _strategy_parameter_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    parameter_rows = _strategy_parameter_rows(row)
+    if not parameter_rows:
+        return "<p>本轮没有记录结构化策略参数；请在 StrategySpec.parameters 和 StrategySpec.parameter_explanations 中补充。</p>"
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(name)}</td>"
+        + f"<td>{escape(value)}</td>"
+        + f"<td>{escape(explanation)}</td>"
+        + f"<td>{escape(source)}</td>"
+        + "</tr>"
+        for name, value, explanation, source in parameter_rows
+    )
+    return _table(["参数", "当前值", "解释", "来源"], body)
+
+
+def _strategy_parameter_rows(row: Dict[str, Any]) -> List[tuple[str, str, str, str]]:
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    explanations: Dict[str, Any] = {}
+    if isinstance(spec.get("parameter_explanations"), dict):
+        explanations.update(spec.get("parameter_explanations") or {})
+    if isinstance(logic.get("parameter_explanations"), dict):
+        explanations.update(logic.get("parameter_explanations") or {})
+    result: List[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, value: Any, source: str) -> None:
+        if name in {"name", "scenario"} or name in seen or value is None or value == [] or value == {}:
+            return
+        seen.add(name)
+        result.append(
+            (
+                name,
+                _strategy_parameter_value_cell(value),
+                _strategy_parameter_explanation(name, explanations),
+                source,
+            )
+        )
+
+    for key in ("parameters", "strategy_parameters", "params"):
+        params = spec.get(key)
+        if isinstance(params, dict):
+            for name, value in params.items():
+                add(str(name), value, f"StrategySpec.{key}")
+            break
+
+    sensitivity = _parameter_sensitivity_payload(row)
+    for key in ("selected_params", "base_params"):
+        params = sensitivity.get(key) if isinstance(sensitivity, dict) else None
+        if isinstance(params, dict):
+            for name, value in params.items():
+                add(str(name), value, f"parameter_sensitivity.{key}")
+            break
+
+    for name in ("lookback_days", "horizon_days", "execution_lag_days", "rebalance_frequency"):
+        add(name, spec.get(name), "StrategySpec field")
+    return result
+
+
+def _strategy_parameter_explanation(name: str, explicit: Dict[str, Any]) -> str:
+    value = explicit.get(name)
+    if value is not None and value != "":
+        return _cell(value)
+    defaults = {
+        "max_positions": "最多同时持有的标的数量；直接影响集中度、换手和单票风险。",
+        "min_positions": "低于该候选数量时降低建仓或保持防御，避免候选池过窄时强行交易。",
+        "target_exposure": "目标总仓位比例；1.0 表示满仓，低于 1.0 表示保留现金。",
+        "empty_months": "指定月份保持空仓或降低风险暴露，用于表达季节性风险控制。",
+        "risk_index_symbol": "用于市场风险过滤或指数止损的参考指数/ETF代码；为空表示不启用。",
+        "lookback_days": "历史观察窗口；用于计算信号、动量、均线、回归或过滤条件。",
+        "horizon_days": "研究验证使用的预期持有/预测周期。",
+        "execution_lag_days": "信号到执行之间的滞后天数；日线 A 股通常至少为 1，防止同日未来信息。",
+        "rebalance_frequency": "调仓频率；决定信号刷新节奏、换手率和成本暴露。",
+        "min_price": "买入价格下限；用于过滤低价/退市风险较高的标的。",
+        "min_adv_value": "最低平均成交额门槛；用于过滤流动性不足的标的。",
+        "index_drawdown_lookback": "指数风险观察窗口；用于识别市场快速下跌。",
+        "index_drawdown_threshold": "指数回撤触发阈值；跌破后进入降仓或空仓防御。",
+    }
+    return defaults.get(name, "策略自定义参数；请在 StrategySpec.parameter_explanations 中补充业务解释。")
+
+
+def _strategy_parameter_value_cell(value: Any) -> str:
+    if isinstance(value, dict):
+        return _parameter_dict_cell(value)
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value)
+    if value == "":
+        return "未启用/空"
+    return _cell(value)
 
 
 def _strategy_logic_plain_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -1193,6 +1292,8 @@ def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Di
             _data_quality_contract_table(data, rows),
             "<h3>核心绩效</h3>",
             _core_performance_contract_table(data, rows),
+            "<h3>参数敏感性</h3>",
+            _parameter_sensitivity_contract_table(data, rows),
             "<h3>成交与成本诊断</h3>",
             _trade_cost_contract_table(data, rows),
             "<h3>换手与持仓暴露</h3>",
@@ -2035,7 +2136,11 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
         target_exposure = "未记录"
     rows_data = [
         ("回测区间", strict.get("period") or "未记录", "必须与数据覆盖一致"),
-        ("初始资金", strict.get("initial_cash") or metrics.get("initial_cash") or "500000 CNY", "A 股示例默认 500000 CNY"),
+        (
+            "初始资金",
+            strict.get("initial_cash") or metrics.get("initial_cash") or "未记录",
+            "使用 strict Backtester 记录值；研究默认由 config/research.yaml 的 default_initial_cash 控制",
+        ),
         ("默认目标总仓位", target_exposure, "研究生成策略默认满仓；按持仓数等权分配"),
         ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
         ("退市风险护栏", guard_text, "买入过滤低价/低流动性/非上市状态，持仓风险每日尝试退出"),
@@ -2712,6 +2817,232 @@ def _return_calendar_class(value: Any) -> str:
     if number < -0.0005:
         return "negative"
     return "neutral"
+
+
+def _parameter_sensitivity_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    sensitivity = _parameter_sensitivity_payload(row)
+    intro = (
+        "<p>参数敏感性是稳健性审计，不作为全样本参数寻优通过证据。"
+        "它用于检查选定参数是否落在可解释的表现平台上，而不是孤立最优点。</p>"
+    )
+    if not sensitivity:
+        body = "".join(
+            [
+                _sensitivity_checklist_row("status", "not_run", "must be explicitly recorded", "warn"),
+                _sensitivity_checklist_row("tested_count", "0", ">=3 local/scenario variants", "fail"),
+                _sensitivity_checklist_row("max_degradation_pct", "missing", "<=30.00%", "fail"),
+            ]
+        )
+        return intro + _table(["Metric", "Observed", "Threshold", "Verdict"], body)
+
+    tested_count = _sensitivity_tested_count(sensitivity)
+    degradation_threshold = _sensitivity_threshold_pct(sensitivity)
+    max_degradation = _percent_point_value(sensitivity.get("max_degradation_pct"))
+    status = _parameter_sensitivity_status(sensitivity)
+    pass_count = _first_present(sensitivity, "pass_count", "passing_count", "stable_count")
+    summary_rows = [
+        _sensitivity_checklist_row(
+            "status",
+            status,
+            "pass/warn/fail from robustness audit",
+            status if status in {"pass", "warn", "fail"} else "warn",
+        ),
+        _sensitivity_checklist_row(
+            "tested_count",
+            str(tested_count),
+            ">=3 local/scenario variants",
+            "pass" if tested_count >= 3 else "fail",
+        ),
+        _sensitivity_checklist_row(
+            "max_degradation_pct",
+            _percent_points_cell(max_degradation),
+            f"<={degradation_threshold:.2f}%",
+            _max_threshold_verdict(max_degradation, degradation_threshold),
+        ),
+        _sensitivity_checklist_row(
+            "pass_count",
+            _int_cell(pass_count) if pass_count is not None else "missing",
+            "record surviving variants, not only the winner",
+            "pass" if _safe_float(pass_count) and _safe_float(pass_count) > 0 else "warn",
+        ),
+    ]
+    meta_rows = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(value)}</td></tr>"
+        for label, value in (
+            ("Method", _cell(sensitivity.get("method") or "local perturbation / scenario sweep around locked parameters")),
+            ("Selected Params", _parameter_dict_cell(sensitivity.get("selected_params") or sensitivity.get("base_params"))),
+            ("Best Params", _parameter_dict_cell(sensitivity.get("best_params") or sensitivity.get("optimal_params"))),
+            ("Stability Note", _cell(sensitivity.get("stability_note") or sensitivity.get("note") or sensitivity.get("reason") or "未记录平台解释")),
+        )
+    )
+    variant_table = _parameter_sensitivity_variant_table(sensitivity)
+    return (
+        intro
+        + _table(["Metric", "Observed", "Threshold", "Verdict"], "".join(summary_rows))
+        + _table(["Item", "Value"], meta_rows)
+        + variant_table
+    )
+
+
+def _parameter_sensitivity_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = row.get("metrics") or {}
+    for key in ("parameter_sensitivity", "sensitivity", "sensitivity_report"):
+        value = metrics.get(key)
+        if isinstance(value, dict):
+            return value
+    validation = metrics.get("validation") or metrics.get("validation_report") or {}
+    if isinstance(validation, dict):
+        for key in ("parameter_sensitivity", "sensitivity", "sensitivity_report"):
+            value = validation.get(key)
+            if isinstance(value, dict):
+                return value
+    return {}
+
+
+def _parameter_sensitivity_status(sensitivity: Dict[str, Any]) -> str:
+    status = str(sensitivity.get("status") or sensitivity.get("verdict") or "").strip().lower()
+    if status in {"pass", "passed", "stable"}:
+        return "pass"
+    if status in {"warn", "warning", "unstable"}:
+        return "warn"
+    if status in {"fail", "failed"}:
+        return "fail"
+    if sensitivity.get("is_stable") is True:
+        return "pass"
+    if sensitivity.get("is_stable") is False:
+        return "fail"
+    return "warn"
+
+
+def _sensitivity_tested_count(sensitivity: Dict[str, Any]) -> int:
+    explicit = _safe_int(_first_present(sensitivity, "tested_count", "n_variants", "variant_count"))
+    if explicit is not None:
+        return explicit
+    variants = _parameter_sensitivity_variants(sensitivity)
+    return len(variants)
+
+
+def _sensitivity_threshold_pct(sensitivity: Dict[str, Any]) -> float:
+    value = _safe_float(
+        _first_present(
+            sensitivity,
+            "max_degradation_threshold_pct",
+            "sensitivity_max_degradation_pct",
+            "degradation_threshold_pct",
+        )
+    )
+    if value is None:
+        return 30.0
+    return value * 100.0 if abs(value) <= 1.0 else value
+
+
+def _parameter_sensitivity_variants(sensitivity: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_rows = sensitivity.get("rows") or sensitivity.get("variants") or sensitivity.get("results")
+    if isinstance(raw_rows, list):
+        return [dict(item) for item in raw_rows if isinstance(item, dict)]
+    combos = sensitivity.get("parameter_combinations")
+    surface = sensitivity.get("ic_surface")
+    if isinstance(combos, list) and isinstance(surface, list):
+        variants = []
+        for index, params in enumerate(combos):
+            if not isinstance(params, dict):
+                continue
+            variants.append(
+                {
+                    "name": f"combo_{index + 1}",
+                    "parameters": params,
+                    "rank_ic": surface[index] if index < len(surface) else None,
+                    "verdict": "reference",
+                }
+            )
+        return variants
+    return []
+
+
+def _parameter_sensitivity_variant_table(sensitivity: Dict[str, Any]) -> str:
+    variants = _parameter_sensitivity_variants(sensitivity)
+    if not variants:
+        return "<p>本轮没有记录参数组合明细；只能给出汇总层面的敏感性结论。</p>"
+    body_rows = []
+    for idx, variant in enumerate(variants[:16], start=1):
+        name = str(variant.get("name") or variant.get("scenario") or variant.get("variant") or f"variant_{idx}")
+        params = variant.get("parameters") or variant.get("params") or {
+            key: value
+            for key, value in variant.items()
+            if key
+            not in {
+                "name",
+                "scenario",
+                "variant",
+                "cagr",
+                "max_drawdown_pct",
+                "sharpe",
+                "rank_ic",
+                "ic",
+                "max_adv_participation",
+                "verdict",
+            }
+        }
+        verdict = str(variant.get("verdict") or variant.get("status") or "reference")
+        body_rows.append(
+            "<tr>"
+            + f"<td>{escape(name)}</td>"
+            + f"<td>{escape(_parameter_dict_cell(params))}</td>"
+            + f"<td>{escape(_pct(variant.get('cagr')))}</td>"
+            + f"<td>{escape(_pct(variant.get('max_drawdown_pct')))}</td>"
+            + f"<td>{escape(_fmt(variant.get('sharpe')))}</td>"
+            + f"<td>{escape(_fmt(_first_present(variant, 'rank_ic', 'ic')))}</td>"
+            + f"<td>{escape(_pct(variant.get('max_adv_participation')))}</td>"
+            + f"<td>{_threshold_badge(_stage_badge_class(verdict) if verdict in {'passed', 'warning', 'failed'} else verdict)}</td>"
+            + "</tr>"
+        )
+    return _table(["Variant", "Parameters", "CAGR", "MaxDD", "Sharpe", "IC", "Max ADV", "Verdict"], "".join(body_rows))
+
+
+def _sensitivity_checklist_row(metric: str, observed: str, threshold: str, verdict: str) -> str:
+    klass = "pass" if verdict == "pass" else "fail" if verdict == "fail" else "warn"
+    return (
+        "<tr>"
+        + f"<td>{escape(metric)}</td>"
+        + f"<td>{escape(observed)}</td>"
+        + f"<td>{escape(threshold)}</td>"
+        + f"<td>{_badge(verdict, klass)}</td>"
+        + "</tr>"
+    )
+
+
+def _max_threshold_verdict(value: Any, maximum: float) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "missing"
+    return "pass" if number <= maximum else "fail"
+
+
+def _percent_point_value(value: Any) -> float | None:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    return number * 100.0 if abs(number) <= 1.0 else number
+
+
+def _percent_points_cell(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "missing"
+    return f"{number:.2f}%"
+
+
+def _parameter_dict_cell(value: Any) -> str:
+    if isinstance(value, dict):
+        if not value:
+            return "missing"
+        return _cell("; ".join(f"{key}={val}" for key, val in value.items()))
+    if isinstance(value, (list, tuple, set)):
+        return _cell(", ".join(str(item) for item in value))
+    if value is None or value == "":
+        return "missing"
+    return _cell(value)
 
 
 def _walkforward_methodology_contract_table(rows: List[Dict[str, Any]]) -> str:

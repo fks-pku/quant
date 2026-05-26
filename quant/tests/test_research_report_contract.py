@@ -160,12 +160,124 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
     assert '<figure class="return-calendar-chart">' in html
     assert '<details class="return-cell positive">' in html
     assert "Backtest Configuration" in html
+    assert "A 股示例默认 500000 CNY" not in html
+    assert "研究默认由 config/research.yaml 的 default_initial_cash 控制" in html
     assert "Data Quality Audit" in html
     assert "Drawdown Episodes" in html
     assert "Cost Decomposition" in html
     assert "<td>max_adv_participation</td><td>4.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>total_trades</td><td>64</td><td>&gt;50</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>cagr_drawdown_tier</td><td>CAGR=7.00%; MaxDD=24.00%</td><td>CAGR 5.00%-10.00% requires MaxDD &lt;=15.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
+
+
+def test_reports_render_parameter_sensitivity_audit_when_available():
+    result = {"run_id": "sensitivity_contract", "backtested": 1, "walkforward_passed": 0}
+    rows = [
+        {
+            "title": "Sensitivity Contract",
+            "strategy_id": "sensitivity_contract_strategy",
+            "status": "needs_walkforward_validation",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 1.12,
+                        "cagr": 0.158,
+                        "max_drawdown_pct": -0.214,
+                        "total_trades": 81,
+                    },
+                    "capacity": {"max_adv_participation": 0.032},
+                },
+                "parameter_sensitivity": {
+                    "status": "warn",
+                    "method": "Local one-factor and scenario sweep around locked parameters.",
+                    "base_params": {"max_positions": 3, "risk_stop_pct": -0.05},
+                    "selected_params": {"max_positions": 3, "risk_stop_pct": -0.05},
+                    "best_params": {"max_positions": 5, "risk_stop_pct": -0.08},
+                    "tested_count": 3,
+                    "pass_count": 2,
+                    "max_degradation_pct": 37.5,
+                    "stability_note": "Best result is near but not centered in the tested plateau.",
+                    "rows": [
+                        {
+                            "name": "base",
+                            "parameters": {"max_positions": 3, "risk_stop_pct": -0.05},
+                            "cagr": 0.158,
+                            "max_drawdown_pct": -0.214,
+                            "sharpe": 1.12,
+                            "max_adv_participation": 0.032,
+                            "verdict": "pass",
+                        },
+                        {
+                            "name": "wider_stop",
+                            "parameters": {"max_positions": 3, "risk_stop_pct": -0.08},
+                            "cagr": 0.131,
+                            "max_drawdown_pct": -0.263,
+                            "sharpe": 0.91,
+                            "max_adv_participation": 0.035,
+                            "verdict": "warn",
+                        },
+                    ],
+                },
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "sensitivity_contract_strategy", "universe": ["000300"]}},
+        }
+    ]
+
+    full_html = build_research_full_report_html(result, rows)
+    strict_html = build_research_stage_report_html("strict_backtest", result, rows)
+
+    assert "4. Parameter Sensitivity" in full_html
+    assert "参数敏感性" in strict_html
+    assert "稳健性审计，不作为全样本参数寻优通过证据" in full_html
+    assert "<td>tested_count</td><td>3</td><td>&gt;=3 local/scenario variants</td><td><span class=\"badge pass\">pass</span></td>" in full_html
+    assert "<td>max_degradation_pct</td><td>37.50%</td><td>&lt;=30.00%</td><td><span class=\"badge fail\">fail</span></td>" in full_html
+    assert "wider_stop" in full_html
+    assert "risk_stop_pct" in full_html
+
+
+def test_full_report_renders_strategy_parameter_list_with_explanations():
+    result = {"run_id": "parameter_contract", "backtested": 1, "walkforward_passed": 0}
+    rows = [
+        {
+            "title": "Parameter Contract",
+            "strategy_id": "parameter_contract_strategy",
+            "status": "needs_walkforward_validation",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 0.88,
+                        "cagr": 0.12,
+                        "max_drawdown_pct": -0.18,
+                        "total_trades": 72,
+                    },
+                    "capacity": {"max_adv_participation": 0.021},
+                }
+            },
+            "evidence": {
+                "strategy_spec": {
+                    "strategy_id": "parameter_contract_strategy",
+                    "signal_formula_key": "parameter_contract_strategy",
+                    "universe": ["000300"],
+                    "lookback_days": 20,
+                    "horizon_days": 5,
+                    "execution_lag_days": 1,
+                    "rebalance_frequency": "weekly",
+                    "parameters": {"max_positions": 3, "empty_months": [1, 4], "target_exposure": 1.0},
+                    "parameter_explanations": {
+                        "max_positions": "最多同时持有的股票数量。",
+                        "empty_months": "这些月份保持空仓以降低季节性风险。",
+                    },
+                }
+            },
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    assert "策略参数列表及解释" in html
+    assert "<td>max_positions</td><td>3</td><td>最多同时持有的股票数量。</td><td>StrategySpec.parameters</td>" in html
+    assert "<td>empty_months</td><td>1, 4</td><td>这些月份保持空仓以降低季节性风险。</td><td>StrategySpec.parameters</td>" in html
+    assert "<td>lookback_days</td><td>20</td><td>历史观察窗口" in html
 
 
 def test_full_report_marks_missing_fast_research_metrics_as_failures():
@@ -478,6 +590,47 @@ def test_small_cap_strict_grid_keeps_scenario_symbol_scope_isolated():
 
     assert _scenario_symbols(stock_symbols, pure_scenario) == ["600001", "600002"]
     assert _scenario_symbols(stock_symbols, blend_scenario) == ["600001", "600002", "510300", "159915"]
+
+
+def test_gold_equity_barbell_report_uses_specific_strategy_logic():
+    from quant.scripts.run_ashare_gold_equity_barbell_timing_strict_backtest import _hypothesis_row
+
+    best = {
+        "scenario": "monthly_126d_200ma_half_equity_half_gold",
+        "symbols": ["000300", "510300", "518880"],
+        "parameters": {
+            "timing_symbol": "000300",
+            "momentum_lookback": 126,
+            "momentum_skip": 1,
+            "trend_window": 200,
+            "volatility_window": 20,
+            "liquidity_window": 20,
+            "min_avg_turnover": 20_000_000.0,
+            "target_exposure": 0.98,
+            "risk_leg_weight": 0.5,
+            "holding_days": 20,
+            "require_pit_size": True,
+        },
+        "risk_category_symbols": {"csi300": ["510300"]},
+        "defensive_category_symbols": {"gold": ["518880"]},
+        "timing_symbol": "000300",
+        "registered_universe_counts": {"registered_symbol_count": 2, "active_symbol_count": 2, "missing_data_count": 0},
+        "universe_registry_version": "audited_stable_etf_registry_v1",
+    }
+    strict_report = {
+        "period": "2016-01-01 to 2025-12-31",
+        "metrics": {"cagr": 0.12, "max_drawdown_pct": -0.15, "sharpe": 0.98},
+        "constraints": {"t_plus_1": True, "cn_lot_size": 100},
+        "diagnostics": {},
+    }
+
+    row = _hypothesis_row(best, strict_report, [best])
+    html = build_research_full_report_html({"run_id": "gold_logic"}, [row])
+
+    assert "StrategySpec declared signal" not in html
+    assert "risk-on" in html
+    assert "gold ETF" in html
+    assert "risk_leg_weight" in html
 
 
 def test_strict_report_includes_strategy_execution_logic_and_signal_explanation():

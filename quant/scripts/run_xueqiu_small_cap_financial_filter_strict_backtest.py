@@ -24,7 +24,7 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
-from quant.features.strategies.reject.xueqiu_small_cap_financial_filter.strategy import (
+from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import (
     XueqiuSmallCapFinancialFilterStrategy,
 )
 from quant.features.trading.portfolio import Portfolio
@@ -36,7 +36,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 500000.0
+INITIAL_CASH = 20000.0
 STRATEGY_ID = "xueqiu_small_cap_financial_filter"
 TITLE = "Xueqiu small-cap financial-filter rotation"
 SOURCE_URL = "https://xueqiu.com/7708198303/333999968"
@@ -264,6 +264,18 @@ def _strategy_spec(scenario: Dict[str, Any], stock_count: int) -> Dict[str, Any]
         "signal_formula_key": "xueqiu_small_cap_financial_filter",
         "strategy_type": "small_cap_size_rotation",
         "prediction_direction": "lower_market_cap_is_better_after_financial_filters",
+        "parameters": {
+            key: value
+            for key, value in scenario.items()
+            if key != "name"
+        },
+        "parameter_explanations": {
+            "max_positions": "每次调仓最多持有的股票数量；越小越集中，收益弹性和个股风险都更高。",
+            "min_positions": "候选数量低于该值时不强行满仓，避免候选池太窄时硬买。",
+            "target_exposure": "目标总仓位比例；1.0 表示满足条件时满仓等权持有。",
+            "empty_months": "按月份主动空仓的风控规则；当前用于表达雪球原始策略里的 1 月和 4 月防御逻辑。",
+            "risk_index_symbol": "指数级风险过滤参考标的；为空表示不启用，配置深成指等代码时用于大跌止损代理。",
+        },
         "lookback_days": 1,
         "horizon_days": 5,
         "execution_lag_days": 1,
@@ -374,7 +386,7 @@ def _write_outputs(
         json.dumps(strict_reports[str(best["scenario"])], ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    row = _hypothesis_row(best, strict_reports[str(best["scenario"])], target_cagr, target_max_drawdown)
+    row = _hypothesis_row(best, strict_reports[str(best["scenario"])], target_cagr, target_max_drawdown, rows)
     result = {"run_id": f"{STRATEGY_ID}_strict_grid", "backtested": len(rows), "rejected": 0, "errors": []}
     html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=datetime.now(timezone.utc).isoformat())
     html = _insert_scenario_grid(html, rows, target_cagr, target_max_drawdown)
@@ -389,6 +401,7 @@ def _hypothesis_row(
     strict_report: Dict[str, Any],
     target_cagr: float,
     target_max_drawdown: float,
+    sensitivity_rows: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     metrics = strict_report.get("metrics") or {}
     cagr = float(metrics.get("cagr") or 0.0)
@@ -401,6 +414,7 @@ def _hypothesis_row(
         "status": "needs_walkforward_validation" if verdict == "pass" else "needs_more_research",
         "metrics": {
             "strict_backtest": strict_report,
+            "parameter_sensitivity": _parameter_sensitivity_payload(best, sensitivity_rows or [], target_cagr, target_max_drawdown),
             "research_stage_conclusions": {
                 "strict_backtest": {
                     "label": "Strict backtest",
@@ -411,6 +425,52 @@ def _hypothesis_row(
             },
         },
         "evidence": {"strategy_spec": _strategy_spec(best.get("parameters") or {}, int(best.get("stock_universe_size") or 0))},
+    }
+
+
+def _parameter_sensitivity_payload(
+    best: Dict[str, Any],
+    rows: List[Dict[str, Any]],
+    target_cagr: float,
+    target_max_drawdown: float,
+) -> Dict[str, Any]:
+    if not rows:
+        return {}
+    sorted_rows = sorted(rows, key=lambda item: _score_row(item, target_cagr, target_max_drawdown), reverse=True)
+    best_score = max((abs(float(row.get("sharpe") or 0.0)) for row in rows), default=0.0)
+    degradations = [
+        max(0.0, (best_score - abs(float(row.get("sharpe") or 0.0))) / best_score * 100.0)
+        for row in rows
+        if best_score > 0
+    ]
+    pass_count = sum(1 for row in rows if row.get("meets_goal") is True)
+    max_degradation = max(degradations) if degradations else None
+    status = "pass" if pass_count >= 2 and (max_degradation is not None and max_degradation <= 30.0) else ("warn" if pass_count else "fail")
+    variants = []
+    for row in sorted_rows:
+        metrics_verdict = "pass" if row.get("meets_goal") is True else "fail"
+        variants.append(
+            {
+                "name": row.get("scenario"),
+                "parameters": row.get("parameters") or {},
+                "cagr": row.get("cagr"),
+                "max_drawdown_pct": row.get("max_drawdown_pct"),
+                "sharpe": row.get("sharpe"),
+                "max_adv_participation": row.get("max_adv_participation"),
+                "verdict": metrics_verdict,
+            }
+        )
+    return {
+        "status": status,
+        "method": "Coarse scenario sensitivity from the strict grid: position count, empty-month rule, and Shenzhen index stop variants.",
+        "base_params": best.get("parameters") or {},
+        "selected_params": best.get("parameters") or {},
+        "best_params": (sorted_rows[0].get("parameters") or {}) if sorted_rows else {},
+        "tested_count": len(rows),
+        "pass_count": pass_count,
+        "max_degradation_pct": max_degradation,
+        "stability_note": "This is a first-pass scenario sensitivity audit from existing strict-grid variants; it is not a fresh train-window parameter search.",
+        "rows": variants,
     }
 
 

@@ -51,7 +51,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 500000.0
+INITIAL_CASH = 20000.0
 TIMING_SYMBOL = "000300"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")
 COMMISSION_CFG = {

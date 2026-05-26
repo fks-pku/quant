@@ -1688,7 +1688,7 @@ def test_research_engine_walkforward_stage_uses_persistent_rejected_candidate_me
         assert captured["strategy_id"] == "persisted_rejected"
         assert captured["symbols"] == ["600001", "600002"]
         assert captured["strategy_archive_dir"].replace("\\", "/").endswith("rejected_strategy/persisted_rejected")
-        assert captured["initial_cash"] == pytest.approx(500000)
+        assert captured["initial_cash"] == pytest.approx(20_000)
         assert (tmp_path / "research" / "reports" / "persisted_rejected" / "walkforward_audit_report.html").exists()
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -2906,6 +2906,7 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
             captured["strategy_symbols"] = list(strategies[0].symbols)
             captured["max_position_pct"] = strategies[0].max_position_pct
             captured["holding_days"] = strategies[0].holding_days
+            captured["initial_cash"] = initial_cash
             return SimpleNamespace(
                 final_nav=float(initial_cash) * 1.05,
                 sharpe_ratio=0.8,
@@ -2964,6 +2965,7 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
         assert captured["strategy_symbols"] == ["600001", "600002"]
         assert captured["max_position_pct"] == pytest.approx(0.85)
         assert captured["holding_days"] == 7
+        assert captured["initial_cash"] == pytest.approx(20_000)
         assert hypothesis["metrics"]["strict_backtest"]["metrics"]["sharpe"] == pytest.approx(0.8)
         assert result.backtested == 1
     finally:
@@ -3282,7 +3284,6 @@ def test_walkforward_runner_uses_archived_parameters_and_execution_cost_model(mo
                 "symbols": ["600001"],
                 "start": "2020-01-01",
                 "end": "2020-01-03",
-                "initial_cash": 500000,
                 "strategy_archive_dir": str(archive_dir),
             },
         )
@@ -3292,7 +3293,7 @@ def test_walkforward_runner_uses_archived_parameters_and_execution_cost_model(mo
         assert captured["config"]["risk"]["max_position_pct"] == pytest.approx(0.20)
         assert captured["max_position_pct"] == pytest.approx(0.7)
         assert captured["holding_days"] == 5
-        assert captured["initial_cash"] == pytest.approx(500000)
+        assert captured["initial_cash"] == pytest.approx(20_000)
         assert "adv20_value" in captured["data_columns"]
         assert "volatility20" in captured["data_columns"]
     finally:

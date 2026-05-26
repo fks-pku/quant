@@ -33,7 +33,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 500000.0
+INITIAL_CASH = 20000.0
 STRATEGY_ID = "large_cap_etf_trend_timing"
 TITLE = "大市值 ETF 趋势切现金"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

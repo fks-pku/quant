@@ -94,6 +94,10 @@ def _execution_adv_value(bar: "BacktestBar", price: float) -> float:
         value = _safe_number(bar.get(key))
         if value is not None:
             return _normalize_turnover_value(value, bar, price)
+    for key in ("adv20_volume", "adv_volume", "avg_volume_20", "volume20", "avg_daily_volume", "avg_volume"):
+        value = _safe_number(bar.get(key))
+        if value is not None and price > 0:
+            return value * price
     volume = _safe_number(bar.get("volume"))
     return float(volume * price) if volume is not None and price > 0 else 0.0
 
@@ -169,6 +173,26 @@ def _liquidity_quantity_cap(
     if not candidates:
         return None
     return min(candidates)
+
+
+def _final_buy_adv_quantity_cap(
+    quantity: float,
+    fill_price: float,
+    adv_value: float,
+    participation_limit: float,
+    market: str,
+    lot_size: int,
+) -> Optional[float]:
+    if quantity <= 0 or fill_price <= 0 or adv_value <= 0 or participation_limit <= 0:
+        return quantity
+    if quantity * fill_price <= adv_value * participation_limit:
+        return quantity
+    max_qty = int((adv_value * participation_limit) / fill_price)
+    if market == "HK" or market == "CN":
+        max_qty = (max_qty // lot_size) * lot_size
+    if max_qty <= 0:
+        return None
+    return float(max_qty)
 
 
 def compute_execution_impact(
@@ -291,20 +315,49 @@ def execute_order(
         quantity = float(max_qty)
         diag.volume_limited_trades += 1
 
+    base_fill_price = fill_price
     impact_bps = compute_execution_impact(
         quantity,
-        fill_price,
+        base_fill_price,
         bar,
         market,
         execution_cost_model,
         bar_volume,
         market_impact_factor,
     )
-    fill_price = apply_market_impact(fill_price, order.side, impact_bps)
+    fill_price = apply_market_impact(base_fill_price, order.side, impact_bps)
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
     enforce_limit_after_impact(order, fill_price, order_type)
 
     adv_value = _execution_adv_value(bar, fill_price)
+    if order.side == "BUY":
+        final_adv_qty = _final_buy_adv_quantity_cap(
+            quantity,
+            fill_price,
+            adv_value,
+            participation_limit,
+            market,
+            lot_size,
+        )
+        if final_adv_qty is None:
+            raise OrderRejectedError(OrderRejectionReason.VOLUME_ZERO, symbol)
+        if final_adv_qty < quantity:
+            quantity = final_adv_qty
+            diag.volume_limited_trades += 1
+            impact_bps = compute_execution_impact(
+                quantity,
+                base_fill_price,
+                bar,
+                market,
+                execution_cost_model,
+                bar_volume,
+                market_impact_factor,
+            )
+            fill_price = apply_market_impact(base_fill_price, order.side, impact_bps)
+            fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
+            enforce_limit_after_impact(order, fill_price, order_type)
+            adv_value = _execution_adv_value(bar, fill_price)
+
     adv_quantity = _execution_adv_quantity(bar, fill_price)
     observation = {
         "symbol": symbol,

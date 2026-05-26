@@ -30,7 +30,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 500000.0
+INITIAL_CASH = 20000.0
 STRATEGY_ID = "ashare_value_momentum_filter"
 TITLE = "A股低估值 12-1 动量过热过滤"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

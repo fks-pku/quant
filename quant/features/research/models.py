@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 DEFAULT_A_SHARE_SYMBOLS = ["000300", "000905", "600519", "000001", "510300"]
+DEFAULT_RESEARCH_INITIAL_CASH = 20_000.0
 
 
 @dataclass
@@ -111,6 +112,7 @@ class ResearchConfig:
     auto_backtest: bool = True
     default_backtest_start: str = "2016-01-01"
     default_backtest_end: str = "2025-12-31"
+    default_initial_cash: float = DEFAULT_RESEARCH_INITIAL_CASH
     default_symbols: List[str] = field(default_factory=lambda: list(DEFAULT_A_SHARE_SYMBOLS))
     llm_provider: str = "minimax"
     llm_model: str = "MiniMax-M2.7"

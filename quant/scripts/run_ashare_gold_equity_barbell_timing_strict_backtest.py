@@ -41,7 +41,7 @@ from quant.infrastructure.research.cn_etf_universe import (
     build_gold_equity_barbell_pit_universe,
     flatten_category_symbols,
 )
-from quant.infrastructure.research.reporting import build_research_stage_report_html
+from quant.infrastructure.research.reporting import build_research_full_report_html, build_research_stage_report_html
 
 
 START = datetime(2016, 1, 1)
@@ -49,7 +49,7 @@ END = datetime(2025, 12, 31)
 UNIVERSE_AS_OF = None
 UNIVERSE_MIN_HISTORY_DAYS_AS_OF = 0
 UNIVERSE_MAX_SYMBOLS_PER_CATEGORY = 0
-INITIAL_CASH = 500000.0
+INITIAL_CASH = 20000.0
 STRATEGY_ID = "ashare_gold_equity_barbell_timing"
 TITLE = "黄金-大盘 ETF 杠铃择时"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")
@@ -158,6 +158,7 @@ def main() -> None:
         row = {
             "scenario": scenario["name"],
             "symbols": all_symbols,
+            "parameters": _scenario_parameters(scenario),
             "risk_category_symbols": scenario["risk_category_symbols"],
             "defensive_category_symbols": scenario["defensive_category_symbols"],
             "timing_symbol": scenario["timing_symbol"],
@@ -316,6 +317,129 @@ def _select_best(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
 
+def _scenario_parameters(scenario: Dict[str, Any]) -> Dict[str, Any]:
+    excluded = {
+        "name",
+        "symbols",
+        "risk_category_symbols",
+        "defensive_category_symbols",
+        "registered_universe_counts",
+        "universe_registry_version",
+        "pit_size_fields",
+    }
+    return {key: value for key, value in scenario.items() if key not in excluded}
+
+
+def _parameter_explanations() -> Dict[str, str]:
+    return {
+        "timing_symbol": "市场温度判断标的；价格在趋势线上且动量为正时打开权益风险。",
+        "momentum_lookback": "ETF 动量观察窗口；用于计算风险调整动量排名。",
+        "momentum_skip": "动量计算跳过最近交易日数量，用于降低短期反转噪声。",
+        "trend_window": "大盘趋势均线窗口；用于判断 risk-on / risk-off。",
+        "volatility_window": "波动率估计窗口；动量分数会惩罚高波动标的。",
+        "liquidity_window": "平均成交额观察窗口；用于过滤流动性不足的 ETF。",
+        "min_avg_turnover": "最低平均成交额门槛；低于该值不进入候选。",
+        "target_exposure": "目标总仓位比例；低于 1.0 表示保留少量现金缓冲。",
+        "risk_leg_weight": "risk-on 时权益腿目标权重；剩余权重分配给黄金防御腿。",
+        "holding_days": "调仓/持有间隔；到期才重新排序和换仓。",
+        "require_pit_size": "是否要求点时可见基金规模数据；用于降低 ETF 幸存者/规模偏差。",
+    }
+
+
+def _strategy_logic(best: Dict[str, Any]) -> Dict[str, Any]:
+    params = best.get("parameters") or {}
+    risk_categories = best.get("risk_category_symbols") or {}
+    defensive_categories = best.get("defensive_category_symbols") or {}
+    risk_text = "; ".join(
+        f"{category}: {', '.join(str(symbol) for symbol in symbols)}"
+        for category, symbols in risk_categories.items()
+    )
+    defensive_text = "; ".join(
+        f"{category}: {', '.join(str(symbol) for symbol in symbols)}"
+        for category, symbols in defensive_categories.items()
+    )
+    return {
+        "core_idea": (
+            "Gold-equity ETF barbell timing: use CSI 300 trend and momentum as the risk-on gate, "
+            "hold the strongest broad-equity ETF category together with gold ETF in risk-on regimes, "
+            "and fall back to gold ETF when equity risk is off."
+        ),
+        "universe": (
+            "Audited stable ETF registry only. Risk categories: "
+            f"{risk_text or 'none'}. Defensive categories: {defensive_text or 'none'}. "
+            "New ETF categories must be manually registered before research."
+        ),
+        "entry_filters": [
+            "registered ETF category must be user-approved before the backtest window",
+            "rebalance-day bar must be current and tradable",
+            f"{params.get('liquidity_window', 20)}-day average turnover must be at least {float(params.get('min_avg_turnover') or 0):.0f}",
+            "PIT fund size/NAV data must be visible when require_pit_size is enabled",
+            "risk leg requires positive risk-adjusted momentum",
+        ],
+        "ranking_rule": (
+            f"Risk-on is true when {params.get('timing_symbol', '000300')} closes above its "
+            f"{params.get('trend_window', 120)}-day moving average and has positive "
+            f"{params.get('momentum_lookback', 63)}-day skipped momentum. Among visible risk ETFs, "
+            "rank by momentum divided by realized volatility and select the highest score."
+        ),
+        "portfolio_construction": (
+            f"Target exposure is {float(params.get('target_exposure') or 0):.0%}. In risk-on regimes, "
+            f"{float(params.get('risk_leg_weight') or 0):.0%} of exposure goes to the selected equity ETF "
+            "and the rest to gold ETF; in risk-off regimes the target exposure is allocated to gold ETF."
+        ),
+        "rebalance_rule": (
+            f"Every {int(params.get('holding_days') or 20)} trading days after close, recompute risk-on, "
+            "select target ETF legs, submit orders, and execute them at the next trading day's open."
+        ),
+        "exit_rule": (
+            "Positions not in the latest target basket are sold at the next execution opportunity; "
+            "if equity risk turns off or no eligible risk ETF remains, equity exposure is removed and gold is kept."
+        ),
+        "risk_budget": (
+            "Risk control comes from the risk-on trend gate, permanent gold defensive leg, PIT ETF registry, "
+            "turnover and fund-size filters, 98% maximum exposure, T+1 execution, lot-size checks, and 5% ADV participation cap."
+        ),
+        "parameter_explanations": _parameter_explanations(),
+    }
+
+
+def _parameter_sensitivity_payload(best: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not rows:
+        return {}
+    best_score = max((abs(float(row.get("sharpe") or 0.0)) for row in rows), default=0.0)
+    degradations = [
+        max(0.0, (best_score - abs(float(row.get("sharpe") or 0.0))) / best_score * 100.0)
+        for row in rows
+        if best_score > 0
+    ]
+    pass_count = sum(1 for row in rows if row.get("meets_goal") is True)
+    max_degradation = max(degradations) if degradations else None
+    variants = []
+    for row in sorted(rows, key=lambda item: float(item.get("sharpe") or 0.0), reverse=True):
+        variants.append(
+            {
+                "name": row.get("scenario"),
+                "parameters": row.get("parameters") or {},
+                "cagr": row.get("cagr"),
+                "max_drawdown_pct": row.get("max_drawdown_pct"),
+                "sharpe": row.get("sharpe"),
+                "verdict": "pass" if row.get("meets_goal") is True else "warn",
+            }
+        )
+    return {
+        "status": "pass" if pass_count >= 2 and (max_degradation is not None and max_degradation <= 30.0) else ("warn" if pass_count else "fail"),
+        "method": "Strict-grid scenario sensitivity over ETF timing windows, equity/gold split, and rebalance interval.",
+        "base_params": best.get("parameters") or {},
+        "selected_params": best.get("parameters") or {},
+        "best_params": best.get("parameters") or {},
+        "tested_count": len(rows),
+        "pass_count": pass_count,
+        "max_degradation_pct": max_degradation,
+        "stability_note": "Scenario sensitivity is derived from strict-grid variants and should be treated as robustness evidence, not as a new full-sample optimization pass.",
+        "rows": variants,
+    }
+
+
 def _write_outputs(
     rows: List[Dict[str, Any]],
     strict_reports: Dict[str, Dict[str, Any]],
@@ -338,16 +462,24 @@ def _write_outputs(
     }
     result_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     last_result_path.write_text(json.dumps(strict_reports[str(best["scenario"])], ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    row = _hypothesis_row(best, strict_reports[str(best["scenario"])])
+    row = _hypothesis_row(best, strict_reports[str(best["scenario"])], rows)
     result = {"run_id": f"{STRATEGY_ID}_strict_grid", "backtested": len(rows), "rejected": 0, "errors": []}
-    html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=datetime.now(timezone.utc).isoformat())
+    generated = datetime.now(timezone.utc).isoformat()
+    html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=generated)
     html = _insert_detail_section(html, rows, universe)
+    full_html = build_research_full_report_html(result, [row], generated_at=generated)
     report_path = strategy_dir / "strict_backtest_report.html"
     report_path.write_text(html, encoding="utf-8")
+    full_report_path = strategy_dir / "full_research_report.html"
+    full_report_path.write_text(full_html, encoding="utf-8")
+    latest_dir = REPORT_ROOT / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    (latest_dir / "strict_backtest_report.html").write_text(html, encoding="utf-8")
+    (latest_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
     return report_path, result_path
 
 
-def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict[str, Any]:
+def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any], rows: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
     metrics = strict_report.get("metrics") or {}
     cagr = float(metrics.get("cagr") or 0.0)
     max_dd = float(metrics.get("max_drawdown_pct") or 0.0)
@@ -359,6 +491,7 @@ def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict
         "status": "needs_walkforward_validation" if verdict == "pass" else "needs_more_research",
         "metrics": {
             "strict_backtest": strict_report,
+            "parameter_sensitivity": _parameter_sensitivity_payload(best, rows or []),
             "research_stage_conclusions": {
                 "strict_backtest": {
                     "label": "严格回测",
@@ -371,9 +504,38 @@ def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict
         "evidence": {
             "strategy_spec": {
                 "strategy_id": STRATEGY_ID,
+                "strategy_type": "etf_barbell_timing",
+                "signal_formula_key": STRATEGY_ID,
+                "prediction_direction": "higher_is_better",
                 "scenario": best["scenario"],
                 "symbols": best["symbols"],
                 "universe": best["symbols"],
+                "required_fields": [
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adj_close",
+                    "volume",
+                    "turnover",
+                    "unit_nav",
+                    "adj_nav",
+                    "total_netasset",
+                    "net_asset",
+                ],
+                "parameters": best.get("parameters") or {},
+                "parameter_explanations": _parameter_explanations(),
+                "strategy_logic": _strategy_logic(best),
+                "lookback_days": best.get("parameters", {}).get("momentum_lookback"),
+                "horizon_days": best.get("parameters", {}).get("holding_days"),
+                "execution_lag_days": 1,
+                "rebalance_frequency": f"every {best.get('parameters', {}).get('holding_days', 20)} trading days",
+                "fallback_symbol": "518880",
+                "risk_controls": {
+                    "target_exposure": best.get("parameters", {}).get("target_exposure"),
+                    "min_adv_value": best.get("parameters", {}).get("min_avg_turnover"),
+                    "market_timing_symbol": best.get("timing_symbol", "000300"),
+                },
                 "risk_category_symbols": best.get("risk_category_symbols", {}),
                 "defensive_category_symbols": best.get("defensive_category_symbols", {}),
                 "timing_symbol": best.get("timing_symbol", "000300"),

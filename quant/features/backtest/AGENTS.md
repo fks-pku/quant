@@ -101,6 +101,7 @@ while current_date ≤ end:
 ## Known Pitfalls
 
 - CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. Research backtests default fund fees to `fund_percent=0.0001` and `fund_min_per_order=0.0`.
+- BUY liquidity control is a global execution invariant: after market impact is applied, final BUY notional must still be `<= max_participation_rate * ADV value` (default research gate 5% ADV). Do not implement per-strategy sizing that assumes this cap can be bypassed.
 - `prev_close_bars` 在 Step ② 中必须在 `prev_bars` 更新之前捕获，否则涨跌停检查会用今日数据
 - `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` 在每个日循环末尾调用，勿遗漏
 - `order_executor` 中 SELL 路径的 settled_quantity 检查：CN T+1 用 `pos.settled_quantity()`，其他市场用 `pos.quantity`

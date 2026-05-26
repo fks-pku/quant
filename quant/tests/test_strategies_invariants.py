@@ -11,9 +11,6 @@ from types import SimpleNamespace
 import pytest
 
 from quant.features.strategies.base import Strategy
-from quant.features.strategies.ashare_small_cap_pure_baseline.strategy import (
-    AShareSmallCapPureBaselineStrategy,
-)
 from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy import (
     AShareAlpha158FactorCompositeStrategy,
 )
@@ -21,6 +18,9 @@ from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy impor
 from quant.features.strategies.registry import StrategyRegistry, strategy
 from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
     AShareGoldEquityBarbellTimingStrategy,
+)
+from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import (
+    XueqiuSmallCapFinancialFilterStrategy,
 )
 
 
@@ -313,9 +313,9 @@ class TestCase5DailyRiskExitStateMachine:
         assert exited == set()
         assert strategy.get_guard_diagnostics()["exit_triggers"]["dust_position"] == 1
 
-        small_cap = AShareSmallCapPureBaselineStrategy(symbols=["002475"], market_timing_symbol="")
+        small_cap = XueqiuSmallCapFinancialFilterStrategy(symbols=["002475"])
         small_cap._positions["002475"] = 0.5
-        small_cap.on_data(None, _value_rsrs_bar("002475", 4.8, total_mv=100.0))
+        small_cap.on_data(None, _value_rsrs_bar("002475", 1.8, total_mv=100.0))
         monkeypatch.setattr(
             small_cap,
             "sell",
@@ -324,7 +324,7 @@ class TestCase5DailyRiskExitStateMachine:
 
         exited = small_cap._exit_risk_positions()
 
-        assert exited == {"002475"}
+        assert exited == set()
         assert sells == []
         assert small_cap.get_guard_diagnostics()["exit_triggers"]["dust_position"] == 1
 

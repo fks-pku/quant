@@ -1746,8 +1746,62 @@ class TestCase17AAdvOrderLimit:
     def test_c17a_03_adv_participation_recorded(self, case17a_result):
         observation = case17a_result.diagnostics.execution_observations[0]
         assert observation["adv_volume"] == pytest.approx(200.0)
+        assert observation["adv_value"] == pytest.approx(observation["adv_volume"] * observation["fill_price"])
+        assert observation["adv_participation"] <= 0.050001
         assert observation["adv_volume_participation"] <= 0.050001
         assert observation["participation_limit"] == pytest.approx(0.05)
+
+
+# ============================================================================
+# CASE-17B: BUY final notional ADV limit after impact
+# ============================================================================
+
+CASE17B_CONFIG = {
+    "backtest": {
+        "slippage_bps": 0,
+        "execution_cost_model": {
+            "enabled": True,
+            "markets": ["US"],
+            "max_participation_rate": 0.05,
+            "impact_coefficient": 0.10,
+        },
+    },
+    "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+@pytest.fixture
+def case17b_result():
+    data = _make_bars(
+        "AAPL",
+        [
+            (datetime(2024, 6, 3), 100.00, 100.00, 1_000_000),
+            (datetime(2024, 6, 4), 100.00, 100.00, 1_000_000),
+        ],
+    )
+    data["adv20_value"] = [20_000.0, 20_000.0]
+    data["volatility20"] = [0.20, 0.20]
+    bt = make_backtester(CASE17B_CONFIG)
+    provider = DataFrameProvider(data)
+    strat = _signal_strategy("Case17B", "AAPL", buy_on={0}, sell_on=set(), qty=500)
+    return bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat], initial_cash=100_000,
+        data_provider=provider, symbols=["AAPL"],
+    )
+
+
+class TestCase17BBuyAdvLimitAfterImpact:
+    def test_c17b_01_buy_final_notional_limited_to_five_pct_adv(self, case17b_result):
+        observation = case17b_result.diagnostics.execution_observations[0]
+        assert observation["side"] == "BUY"
+        assert observation["adv_participation"] <= 0.050001
+        assert observation["notional"] <= observation["adv_value"] * observation["participation_limit"] * 1.00001
+
+    def test_c17b_02_quantity_recapped_after_impact(self, case17b_result):
+        assert case17b_result.trades[0].quantity < 10
+        assert case17b_result.diagnostics.volume_limited_trades >= 1
 
 
 # ============================================================================

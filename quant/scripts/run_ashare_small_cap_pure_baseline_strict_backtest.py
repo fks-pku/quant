@@ -22,9 +22,12 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
-from quant.features.strategies.ashare_small_cap_pure_baseline.strategy import (
-    AShareSmallCapPureBaselineStrategy,
-)
+try:
+    from quant.features.strategies.ashare_small_cap_pure_baseline.strategy import (
+        AShareSmallCapPureBaselineStrategy,
+    )
+except ModuleNotFoundError:
+    AShareSmallCapPureBaselineStrategy = None
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
 from quant.features.trading.sub_portfolio import SubPortfolio
@@ -34,7 +37,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 500000.0
+INITIAL_CASH = 20000.0
 STRATEGY_ID = "ashare_small_cap_pure_baseline"
 TITLE = "A-share small-cap guarded baseline"
 FORMULA_KEY = "ashare_small_cap_guarded_size_factor"
@@ -353,6 +356,8 @@ def _run_one(
     benchmark_meta: Dict[str, Any],
     survivorship_audit: Dict[str, Any],
 ) -> Dict[str, Any]:
+    if AShareSmallCapPureBaselineStrategy is None:
+        raise RuntimeError("ashare_small_cap_pure_baseline has been removed from promoted strategies")
     execution_cost_model = _strict_execution_cost_model(
         STRATEGY_ID,
         {"name": TITLE, "description": "small_cap market_cap guarded size rotation", "research_meta": {"strategy_spec": _strategy_spec(scenario, len(stock_symbols))}},

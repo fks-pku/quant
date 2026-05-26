@@ -1,7 +1,7 @@
 from datetime import date
 from types import SimpleNamespace
 
-from quant.features.strategies.reject.xueqiu_small_cap_financial_filter.strategy import (
+from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import (
     XueqiuSmallCapFinancialFilterStrategy,
 )
 

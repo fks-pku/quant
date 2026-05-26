@@ -214,8 +214,8 @@ class AShareSmallCapRotationBase(Strategy):
             bars = self._bars.get(symbol, [])
             if not bars or not self._exit_risk(symbol, bars[-1]):
                 continue
-            self._sell_position(symbol, quantity, "risk_exit")
-            exited.add(symbol)
+            if self._sell_position(symbol, quantity, "risk_exit"):
+                exited.add(symbol)
         return exited
 
     def _sell_position(self, symbol: str, quantity: float, reason: str) -> bool:

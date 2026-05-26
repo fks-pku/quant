@@ -1037,7 +1037,50 @@ D1 Step4 execute_order:
 C17A-01  diag.volume_limited_trades >= 1
 C17A-02  trades[0].quantity == 10 (ADV 5% 截断)
 C17A-03  execution_observations[0].adv_volume == 200
-C17A-04  execution_observations[0].adv_volume_participation <= 0.05
+C17A-04  execution_observations[0].adv_value == adv_volume * fill_price
+C17A-05  execution_observations[0].adv_participation <= 0.05
+C17A-06  execution_observations[0].adv_volume_participation <= 0.05
+```
+
+---
+
+## CASE-17B: BUY 冲击后最终金额 ADV 上限 (BUY Final Notional ADV Limit After Impact)
+
+验证 BUY 订单在执行冲击成本后，最终成交金额仍不得超过 ADV 金额的 `max_participation_rate`。这条约束用于防止先按冲击前价格截断到 5% ADV，随后成交价因冲击上调，导致最终 notional 实际超过 5% ADV。
+
+### 配置 (零滑点 US + execution_cost_model)
+
+`max_participation_rate = 0.05`, `impact_coefficient = 0.10`
+
+### 行情
+
+| Date       | Day | Open  | Close | Volume    | adv20_value | volatility20 |
+| ---------- | --- | ----- | ----- | --------- | ----------- | ------------ |
+| 2024-06-03 | D0  | 100.0 | 100.0 | 1,000,000 | 20,000      | 0.20         |
+| 2024-06-04 | D1  | 100.0 | 100.0 | 1,000,000 | 20,000      | 0.20         |
+
+### 信号
+
+D0: BUY 500 AAPL -> D1 执行
+
+### 推导
+
+```
+D1 Step4 execute_order:
+  初始 ADV cap: 20,000 * 5% / 100 = 10 股
+  对 10 股计算冲击后 fill_price > 100
+  10 * fill_price > 1,000 时必须再次截断
+  最终 BUY notional <= adv_value * participation_limit
+```
+
+### 断言
+
+```
+C17B-01  execution_observations[0].side == "BUY"
+C17B-02  execution_observations[0].adv_participation <= 0.050001
+C17B-03  execution_observations[0].notional <= adv_value * participation_limit
+C17B-04  trades[0].quantity < 10
+C17B-05  diag.volume_limited_trades >= 1
 ```
 
 ---

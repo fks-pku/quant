@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 from flask import Blueprint, jsonify, request, send_file
 
-from quant.features.research.models import ResearchConfig, ResearchResult
+from quant.features.research.models import DEFAULT_RESEARCH_INITIAL_CASH, ResearchConfig, ResearchResult
 from quant.features.research.research_engine import ResearchEngine
 from quant.features.research.pool import CandidatePool
 from quant.features.research.scheduler import ResearchScheduler
@@ -29,6 +29,15 @@ from quant.infrastructure.research.asset_paths import (
     latest_full_report_html_path,
     latest_stage_report_html_path,
 )
+
+
+def _research_initial_cash(config, default=DEFAULT_RESEARCH_INITIAL_CASH):
+    value = getattr(config, "default_initial_cash", default)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return parsed if parsed > 0 else float(default)
 
 
 def _make_backtest_fn():
@@ -63,7 +72,7 @@ def _make_backtest_fn():
         start = datetime.strptime(config.default_backtest_start, "%Y-%m-%d")
         end = datetime.strptime(config.default_backtest_end, "%Y-%m-%d")
         is_cn = any(is_cn_symbol(sym) for sym in symbols)
-        initial_cash = 500000 if is_cn else 100000
+        initial_cash = _research_initial_cash(config)
         execution_cost_model = _strict_execution_cost_model(sid, info, is_cn)
 
         db_provider = DuckDBProvider()
@@ -2757,7 +2766,7 @@ def _make_walkforward_runner():
         fetch_end_value = request.get("walkforward_end_date") if prefetch_enabled else request["end"]
         fetch_start = datetime.strptime(str(fetch_start_value), "%Y-%m-%d")
         fetch_end = datetime.strptime(str(fetch_end_value), "%Y-%m-%d")
-        initial_cash = float(request.get("initial_cash", 100000))
+        initial_cash = float(request.get("initial_cash", DEFAULT_RESEARCH_INITIAL_CASH))
 
         bundle = _load_data_bundle(symbols, fetch_start, fetch_end, cache_enabled=prefetch_enabled)
         data_df = _slice_data_frame(bundle["data"], start, end)
