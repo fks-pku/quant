@@ -39,9 +39,11 @@ data:
 execution:
   brokers:
     - paper
+    # - qmt             # 取消注释以启用 QMT A股交易
   broker_routing:
     US: paper
     HK: paper
+    CN: qmt              # A股路由到QMT
   default_order_type: MARKET
   slippage_bps: 5
   max_retries: 3
