@@ -32,6 +32,12 @@ def _qmt_symbol_to_cn(symbol: str) -> str:
     return symbol
 
 
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    if val is None:
+        return default
+    return float(val)
+
+
 class QMTBroker(BrokerAdapter):
 
     def __init__(
@@ -200,7 +206,7 @@ class QMTBroker(BrokerAdapter):
                 price_type,
                 price,
                 strategy_name,
-                order.remark if hasattr(order, 'remark') else "",
+                "",
             )
 
             if result is None or not isinstance(result, int) or result <= 0:
@@ -348,12 +354,9 @@ def _qmt_order_callback(broker: QMTBroker, order: Any) -> None:
     with broker._lock:
         if order_id in broker._pending_orders:
             existing = broker._pending_orders[order_id]
-            traded_vol = getattr(order, 'm_nVolumeTraded', None)
-            if traded_vol is None:
-                traded_vol = getattr(order, 'traded_volume', 0)
             broker._pending_orders[order_id] = broker._set_order_attrs(
                 existing,
-                {'status': mapped, 'filled_quantity': float(traded_vol or 0)},
+                {'status': mapped},
             )
 
 
@@ -367,10 +370,8 @@ def _qmt_trade_callback(broker: QMTBroker, trade: Any) -> None:
             filled_qty = existing.filled_quantity + fill_qty
             avg_price = fill_price
             if existing.filled_quantity > 0 and existing.avg_fill_price:
-                avg_price = (
-                    (existing.avg_fill_price * existing.filled_quantity + fill_price * fill_qty)
-                    / filled_qty
-                )
+                total_cost = existing.avg_fill_price * existing.filled_quantity + fill_price * fill_qty
+                avg_price = total_cost / filled_qty if filled_qty > 0 else fill_price
             broker._pending_orders[order_id] = broker._set_order_attrs(
                 existing,
                 {'filled_quantity': filled_qty, 'avg_fill_price': avg_price},
@@ -399,17 +400,19 @@ def _qmt_asset_callback(broker: QMTBroker, asset: Any) -> None:
     with broker._lock:
         broker._account_info_cache = AccountInfo(
             account_id=broker._account,
-            cash=float(getattr(asset, 'm_dAvailable', None) or 0),
-            buying_power=float(getattr(asset, 'm_dAvailable', None) or 0),
-            equity=float(getattr(asset, 'm_dBalance', None) or 0),
+            cash=_safe_float(getattr(asset, 'm_dAvailable', None)),
+            buying_power=_safe_float(getattr(asset, 'm_dAvailable', None)),
+            equity=_safe_float(getattr(asset, 'm_dBalance', None)),
             margin_used=0.0,
         )
 
 
 def _qmt_position_callback(broker: QMTBroker, position: Any) -> None:
     code = _qmt_symbol_to_cn(str(getattr(position, 'm_strInstrumentID', None) or ''))
-    qty = float(getattr(position, 'm_nVolume', None) or 0)
+    qty = _safe_float(getattr(position, 'm_nVolume', None))
     if qty <= 0:
+        with broker._lock:
+            broker._positions_cache.pop(code, None)
         return
     with broker._lock:
         broker._positions_cache[code] = Position(
