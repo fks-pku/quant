@@ -2,6 +2,8 @@
 
 Active candidate daily ETF timing strategy.
 
+Full report: `full_research_report.html`
+
 The strategy avoids single-stock and small-cap exposure. It uses the CSI 300 index as the market temperature signal and trades only a user-audited stable ETF registry: `510050`, `510300`, `159915`, `159949`, `510880`, and `518880`. New ETF categories must be explicitly reviewed and added to the registry before any strategy can use them.
 
 Daily process:
@@ -15,7 +17,7 @@ Daily process:
 
 Risk-exit package:
 
-- `risk_exit.enabled=true` by default; formal reports must also run `risk_exit.enabled=false` as the baseline.
+- `risk_exit.enabled=true` by default; disabled risk-exit runs are treated as optional sensitivity/ablation research and are not shown in the default full report.
 - `stop_loss_pct=0.08` exits an ETF leg whose current price falls 8% below the effective entry cost.
 - `take_profit_pct=0.16` arms a trailing exit; `trailing_stop_pct=0.06` protects ETF-leg gains after that threshold is reached.
 - `max_holding_days=60` exits stale ETF legs when return is below `min_time_stop_return=0.0`.

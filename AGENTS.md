@@ -50,4 +50,5 @@ python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 
 - Frozen dataclasses for immutable value objects
 - `threading.RLock()` for shared state
 - DuckDB readers: `read_only=True`
+- 策略研究模板契约：用户说“研究策略/策略研究/full report”时，必须使用 `quant-research-fks`，并严格按 `quant/features/strategies/xueqiu_small_cap_financial_filter/full_research_report.html` 当前 6 段 HTML 报告契约生成；活跃模板是 `quant/infrastructure/var/research/report_templates/full_research_report_template.html`。默认报告不展示参数敏感性分析或止盈止损开关对照，除非用户明确要求增量审计。
 - Text files: UTF-8; run `python scripts/check_text_encoding.py` after doc rewrites

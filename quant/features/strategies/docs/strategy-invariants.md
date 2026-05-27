@@ -99,15 +99,16 @@ S5-06  送股/拆分等事件产生小于 1 股的内部残留仓位时，风险
 
 ## CASE-6: Top-level strategy promotion gate
 
-顶层 `quant/features/strategies/<strategy_id>/` 是生产注册表自动发现区，不再存放所有研究候选。只有严格本地回测报告证明 `CAGR > 10%` 的策略，才能留在顶层。其它策略必须迁入 `quant/features/strategies/reject/<strategy_id>/`，可用于审计、复现和单测，但不会被 `StrategyRegistry` 自动发现。
+顶层 `quant/features/strategies/<strategy_id>/` 是生产注册表自动发现区，不再存放所有研究候选。只有严格本地回测报告证明当前生产 checklist 全部通过的策略，才能留在顶层；目录内还必须携带与研究报告目录同步的 `full_research_report.html`，方便策略代码与完整审计证据一起归档。其它策略必须迁入 `quant/features/strategies/reject/<strategy_id>/`，可用于审计、复现和单测，但不会被 `StrategyRegistry` 自动发现。
 
 ### 断言
 
 ```
 S6-01  `strategies/reject/` 目录存在
-S6-02  顶层每个含 strategy.py 的策略目录都必须有 strict last_result/grid_result/batch_result CAGR 证据
-S6-03  顶层策略的 CAGR 必须 > 0.10
-S6-04  `strategies/reject/<strategy_id>/strategy.py` 不参与默认目录自动发现
+S6-02  顶层每个含 strategy.py 的策略目录都必须有 strict last_result/grid_result/batch_result checklist 证据
+S6-03  顶层策略必须通过当前生产 checklist：CAGR/MaxDD 分层门槛、total_trades > 50、max_adv_participation <= 5% ADV
+S6-04  顶层策略目录必须附带与 `quant/infrastructure/var/research/reports/<strategy_id>/full_research_report.html` 同步的 `full_research_report.html`
+S6-05  `strategies/reject/<strategy_id>/strategy.py` 不参与默认目录自动发现
 ```
 
 ## CASE-7: Audited ETF registry universe
@@ -124,7 +125,7 @@ S7-03  ETF 类别注册表中的每个 category entry 必须标记为 user_appro
 
 ## CASE-8: Promoted strategy risk-exit toggle
 
-顶层 promoted/candidate 策略默认必须带可开关的止盈止损/风险退出包。这个开关用于报告中生成 `baseline_no_risk_exit` 与 `risk_exit_enabled` 的同口径对照，防止研究只展示加风控后的结果。
+顶层 promoted/candidate 策略默认必须带启用的止盈止损/风险退出包。开关能力保留给专项敏感性/消融研究使用，但默认 full report 不再展示关闭/开启对照；报告只解释当前启用口径下的退出逻辑和风险含义。
 
 ### 断言
 
@@ -136,4 +137,4 @@ S8-02  `risk_exit.enabled=False` 时，PnL 型 stop_loss / trailing_take_profit 
 ### 适用范围
 
 - 适用于顶层 `quant/features/strategies/<strategy_id>/` 中可直接被研究/回测报告调用的策略。
-- 若策略确实不适合单票级止盈止损，必须实现组合级回撤、波动率、时间退出或在报告中明确标记不适用，并仍保留开关对照说明。
+- 若策略确实不适合单票级止盈止损，必须实现组合级回撤、波动率、时间退出或在报告中明确标记不适用，并说明默认启用的风险退出口径。

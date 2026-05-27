@@ -24,7 +24,7 @@
 - 所有策略的买入执行都必须接受框架层 ADV 约束：最终 BUY 成交金额不得超过配置的 `max_participation_rate * ADV value`，研究默认生产门槛为 5% ADV；策略不得用自身下单逻辑绕过该约束
 - 策略 ID 唯一，不区分大小写
 - 策略目录结构: `strategies/<name>/strategy.py`
-- 顶层策略准入门槛：只有严格本地回测证明 `CAGR > 10%` 的策略目录才允许直接放在 `strategies/<name>/`；其余候选必须放在 `strategies/reject/<name>/`
+- 顶层策略准入门槛：只有当前生产 checklist 全部通过的策略目录才允许直接放在 `strategies/<name>/`，并且目录内必须附带与研究产物同步的 `full_research_report.html`；其余候选必须放在 `strategies/reject/<name>/`
 - 研究生成策略默认保持 `enabled: false` / `status: candidate`
 - A 股低价小市值类策略必须显式处理退市风险：买入过滤 ST/停牌/非上市/list_status、价格下限和流动性下限，持仓触发风险时每日尝试退出
 - 日线策略的持仓风险退出必须独立于 `holding_days`/调仓门控；风险退出在每日 `on_after_trading` 先执行，且同日调仓不得对已提交风险退出的 symbol 再次提交 SELL
@@ -32,13 +32,13 @@
 - 只有实际完成候选选择/调仓的 rebalance 才能刷新 `_last_rebalance_date`；空候选池、字段缺失或无有效 NAV 不得让策略等待下一个 holding window
 - 候选入场过滤与持仓退出过滤必须分离；入场 diagnostics 不得混入 `stop_loss`、`take_profit`、`trailing_stop` 等只对已有持仓有意义的退出原因
 - 覆盖 `on_fill()` 的策略必须兼容回测引擎的 synthetic fill：送股/转增可能以 `BUY`、`fill_price=0` 回调同步策略内部仓位，ETF/基金 `adj_factor` 份额折算可能以 `BUY` 或 `SELL`、`fill_price=0` 同步内部仓位，内部成本/峰值价状态要随之按数量比例调整
-- 顶层 promoted/candidate 策略默认必须暴露 `risk_exit.enabled` 或等价总开关；正式研究报告必须能跑出止盈止损/风险退出关闭与开启的同口径对照
+- 顶层 promoted/candidate 策略默认必须暴露并启用 `risk_exit.enabled` 或等价风险退出包；正式研究报告默认只展示启用后的止盈止损/风险退出逻辑，关闭版本只作为专项敏感性/消融研究
 
 ## 修改守则
 
 - 改策略框架：只动 `base.py`, `registry.py`
 - 新增策略：在 `strategies/` 下新建目录，包含 `strategy.py`、`config.yaml`、`README.md`
-- 新增未验证策略或回测年化不超过 10% 的策略：放入 `strategies/reject/<name>/`，不得进入顶层自动发现区；通过严格回测后再 promote
+- 新增未验证策略或当前生产 checklist 未全部通过的策略：放入 `strategies/reject/<name>/`，不得进入顶层自动发现区；通过严格回测 checklist 后再 promote，并同步复制对应 `full_research_report.html` 到策略目录
 - Large-cap forum strategies should reuse `_large_cap_forum_common.py` for shared daily-bar factor/risk mechanics, while preserving separate candidate directories, configs, and README files for each thesis.
 - 非小市值 ETF 轮动策略应通过资产类别与流动性定义 universe；除非用户明确要求，不要把中证1000或其它小盘 proxy ETF 混入默认池。
 - 黄金-权益 ETF 杠铃类策略可以使用黄金 ETF 作为防守资产，但权益腿只能来自已审计稳定 ETF 注册池，不能从当前全市场 ETF taxonomy 自动扩候选，也不能退化为单只股票或小盘 proxy；新增 ETF 类别必须先经用户审计同意并注册到 `audited_stable_etf_registry_v1`。每个调仓点仍必须满足当前 bar、NAV/规模、流动性和 lookback 约束。

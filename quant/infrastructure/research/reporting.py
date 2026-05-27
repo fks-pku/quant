@@ -340,9 +340,9 @@ def build_research_full_report_html(
     title = f"{_report_subject(rows)} End-to-End Research Report"
     body = [
         '<section class="hero">',
-        "<p class=\"eyebrow\">Executive Summary + Audit Appendix</p>",
+        "<p class=\"eyebrow\">Final Decision + Audit Appendix</p>",
         f"<h1>{escape(title)}</h1>",
-        f"<p>Generated at {escape(str(generated))}. The main report focuses on the current Go / No-Go checklist, strict Backtester evidence, capacity, and key residual risks. Detailed audit tables are folded into appendices.</p>",
+        f"<p>Generated at {escape(str(generated))}. The main report focuses on the final decision, the current Metric Checklist, plain-language strategy and risk-exit logic, key risks, appendices, and the remaining TODOs before going live.</p>",
         _report_metric_grid(rows, str(generated)),
         "</section>",
         '<section class="panel">',
@@ -356,8 +356,13 @@ def build_research_full_report_html(
         "</section>",
         '<section class="panel">',
         "<h2>3. Strategy Logic And Core Evidence</h2>",
+        "<h3>策略逻辑</h3>",
         _strategy_logic_plain_paragraph(data, rows),
         _strategy_logic_summary_table(data, rows),
+        "<h3>止盈止损逻辑</h3>",
+        _risk_exit_logic_plain_paragraph(data, rows),
+        _risk_exit_package_contract_table(data, rows),
+        "<h3>核心证据</h3>",
         "<h3>策略参数列表及解释</h3>",
         _strategy_parameter_contract_table(data, rows),
         "<h3>Equity Curve</h3>",
@@ -368,15 +373,11 @@ def build_research_full_report_html(
         _cost_capacity_summary_table(data, rows),
         "</section>",
         '<section class="panel">',
-        "<h2>4. Parameter Sensitivity</h2>",
-        _parameter_sensitivity_contract_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>5. Key Risks</h2>",
+        "<h2>4. Key Risks</h2>",
         _key_risk_table(data, rows),
         "</section>",
         '<section class="panel appendix-panel">',
-        "<h2>6. Audit Appendix</h2>",
+        "<h2>5. Appendix</h2>",
         _details_block(
             "A. Fast research input and signal diagnostics",
             "\n".join(
@@ -449,6 +450,10 @@ def build_research_full_report_html(
                 ]
             ),
         ),
+        "</section>",
+        '<section class="panel">',
+        "<h2>6. TODO：上线前还需要做什么</h2>",
+        _next_steps_contract_table(rows),
         "</section>",
     ]
     return _html_document(title, "\n".join(body))
@@ -660,14 +665,6 @@ def _strategy_parameter_rows(row: Dict[str, Any]) -> List[tuple[str, str, str, s
                 add(str(name), value, f"StrategySpec.{key}")
             break
 
-    sensitivity = _parameter_sensitivity_payload(row)
-    for key in ("selected_params", "base_params"):
-        params = sensitivity.get(key) if isinstance(sensitivity, dict) else None
-        if isinstance(params, dict):
-            for name, value in params.items():
-                add(str(name), value, f"parameter_sensitivity.{key}")
-            break
-
     for name in ("lookback_days", "horizon_days", "execution_lag_days", "rebalance_frequency"):
         add(name, spec.get(name), "StrategySpec field")
     return result
@@ -705,10 +702,219 @@ def _strategy_parameter_value_cell(value: Any) -> str:
     return _cell(value)
 
 
+def _risk_exit_package_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    risk_exit = _risk_exit_config_from_spec(spec)
+    if not risk_exit and not _risk_exit_flag_from_spec(spec):
+        return _message_table(
+            ["项目", "内容", "说明"],
+            "止盈止损/风险退出策略",
+            "missing",
+            "StrategySpec 未记录 risk_exit 或 enable_risk_exit；full report 不能形成完整止盈止损审计。",
+        )
+    values = [
+        (
+            "策略特定风险退出包",
+            _risk_exit_strategy_fit_text(spec),
+            "说明为什么这一套止盈止损适合当前策略，而不是复用通用模板。",
+        ),
+        (
+            "默认启用状态",
+            _risk_exit_switch_text(spec, risk_exit),
+            "默认 full report 只展示启用后的止盈止损逻辑；关闭版本属于专项敏感性/消融研究。",
+        ),
+        (
+            "亏损退出",
+            _risk_exit_loss_text(risk_exit),
+            "用于控制单票或单资产左尾亏损；阈值需与波动率和持仓周期匹配。",
+        ),
+        (
+            "盈利保护",
+            _risk_exit_profit_text(risk_exit),
+            "用于保护已有浮盈，同时避免过早截断策略需要的收益右尾。",
+        ),
+        (
+            "时间止损",
+            _risk_exit_time_text(risk_exit),
+            "用于处理信号迟迟不兑现、资金被低效持仓占用的情况。",
+        ),
+        (
+            "状态/流动性退出",
+            _risk_exit_status_text(spec),
+            "用于处理 ST、停牌、退市、价格、成交额或不可交易状态等非 PnL 风险。",
+        ),
+        (
+            "执行优先级",
+            "每日先检查风险退出，再执行普通调仓卖出和新买入；触发退出的标的当日不应被普通调仓立即买回。",
+            "风险退出只处理已有持仓，不参与买入排序，避免变成隐形选股因子。",
+        ),
+    ]
+    body = "".join(
+        "<tr>"
+        + f"<td>{escape(label)}</td>"
+        + f"<td>{escape(_cell(value))}</td>"
+        + f"<td>{escape(note)}</td>"
+        + "</tr>"
+        for label, value, note in values
+    )
+    return _table(["项目", "当前策略", "审计含义"], body)
+
+
+def _risk_exit_config_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    params = _risk_exit_params_from_spec(spec)
+    risk_exit: Dict[str, Any] = {}
+    nested = params.get("risk_exit")
+    if isinstance(nested, dict):
+        risk_exit.update(nested)
+    for key in (
+        "enabled",
+        "stop_loss_pct",
+        "min_stop_loss_pct",
+        "max_stop_loss_pct",
+        "stop_volatility_multiplier",
+        "take_profit_pct",
+        "trailing_stop_pct",
+        "trailing_volatility_multiplier",
+        "max_trailing_stop_pct",
+        "hard_take_profit_pct",
+        "exit_volatility_lookback",
+        "max_holding_days",
+        "min_time_stop_return",
+    ):
+        if key in params and key not in risk_exit:
+            risk_exit[key] = params[key]
+    if "enabled" not in risk_exit and "enable_risk_exit" in params:
+        risk_exit["enabled"] = params.get("enable_risk_exit")
+    return risk_exit
+
+
+def _risk_exit_params_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    for key in ("parameters", "strategy_parameters", "params"):
+        value = spec.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _risk_exit_flag_from_spec(spec: Dict[str, Any]) -> bool:
+    params = _risk_exit_params_from_spec(spec)
+    return "enable_risk_exit" in params or "risk_exit" in params
+
+
+def _risk_exit_switch_text(spec: Dict[str, Any], risk_exit: Dict[str, Any]) -> str:
+    params = _risk_exit_params_from_spec(spec)
+    enabled = risk_exit.get("enabled", params.get("enable_risk_exit"))
+    enabled_text = "未记录" if enabled is None else str(bool(enabled)).lower()
+    return (
+        f"当前 risk_exit.enabled={enabled_text}；默认研究报告按启用止盈止损/风险退出包后的策略口径展示。"
+    )
+
+
+def _risk_exit_strategy_fit_text(spec: Dict[str, Any]) -> str:
+    formula = str(spec.get("signal_formula_key") or spec.get("strategy_id") or "").lower()
+    strategy_type = str(spec.get("strategy_type") or "").lower()
+    if "small_cap" in formula or "small_cap" in strategy_type:
+        return (
+            "策略特定风险退出包：小市值/低流动性组合容易遇到流动性枯竭、ST/退市和左尾跳跌风险，"
+            "因此采用较宽或波动率自适应止损、浮盈后的移动止盈、时间止损，并保留状态/流动性强制退出。"
+        )
+    if "etf" in formula or "rotation" in formula or "barbell" in formula or "etf" in strategy_type:
+        return (
+            "策略特定风险退出包：ETF/宽基轮动波动低于个股，风险退出应更偏组合级趋势失效、回撤/波动率降仓和时间退出，"
+            "不能机械套用个股窄止损。"
+        )
+    if "trend" in formula or "breakout" in formula or "momentum" in formula:
+        return (
+            "策略特定风险退出包：趋势类策略依赖收益右尾，风险退出应优先使用 ATR/波动率移动止盈和趋势失效退出，"
+            "避免固定硬止盈过早截断大行情。"
+        )
+    if "reversal" in formula or "mean" in formula:
+        return (
+            "策略特定风险退出包：反转类策略更需要时间止损和假设失效退出，避免持有持续下跌的错误反转信号。"
+        )
+    return "策略特定风险退出包：阈值必须按资产类型、持仓周期、波动率、流动性、信号假设和主要失效模式解释。"
+
+
+def _risk_exit_loss_text(risk_exit: Dict[str, Any]) -> str:
+    stop = _safe_float(risk_exit.get("stop_loss_pct"))
+    min_stop = _safe_float(risk_exit.get("min_stop_loss_pct"))
+    max_stop = _safe_float(risk_exit.get("max_stop_loss_pct"))
+    multiplier = risk_exit.get("stop_volatility_multiplier")
+    if stop is None and min_stop is None and max_stop is None:
+        return "未记录亏损退出阈值。"
+    pieces = []
+    if stop is not None:
+        pieces.append(f"基准止损 {_pct(stop)}")
+    if min_stop is not None and max_stop is not None:
+        pieces.append(f"波动率自适应区间 {_pct(min_stop)}-{_pct(max_stop)}")
+    if multiplier is not None:
+        pieces.append(f"volatility multiplier={_cell(multiplier)}")
+    return "；".join(pieces) + "。"
+
+
+def _risk_exit_profit_text(risk_exit: Dict[str, Any]) -> str:
+    take_profit = _safe_float(risk_exit.get("take_profit_pct"))
+    trailing = _safe_float(risk_exit.get("trailing_stop_pct"))
+    trailing_mult = risk_exit.get("trailing_volatility_multiplier")
+    max_trailing = _safe_float(risk_exit.get("max_trailing_stop_pct"))
+    hard_take = _safe_float(risk_exit.get("hard_take_profit_pct"))
+    pieces = []
+    if take_profit is not None and take_profit > 0:
+        pieces.append(f"浮盈达到 {_pct(take_profit)} 后启用盈利保护")
+    if trailing is not None and trailing > 0:
+        pieces.append(f"移动止盈 {_pct(trailing)}")
+    if trailing_mult is not None:
+        pieces.append(f"trailing volatility multiplier={_cell(trailing_mult)}")
+    if max_trailing is not None and max_trailing > 0:
+        pieces.append(f"移动止盈上限 {_pct(max_trailing)}")
+    if hard_take is not None:
+        pieces.append("硬止盈未启用" if hard_take <= 0 else f"硬止盈 {_pct(hard_take)}")
+    return "；".join(pieces) + "。" if pieces else "未记录盈利保护阈值。"
+
+
+def _risk_exit_time_text(risk_exit: Dict[str, Any]) -> str:
+    days = _safe_int(risk_exit.get("max_holding_days"))
+    min_return = _safe_float(risk_exit.get("min_time_stop_return"))
+    if days is None and min_return is None:
+        return "未记录时间止损规则。"
+    if days is not None and min_return is not None:
+        return f"持仓满 {days} 个交易日且收益低于 {_pct(min_return)} 时退出。"
+    if days is not None:
+        return f"持仓满 {days} 个交易日后触发时间检查。"
+    return f"时间止损最低收益阈值 {_pct(min_return)}。"
+
+
+def _risk_exit_status_text(spec: Dict[str, Any]) -> str:
+    logic = spec.get("strategy_logic") if isinstance(spec.get("strategy_logic"), dict) else {}
+    exit_rule = logic.get("exit_rule")
+    if exit_rule:
+        return _cell(exit_rule)
+    return _logic_exit_rule(spec)
+
+
 def _strategy_logic_plain_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     text = _strategy_logic_plain_text(_primary_row(rows))
     if not text:
         return ""
+    return f'<p class="logic-plain"><b>白话版：</b>{escape(text)}</p>'
+
+
+def _risk_exit_logic_plain_paragraph(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    spec = (row.get("evidence") or {}).get("strategy_spec") or {}
+    risk_exit = _risk_exit_config_from_spec(spec)
+    if not risk_exit and not _risk_exit_flag_from_spec(spec):
+        text = "本报告没有记录默认启用的止盈止损/风险退出包；上线前必须补齐当前启用口径下的退出规则说明和 strict backtest 证据。"
+    else:
+        parts = [
+            _risk_exit_strategy_fit_text(spec),
+            _risk_exit_loss_text(risk_exit),
+            _risk_exit_profit_text(risk_exit),
+            _risk_exit_time_text(risk_exit),
+            "每天先看已有持仓是否触发这些退出条件，再做普通调仓；它不参与买入排序，也不能变成隐形选股因子。",
+        ]
+        text = " ".join(part for part in parts if part)
     return f'<p class="logic-plain"><b>白话版：</b>{escape(text)}</p>'
 
 
@@ -1292,8 +1498,6 @@ def _stage_specific_sections(stage_key: str, data: Dict[str, Any], rows: List[Di
             _data_quality_contract_table(data, rows),
             "<h3>核心绩效</h3>",
             _core_performance_contract_table(data, rows),
-            "<h3>参数敏感性</h3>",
-            _parameter_sensitivity_contract_table(data, rows),
             "<h3>成交与成本诊断</h3>",
             _trade_cost_contract_table(data, rows),
             "<h3>换手与持仓暴露</h3>",

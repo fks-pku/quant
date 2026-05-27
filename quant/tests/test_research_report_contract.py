@@ -141,10 +141,23 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
 
     _assert_clean_html(html)
     assert "End-to-End Research Report" in html
+    assert _headings(html, "h2") == [
+        "1. Final Decision",
+        "2. Metric Checklist",
+        "3. Strategy Logic And Core Evidence",
+        "4. Key Risks",
+        "5. Appendix",
+        "6. TODO：上线前还需要做什么",
+    ]
     assert "Metric Checklist" in html
     assert "Strategy Logic And Core Evidence" in html
+    assert "策略逻辑" in html
+    assert "止盈止损逻辑" in html
     assert "Key Risks" in html
-    assert "Audit Appendix" in html
+    assert "Appendix" in html
+    assert "上线前还需要做什么" in html
+    assert "Parameter Sensitivity" not in html
+    assert "参数敏感性" not in html
     assert "A. Fast research input and signal diagnostics" in html
     assert "B. Strict backtest full diagnostics" in html
     assert "C. Walk-forward audit evidence" in html
@@ -170,7 +183,7 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
     assert "<td>cagr_drawdown_tier</td><td>CAGR=7.00%; MaxDD=24.00%</td><td>CAGR 5.00%-10.00% requires MaxDD &lt;=15.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
 
 
-def test_reports_render_parameter_sensitivity_audit_when_available():
+def test_reports_do_not_render_parameter_sensitivity_by_default():
     result = {"run_id": "sensitivity_contract", "backtested": 1, "walkforward_passed": 0}
     rows = [
         {
@@ -226,13 +239,13 @@ def test_reports_render_parameter_sensitivity_audit_when_available():
     full_html = build_research_full_report_html(result, rows)
     strict_html = build_research_stage_report_html("strict_backtest", result, rows)
 
-    assert "4. Parameter Sensitivity" in full_html
-    assert "参数敏感性" in strict_html
-    assert "稳健性审计，不作为全样本参数寻优通过证据" in full_html
-    assert "<td>tested_count</td><td>3</td><td>&gt;=3 local/scenario variants</td><td><span class=\"badge pass\">pass</span></td>" in full_html
-    assert "<td>max_degradation_pct</td><td>37.50%</td><td>&lt;=30.00%</td><td><span class=\"badge fail\">fail</span></td>" in full_html
-    assert "wider_stop" in full_html
-    assert "risk_stop_pct" in full_html
+    assert "Parameter Sensitivity" not in full_html
+    assert "参数敏感性" not in full_html
+    assert "参数敏感性" not in strict_html
+    assert "稳健性审计，不作为全样本参数寻优通过证据" not in full_html
+    assert "tested_count</td><td>3" not in full_html
+    assert "wider_stop" not in full_html
+    assert "risk_stop_pct" not in full_html
 
 
 def test_full_report_renders_strategy_parameter_list_with_explanations():
@@ -278,6 +291,107 @@ def test_full_report_renders_strategy_parameter_list_with_explanations():
     assert "<td>max_positions</td><td>3</td><td>最多同时持有的股票数量。</td><td>StrategySpec.parameters</td>" in html
     assert "<td>empty_months</td><td>1, 4</td><td>这些月份保持空仓以降低季节性风险。</td><td>StrategySpec.parameters</td>" in html
     assert "<td>lookback_days</td><td>20</td><td>历史观察窗口" in html
+
+
+def test_full_report_explains_strategy_specific_risk_exit_package():
+    result = {"run_id": "risk_exit_contract", "backtested": 1, "walkforward_passed": 0}
+    rows = [
+        {
+            "title": "Risk Exit Contract",
+            "strategy_id": "risk_exit_contract_strategy",
+            "status": "needs_walkforward_validation",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 0.94,
+                        "cagr": 0.13,
+                        "max_drawdown_pct": -0.19,
+                        "total_trades": 88,
+                    },
+                    "capacity": {"max_adv_participation": 0.028},
+                }
+            },
+            "evidence": {
+                "strategy_spec": {
+                    "strategy_id": "xueqiu_small_cap_financial_filter",
+                    "strategy_type": "small_cap_size_rotation",
+                    "signal_formula_key": "xueqiu_small_cap_financial_filter",
+                    "universe": ["000001", "000002"],
+                    "parameters": {
+                        "enable_risk_exit": True,
+                        "risk_exit": {
+                            "enabled": True,
+                            "stop_loss_pct": 0.12,
+                            "min_stop_loss_pct": 0.08,
+                            "max_stop_loss_pct": 0.18,
+                            "stop_volatility_multiplier": 3.0,
+                            "take_profit_pct": 0.25,
+                            "trailing_stop_pct": 0.10,
+                            "trailing_volatility_multiplier": 2.5,
+                            "max_trailing_stop_pct": 0.22,
+                            "hard_take_profit_pct": 0.0,
+                            "max_holding_days": 45,
+                            "min_time_stop_return": 0.02,
+                        },
+                    },
+                    "strategy_logic": {
+                        "exit_rule": "每日先检查 ST、停牌、退市、价格和流动性风险；risk_exit.enabled=true 时叠加止损、移动止盈和时间止损。",
+                    },
+                }
+            },
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    assert "止盈止损逻辑" in html
+    assert "策略特定风险退出包" in html
+    assert "baseline_no_risk_exit" not in html
+    assert "risk_exit_enabled" not in html
+    assert "亏损退出" in html
+    assert "12.00%" in html
+    assert "8.00%-18.00%" in html
+    assert "盈利保护" in html
+    assert "25.00%" in html
+    assert "10.00%" in html
+    assert "时间止损" in html
+    assert "45" in html
+    assert "2.00%" in html
+    assert "状态/流动性退出" in html
+    assert "ST、停牌、退市、价格和流动性风险" in html
+
+
+def test_xueqiu_report_spec_preserves_default_enabled_risk_exit_thresholds():
+    from quant.scripts.run_xueqiu_small_cap_financial_filter_strict_backtest import (
+        _risk_exit_scenarios,
+        _strategy_spec,
+    )
+
+    scenario = _risk_exit_scenarios(
+        [
+            {
+                "name": "top3_source_month_plus_shenzhen_stop",
+                "max_positions": 3,
+                "min_positions": 3,
+                "target_exposure": 1.0,
+                "empty_months": [1, 4],
+                "risk_index_symbol": "399001",
+            }
+        ]
+    )[0]
+
+    spec = _strategy_spec(scenario, 100)
+    risk_exit = spec["parameters"]["risk_exit"]
+
+    assert scenario["risk_exit_label"] == "risk_exit_enabled"
+    assert risk_exit["enabled"] is True
+    assert risk_exit["stop_loss_pct"] == 0.12
+    assert risk_exit["min_stop_loss_pct"] == 0.08
+    assert risk_exit["max_stop_loss_pct"] == 0.18
+    assert risk_exit["take_profit_pct"] == 0.25
+    assert risk_exit["trailing_stop_pct"] == 0.10
+    assert risk_exit["max_holding_days"] == 45
+    assert risk_exit["min_time_stop_return"] == 0.02
 
 
 def test_full_report_marks_missing_fast_research_metrics_as_failures():

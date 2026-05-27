@@ -430,7 +430,7 @@ class TestCase8PromotedStrategyRiskExitToggle:
 
 
 class TestCase6TopLevelStrategyPromotionGate:
-    def test_s6_01_top_level_strategies_have_cagr_above_10pct(self):
+    def test_s6_01_top_level_strategies_pass_current_production_checklist(self):
         package_root = Path(__file__).resolve().parents[1]
         strategies_root = package_root / "features" / "strategies"
         reports_root = package_root / "infrastructure" / "var" / "research" / "reports"
@@ -443,9 +443,38 @@ class TestCase6TopLevelStrategyPromotionGate:
                 continue
             if not (item / "strategy.py").exists():
                 continue
-            cagr = _strict_report_cagr(reports_root, item.name)
-            if cagr is None or cagr <= 0.10:
-                violations.append((item.name, cagr))
+            checklist = _strict_report_checklist(reports_root, item.name)
+            if not checklist["passed"]:
+                violations.append((item.name, checklist["failures"]))
+
+        assert violations == []
+
+    def test_s6_02_top_level_strategies_bundle_full_research_report(self):
+        package_root = Path(__file__).resolve().parents[1]
+        strategies_root = package_root / "features" / "strategies"
+        reports_root = package_root / "infrastructure" / "var" / "research" / "reports"
+
+        violations = []
+        for item in sorted(strategies_root.iterdir()):
+            if not item.is_dir() or item.name.startswith("_") or item.name.startswith(".") or item.name == "reject":
+                continue
+            if not (item / "strategy.py").exists():
+                continue
+            bundled_report = item / "full_research_report.html"
+            source_report = reports_root / item.name / "full_research_report.html"
+            if not bundled_report.exists():
+                violations.append((item.name, "missing bundled full_research_report.html"))
+                continue
+            if not source_report.exists():
+                violations.append((item.name, "missing research full_research_report.html"))
+                continue
+            bundled_text = bundled_report.read_text(encoding="utf-8")
+            source_text = source_report.read_text(encoding="utf-8")
+            if bundled_text != source_text:
+                violations.append((item.name, "bundled full_research_report.html is not synchronized with research report"))
+                continue
+            if item.name not in bundled_text or "Metric Checklist" not in bundled_text:
+                violations.append((item.name, "bundled report is not the strategy full report"))
 
         assert violations == []
 
@@ -615,6 +644,93 @@ def _strict_report_cagr(reports_root: Path, strategy_id: str) -> float | None:
             if row.get("strategy_id") == strategy_id and row.get("cagr") is not None:
                 return float(row["cagr"])
     return None
+
+
+def _strict_report_checklist(reports_root: Path, strategy_id: str) -> dict:
+    evidence = _strict_report_evidence(reports_root, strategy_id)
+    cagr = _optional_float(evidence.get("cagr"))
+    max_drawdown = _optional_float(evidence.get("max_drawdown_pct"))
+    total_trades = _optional_int(evidence.get("total_trades"))
+    max_adv = _optional_float(evidence.get("max_adv_participation"))
+    failures = []
+    if cagr is None:
+        failures.append("cagr=missing")
+    elif cagr < 0.05:
+        failures.append(f"cagr={cagr:.4f} < 0.05")
+    if max_drawdown is None:
+        failures.append("max_drawdown_pct=missing")
+    elif cagr is not None and cagr >= 0.05 and abs(max_drawdown) > _drawdown_limit_for_cagr(cagr):
+        failures.append(f"max_drawdown_pct={max_drawdown:.4f} exceeds tier")
+    if total_trades is None:
+        failures.append("total_trades=missing")
+    elif total_trades <= 50:
+        failures.append(f"total_trades={total_trades} <= 50")
+    if max_adv is None:
+        failures.append("max_adv_participation=missing")
+    elif max_adv > 0.05:
+        failures.append(f"max_adv_participation={max_adv:.4f} > 0.05")
+    return {"passed": not failures, "failures": failures, "evidence": evidence}
+
+
+def _strict_report_evidence(reports_root: Path, strategy_id: str) -> dict:
+    grid_path = reports_root / strategy_id / "grid_result.json"
+    if grid_path.exists():
+        payload = json.loads(grid_path.read_text(encoding="utf-8"))
+        best = payload.get("best") or {}
+        strict_reports = payload.get("strict_reports") or {}
+        strict = strict_reports.get(str(best.get("scenario"))) or {}
+        metrics = strict.get("metrics") or {}
+        capacity = strict.get("capacity") or {}
+        return {
+            "cagr": _first_present(best, metrics, "cagr"),
+            "max_drawdown_pct": _first_present(best, metrics, "max_drawdown_pct"),
+            "total_trades": _first_present(best, metrics, "total_trades"),
+            "max_adv_participation": _first_present(best, capacity, "max_adv_participation"),
+        }
+
+    result_path = reports_root / strategy_id / "last_result.json"
+    if result_path.exists():
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        metrics = payload.get("metrics") or {}
+        capacity = payload.get("capacity") or {}
+        return {
+            "cagr": metrics.get("cagr"),
+            "max_drawdown_pct": metrics.get("max_drawdown_pct"),
+            "total_trades": metrics.get("total_trades"),
+            "max_adv_participation": capacity.get("max_adv_participation"),
+        }
+    return {}
+
+
+def _first_present(primary: dict, secondary: dict, key: str):
+    value = primary.get(key)
+    if value is not None:
+        return value
+    return secondary.get(key)
+
+
+def _optional_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _drawdown_limit_for_cagr(cagr: float) -> float:
+    if cagr < 0.10:
+        return 0.15
+    if cagr < 0.15:
+        return 0.25
+    if cagr < 0.20:
+        return 0.30
+    return 0.50
 
 
 def _payload_cagr(payload: dict) -> float | None:

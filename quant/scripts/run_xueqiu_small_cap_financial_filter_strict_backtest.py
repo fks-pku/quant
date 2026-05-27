@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime, timezone
-from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -25,6 +24,7 @@ from quant.api.research_bp import (
 from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
+from quant.features.research.production_gate import evaluate_production_readiness
 from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import (
     XueqiuSmallCapFinancialFilterStrategy,
 )
@@ -42,6 +42,7 @@ STRATEGY_ID = "xueqiu_small_cap_financial_filter"
 TITLE = "Xueqiu small-cap financial-filter rotation"
 SOURCE_URL = "https://xueqiu.com/7708198303/333999968"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")
+STRATEGIES_ROOT = Path("quant/features/strategies")
 DEFAULT_TARGET_CAGR = 0.10
 DEFAULT_TARGET_MAX_DRAWDOWN = -0.30
 COMMISSION_CFG = {
@@ -90,9 +91,27 @@ SCENARIOS: List[Dict[str, Any]] = [
     },
 ]
 
+DEFAULT_RISK_EXIT: Dict[str, Any] = {
+    "stop_loss_pct": 0.12,
+    "min_stop_loss_pct": 0.08,
+    "max_stop_loss_pct": 0.18,
+    "stop_volatility_multiplier": 3.0,
+    "take_profit_pct": 0.25,
+    "trailing_stop_pct": 0.10,
+    "trailing_volatility_multiplier": 2.5,
+    "max_trailing_stop_pct": 0.22,
+    "hard_take_profit_pct": 0.0,
+    "exit_volatility_lookback": 20,
+    "max_holding_days": 45,
+    "min_time_stop_return": 0.02,
+}
+
 RISK_EXIT_VARIANTS: List[Dict[str, Any]] = [
-    {"risk_exit_label": "baseline_no_risk_exit", "enable_risk_exit": False, "risk_exit": {"enabled": False}},
-    {"risk_exit_label": "risk_exit_enabled", "enable_risk_exit": True, "risk_exit": {"enabled": True}},
+    {
+        "risk_exit_label": "risk_exit_enabled",
+        "enable_risk_exit": True,
+        "risk_exit": {**DEFAULT_RISK_EXIT, "enabled": True},
+    },
 ]
 
 
@@ -126,7 +145,7 @@ def main() -> None:
             "base_scenario": scenario.get("base_scenario", scenario["name"]),
             "risk_exit_label": scenario.get("risk_exit_label", "risk_exit_enabled"),
             "enable_risk_exit": bool(scenario.get("enable_risk_exit", True)),
-            "parameters": dict(scenario),
+            "parameters": _scenario_report_parameters(scenario),
             "symbols": scenario_symbols,
             "stock_universe_size": len(stock_symbols),
             "sharpe": metrics.get("sharpe"),
@@ -189,6 +208,11 @@ def _scenario_symbols(stock_symbols: List[str], scenario: Dict[str, Any]) -> Lis
     return list(dict.fromkeys([*stock_symbols, *_scenario_extras(scenario)]))
 
 
+def _scenario_report_parameters(scenario: Dict[str, Any]) -> Dict[str, Any]:
+    hidden = {"base_scenario", "risk_exit_label", "enable_risk_exit"}
+    return {key: value for key, value in scenario.items() if key not in hidden}
+
+
 def _scenario_extras(scenario: Dict[str, Any]) -> List[str]:
     symbol = str(scenario.get("risk_index_symbol") or "")
     return [symbol] if symbol else []
@@ -201,7 +225,7 @@ def _risk_exit_scenarios(scenarios: List[Dict[str, Any]]) -> List[Dict[str, Any]
             row = dict(scenario)
             row.update(variant)
             row["base_scenario"] = scenario["name"]
-            row["name"] = f"{scenario['name']}__{variant['risk_exit_label']}"
+            row["name"] = scenario["name"]
             expanded.append(row)
     return expanded
 
@@ -298,10 +322,10 @@ def _strategy_spec(scenario: Dict[str, Any], stock_count: int) -> Dict[str, Any]
             "target_exposure": "目标总仓位比例；1.0 表示满足条件时满仓等权持有。",
             "empty_months": "按月份主动空仓的风控规则；当前用于表达雪球原始策略里的 1 月和 4 月防御逻辑。",
             "risk_index_symbol": "指数级风险过滤参考标的；为空表示不启用，配置深成指等代码时用于大跌止损代理。",
-            "enable_risk_exit": "是否启用 PnL 型止盈止损/时间止损包；关闭时保留上市状态和流动性护栏。",
-            "risk_exit": "止盈止损开关与阈值分组，用于正式报告生成 baseline_no_risk_exit 与 risk_exit_enabled 对照。",
-            "base_scenario": "不含风险退出开关后缀的原始场景名称，用于配对比较同一参数场景下的 risk_exit 关闭与开启效果。",
-            "risk_exit_label": "风险退出开关分组；baseline_no_risk_exit 表示关闭 PnL 型止盈止损，risk_exit_enabled 表示启用默认止盈止损包。",
+            "enable_risk_exit": "默认启用 PnL 型止盈止损/时间止损包；关闭版本只用于专项敏感性/消融研究。",
+            "risk_exit": "默认启用的止盈止损阈值分组；正式报告按启用后的风险退出口径展示。",
+            "base_scenario": "不含风险退出口径标记的原始场景名称，用于识别场景来源。",
+            "risk_exit_label": "风险退出口径标记；默认 risk_exit_enabled 表示启用当前止盈止损包。",
         },
         "lookback_days": 1,
         "horizon_days": 5,
@@ -384,6 +408,16 @@ def _select_best(
     return max(candidates, key=lambda row: _score_row(row, target_cagr, target_max_drawdown))
 
 
+def _bundle_full_report_for_promoted_strategy(full_html: str, strict_report: Dict[str, Any]) -> None:
+    gate = evaluate_production_readiness({"strict_backtest": strict_report})
+    if gate.get("verdict") != "pass":
+        return
+    strategy_dir = STRATEGIES_ROOT / STRATEGY_ID
+    if not (strategy_dir / "strategy.py").exists():
+        return
+    (strategy_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
+
+
 def _write_outputs(
     rows: List[Dict[str, Any]],
     strict_reports: Dict[str, Dict[str, Any]],
@@ -416,25 +450,16 @@ def _write_outputs(
     row = _hypothesis_row(best, strict_reports[str(best["scenario"])], target_cagr, target_max_drawdown, rows)
     result = {"run_id": f"{STRATEGY_ID}_strict_grid", "backtested": len(rows), "rejected": 0, "errors": []}
     generated = datetime.now(timezone.utc).isoformat()
-    comparison = _risk_exit_comparison(rows, strict_reports, best)
-    if comparison:
-        comparison_path = strategy_dir / "risk_exit_comparison.json"
-        comparison_text = json.dumps(comparison, ensure_ascii=False, indent=2, default=str)
-        comparison_path.write_text(comparison_text, encoding="utf-8")
-        (strategy_dir / "runs" / f"{run_ts}_risk_exit_comparison.json").write_text(comparison_text, encoding="utf-8")
     html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=generated)
     html = _insert_scenario_grid(html, rows, target_cagr, target_max_drawdown)
-    html = _insert_risk_exit_comparison(html, comparison, stage_only=True)
     full_html = build_research_full_report_html(result, [row], generated_at=generated)
     full_html = _insert_scenario_grid(full_html, rows, target_cagr, target_max_drawdown)
-    full_html = _insert_risk_exit_comparison(full_html, comparison)
     fast_html = build_research_stage_report_html("fast_research", result, [row], generated_at=generated)
-    fast_html = _insert_risk_exit_comparison(fast_html, comparison, stage_only=True)
     walk_html = build_research_stage_report_html("walkforward_strict_audit", result, [row], generated_at=generated)
-    walk_html = _insert_risk_exit_comparison(walk_html, comparison, stage_only=True)
     report_path = strategy_dir / "strict_backtest_report.html"
     report_path.write_text(html, encoding="utf-8")
     (strategy_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
+    _bundle_full_report_for_promoted_strategy(full_html, strict_reports[str(best["scenario"])])
     (strategy_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
     (strategy_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
     (strategy_dir / "runs" / f"{run_ts}_strict_backtest_report.html").write_text(html, encoding="utf-8")
@@ -447,11 +472,6 @@ def _write_outputs(
     (latest_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
     (latest_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
     (latest_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
-    if comparison:
-        (latest_dir / "risk_exit_comparison.json").write_text(
-            json.dumps(comparison, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
     return report_path, result_path
 
 
@@ -533,161 +553,6 @@ def _parameter_sensitivity_payload(
     }
 
 
-COMPARISON_METRICS = [
-    ("CAGR", "pct", "cagr"),
-    ("Total Return", "pct", "total_return"),
-    ("Max Drawdown", "pct", "max_drawdown_pct"),
-    ("Sharpe", "num", "sharpe"),
-    ("Sortino", "num", "sortino"),
-    ("Calmar", "num", "calmar_ratio"),
-    ("Win Rate", "pct", "win_rate"),
-    ("Profit Factor", "num", "profit_factor"),
-    ("Total Trades", "int", "total_trades"),
-    ("Round Trips", "int", "round_trip_trades"),
-    ("Avg Holding Days", "num", "avg_trade_duration_days"),
-    ("Commission", "money", "total_commission"),
-    ("Cost Drag", "pct_points", "cost_drag_pct"),
-    ("Max ADV Participation", "pct", "max_adv_participation"),
-    ("P95 ADV Participation", "pct", "p95_adv_participation"),
-    ("Volume Limited Trades", "int", "volume_limited_trades"),
-]
-
-
-def _risk_exit_comparison(
-    rows: List[Dict[str, Any]],
-    strict_reports: Dict[str, Dict[str, Any]],
-    best: Dict[str, Any],
-) -> Dict[str, Any]:
-    base_scenario = str(best.get("base_scenario") or best.get("scenario") or "")
-    off = _find_risk_exit_row(rows, base_scenario, "baseline_no_risk_exit")
-    on = _find_risk_exit_row(rows, base_scenario, "risk_exit_enabled")
-    if not off or not on:
-        return {}
-    before = _comparison_snapshot(off, strict_reports.get(str(off["scenario"])) or {})
-    after = _comparison_snapshot(on, strict_reports.get(str(on["scenario"])) or {})
-    return {
-        "strategy_id": STRATEGY_ID,
-        "base_scenario": base_scenario,
-        "baseline_no_risk_exit": before,
-        "risk_exit_enabled": after,
-        "deltas": {
-            key: None if before.get(key) is None or after.get(key) is None else after[key] - before[key]
-            for _, _, key in COMPARISON_METRICS
-        },
-        "exit_triggers": after.get("exit_triggers") or {},
-        "interpretation": (
-            "This is a same-sample strict Backtester comparison. Improvement from risk_exit_enabled must still be confirmed by walk-forward or holdout validation."
-        ),
-    }
-
-
-def _find_risk_exit_row(rows: List[Dict[str, Any]], base_scenario: str, label: str) -> Dict[str, Any] | None:
-    for row in rows:
-        if row.get("base_scenario") == base_scenario and row.get("risk_exit_label") == label:
-            return row
-    return None
-
-
-def _comparison_snapshot(row: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict[str, Any]:
-    metrics = strict_report.get("metrics") or {}
-    diagnostics = strict_report.get("diagnostics") or {}
-    capacity = strict_report.get("capacity") or {}
-    guard = strict_report.get("guard_diagnostics") or {}
-    return {
-        "scenario": row.get("scenario"),
-        "risk_exit_label": row.get("risk_exit_label"),
-        "cagr": metrics.get("cagr"),
-        "total_return": metrics.get("total_return"),
-        "max_drawdown_pct": metrics.get("max_drawdown_pct"),
-        "sharpe": metrics.get("sharpe"),
-        "sortino": metrics.get("sortino"),
-        "calmar_ratio": metrics.get("calmar_ratio"),
-        "win_rate": metrics.get("win_rate"),
-        "profit_factor": metrics.get("profit_factor"),
-        "total_trades": metrics.get("total_trades"),
-        "round_trip_trades": metrics.get("round_trip_trades"),
-        "avg_trade_duration_days": metrics.get("avg_trade_duration_days"),
-        "total_commission": diagnostics.get("total_commission"),
-        "cost_drag_pct": diagnostics.get("cost_drag_pct"),
-        "max_adv_participation": capacity.get("max_adv_participation"),
-        "p95_adv_participation": capacity.get("p95_adv_participation"),
-        "volume_limited_trades": diagnostics.get("volume_limited_trades"),
-        "exit_triggers": dict(guard.get("exit_triggers") or {}),
-    }
-
-
-def _insert_risk_exit_comparison(html: str, comparison: Dict[str, Any], stage_only: bool = False) -> str:
-    if not comparison:
-        return html
-    if stage_only:
-        panel = (
-            '<section class="panel">\n'
-            "<h2>2. Risk Exit Off/On Comparison</h2>\n"
-            "<p>本阶段报告已同步生成止盈止损/风险退出开关对照；完整表格见 full_research_report.html，机器可读版本见 risk_exit_comparison.json。</p>\n"
-            "</section>\n"
-        )
-    else:
-        before = comparison.get("baseline_no_risk_exit") or {}
-        after = comparison.get("risk_exit_enabled") or {}
-        body = "".join(
-            "<tr>"
-            f"<td>{escape(name)}</td>"
-            f"<td>{_fmt_compare(before.get(key), kind)}</td>"
-            f"<td>{_fmt_compare(after.get(key), kind)}</td>"
-            f"<td>{_fmt_delta(before.get(key), after.get(key), kind)}</td>"
-            "</tr>"
-            for name, kind, key in COMPARISON_METRICS
-        )
-        triggers = comparison.get("exit_triggers") or {}
-        trigger_text = ", ".join(f"{escape(str(key))}: {int(value)}" for key, value in sorted(triggers.items())) or "n/a"
-        panel = (
-            '<section class="panel">\n'
-            "<h2>2. Risk Exit Off/On Comparison</h2>\n"
-            "<p>同一 base scenario、同一数据、同一 universe、同一成本模型和同一执行口径下，对比 risk_exit.enabled=false 与 risk_exit.enabled=true。</p>\n"
-            '<div class="table-wrap"><table><thead><tr><th>Metric</th><th>baseline_no_risk_exit</th><th>risk_exit_enabled</th><th>变化</th></tr></thead>'
-            f"<tbody>{body}</tbody></table></div>\n"
-            f"<p>risk_exit_enabled 触发统计：{trigger_text}。该表是同样本 strict 回测对照，改善仍需 walk-forward 或留出样本确认。</p>\n"
-            "</section>\n"
-        )
-    for marker in (
-        '<section class="panel">\n<h2>2. Metric Checklist</h2>',
-        '<section class="panel">\n<h2>3. 报告导航</h2>',
-    ):
-        if marker in html:
-            return html.replace(marker, panel + marker, 1)
-    return html.replace("</body>", panel + "</body>", 1)
-
-
-def _fmt_compare(value: Any, kind: str) -> str:
-    if value is None:
-        return "n/a"
-    number = float(value)
-    if kind == "pct":
-        return f"{number:.2%}"
-    if kind == "pct_points":
-        return f"{number:.2f}%"
-    if kind == "int":
-        return f"{int(round(number)):,}"
-    if kind == "money":
-        return f"{number:,.2f}"
-    return f"{number:.2f}"
-
-
-def _fmt_delta(before: Any, after: Any, kind: str) -> str:
-    if before is None or after is None:
-        return "n/a"
-    delta = float(after) - float(before)
-    if kind == "pct":
-        return f"{delta:+.2%}"
-    if kind == "pct_points":
-        return f"{delta:+.2f} pct pts"
-    if kind == "int":
-        return f"{int(round(delta)):+,}"
-    if kind == "money":
-        return f"{delta:+,.2f}"
-    return f"{delta:+.2f}"
-
-
 def _insert_scenario_grid(
     html: str,
     rows: List[Dict[str, Any]],
@@ -704,7 +569,7 @@ def _insert_scenario_grid(
         f"<td>{int(row.get('total_trades') or 0)}</td>"
         f"<td>{float(row.get('cost_drag_pct') or 0.0):.2f}%</td>"
         f"<td>{float(row.get('max_adv_participation') or 0.0):.2%}</td>"
-        f"<td>{json.dumps(row.get('parameters') or {}, ensure_ascii=False)}</td>"
+        f"<td>{json.dumps(_scenario_grid_parameters(row.get('parameters') or {}), ensure_ascii=False)}</td>"
         "</tr>"
         for row in sorted(rows, key=lambda item: _score_row(item, target_cagr, target_max_drawdown), reverse=True)
     )
@@ -715,6 +580,11 @@ def _insert_scenario_grid(
     )
     marker = "<h3>回测配置</h3>"
     return html.replace(marker, f"{grid}<h3>回测配置</h3>", 1)
+
+
+def _scenario_grid_parameters(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    hidden = {"base_scenario", "risk_exit_label", "enable_risk_exit"}
+    return {key: value for key, value in parameters.items() if key not in hidden}
 
 
 def _score_row(

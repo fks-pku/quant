@@ -59,6 +59,7 @@ Ask these before trusting any result:
 6. Does walk-forward or OOS evidence survive bad regimes, not only the full sample?
 7. Are failed variants, rejected hypotheses, and warnings preserved in the report?
 8. If a stop-loss/take-profit package exists, is there a same-assumption off/on comparison, and were those parameters fixed before the final validation?
+9. Is the risk-exit package strategy-specific, or was a generic stop-loss/take-profit template copied from another strategy without justification?
 
 ## Bias Taxonomy And Controls
 
@@ -123,6 +124,7 @@ Controls:
 - Lock parameters before final OOS evaluation.
 - Do not use the same walk-forward failures to repeatedly tune the strategy without resetting validation.
 - Treat stop-loss, take-profit, trailing stop, and time-stop thresholds as parameters. Require a no-risk-exit baseline and disclose whether the risk-exit package was designed before or after seeing the equity curve.
+- Require the stop-loss/take-profit/risk-exit package to match the strategy's asset class, holding period, volatility, liquidity, signal thesis, turnover, and expected failure modes. A reused implementation is acceptable only if the report explains why the thresholds and triggers are appropriate for this strategy and includes sensitivity evidence.
 
 Red flags:
 
@@ -130,6 +132,7 @@ Red flags:
 - Report only shows the winning run.
 - Rules changed after seeing the equity curve.
 - Stop-loss/take-profit rules are added after inspecting drawdowns, but the report only shows the improved version.
+- Multiple unrelated strategies share the same stop-loss/take-profit/time-stop thresholds with no strategy-specific rationale.
 
 ### 5. Overfitting And Regime Bias
 
@@ -250,7 +253,7 @@ Require:
 - Walk-forward pass, or explicit warning/no-go if OOS stability fails.
 - Survivorship and universe audit.
 - Capacity and cost audit.
-- Stop-loss/take-profit off/on comparison with trigger attribution when the strategy includes a risk-exit package.
+- Strategy-specific stop-loss/take-profit off/on comparison with trigger attribution when the strategy includes a risk-exit package.
 - Correlation/factor exposure review if strategy will join a portfolio.
 
 ## Common Mistakes
