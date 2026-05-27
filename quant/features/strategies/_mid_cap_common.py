@@ -144,8 +144,12 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
 
         for symbol, quantity in list(self._positions.items()):
             if quantity > 0 and symbol not in selected_set:
+                sell_quantity = int(quantity)
+                if sell_quantity <= 0:
+                    self._count("exit_triggers", "dust_position")
+                    continue
                 price = self._get_last_price(symbol)
-                self.sell(symbol, int(quantity), "MARKET", price if price > 0 else None)
+                self.sell(symbol, sell_quantity, "MARKET", price if price > 0 else None)
 
         nav = float(getattr(getattr(context, "portfolio", None), "nav", 0.0) or 0.0)
         if nav <= 0:
@@ -242,9 +246,13 @@ class AShareMidCapCompositeBase(DailyBarStrategy):
             reason = self._position_exit_reason(symbol, bar)
             if not reason:
                 continue
+            sell_quantity = int(quantity)
+            if sell_quantity <= 0:
+                self._count("exit_triggers", "dust_position")
+                continue
             self._count("exit_triggers", reason)
             price = self._get_last_price(symbol)
-            self.sell(symbol, int(quantity), "MARKET", price if price > 0 else None)
+            self.sell(symbol, sell_quantity, "MARKET", price if price > 0 else None)
             exited.add(symbol)
         return exited
 

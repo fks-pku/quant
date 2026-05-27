@@ -58,6 +58,7 @@ Ask these before trusting any result:
 5. Are execution prices, costs, liquidity, lot size, limits, and cash constraints realistic?
 6. Does walk-forward or OOS evidence survive bad regimes, not only the full sample?
 7. Are failed variants, rejected hypotheses, and warnings preserved in the report?
+8. If a stop-loss/take-profit package exists, is there a same-assumption off/on comparison, and were those parameters fixed before the final validation?
 
 ## Bias Taxonomy And Controls
 
@@ -121,12 +122,14 @@ Controls:
 - Penalize grid searches with deflated Sharpe ratio, multiple-testing notes, or stricter OOS requirements.
 - Lock parameters before final OOS evaluation.
 - Do not use the same walk-forward failures to repeatedly tune the strategy without resetting validation.
+- Treat stop-loss, take-profit, trailing stop, and time-stop thresholds as parameters. Require a no-risk-exit baseline and disclose whether the risk-exit package was designed before or after seeing the equity curve.
 
 Red flags:
 
 - "Best" parameter chosen from a large grid with no penalty.
 - Report only shows the winning run.
 - Rules changed after seeing the equity curve.
+- Stop-loss/take-profit rules are added after inspecting drawdowns, but the report only shows the improved version.
 
 ### 5. Overfitting And Regime Bias
 
@@ -247,6 +250,7 @@ Require:
 - Walk-forward pass, or explicit warning/no-go if OOS stability fails.
 - Survivorship and universe audit.
 - Capacity and cost audit.
+- Stop-loss/take-profit off/on comparison with trigger attribution when the strategy includes a risk-exit package.
 - Correlation/factor exposure review if strategy will join a portfolio.
 
 ## Common Mistakes

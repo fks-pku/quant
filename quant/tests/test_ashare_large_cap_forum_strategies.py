@@ -6,8 +6,14 @@ from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy 
 from quant.features.strategies.reject.ashare_csi300_low_turnover_multifactor.strategy import (
     AShareCsi300LowTurnoverMultifactorStrategy,
 )
+from quant.features.strategies.reject.ashare_csi300_index_enhanced_multifactor.strategy import (
+    AShareCsi300IndexEnhancedMultifactorStrategy,
+)
 from quant.features.strategies.reject.ashare_dividend_low_vol_smart_beta.strategy import (
     AShareDividendLowVolSmartBetaStrategy,
+)
+from quant.features.strategies.reject.ashare_dividend_low_vol_quality_enhanced.strategy import (
+    AShareDividendLowVolQualityEnhancedStrategy,
 )
 from quant.features.strategies.reject.ashare_etf_rsrs_momentum_rotation.strategy import (
     AShareEtfRsrsMomentumRotationStrategy,
@@ -47,10 +53,12 @@ class _Context:
 def test_forum_large_cap_strategies_are_registered():
     for name in [
         "ashare_csi300_low_turnover_multifactor",
+        "ashare_csi300_index_enhanced_multifactor",
         "ashare_alpha158_factor_composite",
         "ashare_white_horse_market_temperature",
         "ashare_low_vol_value_momentum",
         "ashare_dividend_low_vol_smart_beta",
+        "ashare_dividend_low_vol_quality_enhanced",
         "ashare_etf_rsrs_momentum_rotation",
     ]:
         assert StrategyRegistry.is_registered(name)
@@ -103,6 +111,117 @@ def test_profile_defaults_map_to_expected_score_specs():
         0.35,
         True,
     )
+    assert AShareDividendLowVolQualityEnhancedStrategy(symbols=["600001", "000300"]).score_specs[2] == (
+        "roe",
+        0.16,
+        True,
+    )
+    assert AShareCsi300IndexEnhancedMultifactorStrategy(symbols=["600001", "000300"]).score_specs[0] == (
+        "momentum",
+        0.22,
+        True,
+    )
+
+
+def test_csi300_index_enhanced_multifactor_prefers_balanced_factor_name():
+    strategy = AShareCsi300IndexEnhancedMultifactorStrategy(
+        symbols=["600001", "600002", "600003", "000300"],
+        max_positions=1,
+        target_weight_slots=1,
+        cap_percentile_low=0.0,
+        cap_percentile_high=1.0,
+        min_turnover=0.0,
+        min_long_momentum=-1.0,
+        min_recent_momentum=-1.0,
+        max_volatility=0.0,
+    )
+    context = _Context()
+    strategy.on_start(context)
+
+    for index in range(260):
+        close = 10.0 + index * 0.02
+        base = {
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "adj_close": close,
+            "volume": 1000000,
+            "turnover": 1000000,
+            "turnover_rate_f": 2.0,
+            "pe_ttm": 12.0,
+            "pb": 1.2,
+            "ps_ttm": 1.5,
+            "dv_ttm": 1.0,
+            "total_mv": 1000000.0,
+            "circ_mv": 800000.0,
+            "tradable": True,
+            "has_daily_bar": True,
+            "is_st": False,
+            "is_listed": True,
+            "list_status": "L",
+        }
+        strategy.on_data(None, {"symbol": "600001", **base, "roe": 18.0, "turnover_rate_f": 0.5})
+        strategy.on_data(None, {"symbol": "600002", **base, "roe": 6.0, "pb": 4.0, "pe_ttm": 40.0})
+        strategy.on_data(None, {"symbol": "600003", **base, "roe": 10.0, "dv_ttm": 0.2})
+        strategy.on_data(None, {"symbol": "000300", **base})
+
+    strategy.on_after_trading(context, date(2026, 5, 22))
+
+    buys = [order for order in context.orders if order["side"] == "BUY"]
+    assert [order["symbol"] for order in buys] == ["600001"]
+
+
+def test_dividend_low_vol_quality_enhanced_prefers_quality_dividend_name():
+    strategy = AShareDividendLowVolQualityEnhancedStrategy(
+        symbols=["600001", "600002", "600003", "000300"],
+        max_positions=1,
+        target_weight_slots=1,
+        cap_percentile_low=0.0,
+        cap_percentile_high=1.0,
+        min_turnover=0.0,
+        use_market_timing=False,
+        min_dividend_yield=0.1,
+        min_roe=0.0,
+        max_debt_to_assets=0.0,
+        min_long_momentum=-1.0,
+        min_recent_momentum=-1.0,
+        max_volatility=0.0,
+    )
+    context = _Context()
+    strategy.on_start(context)
+
+    for index in range(260):
+        close = 10.0 + index * 0.01
+        base = {
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "adj_close": close,
+            "volume": 1000000,
+            "turnover": 1000000,
+            "turnover_rate_f": 2.0,
+            "pe_ttm": 12.0,
+            "pb": 1.0,
+            "ps_ttm": 1.0,
+            "total_mv": 1000000.0,
+            "circ_mv": 800000.0,
+            "tradable": True,
+            "has_daily_bar": True,
+            "is_st": False,
+            "is_listed": True,
+            "list_status": "L",
+        }
+        strategy.on_data(None, {"symbol": "600001", **base, "dv_ttm": 4.0, "roe": 18.0, "grossprofit_margin": 35.0, "debt_to_assets": 30.0})
+        strategy.on_data(None, {"symbol": "600002", **base, "dv_ttm": 4.0, "roe": 4.0, "grossprofit_margin": 10.0, "debt_to_assets": 95.0})
+        strategy.on_data(None, {"symbol": "600003", **base, "dv_ttm": 0.5, "roe": 20.0, "grossprofit_margin": 40.0, "debt_to_assets": 20.0})
+        strategy.on_data(None, {"symbol": "000300", **base})
+
+    strategy.on_after_trading(context, date(2026, 5, 22))
+
+    buys = [order for order in context.orders if order["side"] == "BUY"]
+    assert [order["symbol"] for order in buys] == ["600001"]
 
 
 def test_etf_rsrs_risk_off_liquidates_without_waiting_for_rebalance_gate():

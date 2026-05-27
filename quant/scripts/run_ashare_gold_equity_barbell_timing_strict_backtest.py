@@ -123,6 +123,11 @@ SCENARIOS: List[Dict[str, Any]] = [
     },
 ]
 
+RISK_EXIT_VARIANTS: List[Dict[str, Any]] = [
+    {"risk_exit_label": "baseline_no_risk_exit", "enable_risk_exit": False, "risk_exit": {"enabled": False}},
+    {"risk_exit_label": "risk_exit_enabled", "enable_risk_exit": True, "risk_exit": {"enabled": True}},
+]
+
 
 DETAIL_SECTION = """
 <h3>策略执行逻辑</h3>
@@ -145,7 +150,7 @@ def main() -> None:
         universe_end=END,
     )
     _validate_pit_universe(universe)
-    scenarios = [_with_pit_universe(scenario, universe) for scenario in SCENARIOS]
+    scenarios = [_with_pit_universe(scenario, universe) for scenario in _risk_exit_scenarios(SCENARIOS)]
     all_symbols = sorted({symbol for scenario in scenarios for symbol in scenario["symbols"]})
     lot_sizes, benchmark_provider, benchmark_meta, survivorship_audit = _load_shared_inputs(all_symbols)
     rows = []
@@ -157,6 +162,9 @@ def main() -> None:
         metrics = strict_report.get("metrics") or {}
         row = {
             "scenario": scenario["name"],
+            "base_scenario": scenario.get("base_scenario", scenario["name"]),
+            "risk_exit_label": scenario.get("risk_exit_label", "risk_exit_enabled"),
+            "enable_risk_exit": bool(scenario.get("enable_risk_exit", True)),
             "symbols": all_symbols,
             "parameters": _scenario_parameters(scenario),
             "risk_category_symbols": scenario["risk_category_symbols"],
@@ -200,6 +208,18 @@ def _with_pit_universe(scenario: Dict[str, Any], universe: Dict[str, Any]) -> Di
     result["registered_universe_counts"] = dict(universe.get("registered_universe_counts") or {})
     result["universe_registry_version"] = universe.get("universe_registry_version") or "audited_stable_etf_registry_v1"
     return result
+
+
+def _risk_exit_scenarios(scenarios: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    expanded = []
+    for scenario in scenarios:
+        for variant in RISK_EXIT_VARIANTS:
+            row = dict(scenario)
+            row.update(variant)
+            row["base_scenario"] = scenario["name"]
+            row["name"] = f"{scenario['name']}__{variant['risk_exit_label']}"
+            expanded.append(row)
+    return expanded
 
 
 def _validate_pit_universe(universe: Dict[str, Any]) -> None:
@@ -257,6 +277,8 @@ def _run_one(
         holding_days=int(scenario["holding_days"]),
         pit_size_fields=list(scenario["pit_size_fields"]),
         require_pit_size=bool(scenario["require_pit_size"]),
+        enable_risk_exit=bool(scenario.get("enable_risk_exit", True)),
+        risk_exit=dict(scenario.get("risk_exit") or {}),
     )
     backtest_config = {"slippage_bps": 5, "execution_cost_model": execution_cost_model}
     bt_config = {
@@ -326,6 +348,8 @@ def _scenario_parameters(scenario: Dict[str, Any]) -> Dict[str, Any]:
         "registered_universe_counts",
         "universe_registry_version",
         "pit_size_fields",
+        "base_scenario",
+        "risk_exit_label",
     }
     return {key: value for key, value in scenario.items() if key not in excluded}
 
@@ -343,6 +367,10 @@ def _parameter_explanations() -> Dict[str, str]:
         "risk_leg_weight": "risk-on 时权益腿目标权重；剩余权重分配给黄金防御腿。",
         "holding_days": "调仓/持有间隔；到期才重新排序和换仓。",
         "require_pit_size": "是否要求点时可见基金规模数据；用于降低 ETF 幸存者/规模偏差。",
+        "enable_risk_exit": "是否启用 ETF 持仓级止盈止损/时间止损包；关闭时只保留原始择时调仓逻辑。",
+        "risk_exit": "止盈止损开关与阈值分组，用于正式报告生成 baseline_no_risk_exit 与 risk_exit_enabled 对照。",
+        "base_scenario": "不含风险退出开关后缀的原始场景名称，用于配对比较同一参数场景下的 risk_exit 关闭与开启效果。",
+        "risk_exit_label": "风险退出开关分组；baseline_no_risk_exit 表示关闭 PnL 型止盈止损，risk_exit_enabled 表示启用默认止盈止损包。",
     }
 
 
@@ -393,11 +421,12 @@ def _strategy_logic(best: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "exit_rule": (
             "Positions not in the latest target basket are sold at the next execution opportunity; "
-            "if equity risk turns off or no eligible risk ETF remains, equity exposure is removed and gold is kept."
+            "if equity risk turns off or no eligible risk ETF remains, equity exposure is removed and gold is kept. "
+            "When risk_exit.enabled is true, ETF legs can also exit through stop_loss, trailing_take_profit, or time_stop before the rebalance gate."
         ),
         "risk_budget": (
             "Risk control comes from the risk-on trend gate, permanent gold defensive leg, PIT ETF registry, "
-            "turnover and fund-size filters, 98% maximum exposure, T+1 execution, lot-size checks, and 5% ADV participation cap."
+            "turnover and fund-size filters, risk_exit off/on audited stops, 98% maximum exposure, T+1 execution, lot-size checks, and 5% ADV participation cap."
         ),
         "parameter_explanations": _parameter_explanations(),
     }
@@ -465,17 +494,48 @@ def _write_outputs(
     row = _hypothesis_row(best, strict_reports[str(best["scenario"])], rows)
     result = {"run_id": f"{STRATEGY_ID}_strict_grid", "backtested": len(rows), "rejected": 0, "errors": []}
     generated = datetime.now(timezone.utc).isoformat()
+    comparison = _risk_exit_comparison(rows, strict_reports, best)
+    if comparison:
+        comparison_text = json.dumps(comparison, ensure_ascii=False, indent=2, default=str)
+        (strategy_dir / "risk_exit_comparison.json").write_text(comparison_text, encoding="utf-8")
     html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=generated)
     html = _insert_detail_section(html, rows, universe)
+    html = _insert_risk_exit_comparison(html, comparison, stage_only=True)
     full_html = build_research_full_report_html(result, [row], generated_at=generated)
+    full_html = _insert_risk_exit_comparison(full_html, comparison)
+    fast_html = build_research_stage_report_html("fast_research", result, [row], generated_at=generated)
+    fast_html = _insert_risk_exit_comparison(fast_html, comparison, stage_only=True)
+    walk_html = build_research_stage_report_html("walkforward_strict_audit", result, [row], generated_at=generated)
+    walk_html = _insert_risk_exit_comparison(walk_html, comparison, stage_only=True)
     report_path = strategy_dir / "strict_backtest_report.html"
     report_path.write_text(html, encoding="utf-8")
     full_report_path = strategy_dir / "full_research_report.html"
     full_report_path.write_text(full_html, encoding="utf-8")
+    (strategy_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
+    (strategy_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
+    run_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    runs_dir = strategy_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / f"{run_ts}_strict_backtest_report.html").write_text(html, encoding="utf-8")
+    (runs_dir / f"{run_ts}_full_research_report.html").write_text(full_html, encoding="utf-8")
+    (runs_dir / f"{run_ts}_fast_research_report.html").write_text(fast_html, encoding="utf-8")
+    (runs_dir / f"{run_ts}_walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
+    if comparison:
+        (runs_dir / f"{run_ts}_risk_exit_comparison.json").write_text(
+            json.dumps(comparison, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
     latest_dir = REPORT_ROOT / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
     (latest_dir / "strict_backtest_report.html").write_text(html, encoding="utf-8")
     (latest_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
+    (latest_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
+    (latest_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
+    if comparison:
+        (latest_dir / "risk_exit_comparison.json").write_text(
+            json.dumps(comparison, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
     return report_path, result_path
 
 
@@ -548,6 +608,161 @@ def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any], rows: L
             }
         },
     }
+
+
+COMPARISON_METRICS = [
+    ("CAGR", "pct", "cagr"),
+    ("Total Return", "pct", "total_return"),
+    ("Max Drawdown", "pct", "max_drawdown_pct"),
+    ("Sharpe", "num", "sharpe"),
+    ("Sortino", "num", "sortino"),
+    ("Calmar", "num", "calmar_ratio"),
+    ("Win Rate", "pct", "win_rate"),
+    ("Profit Factor", "num", "profit_factor"),
+    ("Total Trades", "int", "total_trades"),
+    ("Round Trips", "int", "round_trip_trades"),
+    ("Avg Holding Days", "num", "avg_trade_duration_days"),
+    ("Commission", "money", "total_commission"),
+    ("Cost Drag", "pct_points", "cost_drag_pct"),
+    ("Max ADV Participation", "pct", "max_adv_participation"),
+    ("P95 ADV Participation", "pct", "p95_adv_participation"),
+    ("Volume Limited Trades", "int", "volume_limited_trades"),
+]
+
+
+def _risk_exit_comparison(
+    rows: List[Dict[str, Any]],
+    strict_reports: Dict[str, Dict[str, Any]],
+    best: Dict[str, Any],
+) -> Dict[str, Any]:
+    base_scenario = str(best.get("base_scenario") or best.get("scenario") or "")
+    off = _find_risk_exit_row(rows, base_scenario, "baseline_no_risk_exit")
+    on = _find_risk_exit_row(rows, base_scenario, "risk_exit_enabled")
+    if not off or not on:
+        return {}
+    before = _comparison_snapshot(off, strict_reports.get(str(off["scenario"])) or {})
+    after = _comparison_snapshot(on, strict_reports.get(str(on["scenario"])) or {})
+    return {
+        "strategy_id": STRATEGY_ID,
+        "base_scenario": base_scenario,
+        "baseline_no_risk_exit": before,
+        "risk_exit_enabled": after,
+        "deltas": {
+            key: None if before.get(key) is None or after.get(key) is None else after[key] - before[key]
+            for _, _, key in COMPARISON_METRICS
+        },
+        "exit_triggers": after.get("exit_triggers") or {},
+        "interpretation": (
+            "This is a same-sample strict Backtester comparison. Improvement from risk_exit_enabled must still be confirmed by walk-forward or holdout validation."
+        ),
+    }
+
+
+def _find_risk_exit_row(rows: List[Dict[str, Any]], base_scenario: str, label: str) -> Dict[str, Any] | None:
+    for row in rows:
+        if row.get("base_scenario") == base_scenario and row.get("risk_exit_label") == label:
+            return row
+    return None
+
+
+def _comparison_snapshot(row: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = strict_report.get("metrics") or {}
+    diagnostics = strict_report.get("diagnostics") or {}
+    capacity = strict_report.get("capacity") or {}
+    guard = strict_report.get("guard_diagnostics") or {}
+    return {
+        "scenario": row.get("scenario"),
+        "risk_exit_label": row.get("risk_exit_label"),
+        "cagr": metrics.get("cagr"),
+        "total_return": metrics.get("total_return"),
+        "max_drawdown_pct": metrics.get("max_drawdown_pct"),
+        "sharpe": metrics.get("sharpe"),
+        "sortino": metrics.get("sortino"),
+        "calmar_ratio": metrics.get("calmar_ratio"),
+        "win_rate": metrics.get("win_rate"),
+        "profit_factor": metrics.get("profit_factor"),
+        "total_trades": metrics.get("total_trades"),
+        "round_trip_trades": metrics.get("round_trip_trades"),
+        "avg_trade_duration_days": metrics.get("avg_trade_duration_days"),
+        "total_commission": diagnostics.get("total_commission"),
+        "cost_drag_pct": diagnostics.get("cost_drag_pct"),
+        "max_adv_participation": capacity.get("max_adv_participation"),
+        "p95_adv_participation": capacity.get("p95_adv_participation"),
+        "volume_limited_trades": diagnostics.get("volume_limited_trades"),
+        "exit_triggers": dict(guard.get("exit_triggers") or {}),
+    }
+
+
+def _insert_risk_exit_comparison(html: str, comparison: Dict[str, Any], stage_only: bool = False) -> str:
+    if not comparison:
+        return html
+    if stage_only:
+        panel = (
+            '<section class="panel">\n'
+            "<h2>2. Risk Exit Off/On Comparison</h2>\n"
+            "<p>本阶段报告已同步生成止盈止损/风险退出开关对照；完整表格见 full_research_report.html，机器可读版本见 risk_exit_comparison.json。</p>\n"
+            "</section>\n"
+        )
+    else:
+        before = comparison.get("baseline_no_risk_exit") or {}
+        after = comparison.get("risk_exit_enabled") or {}
+        body = "".join(
+            "<tr>"
+            f"<td>{escape(name)}</td>"
+            f"<td>{_fmt_compare(before.get(key), kind)}</td>"
+            f"<td>{_fmt_compare(after.get(key), kind)}</td>"
+            f"<td>{_fmt_delta(before.get(key), after.get(key), kind)}</td>"
+            "</tr>"
+            for name, kind, key in COMPARISON_METRICS
+        )
+        triggers = comparison.get("exit_triggers") or {}
+        trigger_text = ", ".join(f"{escape(str(key))}: {int(value)}" for key, value in sorted(triggers.items())) or "n/a"
+        panel = (
+            '<section class="panel">\n'
+            "<h2>2. Risk Exit Off/On Comparison</h2>\n"
+            "<p>同一 base scenario、同一数据、同一 universe、同一成本模型和同一执行口径下，对比 risk_exit.enabled=false 与 risk_exit.enabled=true。</p>\n"
+            '<div class="table-wrap"><table><thead><tr><th>Metric</th><th>baseline_no_risk_exit</th><th>risk_exit_enabled</th><th>变化</th></tr></thead>'
+            f"<tbody>{body}</tbody></table></div>\n"
+            f"<p>risk_exit_enabled 触发统计：{trigger_text}。该表是同样本 strict 回测对照，改善仍需 walk-forward 或留出样本确认。</p>\n"
+            "</section>\n"
+        )
+    for marker in (
+        '<section class="panel">\n<h2>2. Metric Checklist</h2>',
+        '<section class="panel">\n<h2>3. 报告导航</h2>',
+    ):
+        if marker in html:
+            return html.replace(marker, panel + marker, 1)
+    return html.replace("</body>", panel + "</body>", 1)
+
+
+def _fmt_compare(value: Any, kind: str) -> str:
+    if value is None:
+        return "n/a"
+    number = float(value)
+    if kind == "pct":
+        return f"{number:.2%}"
+    if kind == "pct_points":
+        return f"{number:.2f}%"
+    if kind == "int":
+        return f"{int(round(number)):,}"
+    if kind == "money":
+        return f"{number:,.2f}"
+    return f"{number:.2f}"
+
+
+def _fmt_delta(before: Any, after: Any, kind: str) -> str:
+    if before is None or after is None:
+        return "n/a"
+    delta = float(after) - float(before)
+    if kind == "pct":
+        return f"{delta:+.2%}"
+    if kind == "pct_points":
+        return f"{delta:+.2f} pct pts"
+    if kind == "int":
+        return f"{int(round(delta)):+,}"
+    if kind == "money":
+        return f"{delta:+,.2f}"
+    return f"{delta:+.2f}"
 
 
 def _insert_detail_section(html: str, rows: List[Dict[str, Any]], universe: Dict[str, Any]) -> str:

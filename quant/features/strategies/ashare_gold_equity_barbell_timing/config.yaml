@@ -25,3 +25,16 @@ parameters:
   lot_size: 100
   require_pit_size: true
   pit_size_fields: ["total_netasset", "net_asset", "fund_size", "aum", "total_net_asset", "net_assets"]
+  enable_risk_exit: true
+  stop_loss_pct: 0.08
+  take_profit_pct: 0.16
+  trailing_stop_pct: 0.06
+  max_holding_days: 60
+  min_time_stop_return: 0.0
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.08
+    take_profit_pct: 0.16
+    trailing_stop_pct: 0.06
+    max_holding_days: 60
+    min_time_stop_return: 0.0

@@ -48,7 +48,22 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
         defensive_category_symbols: Optional[Dict[str, List[str]]] = None,
         pit_size_fields: Optional[List[str]] = None,
         require_pit_size: bool = False,
+        enable_risk_exit: bool = True,
+        risk_exit: Optional[Dict[str, Any]] = None,
+        stop_loss_pct: float = 0.08,
+        take_profit_pct: float = 0.16,
+        trailing_stop_pct: float = 0.06,
+        max_holding_days: int = 60,
+        min_time_stop_return: float = 0.0,
     ):
+        risk_exit_config = dict(risk_exit or {})
+        if "enabled" in risk_exit_config:
+            enable_risk_exit = bool(risk_exit_config.get("enabled"))
+        stop_loss_pct = risk_exit_config.get("stop_loss_pct", stop_loss_pct)
+        take_profit_pct = risk_exit_config.get("take_profit_pct", take_profit_pct)
+        trailing_stop_pct = risk_exit_config.get("trailing_stop_pct", trailing_stop_pct)
+        max_holding_days = risk_exit_config.get("max_holding_days", max_holding_days)
+        min_time_stop_return = risk_exit_config.get("min_time_stop_return", min_time_stop_return)
         explicit_risk_symbols = [str(symbol) for symbol in risk_symbols] if risk_symbols is not None else None
         explicit_defensive_symbols = [str(symbol) for symbol in defensive_symbols] if defensive_symbols is not None else None
         self.risk_category_symbols = self._normalize_category_symbols(
@@ -81,6 +96,15 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
         self.lot_size = max(1, int(lot_size))
         self.pit_size_fields = tuple(str(field) for field in (pit_size_fields or DEFAULT_PIT_SIZE_FIELDS))
         self.require_pit_size = bool(require_pit_size)
+        self.enable_risk_exit = bool(enable_risk_exit)
+        self.stop_loss_pct = max(0.0, float(stop_loss_pct))
+        self.take_profit_pct = max(0.0, float(take_profit_pct))
+        self.trailing_stop_pct = max(0.0, float(trailing_stop_pct))
+        self.max_holding_days = max(0, int(max_holding_days))
+        self.min_time_stop_return = float(min_time_stop_return)
+        self._entry_prices: Dict[str, float] = {}
+        self._peak_prices: Dict[str, float] = {}
+        self._entry_bar_counts: Dict[str, int] = {}
         self._last_scores: Dict[str, float] = {}
         self._last_target_weights: Dict[str, float] = {}
         self._diagnostics: Dict[str, Any] = {
@@ -92,6 +116,7 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
             "last_risk_category_candidates": {},
             "last_defensive_category_candidates": {},
             "entry_rejections": {},
+            "exit_triggers": {},
         }
 
     @property
@@ -101,24 +126,31 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
             self.trend_window,
             self.volatility_window,
             self.liquidity_window,
+            self.max_holding_days,
         ) + (260 if self.require_pit_size else 5)
 
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
+        exited = self._exit_risk_positions()
         if not self._check_rebalance_gate(trading_date):
             return
-        if self._execute_rebalance(context, trading_date):
+        if self._execute_rebalance(context, trading_date, exited):
             self._last_rebalance_date = trading_date
             self._days_since_rebalance = 0
 
-    def _execute_rebalance(self, context: "Context", trading_date: date) -> bool:
-        target_weights = self._target_weights(trading_date)
+    def _execute_rebalance(self, context: "Context", trading_date: date, exited: Optional[set[str]] = None) -> bool:
+        exited_symbols = set(exited or set())
+        target_weights = {
+            symbol: weight
+            for symbol, weight in self._target_weights(trading_date).items()
+            if symbol not in exited_symbols
+        }
         selected_set = set(target_weights)
         self._diagnostics["rebalance_count"] = int(self._diagnostics.get("rebalance_count") or 0) + 1
         self._diagnostics["last_selected"] = list(target_weights)
         self._last_target_weights = dict(target_weights)
 
         for symbol, quantity in list(self._positions.items()):
-            if quantity > 0 and symbol not in selected_set:
+            if quantity > 0 and symbol not in selected_set and symbol not in exited_symbols:
                 price = self._get_last_price(symbol)
                 sell_quantity = int(quantity)
                 if sell_quantity > 0:
@@ -141,6 +173,73 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
             elif delta < 0:
                 self.sell(symbol, abs(delta), "MARKET", price)
         return True
+
+    def on_fill(self, context: "Context", fill: Any) -> None:
+        symbol = str(getattr(fill, "symbol", "") or "")
+        previous_quantity = float(self._positions.get(symbol, 0) or 0)
+        super().on_fill(context, fill)
+        if not symbol:
+            return
+        current_quantity = float(self._positions.get(symbol, 0) or 0)
+        side = str(getattr(fill, "side", "") or "").upper()
+        fill_quantity = float(getattr(fill, "quantity", 0) or 0)
+        fill_price = self._fill_price(fill)
+        if side == "BUY" and fill_quantity > 0:
+            self._record_entry_fill(symbol, previous_quantity, fill_quantity, fill_price)
+        elif side == "SELL" and current_quantity <= 0:
+            self._clear_position_state(symbol)
+
+    def _exit_risk_positions(self) -> set[str]:
+        exited = set()
+        if not self.enable_risk_exit:
+            return exited
+        for symbol, quantity in list(self._positions.items()):
+            if quantity <= 0:
+                continue
+            sell_quantity = int(quantity)
+            if sell_quantity <= 0:
+                self._count("exit_triggers", "dust_position")
+                continue
+            price = self._get_last_price(symbol)
+            if price <= 0:
+                continue
+            self._update_peak_price(symbol, price)
+            reason = self._position_exit_reason(symbol, price)
+            if not reason:
+                continue
+            self.sell(symbol, sell_quantity, "MARKET", price)
+            self._count("exit_triggers", reason)
+            exited.add(symbol)
+        return exited
+
+    def _position_exit_reason(self, symbol: str, price: float) -> str:
+        entry_price = self._effective_entry_price(symbol)
+        if price <= 0 or entry_price <= 0:
+            return ""
+        if self.stop_loss_pct > 0 and price <= entry_price * (1.0 - self.stop_loss_pct):
+            return "stop_loss"
+        peak_price = max(self._peak_prices.get(symbol, price), price)
+        if (
+            self.take_profit_pct > 0
+            and self.trailing_stop_pct > 0
+            and peak_price >= entry_price * (1.0 + self.take_profit_pct)
+            and price <= peak_price * (1.0 - self.trailing_stop_pct)
+        ):
+            return "trailing_take_profit"
+        if self._time_stop_triggered(symbol, price, entry_price):
+            return "time_stop"
+        return ""
+
+    def _time_stop_triggered(self, symbol: str, price: float, entry_price: float) -> bool:
+        if self.max_holding_days <= 0:
+            return False
+        entry_bar_count = self._entry_bar_counts.get(symbol)
+        if entry_bar_count is None:
+            return False
+        holding_days = len(self._day_data.get(symbol, [])) - entry_bar_count
+        if holding_days < self.max_holding_days:
+            return False
+        return price / entry_price - 1.0 < self.min_time_stop_return
 
     def _target_weights(self, trading_date: date) -> Dict[str, float]:
         defensive = self._best_defensive_symbol(trading_date)
@@ -261,6 +360,48 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
             return 0.0
         return sum(values) / float(len(values))
 
+    def _effective_entry_price(self, symbol: str) -> float:
+        portfolio = getattr(getattr(self, "context", None), "portfolio", None)
+        get_position = getattr(portfolio, "get_position", None)
+        if callable(get_position):
+            try:
+                position = get_position(symbol)
+            except Exception:
+                position = None
+            for field in ("avg_cost", "average_cost", "entry_price"):
+                value = getattr(position, field, None)
+                number = self._safe_float(value, 0.0)
+                if number > 0:
+                    return number
+        return self._entry_prices.get(symbol, 0.0)
+
+    def _record_entry_fill(self, symbol: str, previous_quantity: float, fill_quantity: float, fill_price: float) -> None:
+        if previous_quantity > 0 and symbol in self._entry_prices:
+            total_quantity = previous_quantity + fill_quantity
+            if fill_price > 0:
+                self._entry_prices[symbol] = (
+                    self._entry_prices[symbol] * previous_quantity + fill_price * fill_quantity
+                ) / total_quantity
+            else:
+                adjustment = previous_quantity / total_quantity
+                self._entry_prices[symbol] *= adjustment
+                if symbol in self._peak_prices:
+                    self._peak_prices[symbol] *= adjustment
+        elif fill_price > 0:
+            self._entry_prices[symbol] = fill_price
+            self._entry_bar_counts[symbol] = len(self._day_data.get(symbol, []))
+        if fill_price > 0:
+            self._peak_prices[symbol] = max(self._peak_prices.get(symbol, fill_price), fill_price)
+
+    def _update_peak_price(self, symbol: str, price: float) -> None:
+        if price > 0 and self._positions.get(symbol, 0) > 0:
+            self._peak_prices[symbol] = max(self._peak_prices.get(symbol, price), price)
+
+    def _clear_position_state(self, symbol: str) -> None:
+        self._entry_prices.pop(symbol, None)
+        self._peak_prices.pop(symbol, None)
+        self._entry_bar_counts.pop(symbol, None)
+
     def _cash_turnover(self, bar: Any) -> float:
         close = self._numeric_bar_value(bar, "raw_close") or self._numeric_bar_value(bar, "close") or 0.0
         volume = self._numeric_bar_value(bar, "raw_volume") or self._numeric_bar_value(bar, "volume") or 0.0
@@ -369,8 +510,10 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
         return {
             **self._diagnostics,
             "entry_rejections": dict(self._diagnostics.get("entry_rejections") or {}),
+            "exit_triggers": dict(self._diagnostics.get("exit_triggers") or {}),
             "last_scores": dict(self._last_scores),
             "last_target_weights": dict(self._last_target_weights),
+            "parameters": self._get_parameters(),
         }
 
     def _get_parameters(self) -> Dict[str, Any]:
@@ -392,11 +535,56 @@ class AShareGoldEquityBarbellTimingStrategy(DailyBarStrategy):
             "defensive_category_symbols": {key: list(value) for key, value in self.defensive_category_symbols.items()},
             "pit_size_fields": list(self.pit_size_fields),
             "require_pit_size": self.require_pit_size,
+            "enable_risk_exit": self.enable_risk_exit,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
+            "trailing_stop_pct": self.trailing_stop_pct,
+            "max_holding_days": self.max_holding_days,
+            "min_time_stop_return": self.min_time_stop_return,
+            "risk_exit": {
+                "enabled": self.enable_risk_exit,
+                "stop_loss_pct": self.stop_loss_pct,
+                "take_profit_pct": self.take_profit_pct,
+                "trailing_stop_pct": self.trailing_stop_pct,
+                "max_holding_days": self.max_holding_days,
+                "min_time_stop_return": self.min_time_stop_return,
+            },
         }
+
+    def _get_state_fields(self) -> Dict[str, Any]:
+        return {
+            "risk_exit_state": {
+                "entry_prices": dict(self._entry_prices),
+                "peak_prices": dict(self._peak_prices),
+                "entry_bar_counts": dict(self._entry_bar_counts),
+            }
+        }
+
+    def _on_stop_cleanup(self) -> None:
+        self._entry_prices.clear()
+        self._peak_prices.clear()
+        self._entry_bar_counts.clear()
 
     def _count(self, bucket: str, key: str) -> None:
         values = self._diagnostics.setdefault(bucket, {})
         values[key] = int(values.get(key, 0)) + 1
+
+    @staticmethod
+    def _fill_price(fill: Any) -> float:
+        for field in ("fill_price", "price", "entry_price"):
+            value = getattr(fill, field, 0.0)
+            number = AShareGoldEquityBarbellTimingStrategy._safe_float(value, 0.0)
+            if number > 0:
+                return number
+        return 0.0
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return default
+        return number if math.isfinite(number) else default
 
     @classmethod
     def _is_current_bar(cls, bar: Any, trading_date: date) -> bool:

@@ -1,7 +1,8 @@
 """Xueqiu small-cap financial-filter rotation."""
 
 from datetime import date
-from typing import Any, List, Optional
+import math
+from typing import Any, Dict, List, Optional
 
 from quant.features.strategies._small_cap_common import AShareSmallCapRotationBase
 from quant.features.strategies.registry import strategy
@@ -26,6 +27,20 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         risk_index_symbol: str = "",
         index_drawdown_lookback: int = 5,
         index_drawdown_threshold: float = -0.05,
+        enable_risk_exit: bool = True,
+        risk_exit: Optional[Dict[str, Any]] = None,
+        stop_loss_pct: float = 0.12,
+        min_stop_loss_pct: float = 0.08,
+        max_stop_loss_pct: float = 0.18,
+        stop_volatility_multiplier: float = 3.0,
+        take_profit_pct: float = 0.25,
+        trailing_stop_pct: float = 0.10,
+        trailing_volatility_multiplier: float = 2.5,
+        max_trailing_stop_pct: float = 0.22,
+        hard_take_profit_pct: float = 0.0,
+        exit_volatility_lookback: int = 20,
+        max_holding_days: int = 45,
+        min_time_stop_return: float = 0.02,
     ):
         extra_symbols = list(symbols or [])
         if risk_index_symbol and risk_index_symbol not in extra_symbols:
@@ -40,6 +55,24 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
             lot_size=lot_size,
             target_exposure=target_exposure,
         )
+        risk_exit_config = dict(risk_exit or {})
+        if "enabled" in risk_exit_config:
+            enable_risk_exit = self._bool_value(risk_exit_config.get("enabled"), bool(enable_risk_exit))
+        stop_loss_pct = risk_exit_config.get("stop_loss_pct", stop_loss_pct)
+        min_stop_loss_pct = risk_exit_config.get("min_stop_loss_pct", min_stop_loss_pct)
+        max_stop_loss_pct = risk_exit_config.get("max_stop_loss_pct", max_stop_loss_pct)
+        stop_volatility_multiplier = risk_exit_config.get("stop_volatility_multiplier", stop_volatility_multiplier)
+        take_profit_pct = risk_exit_config.get("take_profit_pct", take_profit_pct)
+        trailing_stop_pct = risk_exit_config.get("trailing_stop_pct", trailing_stop_pct)
+        trailing_volatility_multiplier = risk_exit_config.get(
+            "trailing_volatility_multiplier",
+            trailing_volatility_multiplier,
+        )
+        max_trailing_stop_pct = risk_exit_config.get("max_trailing_stop_pct", max_trailing_stop_pct)
+        hard_take_profit_pct = risk_exit_config.get("hard_take_profit_pct", hard_take_profit_pct)
+        exit_volatility_lookback = risk_exit_config.get("exit_volatility_lookback", exit_volatility_lookback)
+        max_holding_days = risk_exit_config.get("max_holding_days", max_holding_days)
+        min_time_stop_return = risk_exit_config.get("min_time_stop_return", min_time_stop_return)
         self.min_positions = max(1, int(min_positions))
         self.min_market_cap = float(min_market_cap)
         self.min_inferred_revenue = float(min_inferred_revenue)
@@ -50,6 +83,22 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         self.risk_index_symbol = str(risk_index_symbol or "")
         self.index_drawdown_lookback = max(1, int(index_drawdown_lookback))
         self.index_drawdown_threshold = float(index_drawdown_threshold)
+        self.enable_risk_exit = bool(enable_risk_exit)
+        self.stop_loss_pct = max(0.0, float(stop_loss_pct))
+        self.min_stop_loss_pct = max(0.0, float(min_stop_loss_pct))
+        self.max_stop_loss_pct = max(0.0, float(max_stop_loss_pct))
+        self.stop_volatility_multiplier = max(0.0, float(stop_volatility_multiplier))
+        self.take_profit_pct = max(0.0, float(take_profit_pct))
+        self.trailing_stop_pct = max(0.0, float(trailing_stop_pct))
+        self.trailing_volatility_multiplier = max(0.0, float(trailing_volatility_multiplier))
+        self.max_trailing_stop_pct = max(0.0, float(max_trailing_stop_pct))
+        self.hard_take_profit_pct = max(0.0, float(hard_take_profit_pct))
+        self.exit_volatility_lookback = max(2, int(exit_volatility_lookback))
+        self.max_holding_days = max(0, int(max_holding_days))
+        self.min_time_stop_return = float(min_time_stop_return)
+        self._entry_prices: Dict[str, float] = {}
+        self._peak_prices: Dict[str, float] = {}
+        self._entry_bar_counts: Dict[str, int] = {}
 
     def on_after_trading(self, context: Any, trading_date: date) -> None:
         exited = self._exit_risk_positions()
@@ -88,6 +137,38 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
             if quantity > 0 and symbol not in selected and symbol not in exited:
                 self._sell_position(symbol, quantity, "risk_or_rebalance_exit")
 
+    def on_fill(self, context: Any, fill: Any) -> None:
+        symbol = str(getattr(fill, "symbol", "") or "")
+        previous_quantity = float(self._positions.get(symbol, 0) or 0)
+        super().on_fill(context, fill)
+        if not symbol or (self.risk_index_symbol and symbol == self.risk_index_symbol):
+            return
+        current_quantity = float(self._positions.get(symbol, 0) or 0)
+        side = str(getattr(fill, "side", "") or "").upper()
+        fill_quantity = float(getattr(fill, "quantity", 0) or 0)
+        fill_price = self._fill_price(fill)
+        if side == "BUY" and fill_quantity > 0:
+            self._record_entry_fill(symbol, previous_quantity, fill_quantity, fill_price)
+        elif side == "SELL" and current_quantity <= 0:
+            self._clear_position_state(symbol)
+
+    def _exit_risk_positions(self) -> set:
+        exited = set()
+        for symbol, quantity in list(self._positions.items()):
+            if quantity <= 0:
+                continue
+            bars = self._bars.get(symbol, [])
+            if not bars:
+                continue
+            price = self._price(bars[-1])
+            self._update_peak_price(symbol, price)
+            reason = self._position_exit_reason(symbol, bars[-1])
+            if not reason:
+                continue
+            if self._sell_position(symbol, quantity, reason):
+                exited.add(symbol)
+        return exited
+
     def _entry_risk(self, symbol: str, bar: Any) -> bool:
         if self.risk_index_symbol and symbol == self.risk_index_symbol:
             return True
@@ -108,31 +189,44 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
     def _exit_risk(self, symbol: str, bar: Any) -> bool:
         if self.risk_index_symbol and symbol == self.risk_index_symbol:
             return False
-        return self._status_or_delisting_risk(symbol, bar)
+        return bool(self._position_exit_reason(symbol, bar))
+
+    def _position_exit_reason(self, symbol: str, bar: Any) -> str:
+        status_reason = self._status_or_delisting_exit_reason(symbol, bar)
+        if status_reason:
+            return status_reason
+        if not self.enable_risk_exit:
+            return ""
+        return self._profit_exit_reason(symbol, self._price(bar))
 
     def _status_or_delisting_risk(self, symbol: str, bar: Any) -> bool:
+        return bool(self._status_or_delisting_exit_reason(symbol, bar))
+
+    def _status_or_delisting_exit_reason(self, symbol: str, bar: Any) -> str:
         if not self._is_mainland_a_symbol(symbol):
-            return True
+            return "not_mainland_a"
         if self._bool_value(self._value(bar, "is_st", False), False):
-            return True
+            return "st"
         if self._bool_value(self._value(bar, "_suspended", False), False):
-            return True
+            return "suspended"
         if self._bool_value(self._value(bar, "status_is_suspended", False), False):
-            return True
+            return "suspended"
         if self._bool_value(self._value(bar, "tradable", True), True) is False:
-            return True
+            return "not_tradable"
         if self._bool_value(self._value(bar, "has_daily_bar", True), True) is False:
-            return True
+            return "no_daily_bar"
         if self._bool_value(self._value(bar, "is_listed", True), True) is False:
-            return True
+            return "not_listed"
         list_status = str(self._value(bar, "list_status", "L") or "L").upper()
         if list_status not in {"", "L"}:
-            return True
+            return "list_status"
         if self._price(bar) < self.min_price:
-            return True
+            return "low_price"
         if self._market_cap(bar) <= 0:
-            return True
-        return self._average_turnover(symbol) < self.min_adv_value
+            return "missing_market_cap"
+        if self._average_turnover(symbol) < self.min_adv_value:
+            return "low_turnover"
+        return ""
 
     def _has_positive_profit(self, bar: Any) -> bool:
         for field in ("pe_ttm", "pe", "eps", "netprofit_margin"):
@@ -156,6 +250,127 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
     def _candidate_score(self, symbol: str, bar: Any) -> float:
         return -self._market_cap(bar)
 
+    def _profit_exit_reason(self, symbol: str, price: float) -> str:
+        entry_price = self._effective_entry_price(symbol)
+        if price <= 0 or entry_price <= 0 or self._positions.get(symbol, 0) <= 0:
+            return ""
+        stop_loss = self._effective_stop_loss_pct(symbol)
+        if stop_loss > 0 and price <= entry_price * (1.0 - stop_loss):
+            return "stop_loss"
+        if self.hard_take_profit_pct > 0 and price >= entry_price * (1.0 + self.hard_take_profit_pct):
+            return "take_profit"
+        peak_price = max(self._peak_prices.get(symbol, price), price)
+        trailing_stop = self._effective_trailing_stop_pct(symbol)
+        if (
+            self.take_profit_pct > 0
+            and trailing_stop > 0
+            and peak_price >= entry_price * (1.0 + self.take_profit_pct)
+            and price <= peak_price * (1.0 - trailing_stop)
+        ):
+            return "trailing_take_profit"
+        if self._time_stop_triggered(symbol, price, entry_price):
+            return "time_stop"
+        return ""
+
+    def _effective_stop_loss_pct(self, symbol: str) -> float:
+        value = self.stop_loss_pct
+        volatility = self._daily_volatility(symbol, self.exit_volatility_lookback)
+        if volatility is not None and self.stop_volatility_multiplier > 0:
+            value = max(value, volatility * self.stop_volatility_multiplier)
+        if self.min_stop_loss_pct > 0:
+            value = max(value, self.min_stop_loss_pct)
+        if self.max_stop_loss_pct > 0:
+            value = min(value, self.max_stop_loss_pct)
+        return value
+
+    def _effective_trailing_stop_pct(self, symbol: str) -> float:
+        value = self.trailing_stop_pct
+        volatility = self._daily_volatility(symbol, self.exit_volatility_lookback)
+        if volatility is not None and self.trailing_volatility_multiplier > 0:
+            value = max(value, volatility * self.trailing_volatility_multiplier)
+        if self.max_trailing_stop_pct > 0:
+            value = min(value, self.max_trailing_stop_pct)
+        return value
+
+    def _daily_volatility(self, symbol: str, lookback: int) -> Optional[float]:
+        bars = self._bars.get(symbol, [])
+        if len(bars) <= lookback:
+            return None
+        prices = [self._adj(bar, "close") for bar in bars[-lookback - 1 :]]
+        prices = [price for price in prices if price > 0 and math.isfinite(price)]
+        if len(prices) < 3:
+            return None
+        returns = [prices[index] / prices[index - 1] - 1.0 for index in range(1, len(prices))]
+        mean = sum(returns) / float(len(returns))
+        variance = sum((value - mean) ** 2 for value in returns) / float(max(1, len(returns) - 1))
+        volatility = math.sqrt(max(variance, 0.0))
+        return volatility if math.isfinite(volatility) and volatility > 0 else None
+
+    def _time_stop_triggered(self, symbol: str, price: float, entry_price: float) -> bool:
+        if self.max_holding_days <= 0:
+            return False
+        entry_bar_count = self._entry_bar_counts.get(symbol)
+        if entry_bar_count is None:
+            return False
+        holding_days = len(self._bars.get(symbol, [])) - entry_bar_count
+        if holding_days < self.max_holding_days:
+            return False
+        return price / entry_price - 1.0 < self.min_time_stop_return
+
+    def _effective_entry_price(self, symbol: str) -> float:
+        portfolio = getattr(getattr(self, "context", None), "portfolio", None)
+        get_position = getattr(portfolio, "get_position", None)
+        if callable(get_position):
+            try:
+                position = get_position(symbol)
+            except Exception:
+                position = None
+            for field in ("avg_cost", "average_cost", "entry_price"):
+                value = getattr(position, field, None)
+                number = self._float_value(value, 0.0)
+                if number > 0:
+                    return number
+        return self._entry_prices.get(symbol, 0.0)
+
+    def _record_entry_fill(self, symbol: str, previous_quantity: float, fill_quantity: float, fill_price: float) -> None:
+        if previous_quantity > 0 and symbol in self._entry_prices:
+            total_quantity = previous_quantity + fill_quantity
+            if fill_price > 0:
+                self._entry_prices[symbol] = (
+                    self._entry_prices[symbol] * previous_quantity + fill_price * fill_quantity
+                ) / total_quantity
+            else:
+                adjustment = previous_quantity / total_quantity
+                self._entry_prices[symbol] *= adjustment
+                if symbol in self._peak_prices:
+                    self._peak_prices[symbol] *= adjustment
+        elif fill_price > 0:
+            self._entry_prices[symbol] = fill_price
+            self._entry_bar_counts[symbol] = len(self._bars.get(symbol, []))
+        if fill_price > 0:
+            self._peak_prices[symbol] = max(self._peak_prices.get(symbol, fill_price), fill_price)
+
+    def _update_peak_price(self, symbol: str, price: float) -> None:
+        if price > 0 and self._positions.get(symbol, 0) > 0:
+            self._peak_prices[symbol] = max(self._peak_prices.get(symbol, price), price)
+
+    def _clear_position_state(self, symbol: str) -> None:
+        self._entry_prices.pop(symbol, None)
+        self._peak_prices.pop(symbol, None)
+        self._entry_bar_counts.pop(symbol, None)
+
+    @staticmethod
+    def _fill_price(fill: Any) -> float:
+        for field in ("fill_price", "price", "entry_price"):
+            value = getattr(fill, field, 0.0)
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0 and math.isfinite(number):
+                return number
+        return 0.0
+
     def get_state(self) -> dict:
         state = super().get_state()
         params = dict(state.get("parameters") or {})
@@ -170,7 +385,46 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
                 "risk_index_symbol": self.risk_index_symbol,
                 "index_drawdown_lookback": self.index_drawdown_lookback,
                 "index_drawdown_threshold": self.index_drawdown_threshold,
+                "enable_risk_exit": self.enable_risk_exit,
+                "stop_loss_pct": self.stop_loss_pct,
+                "min_stop_loss_pct": self.min_stop_loss_pct,
+                "max_stop_loss_pct": self.max_stop_loss_pct,
+                "stop_volatility_multiplier": self.stop_volatility_multiplier,
+                "take_profit_pct": self.take_profit_pct,
+                "trailing_stop_pct": self.trailing_stop_pct,
+                "trailing_volatility_multiplier": self.trailing_volatility_multiplier,
+                "max_trailing_stop_pct": self.max_trailing_stop_pct,
+                "hard_take_profit_pct": self.hard_take_profit_pct,
+                "exit_volatility_lookback": self.exit_volatility_lookback,
+                "max_holding_days": self.max_holding_days,
+                "min_time_stop_return": self.min_time_stop_return,
+                "risk_exit": {
+                    "enabled": self.enable_risk_exit,
+                    "stop_loss_pct": self.stop_loss_pct,
+                    "min_stop_loss_pct": self.min_stop_loss_pct,
+                    "max_stop_loss_pct": self.max_stop_loss_pct,
+                    "stop_volatility_multiplier": self.stop_volatility_multiplier,
+                    "take_profit_pct": self.take_profit_pct,
+                    "trailing_stop_pct": self.trailing_stop_pct,
+                    "trailing_volatility_multiplier": self.trailing_volatility_multiplier,
+                    "max_trailing_stop_pct": self.max_trailing_stop_pct,
+                    "hard_take_profit_pct": self.hard_take_profit_pct,
+                    "exit_volatility_lookback": self.exit_volatility_lookback,
+                    "max_holding_days": self.max_holding_days,
+                    "min_time_stop_return": self.min_time_stop_return,
+                },
             }
         )
         state["parameters"] = params
+        state["exit_state"] = {
+            "entry_prices": dict(self._entry_prices),
+            "peak_prices": dict(self._peak_prices),
+            "entry_bar_counts": dict(self._entry_bar_counts),
+        }
         return state
+
+    def on_stop(self, context: Any) -> None:
+        super().on_stop(context)
+        self._entry_prices.clear()
+        self._peak_prices.clear()
+        self._entry_bar_counts.clear()

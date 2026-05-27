@@ -1,0 +1,19 @@
+strategy:
+  name: ashare_gtja_alpha095_amount_std
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 5
+  max_positions: 40
+  target_weight_slots: 40
+  max_position_pct: 0.95
+  cap_percentile_low: 0.25
+  cap_percentile_high: 1.00
+  min_price: 3.0
+  min_turnover: 200000.0
+  lot_size: 100
+  amount_lookback: 20
+  alpha_high_is_better: true
+  benchmark_symbol: "000300"

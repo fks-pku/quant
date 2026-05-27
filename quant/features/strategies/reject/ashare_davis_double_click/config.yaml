@@ -1,0 +1,22 @@
+strategy:
+  name: ashare_davis_double_click
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 20
+  max_positions: 10
+  max_position_pct: 1.0
+  cap_percentile_low: 0.25
+  cap_percentile_high: 0.95
+  min_price: 3.0
+  min_turnover: 50000.0
+  lot_size: 100
+  momentum_lookback: 126
+  momentum_skip: 5
+  min_pe_ttm: 5.0
+  max_pe_ttm: 60.0
+  min_profit_growth: 15.0
+  min_roe: 6.0
+  min_momentum: -0.05

@@ -137,6 +137,65 @@ def test_risk_off_buys_gold_only():
     ]
 
 
+def test_risk_exit_stop_loss_runs_even_inside_holding_gate():
+    strategy = AShareGoldEquityBarbellTimingStrategy(
+        risk_symbols=["510001"],
+        defensive_symbols=["518880"],
+        timing_symbol="510001",
+        momentum_lookback=6,
+        momentum_skip=1,
+        trend_window=5,
+        volatility_window=5,
+        liquidity_window=3,
+        min_avg_turnover=1000.0,
+        holding_days=20,
+        risk_exit={"enabled": True, "stop_loss_pct": 0.08},
+    )
+    context = _Context()
+    strategy.on_start(context)
+    strategy.on_fill(None, type("Fill", (), {"symbol": "510001", "quantity": 1000, "side": "BUY", "fill_price": 10.0})())
+    strategy._last_rebalance_date = date(2026, 5, 1)
+    strategy._days_since_rebalance = 0
+    _feed(strategy, "510001", [10.0, 9.1], last_date=date(2026, 5, 20))
+
+    strategy.on_after_trading(context, date(2026, 5, 20))
+
+    assert context.orders == [
+        {
+            "symbol": "510001",
+            "quantity": 1000,
+            "side": "SELL",
+            "order_type": "MARKET",
+            "price": 9.1,
+            "strategy_name": "ashare_gold_equity_barbell_timing",
+        }
+    ]
+    assert strategy.get_guard_diagnostics()["exit_triggers"]["stop_loss"] == 1
+
+
+def test_risk_exit_switch_can_disable_gold_barbell_pnl_stops():
+    strategy = AShareGoldEquityBarbellTimingStrategy(
+        risk_symbols=["510001"],
+        defensive_symbols=["518880"],
+        timing_symbol="510001",
+        momentum_lookback=6,
+        momentum_skip=1,
+        trend_window=5,
+        volatility_window=5,
+        liquidity_window=3,
+        min_avg_turnover=1000.0,
+        risk_exit={"enabled": False, "stop_loss_pct": 0.08},
+    )
+    context = _Context()
+    strategy.on_start(context)
+    strategy.on_fill(None, type("Fill", (), {"symbol": "510001", "quantity": 1000, "side": "BUY", "fill_price": 10.0})())
+    _feed(strategy, "510001", [10.0, 9.1], last_date=date(2026, 5, 20))
+
+    assert strategy.get_state()["parameters"]["risk_exit"]["enabled"] is False
+    assert strategy._exit_risk_positions() == set()
+    assert context.orders == []
+
+
 def test_pit_category_universe_ranks_visible_wide_candidates_by_signal():
     strategy = AShareGoldEquityBarbellTimingStrategy(
         risk_category_symbols={

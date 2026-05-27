@@ -13,4 +13,12 @@ Daily process:
 5. Allocate half of the configured exposure to the best registered equity ETF and half to the registered gold ETF.
 6. In risk-off state, allocate the configured exposure to gold ETF only; if data is missing, stay in cash.
 
+Risk-exit package:
+
+- `risk_exit.enabled=true` by default; formal reports must also run `risk_exit.enabled=false` as the baseline.
+- `stop_loss_pct=0.08` exits an ETF leg whose current price falls 8% below the effective entry cost.
+- `take_profit_pct=0.16` arms a trailing exit; `trailing_stop_pct=0.06` protects ETF-leg gains after that threshold is reached.
+- `max_holding_days=60` exits stale ETF legs when return is below `min_time_stop_return=0.0`.
+- Risk exits run daily before the rebalance gate and same-day rebalance will not immediately buy back a leg that just exited.
+
 The universe is intentionally not a full-market ETF category universe. It is a pre-registered representative pool that reduces implicit category look-ahead risk at the cost of manual representative-pool selection bias.

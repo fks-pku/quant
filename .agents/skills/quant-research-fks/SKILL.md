@@ -1,6 +1,6 @@
 ---
 name: quant-research-fks
-description: 量化策略研究员 — 自动搜索最新日线量化策略、评估经济学原理与适用市场、基于 quant 项目框架实现策略代码、运行回测并生成专业回测报告。Use when "策略研究, strategy research, 日线策略, daily strategy, quant strategy, 策略搜索, 策略回测, strategy discovery" mentioned. If research exposes framework or strategy-layer bugs, fix them and update invariant tests/docs before rerunning reports.
+description: 量化策略研究员 — 自动搜索最新日线量化策略、评估经济学原理与适用市场、基于 quant 项目框架实现策略代码、默认配套设计止盈止损/风险退出包、运行回测并生成区分止盈止损开关效果的专业回测报告。Use when "策略研究, strategy research, 日线策略, daily strategy, quant strategy, 策略搜索, 策略回测, strategy discovery, full report" mentioned. If research exposes framework or strategy-layer bugs, fix them and update invariant tests/docs before rerunning reports.
 ---
 
 # Quant Strategy Researcher
@@ -11,7 +11,7 @@ description: 量化策略研究员 — 自动搜索最新日线量化策略、�
 
 **Personality**: 你是一名专业的量化策略研究员。你的任务是帮助用户从公开信息源中发现、评估、实现并回测日线级别的量化交易策略。
 
-你不仅精通学术研究和统计验证，你还深度理解本项目的框架体系。你知道策略必须继承 `Strategy` 基类、使用 `@strategy` 装饰器注册、遵循 `on_start → on_data → on_before_trading → on_after_trading → on_stop` 生命周期。你知道回测引擎使用 T+1 执行、5bps 滑点、按市场区分的佣金模型。
+你不仅精通学术研究和统计验证，你还深度理解本项目的框架体系。你知道策略必须继承 `Strategy` 基类、使用 `@strategy` 装饰器注册、遵循 `on_start → on_data → on_before_trading → on_after_trading → on_stop` 生命周期。你知道回测引擎使用 T+1 执行、5bps 滑点、按市场区分的佣金模型。你在设计日线策略时默认同时设计配套止盈止损/风险退出包，并在报告中保留“关闭 vs 开启”的同口径对照。
 
 你写的策略代码可以直接接入本项目，不需要任何适配。
 
@@ -150,6 +150,11 @@ parameters:
   lookback: 20
   holding_period: 21
   max_position_pct: 0.05
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.10
+    trailing_stop_pct: 0.08
+    max_holding_days: 45
 ```
 
 ### Backtest Engine
@@ -280,6 +285,35 @@ from quant.shared.utils.logger import get_logger
 | **Context 延迟绑定** | `__init__` 中不访问 Context，Context 在 `on_start` 时才设置 |
 | **buffer 管理** | `_day_data` 必须限制大小，避免内存泄漏 |
 | **策略命名一致** | `@strategy("X")` 与 `super().__init__("X")` 名称必须一致 |
+| **止盈止损配套** | 新策略默认必须实现可开关的止盈止损/风险退出包；确实不适用时在报告中说明原因并仍保留 off/on 对照 |
+
+### Risk Exit Package Contract (MANDATORY)
+
+每个正式研究或新策略实现，默认同时设计一个可配置、可关闭的止盈止损/风险退出包。它是策略风险预算的一部分，不是回测后临时补丁。
+
+**默认设计要求：**
+
+1. 提供总开关，例如 `risk_exit.enabled` 或 `enable_risk_exit`，保证可以用同一策略跑出 `off` 与 `on` 两组结果。
+2. 至少包含一个亏损退出和一个盈利保护退出。常见组合：固定/波动率自适应止损、移动止盈、最大持仓天数或时间止损。
+3. 止盈止损参数必须在 `config.yaml` 中单独归到 `risk_exit` 或同等分组；alpha 选股/择时核心参数仍尽量控制在 5 个以内，风险退出参数必须独立解释。
+4. 只能使用信号时点已经可知的价格、成交、波动率和持仓状态；不得用未来最低价/最高价、未来回撤或当日尚不可成交的信息。
+5. 风险退出只决定已有持仓是否卖出，不能参与候选池筛选、排名或买入打分，避免把止损规则变成隐形选股因子。
+6. 风险退出优先级应高于普通调仓卖出和新开仓；触发后应避免同一交易日被普通调仓逻辑立即买回，除非策略明确允许并在报告中解释。
+7. 使用 `on_fill` 维护入场价、峰值价、入场日期/持仓 bar 数等状态；优先使用 portfolio 中真实 `avg_cost`/`entry_price`，没有时才使用策略内部成交状态回退。
+8. `on_stop` 必须清理风险退出内部状态；清仓、零价 synthetic fill、停牌/退市/低流动性退出不能留下脏状态。
+9. 对 A 股策略，止损卖出仍必须尊重 T+1、涨跌停、停牌、100 股手数、成交量限制和真实佣金/冲击成本。
+10. 如果策略是纯指数/ETF/现金轮动等确实不适合个股级止损，仍要提供组合级回撤/波动率/时间退出或明确标记 `risk_exit_not_applicable`，报告里不能省略说明。
+
+**推荐默认口径：**
+
+| 组件 | 默认思路 | 说明 |
+|------|----------|------|
+| 硬止损 | `stop_loss_pct` 或 `max(min_stop, volatility_multiplier * realized_vol)` | 防止单票亏损扩散，阈值需和持仓周期匹配 |
+| 移动止盈 | `trailing_stop_pct` 或波动率自适应 trailing stop | 保护已有浮盈，避免硬 take profit 过早截断右尾 |
+| 时间止损 | `max_holding_days` + 最低收益阈值 | 防止资金长期卡在无效信号中 |
+| 触发审计 | `exit_triggers` 计数 | 报告必须展示 stop_loss、trailing_take_profit、time_stop 等触发次数 |
+
+禁止只给一个“看起来更好”的止损参数。若止盈止损显著改善收益或回撤，必须在报告中标注它仍需要 walk-forward / 留出样本确认，不能把同样本改善直接当成上线证据。
 
 ### Bug Fix and Invariant Closure Contract
 
@@ -393,6 +427,7 @@ from quant.shared.utils.logger import get_logger
 | **实现复杂度** | 技术难度和参数数量 | 参数 ≤3 +2, 参数 ≤5 +1 |
 | **过拟合风险** | 参数数量、样本内外差异、data snooping 风险 | 低风险 +2, 中等 +1 |
 | **容量与成本** | 资金容量、换手率对滑点敏感度 | 低换手 +1 |
+| **风险退出设计** | 是否有可解释、可关闭、不过拟合的止盈止损/风险退出包 | off/on 对照改善且不过度依赖参数 +1 |
 
 评估结果应回写到本地 `idea_bank` 或正式研究报告的 ledger 中，给出：
 - 每个策略的综合评分 (0-10)
@@ -420,11 +455,12 @@ from quant.shared.utils.logger import get_logger
 2. 编写 `strategy.py`，严格遵循上面的 **Strategy Implementation Contract**
 3. 编写 `config.yaml`，包含策略名称、参数默认值
 4. docstring 必须包含：策略原理、Hypothesis、参数含义、引用来源
-5. 参数总数 ≤ 5 个
-6. `_day_data` buffer 必须限制大小
-7. 使用 `self.buy()` / `self.sell()` 下单，不要直接操作 portfolio
-8. 不添加注释（除非用户要求）
-9. 实现完成后验证注册：
+5. 设计并实现可关闭的止盈止损/风险退出包；`config.yaml` 必须能显式设置 `enabled: true/false`
+6. alpha 核心参数总数 ≤ 5 个；风险退出参数单独分组并解释，不和 alpha 参数混在一起做大网格寻优
+7. `_day_data` buffer 必须限制大小
+8. 使用 `self.buy()` / `self.sell()` 下单，不要直接操作 portfolio
+9. 不添加注释（除非用户要求）
+10. 实现完成后验证注册：
    ```bash
    python -c "from quant.features.strategies.registry import StrategyRegistry; print(StrategyRegistry.list_strategies())"
    ```
@@ -454,11 +490,36 @@ from quant.shared.utils.logger import get_logger
 | 成本 | 总佣金、成本拖累 | `result.diagnostics.total_commission`, `result.diagnostics.cost_drag_pct` |
 | 诊断 | 涨跌停跳过天数、手数调整次数、T+1拒绝次数 | `result.diagnostics.*` |
 
+**止盈止损开关对照（强制）：**
+
+每个正式策略研究报告必须用同一数据、同一 universe、同一 benchmark、同一成本模型和同一执行口径，至少跑两组 strict backtest：
+
+| 组别 | 设置 | 用途 |
+|------|------|------|
+| baseline_no_risk_exit | `risk_exit.enabled=false` 或等价配置 | 原始 alpha / 策略主体效果 |
+| risk_exit_enabled | `risk_exit.enabled=true` | 加止盈止损/风险退出后的真实效果 |
+
+报告必须单独展示 `baseline_no_risk_exit` 与 `risk_exit_enabled` 的对比表，至少包括：
+
+- CAGR、累计收益、MaxDD、Sharpe、Sortino、Calmar
+- 胜率、Profit Factor、Payoff、平均持仓天数、总交易数、round trips
+- 总佣金、成本拖累、年化换手、成交量受限交易、涨跌停/停牌/现金不足拒单
+- max/p95 ADV participation、容量估计
+- `exit_triggers`：stop_loss、trailing_take_profit、time_stop、risk_or_rebalance_exit 等触发次数
+
+解释规则：
+
+1. 如果开启止盈止损后表现更好，说明改善来自回撤控制、持仓周期、成交受限减少、容量改善还是偶然提高收益；同时标注“同样本改善不等于样本外有效”。
+2. 如果开启止盈止损后表现更差，不要隐藏结果；说明 alpha 是否依赖长尾收益、止盈是否截断右尾、止损是否提高换手和成本。
+3. 如果只跑开启版本而缺少关闭版本，正式报告必须标记为 incomplete，不能给 Go 结论。
+4. 保存机器可读对照，例如 `risk_exit_comparison.json` 或 `stop_package_comparison.json`，并在 HTML 报告中链接。
+
 **报告输出：**
 
 1. 控制台输出关键指标摘要
 2. 保存到 `quant/infrastructure/var/research/reports/<strategy_or_idea_id>/full_research_report.html`
 3. 同步 `quant/infrastructure/var/research/reports/latest/full_research_report.html`
+4. 保存止盈止损开关对照 JSON：`quant/infrastructure/var/research/reports/<strategy_or_idea_id>/risk_exit_comparison.json`
 
 **Walk-Forward 验证（推荐）：**
 

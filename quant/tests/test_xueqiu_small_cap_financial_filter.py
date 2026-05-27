@@ -1,6 +1,8 @@
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import (
     XueqiuSmallCapFinancialFilterStrategy,
 )
@@ -26,6 +28,31 @@ def _bar(symbol="000001", **overrides):
     }
     data.update(overrides)
     return data
+
+
+class _Position:
+    def __init__(self, avg_cost=None):
+        self.avg_cost = avg_cost
+
+
+class _Portfolio:
+    nav = 100000.0
+
+    def __init__(self, positions=None):
+        self._positions = positions or {}
+
+    def get_position(self, symbol):
+        return self._positions.get(symbol)
+
+
+class _Context:
+    def __init__(self, positions=None):
+        self.portfolio = _Portfolio(positions)
+        self.orders = []
+
+    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
+        self.orders.append((symbol, quantity, side, order_type, price, strategy_name))
+        return f"order-{len(self.orders)}"
 
 
 def test_xueqiu_filter_rejects_missing_financial_proxies():
@@ -72,3 +99,114 @@ def test_xueqiu_empty_months_accepts_empty_list():
     strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001"], empty_months=[])
 
     assert strategy.empty_months == set()
+
+
+def test_xueqiu_stop_loss_uses_portfolio_average_cost():
+    context = _Context({"000001": _Position(avg_cost=10.0)})
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001"],
+        stop_loss_pct=0.10,
+        min_stop_loss_pct=0.0,
+        max_stop_loss_pct=0.0,
+        stop_volatility_multiplier=0.0,
+    )
+    strategy.on_start(context)
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=7.0, price=7.0))
+    strategy.on_data(None, _bar("000001", close=8.9))
+
+    exited = strategy._exit_risk_positions()
+
+    assert exited == {"000001"}
+    assert context.orders == [("000001", 100, "SELL", "MARKET", 8.9, "xueqiu_small_cap_financial_filter")]
+    assert strategy.get_guard_diagnostics()["exit_triggers"]["stop_loss"] == 1
+
+
+def test_xueqiu_risk_exit_switch_can_disable_pnl_stops():
+    context = _Context({"000001": _Position(avg_cost=10.0)})
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001"],
+        risk_exit={"enabled": False, "stop_loss_pct": 0.10},
+        min_stop_loss_pct=0.0,
+        max_stop_loss_pct=0.0,
+        stop_volatility_multiplier=0.0,
+    )
+    strategy.on_start(context)
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0))
+    strategy.on_data(None, _bar("000001", close=8.9))
+
+    assert strategy.get_state()["parameters"]["risk_exit"]["enabled"] is False
+    assert strategy._exit_risk_positions() == set()
+    assert context.orders == []
+
+
+def test_xueqiu_trailing_take_profit_exits_after_armed_peak_drawdown():
+    context = _Context()
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001"],
+        stop_loss_pct=0.0,
+        take_profit_pct=0.20,
+        trailing_stop_pct=0.08,
+        trailing_volatility_multiplier=0.0,
+        max_trailing_stop_pct=0.0,
+    )
+    strategy.on_start(context)
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0))
+
+    strategy.on_data(None, _bar("000001", close=12.8))
+    assert strategy._exit_risk_positions() == set()
+    strategy.on_data(None, _bar("000001", close=11.4))
+
+    exited = strategy._exit_risk_positions()
+
+    assert exited == {"000001"}
+    assert context.orders == [("000001", 100, "SELL", "MARKET", 11.4, "xueqiu_small_cap_financial_filter")]
+    assert strategy.get_guard_diagnostics()["exit_triggers"]["trailing_take_profit"] == 1
+
+
+def test_xueqiu_time_stop_exits_stale_nonperformer():
+    context = _Context()
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001"],
+        stop_loss_pct=0.0,
+        take_profit_pct=0.0,
+        trailing_stop_pct=0.0,
+        max_holding_days=3,
+        min_time_stop_return=0.02,
+    )
+    strategy.on_start(context)
+    strategy.on_data(None, _bar("000001", close=10.0))
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0))
+    for _ in range(3):
+        strategy.on_data(None, _bar("000001", close=10.1))
+
+    exited = strategy._exit_risk_positions()
+
+    assert exited == {"000001"}
+    assert context.orders == [("000001", 100, "SELL", "MARKET", 10.1, "xueqiu_small_cap_financial_filter")]
+    assert strategy.get_guard_diagnostics()["exit_triggers"]["time_stop"] == 1
+
+
+def test_xueqiu_candidate_filter_does_not_apply_profit_stops():
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001"],
+        stop_loss_pct=0.10,
+        min_stop_loss_pct=0.0,
+        max_stop_loss_pct=0.0,
+        stop_volatility_multiplier=0.0,
+    )
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0))
+    strategy.on_data(None, _bar("000001", close=8.9))
+
+    assert not strategy._entry_risk("000001", _bar("000001", close=8.9))
+
+
+def test_xueqiu_zero_price_synthetic_fill_adjusts_entry_and_peak():
+    strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001"])
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=100, side="BUY", fill_price=10.0, price=10.0))
+    strategy._update_peak_price("000001", 12.0)
+
+    strategy.on_fill(None, SimpleNamespace(symbol="000001", quantity=10, side="BUY", fill_price=0.0, price=0.0))
+
+    assert strategy._positions["000001"] == 110
+    assert strategy._entry_prices["000001"] == pytest.approx(1000.0 / 110.0)
+    assert strategy._peak_prices["000001"] == pytest.approx(1200.0 / 110.0)

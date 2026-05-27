@@ -94,6 +94,7 @@ S5-06  送股/拆分等事件产生小于 1 股的内部残留仓位时，风险
 
 - 适用于有 `holding_days`、定期调仓、风险退出、择时 gate 或候选池筛选的日线策略。
 - 单纯 buy-and-hold 或一次性信号策略不一定需要实现所有 gate，但不能违反已适用的生命周期契约。
+- PnL 型止盈止损属于已有持仓退出条件；允许读取真实 `avg_cost` 或策略内部 fill state，但不得参与候选入场过滤。
 - 如果未来抽象出公共日线调仓基类，应把本 CASE 的状态机迁移到公共基类测试，并保留策略级回归测试验证接入正确。
 
 ## CASE-6: Top-level strategy promotion gate
@@ -120,3 +121,19 @@ S7-01  注册类别中如果存在多个已审计候选，调仓日可见候选�
 S7-02  未来新发或当日无 current bar 的 symbol 即使在窗口 superset 中，也不得进入该调仓日的可选候选
 S7-03  ETF 类别注册表中的每个 category entry 必须标记为 user_approved；新增类别必须通过注册表和测试审计
 ```
+
+## CASE-8: Promoted strategy risk-exit toggle
+
+顶层 promoted/candidate 策略默认必须带可开关的止盈止损/风险退出包。这个开关用于报告中生成 `baseline_no_risk_exit` 与 `risk_exit_enabled` 的同口径对照，防止研究只展示加风控后的结果。
+
+### 断言
+
+```
+S8-01  顶层策略默认 `risk_exit.enabled=True`，并在 `get_state()["parameters"]` 中暴露该配置
+S8-02  `risk_exit.enabled=False` 时，PnL 型 stop_loss / trailing_take_profit / time_stop 不得触发；非 PnL 的上市状态、停牌、退市、低流动性护栏可继续独立执行
+```
+
+### 适用范围
+
+- 适用于顶层 `quant/features/strategies/<strategy_id>/` 中可直接被研究/回测报告调用的策略。
+- 若策略确实不适合单票级止盈止损，必须实现组合级回撤、波动率、时间退出或在报告中明确标记不适用，并仍保留开关对照说明。

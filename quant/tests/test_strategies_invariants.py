@@ -14,6 +14,9 @@ from quant.features.strategies.base import Strategy
 from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy import (
     AShareAlpha158FactorCompositeStrategy,
 )
+from quant.features.strategies.reject.ashare_davis_double_click.strategy import (
+    AShareDavisDoubleClickStrategy,
+)
 from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
 from quant.features.strategies.registry import StrategyRegistry, strategy
 from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
@@ -280,6 +283,24 @@ class TestCase5DailyRiskExitStateMachine:
 
         assert reason == ""
 
+        small_cap = XueqiuSmallCapFinancialFilterStrategy(
+            symbols=["002475"],
+            min_adv_value=0.0,
+            stop_loss_pct=0.10,
+            min_stop_loss_pct=0.0,
+            max_stop_loss_pct=0.0,
+            stop_volatility_multiplier=0.0,
+        )
+        small_cap._positions["002475"] = 100
+        small_cap._entry_prices["002475"] = 10.0
+
+        rejected = small_cap._entry_risk(
+            "002475",
+            _value_rsrs_bar("002475", 8.9, total_mv=120000.0, circ_mv=110000.0, pe_ttm=20.0, ps_ttm=8.0),
+        )
+
+        assert rejected is False
+
     def test_s5_05_zero_price_stock_dividend_fill_keeps_internal_cost_in_sync(self):
         strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"])
         strategy.on_fill(
@@ -294,6 +315,20 @@ class TestCase5DailyRiskExitStateMachine:
 
         assert strategy._positions["000001"] == 110
         assert strategy._entry_prices["000001"] == pytest.approx(1000.0 / 110.0)
+
+        small_cap = XueqiuSmallCapFinancialFilterStrategy(symbols=["002475"])
+        small_cap.on_fill(
+            None,
+            SimpleNamespace(symbol="002475", quantity=100, side="BUY", fill_price=10.0, price=10.0),
+        )
+
+        small_cap.on_fill(
+            None,
+            SimpleNamespace(symbol="002475", quantity=10, side="BUY", fill_price=0.0, price=0.0),
+        )
+
+        assert small_cap._positions["002475"] == 110
+        assert small_cap._entry_prices["002475"] == pytest.approx(1000.0 / 110.0)
 
     def test_s5_06_dust_position_does_not_submit_zero_quantity_sell(self, monkeypatch):
         strategy = AShareAlpha158FactorCompositeStrategy(symbols=["002475", "000300"])
@@ -327,6 +362,66 @@ class TestCase5DailyRiskExitStateMachine:
         assert exited == set()
         assert sells == []
         assert small_cap.get_guard_diagnostics()["exit_triggers"]["dust_position"] == 1
+
+        mid_cap = AShareDavisDoubleClickStrategy(symbols=["002475"])
+        mid_cap._positions["002475"] = 0.5
+        monkeypatch.setattr(mid_cap, "_get_last_bar", lambda symbol: _value_rsrs_bar(symbol, 10.0))
+        monkeypatch.setattr(mid_cap, "_position_exit_reason", lambda symbol, bar: "dust_exit")
+        monkeypatch.setattr(
+            mid_cap,
+            "sell",
+            lambda symbol, quantity, order_type="MARKET", price=None: sells.append((symbol, quantity, price)),
+        )
+
+        exited = mid_cap._exit_risk_positions()
+
+        assert exited == set()
+        assert sells == []
+        assert mid_cap.get_guard_diagnostics()["exit_triggers"]["dust_position"] == 1
+
+
+# ---------------------------------------------------------------------------
+# CASE-8: Promoted strategy risk-exit toggle
+# ---------------------------------------------------------------------------
+
+
+class TestCase8PromotedStrategyRiskExitToggle:
+    def test_s8_01_promoted_strategies_default_to_enabled_risk_exit_package(self):
+        small_cap = XueqiuSmallCapFinancialFilterStrategy(symbols=["002475"])
+        barbell = AShareGoldEquityBarbellTimingStrategy(
+            risk_symbols=["510300"],
+            defensive_symbols=["518880"],
+            timing_symbol="510300",
+        )
+
+        assert small_cap.get_state()["parameters"]["risk_exit"]["enabled"] is True
+        assert barbell.get_state()["parameters"]["risk_exit"]["enabled"] is True
+
+    def test_s8_02_risk_exit_disabled_suppresses_pnl_exit_package(self):
+        small_cap = XueqiuSmallCapFinancialFilterStrategy(
+            symbols=["002475"],
+            risk_exit={"enabled": False, "stop_loss_pct": 0.10},
+            min_stop_loss_pct=0.0,
+            max_stop_loss_pct=0.0,
+            stop_volatility_multiplier=0.0,
+        )
+        small_cap._positions["002475"] = 100
+        small_cap._entry_prices["002475"] = 10.0
+        small_cap.on_data(None, _value_rsrs_bar("002475", 8.9, total_mv=120000.0, circ_mv=110000.0, pe_ttm=20.0, ps_ttm=8.0))
+
+        assert small_cap._exit_risk_positions() == set()
+
+        barbell = AShareGoldEquityBarbellTimingStrategy(
+            risk_symbols=["510300"],
+            defensive_symbols=["518880"],
+            timing_symbol="510300",
+            risk_exit={"enabled": False, "stop_loss_pct": 0.08},
+        )
+        barbell._positions["510300"] = 100
+        barbell._entry_prices["510300"] = 10.0
+        _feed_pit_barbell(barbell, "510300", [10.0, 9.1])
+
+        assert barbell._exit_risk_positions() == set()
 
 
 # ---------------------------------------------------------------------------

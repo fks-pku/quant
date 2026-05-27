@@ -1,0 +1,28 @@
+strategy:
+  name: ashare_dividend_low_vol_quality_enhanced
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 60
+  max_positions: 10
+  target_weight_slots: 10
+  max_position_pct: 0.95
+  cap_percentile_low: 0.50
+  cap_percentile_high: 1.00
+  min_price: 5.0
+  min_turnover: 80000.0
+  use_market_timing: true
+  timing_ma: 200
+  timing_exit_buffer: 0.95
+  timing_momentum_lookback: 60
+  min_timing_momentum: -0.12
+  max_volatility: 0.60
+  min_drawdown: -0.45
+  max_pb: 15.0
+  max_ps_ttm: 25.0
+  min_roe: 6.0
+  max_debt_to_assets: 95.0
+  min_dividend_yield: 1.0
+  score_profile: dividend_low_vol_quality_enhanced

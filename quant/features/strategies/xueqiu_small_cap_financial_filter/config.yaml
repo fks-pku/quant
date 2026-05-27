@@ -19,3 +19,30 @@ parameters:
   risk_index_symbol: ""
   index_drawdown_lookback: 5
   index_drawdown_threshold: -0.05
+  enable_risk_exit: true
+  stop_loss_pct: 0.12
+  min_stop_loss_pct: 0.08
+  max_stop_loss_pct: 0.18
+  stop_volatility_multiplier: 3.0
+  take_profit_pct: 0.25
+  trailing_stop_pct: 0.10
+  trailing_volatility_multiplier: 2.5
+  max_trailing_stop_pct: 0.22
+  hard_take_profit_pct: 0.0
+  exit_volatility_lookback: 20
+  max_holding_days: 45
+  min_time_stop_return: 0.02
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.12
+    min_stop_loss_pct: 0.08
+    max_stop_loss_pct: 0.18
+    stop_volatility_multiplier: 3.0
+    take_profit_pct: 0.25
+    trailing_stop_pct: 0.10
+    trailing_volatility_multiplier: 2.5
+    max_trailing_stop_pct: 0.22
+    hard_take_profit_pct: 0.0
+    exit_volatility_lookback: 20
+    max_holding_days: 45
+    min_time_stop_return: 0.02
