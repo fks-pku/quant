@@ -138,3 +138,19 @@ S8-02  `risk_exit.enabled=False` 时，PnL 型 stop_loss / trailing_take_profit 
 
 - 适用于顶层 `quant/features/strategies/<strategy_id>/` 中可直接被研究/回测报告调用的策略。
 - 若策略确实不适合单票级止盈止损，必须实现组合级回撤、波动率、时间退出或在报告中明确标记不适用，并说明默认启用的风险退出口径。
+
+## CASE-9: Retail-permission stock universe
+
+面向普通账户的 A 股个股策略默认不得买入需要额外权限的创业板和科创板股票。该约束属于股票交易权限约束，不适用于 ETF 策略；创业板/科创板 ETF 仍可由 ETF 策略按其自身 universe 审计规则交易。
+
+### 断言
+
+```
+S9-01  小盘个股策略默认从 `symbols` 和买入候选中过滤创业板 `300/301` 与科创板 `688/689` 股票，并在 `get_state()["parameters"]["excluded_board_prefixes"]` 暴露该规则
+S9-02  ETF 策略不继承 A 股个股权限过滤，创业板/科创板相关 ETF 是否可交易由 ETF 策略自身 universe 与流动性/NAV 审计决定
+```
+
+### 适用范围
+
+- 适用于默认面向普通股票账户执行的 A 股个股策略，例如小盘财务过滤策略。
+- 若用户明确提供已开通权限的账户配置，可通过策略参数覆盖该前缀列表，但默认研究和正式报告必须按普通账户可买股票池运行。

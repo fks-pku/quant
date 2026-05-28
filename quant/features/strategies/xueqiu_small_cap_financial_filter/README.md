@@ -6,7 +6,7 @@ Full report: `full_research_report.html`
 
 This candidate models the article's small-cap rule as a research-only A-share daily strategy:
 
-- Universe: local full A-share stock universe with status sidecar.
+- Universe: local A-share stock universe with status sidecar, excluding ChiNext `300/301` and STAR `688/689` stocks by default for accounts without those stock-trading permissions.
 - Entry filters: non-ST, tradable, listed, `list_status == L`, price and liquidity guard, point-in-time `total_mv/circ_mv >= 100000` in Tushare ten-thousand-CNY units, positive-profit proxy, and inferred revenue proxy `total_mv / ps_ttm >= 10000`.
 - Ranking: smaller point-in-time market cap ranks higher.
 - Portfolio: long-only Top 3-5 concentrated names.
@@ -14,6 +14,7 @@ This candidate models the article's small-cap rule as a research-only A-share da
 - Seasonal risk-off: January and April hold cash.
 - Optional index risk-off: if configured, a short-window Shenzhen/ChiNext proxy drawdown can force cash.
 - Position exits: status/delisting/low-liquidity exits run daily before rebalance; PnL exits are controlled by `risk_exit.enabled`, use portfolio `avg_cost` when available, then fallback to strategy fill state. The default enabled package combines volatility-adjusted stop loss, trailing take-profit after a 25% gain, and a 45-trading-day time stop for positions that have not earned at least 2%.
+- Permission-board guard: `excluded_board_prefixes=["300","301","688","689"]` is enabled by default. This applies only to stock holdings in this strategy; ETF strategies are not filtered by this stock-permission rule.
 
 The local data does not contain absolute net profit or operating revenue. Positive profit is therefore proxied by positive `pe_ttm`, `pe`, `eps`, or `netprofit_margin`; operating revenue above RMB 100m is proxied by market cap divided by `ps_ttm`/`ps`. These approximations must be treated as residual model risk.
 

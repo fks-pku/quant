@@ -19,6 +19,7 @@ parameters:
   risk_index_symbol: ""
   index_drawdown_lookback: 5
   index_drawdown_threshold: -0.05
+  excluded_board_prefixes: ["300", "301", "688", "689"]
   enable_risk_exit: true
   stop_loss_pct: 0.12
   min_stop_loss_pct: 0.08

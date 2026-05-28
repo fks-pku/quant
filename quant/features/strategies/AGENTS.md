@@ -33,6 +33,7 @@
 - 候选入场过滤与持仓退出过滤必须分离；入场 diagnostics 不得混入 `stop_loss`、`take_profit`、`trailing_stop` 等只对已有持仓有意义的退出原因
 - 覆盖 `on_fill()` 的策略必须兼容回测引擎的 synthetic fill：送股/转增可能以 `BUY`、`fill_price=0` 回调同步策略内部仓位，ETF/基金 `adj_factor` 份额折算可能以 `BUY` 或 `SELL`、`fill_price=0` 同步内部仓位，内部成本/峰值价状态要随之按数量比例调整
 - 顶层 promoted/candidate 策略默认必须暴露并启用 `risk_exit.enabled` 或等价风险退出包；正式研究报告默认只展示启用后的止盈止损/风险退出逻辑，关闭版本只作为专项敏感性/消融研究
+- 面向普通账户的 A 股个股策略默认必须排除需要额外权限的创业板 `300/301` 与科创板 `688/689` 股票；ETF 策略不适用该股票权限过滤
 
 ## 修改守则
 

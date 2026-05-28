@@ -8,6 +8,13 @@ from quant.features.strategies._small_cap_common import AShareSmallCapRotationBa
 from quant.features.strategies.registry import strategy
 
 
+DEFAULT_EXCLUDED_BOARD_PREFIXES = ("300", "301", "688", "689")
+
+
+def _symbol_has_prefix(symbol: str, prefixes: tuple[str, ...]) -> bool:
+    return any(str(symbol).startswith(prefix) for prefix in prefixes)
+
+
 @strategy("xueqiu_small_cap_financial_filter")
 class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
     def __init__(
@@ -27,6 +34,7 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         risk_index_symbol: str = "",
         index_drawdown_lookback: int = 5,
         index_drawdown_threshold: float = -0.05,
+        excluded_board_prefixes: Optional[List[str]] = None,
         enable_risk_exit: bool = True,
         risk_exit: Optional[Dict[str, Any]] = None,
         stop_loss_pct: float = 0.12,
@@ -42,7 +50,14 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         max_holding_days: int = 45,
         min_time_stop_return: float = 0.02,
     ):
-        extra_symbols = list(symbols or [])
+        excluded_prefixes = DEFAULT_EXCLUDED_BOARD_PREFIXES if excluded_board_prefixes is None else tuple(
+            str(prefix) for prefix in excluded_board_prefixes if str(prefix)
+        )
+        extra_symbols = [
+            str(symbol)
+            for symbol in list(symbols or [])
+            if not _symbol_has_prefix(str(symbol), excluded_prefixes)
+        ]
         if risk_index_symbol and risk_index_symbol not in extra_symbols:
             extra_symbols.append(risk_index_symbol)
         super().__init__(
@@ -83,6 +98,7 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         self.risk_index_symbol = str(risk_index_symbol or "")
         self.index_drawdown_lookback = max(1, int(index_drawdown_lookback))
         self.index_drawdown_threshold = float(index_drawdown_threshold)
+        self.excluded_board_prefixes = tuple(excluded_prefixes)
         self.enable_risk_exit = bool(enable_risk_exit)
         self.stop_loss_pct = max(0.0, float(stop_loss_pct))
         self.min_stop_loss_pct = max(0.0, float(min_stop_loss_pct))
@@ -172,6 +188,9 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
     def _entry_risk(self, symbol: str, bar: Any) -> bool:
         if self.risk_index_symbol and symbol == self.risk_index_symbol:
             return True
+        if self._is_permission_excluded_symbol(symbol):
+            self._count("entry_rejections", "excluded_permission_board")
+            return True
         if super()._entry_risk(symbol, bar):
             return True
         market_cap = self._market_cap(bar)
@@ -203,6 +222,8 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         return bool(self._status_or_delisting_exit_reason(symbol, bar))
 
     def _status_or_delisting_exit_reason(self, symbol: str, bar: Any) -> str:
+        if self._is_permission_excluded_symbol(symbol):
+            return "excluded_permission_board"
         if not self._is_mainland_a_symbol(symbol):
             return "not_mainland_a"
         if self._bool_value(self._value(bar, "is_st", False), False):
@@ -227,6 +248,9 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
         if self._average_turnover(symbol) < self.min_adv_value:
             return "low_turnover"
         return ""
+
+    def _is_permission_excluded_symbol(self, symbol: str) -> bool:
+        return _symbol_has_prefix(str(symbol), self.excluded_board_prefixes)
 
     def _has_positive_profit(self, bar: Any) -> bool:
         for field in ("pe_ttm", "pe", "eps", "netprofit_margin"):
@@ -385,6 +409,7 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
                 "risk_index_symbol": self.risk_index_symbol,
                 "index_drawdown_lookback": self.index_drawdown_lookback,
                 "index_drawdown_threshold": self.index_drawdown_threshold,
+                "excluded_board_prefixes": list(self.excluded_board_prefixes),
                 "enable_risk_exit": self.enable_risk_exit,
                 "stop_loss_pct": self.stop_loss_pct,
                 "min_stop_loss_pct": self.min_stop_loss_pct,

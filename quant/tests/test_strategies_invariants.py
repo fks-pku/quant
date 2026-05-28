@@ -425,6 +425,37 @@ class TestCase8PromotedStrategyRiskExitToggle:
 
 
 # ---------------------------------------------------------------------------
+# CASE-9: Retail-permission stock universe
+# ---------------------------------------------------------------------------
+
+
+class TestCase9RetailPermissionStockUniverse:
+    def test_s9_01_small_cap_strategy_excludes_special_permission_stock_boards_by_default(self):
+        strategy = XueqiuSmallCapFinancialFilterStrategy(
+            symbols=["000001", "002475", "300001", "301001", "688001", "689001"],
+            risk_index_symbol="399001",
+        )
+
+        assert strategy.symbols == ["000001", "002475", "399001"]
+        assert strategy.get_state()["parameters"]["excluded_board_prefixes"] == ["300", "301", "688", "689"]
+        for symbol in ["300001", "301001", "688001", "689001"]:
+            assert strategy._entry_risk(
+                symbol,
+                _value_rsrs_bar(symbol, 10.0, total_mv=120000.0, circ_mv=110000.0, pe_ttm=20.0, ps_ttm=8.0),
+            )
+
+    def test_s9_02_etf_strategy_keeps_chinext_etfs_under_its_own_universe_rules(self):
+        strategy = AShareGoldEquityBarbellTimingStrategy(
+            risk_symbols=["159915", "159949"],
+            defensive_symbols=["518880"],
+            timing_symbol="510300",
+        )
+
+        assert "159915" in strategy.symbols
+        assert "159949" in strategy.symbols
+
+
+# ---------------------------------------------------------------------------
 # CASE-6: Top-level strategy promotion gate
 # ---------------------------------------------------------------------------
 

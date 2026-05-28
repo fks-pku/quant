@@ -384,6 +384,8 @@ def test_xueqiu_report_spec_preserves_default_enabled_risk_exit_thresholds():
     risk_exit = spec["parameters"]["risk_exit"]
 
     assert scenario["risk_exit_label"] == "risk_exit_enabled"
+    assert spec["parameters"]["excluded_board_prefixes"] == ["300", "301", "688", "689"]
+    assert "excluding ChiNext 300/301 and STAR 688/689 stocks" in spec["universe"]
     assert risk_exit["enabled"] is True
     assert risk_exit["stop_loss_pct"] == 0.12
     assert risk_exit["min_stop_loss_pct"] == 0.08

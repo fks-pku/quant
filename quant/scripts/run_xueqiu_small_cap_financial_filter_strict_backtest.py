@@ -26,6 +26,7 @@ from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
 from quant.features.research.production_gate import evaluate_production_readiness
 from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import (
+    DEFAULT_EXCLUDED_BOARD_PREFIXES,
     XueqiuSmallCapFinancialFilterStrategy,
 )
 from quant.features.trading.portfolio import Portfolio
@@ -192,7 +193,11 @@ def _load_shared_inputs() -> Tuple[List[str], Dict[str, int], BenchmarkProvider,
             """,
             [START, END],
         ).fetchall()
-        stock_symbols = [str(row[0]) for row in rows if is_cn_symbol(str(row[0]))]
+        stock_symbols = [
+            str(row[0])
+            for row in rows
+            if is_cn_symbol(str(row[0])) and not _is_permission_excluded_symbol(str(row[0]))
+        ]
         all_required_symbols = list(stock_symbols)
         for scenario in SCENARIOS:
             all_required_symbols.extend(_scenario_extras(scenario))
@@ -210,12 +215,18 @@ def _scenario_symbols(stock_symbols: List[str], scenario: Dict[str, Any]) -> Lis
 
 def _scenario_report_parameters(scenario: Dict[str, Any]) -> Dict[str, Any]:
     hidden = {"base_scenario", "risk_exit_label", "enable_risk_exit"}
-    return {key: value for key, value in scenario.items() if key not in hidden}
+    parameters = {key: value for key, value in scenario.items() if key not in hidden}
+    parameters["excluded_board_prefixes"] = list(DEFAULT_EXCLUDED_BOARD_PREFIXES)
+    return parameters
 
 
 def _scenario_extras(scenario: Dict[str, Any]) -> List[str]:
     symbol = str(scenario.get("risk_index_symbol") or "")
     return [symbol] if symbol else []
+
+
+def _is_permission_excluded_symbol(symbol: str) -> bool:
+    return any(str(symbol).startswith(prefix) for prefix in DEFAULT_EXCLUDED_BOARD_PREFIXES)
 
 
 def _risk_exit_scenarios(scenarios: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -306,22 +317,25 @@ def _strategy_kwargs(scenario: Dict[str, Any]) -> Dict[str, Any]:
 def _strategy_spec(scenario: Dict[str, Any], stock_count: int) -> Dict[str, Any]:
     index_stop = str(scenario.get("risk_index_symbol") or "")
     empty_months = scenario.get("empty_months") or []
+    parameters = {
+        key: value
+        for key, value in scenario.items()
+        if key not in {"name", "base_scenario", "risk_exit_label"}
+    }
+    parameters["excluded_board_prefixes"] = list(DEFAULT_EXCLUDED_BOARD_PREFIXES)
     return {
         "strategy_id": STRATEGY_ID,
         "signal_formula_key": "xueqiu_small_cap_financial_filter",
         "strategy_type": "small_cap_size_rotation",
         "prediction_direction": "lower_market_cap_is_better_after_financial_filters",
-        "parameters": {
-            key: value
-            for key, value in scenario.items()
-            if key not in {"name", "base_scenario", "risk_exit_label"}
-        },
+        "parameters": parameters,
         "parameter_explanations": {
             "max_positions": "每次调仓最多持有的股票数量；越小越集中，收益弹性和个股风险都更高。",
             "min_positions": "候选数量低于该值时不强行满仓，避免候选池太窄时硬买。",
             "target_exposure": "目标总仓位比例；1.0 表示满足条件时满仓等权持有。",
             "empty_months": "按月份主动空仓的风控规则；当前用于表达雪球原始策略里的 1 月和 4 月防御逻辑。",
             "risk_index_symbol": "指数级风险过滤参考标的；为空表示不启用，配置深成指等代码时用于大跌止损代理。",
+            "excluded_board_prefixes": "普通账户无权限买入板块的股票代码前缀；默认剔除创业板 300/301 和科创板 688/689，ETF 策略不适用。",
             "enable_risk_exit": "默认启用 PnL 型止盈止损/时间止损包；关闭版本只用于专项敏感性/消融研究。",
             "risk_exit": "默认启用的止盈止损阈值分组；正式报告按启用后的风险退出口径展示。",
             "base_scenario": "不含风险退出口径标记的原始场景名称，用于识别场景来源。",
@@ -332,7 +346,10 @@ def _strategy_spec(scenario: Dict[str, Any], stock_count: int) -> Dict[str, Any]
         "execution_lag_days": 1,
         "rebalance_frequency": "weekly_tuesday_open_approximated_by_monday_close_signal",
         "source_url": SOURCE_URL,
-        "universe": f"Full A-share stock universe from daily_cn_ochl ({stock_count} symbols)",
+        "universe": (
+            f"A-share main-board permissionable stock universe from daily_cn_ochl ({stock_count} symbols), "
+            "excluding ChiNext 300/301 and STAR 688/689 stocks"
+        ),
         "required_fields": [
             "open",
             "high",
@@ -355,8 +372,12 @@ def _strategy_spec(scenario: Dict[str, Any], stock_count: int) -> Dict[str, Any]
         ],
         "strategy_logic": {
             "core_idea": "A 股小市值溢价叠加基础财务正向过滤：排除亏损和收入规模过小的壳化/高退市风险股票后，集中持有市值最小的 3-5 只。",
-            "universe": f"daily_cn_ochl 全 A 股个股池，回测期内共 {stock_count} 个代码；不使用当前成分股列表。",
+            "universe": (
+                f"daily_cn_ochl A 股个股池剔除创业板 300/301 与科创板 688/689 后，"
+                f"回测期内共 {stock_count} 个普通账户可买代码；不使用当前成分股列表。"
+            ),
             "entry_filters": [
+                "排除普通账户无权限买入的创业板 300/301 与科创板 688/689 股票；ETF 购买权限不受此规则影响",
                 "排除 ST、停牌、不可交易、非上市、list_status != L",
                 "收盘价 >= 2，20 日平均成交额 >= 20000 本地 amount 单位",
                 "point-in-time total_mv/circ_mv >= 100000，约 RMB 10 亿",

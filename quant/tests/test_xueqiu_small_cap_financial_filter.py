@@ -66,6 +66,30 @@ def test_xueqiu_filter_rejects_missing_financial_proxies():
     assert strategy._entry_risk("000001", _bar(ps_ttm=20.0, ps=20.0))
 
 
+def test_xueqiu_default_universe_excludes_permission_boards():
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001", "002475", "300001", "301001", "688001", "689001"],
+        risk_index_symbol="399001",
+    )
+
+    assert strategy.symbols == ["000001", "002475", "399001"]
+    assert strategy.get_state()["parameters"]["excluded_board_prefixes"] == ["300", "301", "688", "689"]
+    for symbol in ["300001", "301001", "688001", "689001"]:
+        assert strategy._entry_risk(symbol, _bar(symbol)) is True
+
+
+def test_xueqiu_permission_board_exclusion_can_be_overridden():
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["300001", "688001"],
+        excluded_board_prefixes=[],
+        min_adv_value=0.0,
+    )
+
+    assert strategy.symbols == ["300001", "688001"]
+    assert strategy._entry_risk("300001", _bar("300001")) is False
+    assert strategy._entry_risk("688001", _bar("688001")) is False
+
+
 def test_xueqiu_score_prefers_smaller_market_cap():
     strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001", "000002"])
 
