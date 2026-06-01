@@ -1,12 +1,13 @@
-# Rejected Strategy Archive
+# Strategy Candidate Reject Staging
 
-This folder stores research candidates that are not eligible for the top-level strategy registry.
+This folder stores research candidates that are not eligible for the top-level strategy registry yet, but have not necessarily reached a final No-Go archive decision.
 
 Promotion rule:
 
 - A strategy may live directly under `quant/features/strategies/<strategy_id>/` only when a strict local backtest report shows `CAGR > 10%`.
-- Strategies with `CAGR <= 10%`, no strict report, or failed validation must stay under `quant/features/strategies/reject/<strategy_id>/`.
-- Rejected strategies can still be imported manually for audit, regression tests, and historical reproduction, but they are not auto-discovered by `StrategyRegistry`.
+- Strategies with `CAGR <= 10%`, no strict report, or failed validation must stay under `quant/features/strategies/reject/<strategy_id>/` while they are still candidates or staging rejects.
+- Final No-Go generated strategies should be moved out of `quant/features/strategies/` and archived under `quant/features/rejected_strategy/<strategy_id>/`.
+- Staged or archived rejected strategies can still be imported manually for audit, regression tests, and historical reproduction, but they are not auto-discovered by `StrategyRegistry`.
 
 Promotion checklist:
 

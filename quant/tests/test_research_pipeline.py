@@ -415,7 +415,7 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
         assert min_history_days_as_of == 0
         assert max_symbols_per_category == 0
         assert universe_start == "2016-01-01"
-        assert universe_end == "2025-12-31"
+        assert universe_end == "2026-05-01"
         return {
             "symbols": ["510300", "518880"],
             "risk_category_symbols": {"csi300": ["510300"]},
@@ -423,7 +423,7 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
             "universe_selection_policy": "audited_stable_etf_registry",
             "universe_as_of": "",
             "universe_start": "2016-01-01",
-            "universe_end": "2025-12-31",
+            "universe_end": "2026-05-01",
             "universe_min_history_days_as_of": 0,
             "universe_max_symbols_per_category": 0,
             "universe_registry_version": "audited_stable_etf_registry_v1",
@@ -438,7 +438,7 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
         "timing_symbol": "000300",
         "universe_selection_policy": "audited_stable_etf_registry",
         "universe_start": "2016-01-01",
-        "universe_end": "2025-12-31",
+        "universe_end": "2026-05-01",
         "universe_min_history_days_as_of": 0,
         "universe_max_symbols_per_category": 0,
     }
@@ -456,7 +456,7 @@ def test_archived_pit_universe_resolution_is_cached(monkeypatch):
     assert first_params["risk_category_symbols"] == second_params["risk_category_symbols"]
     assert first_params["universe_selection_policy"] == "audited_stable_etf_registry"
     assert first_params["universe_start"] == "2016-01-01"
-    assert first_params["universe_end"] == "2025-12-31"
+    assert first_params["universe_end"] == "2026-05-01"
     assert first_params["universe_max_symbols_per_category"] == 0
 
 
@@ -2711,11 +2711,11 @@ def test_walkforward_trade_enrichment_adds_capacity_fields():
     assert trade["avg_daily_volume"] == pytest.approx(20_000.0)
 
 
-def test_research_config_default_backtest_window_spans_2016_to_2025():
+def test_research_config_default_backtest_window_spans_2016_to_2026():
     cfg = ResearchConfig()
 
     assert cfg.default_backtest_start == "2016-01-01"
-    assert cfg.default_backtest_end == "2025-12-31"
+    assert cfg.default_backtest_end == "2026-05-01"
 
 
 def test_api_yearly_returns_from_equity_uses_calendar_years():
@@ -2749,7 +2749,7 @@ def test_api_load_research_config_reads_feature_yaml():
 
     assert cfg.sources == ["arxiv", "ssrn", "nber", "blog"]
     assert cfg.default_backtest_start == "2016-01-01"
-    assert cfg.default_backtest_end == "2025-12-31"
+    assert cfg.default_backtest_end == "2026-05-01"
     assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
     assert cfg.production_gate_config["max_drawdown_cagr_10_15"] == 0.25
@@ -2997,7 +2997,7 @@ def test_api_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._config["min_stocks"] == 17
     assert validator._config["factor_validation_enabled"] is True
     assert validator._config["start_date"] == "2016-01-01"
-    assert validator._config["end_date"] == "2025-12-31"
+    assert validator._config["end_date"] == "2026-05-01"
 
 
 def test_walkforward_runner_reuses_prefetched_data(monkeypatch):
@@ -3460,7 +3460,7 @@ def test_cli_make_validation_components_wires_market_and_factor_ports(monkeypatc
     assert validator._config["min_observations"] == 88
     assert validator._config["sensitivity_enabled"] is True
     assert validator._config["start_date"] == "2016-01-01"
-    assert validator._config["end_date"] == "2025-12-31"
+    assert validator._config["end_date"] == "2026-05-01"
 
 
 def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
@@ -3469,7 +3469,7 @@ def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
     cfg = cli._load_research_config()
 
     assert cfg.default_backtest_start == "2016-01-01"
-    assert cfg.default_backtest_end == "2025-12-31"
+    assert cfg.default_backtest_end == "2026-05-01"
     assert cfg.production_gate_config["max_drawdown_cagr_15_20"] == 0.30
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
 

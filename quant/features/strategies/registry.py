@@ -16,6 +16,13 @@ def _key(name: str) -> str:
     return name.lower()
 
 
+def _is_archived_or_rejected_module(module_name: str) -> bool:
+    return (
+        ".features.rejected_strategy." in module_name
+        or ".features.strategies.reject." in module_name
+    )
+
+
 def _discover_strategies() -> None:
     """Auto-discover strategies from subdirectories."""
     strategies_dir = Path(__file__).parent
@@ -37,7 +44,11 @@ def _discover_strategies() -> None:
 
                 for attr_name in dir(module):
                     cls = getattr(module, attr_name)
-                    if isinstance(cls, type) and hasattr(cls, "_registry_name"):
+                    if (
+                        isinstance(cls, type)
+                        and hasattr(cls, "_registry_name")
+                        and getattr(cls, "_registry_active", True)
+                    ):
                         _registry[_key(cls._registry_name)] = cls
         except Exception:
             _log = setup_logger("strategy.registry")
@@ -47,8 +58,10 @@ def _discover_strategies() -> None:
 def strategy(name: str):
     """Decorator to register a strategy class by name (case-insensitive)."""
     def decorator(cls: Type) -> Type:
-        _registry[_key(name)] = cls
         cls._registry_name = name
+        cls._registry_active = not _is_archived_or_rejected_module(getattr(cls, "__module__", ""))
+        if cls._registry_active:
+            _registry[_key(name)] = cls
         return cls
     return decorator
 

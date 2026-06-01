@@ -55,11 +55,11 @@ def ingest_indices(
     for idx_code in indices:
         logger.info(f"Fetching index {idx_code} ({start.date()} ~ {end.date()})")
         try:
-            df = provider.fetch_daily_with_hfq(idx_code, start, end)
+            df = provider.fetch_index_daily_with_hfq(idx_code, start, end)
             if df.empty:
                 logger.warning(f"  No data for index {idx_code}")
                 continue
-            rows = storage.save_bars(df, timeframe="1d")
+            rows = storage.save_cn_index_bars(df, timeframe="1d")
             logger.info(f"  Index {idx_code}: {rows} bars saved")
         except Exception as e:
             logger.error(f"  Failed index {idx_code}: {e}")

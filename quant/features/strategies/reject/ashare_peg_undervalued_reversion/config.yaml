@@ -1,0 +1,46 @@
+strategy:
+  name: ashare_peg_undervalued_reversion
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 60
+  max_positions: 10
+  max_position_pct: 1.0
+  cap_percentile_low: 0.15
+  cap_percentile_high: 0.95
+  min_price: 3.0
+  min_turnover: 50000.0
+  lot_size: 100
+  momentum_lookback: 126
+  momentum_skip: 5
+  min_pe_ttm: 3.0
+  max_pe_ttm: 80.0
+  min_profit_growth: 8.0
+  max_growth_for_peg: 120.0
+  min_roe: 5.0
+  min_sales_growth: -20.0
+  min_momentum: -0.25
+  max_entry_peg: 0.60
+  fair_peg_exit: 1.05
+  excluded_board_prefixes:
+    - "300"
+    - "301"
+    - "688"
+    - "689"
+  enable_risk_exit: true
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.22
+    min_stop_loss_pct: 0.18
+    max_stop_loss_pct: 0.32
+    stop_volatility_multiplier: 4.0
+    take_profit_pct: 0.60
+    trailing_stop_pct: 0.20
+    trailing_volatility_multiplier: 3.0
+    max_trailing_stop_pct: 0.35
+    hard_take_profit_pct: 0.0
+    exit_volatility_lookback: 20
+    max_holding_days: 252
+    min_time_stop_return: 0.0

@@ -593,3 +593,51 @@ def test_security_status_builder_expands_delisted_stock_basic_symbols(tmp_path):
         (datetime(2024, 3, 5).date(), True, "L", True, False, False),
         (datetime(2024, 3, 6).date(), False, "D", True, False, False),
     ]
+
+
+def test_security_status_builder_incremental_upserts_requested_dates(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    status_db = tmp_path / "security_status.duckdb"
+    _create_market_db(duckdb, market_db)
+
+    import importlib.util
+    from pathlib import Path
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "build_cn_security_status.py"
+    spec = importlib.util.spec_from_file_location("build_cn_security_status", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _build_status_table = module._build_status_table
+    _create_stage_tables = module._create_stage_tables
+
+    conn = duckdb.connect(str(status_db))
+    conn.execute(f"ATTACH '{market_db}' AS market (READ_ONLY)")
+    _create_stage_tables(conn)
+    conn.execute("INSERT INTO stage_trade_cal VALUES ('2024-03-04', TRUE)")
+    conn.execute("INSERT INTO stage_stock_basic VALUES ('000005', '000005.SZ', '星源', '1990-01-01', NULL, 'L')")
+    _build_status_table(conn, datetime(2024, 3, 4).date(), datetime(2024, 3, 4).date(), include_limits=False)
+
+    _create_stage_tables(conn)
+    conn.execute("INSERT INTO stage_trade_cal VALUES ('2024-03-05', TRUE)")
+    conn.execute("INSERT INTO stage_stock_basic VALUES ('000005', '000005.SZ', '星源', '1990-01-01', NULL, 'L')")
+    _build_status_table(
+        conn,
+        datetime(2024, 3, 5).date(),
+        datetime(2024, 3, 5).date(),
+        include_limits=False,
+        replace_all=False,
+    )
+    rows = conn.execute(
+        """
+        SELECT trade_date, symbol
+        FROM cn_security_status_daily
+        ORDER BY trade_date
+        """
+    ).fetchall()
+    conn.close()
+
+    assert rows == [
+        (datetime(2024, 3, 4).date(), "000005"),
+        (datetime(2024, 3, 5).date(), "000005"),
+    ]

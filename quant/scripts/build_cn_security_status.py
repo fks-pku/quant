@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -77,6 +77,7 @@ def build_cn_security_status(
     end_date: Optional[str] = None,
     min_interval: float = 0.25,
     skip_limits: bool = False,
+    replace_all: bool = True,
 ) -> None:
     security_db.parent.mkdir(parents=True, exist_ok=True)
     client = TushareClient(min_interval=min_interval)
@@ -92,7 +93,7 @@ def build_cn_security_status(
         _load_suspend(conn, client, start, end)
         if not skip_limits:
             _load_stk_limit(conn, client, start, end)
-        _build_status_table(conn, start, end, include_limits=not skip_limits)
+        _build_status_table(conn, start, end, include_limits=not skip_limits, replace_all=replace_all)
         _log_summary(conn)
     finally:
         conn.close()
@@ -323,7 +324,13 @@ def _load_stk_limit(conn: duckdb.DuckDBPyConnection, client: TushareClient, star
         logger.info("Loaded stk_limit %s-%s rows=%s total=%s", chunk_start, chunk_end, len(frame), total)
 
 
-def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date, include_limits: bool) -> None:
+def _build_status_table(
+    conn: duckdb.DuckDBPyConnection,
+    start: date,
+    end: date,
+    include_limits: bool,
+    replace_all: bool = True,
+) -> None:
     conn.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE stage_local_bars AS
@@ -339,7 +346,7 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
         WHERE CAST(timestamp AS DATE) BETWEEN ? AND ?
           AND NOT (symbol LIKE '920%' OR symbol LIKE '8%' OR symbol LIKE '4%')
         """,
-        [start, end],
+        [start - timedelta(days=10), end],
     )
     conn.execute(
         """
@@ -365,6 +372,7 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
         WITH local_ranges AS (
             SELECT symbol, MIN(trade_date) AS start_date, MAX(trade_date) AS end_date
             FROM stage_local_bars
+            WHERE trade_date BETWEEN ? AND ?
             GROUP BY symbol
         ),
         meta_ranges AS (
@@ -385,7 +393,7 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
         )
         GROUP BY symbol
         """,
-        [start, start, end, end, start],
+        [start, end, start, start, end, end, start],
     )
     conn.execute(
         """
@@ -507,8 +515,21 @@ def _build_status_table(conn: duckdb.DuckDBPyConnection, start: date, end: date,
         FROM joined
         """
     )
-    conn.execute(f"DROP TABLE IF EXISTS {STATUS_TABLE}")
-    conn.execute(f"ALTER TABLE {STATUS_TABLE}_new RENAME TO {STATUS_TABLE}")
+    exists = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_name = ?
+        """,
+        [STATUS_TABLE],
+    ).fetchone()[0]
+    if replace_all or not exists:
+        conn.execute(f"DROP TABLE IF EXISTS {STATUS_TABLE}")
+        conn.execute(f"ALTER TABLE {STATUS_TABLE}_new RENAME TO {STATUS_TABLE}")
+    else:
+        conn.execute(f"DELETE FROM {STATUS_TABLE} WHERE trade_date BETWEEN ? AND ?", [start, end])
+        conn.execute(f"INSERT INTO {STATUS_TABLE} SELECT * FROM {STATUS_TABLE}_new")
+        conn.execute(f"DROP TABLE IF EXISTS {STATUS_TABLE}_new")
     conn.execute(
         f"""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_{STATUS_TABLE}_symbol_date
@@ -601,6 +622,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--end-date", default=None)
     parser.add_argument("--min-interval", type=float, default=0.25)
     parser.add_argument("--skip-limits", action="store_true")
+    parser.add_argument("--incremental", action="store_true")
     return parser.parse_args()
 
 
@@ -614,6 +636,7 @@ def main() -> None:
         end_date=args.end_date,
         min_interval=args.min_interval,
         skip_limits=args.skip_limits,
+        replace_all=not args.incremental,
     )
 
 

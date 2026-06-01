@@ -2,9 +2,7 @@ import yaml
 from pathlib import Path
 from flask import Blueprint, jsonify
 
-from quant.api.state.runtime import (
-    _futu_lock, _futu_broker, _get_futu_broker, _maybe_snapshot,
-)
+from quant.api.state import runtime as state
 from quant.features.portfolio.tracker import get_tracker, DEFAULT_STRATEGY
 
 futu_bp = Blueprint('futu', __name__)
@@ -12,9 +10,8 @@ futu_bp = Blueprint('futu', __name__)
 
 @futu_bp.route('/api/futu/connect', methods=['POST'])
 def futu_connect():
-    global _futu_broker
-    with _futu_lock:
-        if _futu_broker is not None and _futu_broker.is_connected():
+    with state._futu_lock:
+        if state._futu_broker is not None and state._futu_broker.is_connected():
             return jsonify({'connected': True, 'message': 'Already connected'})
     try:
         from quant.infrastructure.execution.brokers.futu import FutuBroker
@@ -27,8 +24,8 @@ def futu_connect():
             port=futu_config.get('port', 11111),
         )
         broker.connect()
-        with _futu_lock:
-            _futu_broker = broker
+        with state._futu_lock:
+            state._futu_broker = broker
         return jsonify({'connected': True})
     except Exception as e:
         return jsonify({'connected': False, 'error': str(e)}), 500
@@ -36,21 +33,20 @@ def futu_connect():
 
 @futu_bp.route('/api/futu/disconnect', methods=['POST'])
 def futu_disconnect():
-    global _futu_broker
-    with _futu_lock:
-        if _futu_broker:
+    with state._futu_lock:
+        if state._futu_broker:
             try:
-                _futu_broker.disconnect()
+                state._futu_broker.disconnect()
             except Exception:
                 pass
-            _futu_broker = None
+            state._futu_broker = None
     return jsonify({'disconnected': True})
 
 
 @futu_bp.route('/api/futu/unlock', methods=['POST'])
 def futu_unlock():
-    with _futu_lock:
-        broker = _get_futu_broker()
+    with state._futu_lock:
+        broker = state._get_futu_broker()
     if broker is None:
         return jsonify({'error': 'Not connected'}), 400
     try:
@@ -62,8 +58,8 @@ def futu_unlock():
 
 @futu_bp.route('/api/futu/status', methods=['GET'])
 def futu_status():
-    with _futu_lock:
-        broker = _get_futu_broker()
+    with state._futu_lock:
+        broker = state._get_futu_broker()
     if broker is None:
         return jsonify({'connected': False, 'unlocked': False})
     return jsonify({
@@ -74,8 +70,8 @@ def futu_status():
 
 @futu_bp.route('/api/futu/account', methods=['GET'])
 def futu_account():
-    with _futu_lock:
-        broker = _get_futu_broker()
+    with state._futu_lock:
+        broker = state._get_futu_broker()
     if broker is None or not broker.is_connected() or not broker.is_unlocked():
         return jsonify({'error': 'Futu not connected/unlocked'}), 400
     try:
@@ -87,8 +83,8 @@ def futu_account():
 
 @futu_bp.route('/api/futu/positions', methods=['GET'])
 def futu_positions():
-    with _futu_lock:
-        broker = _get_futu_broker()
+    with state._futu_lock:
+        broker = state._get_futu_broker()
     if broker is None or not broker.is_connected() or not broker.is_unlocked():
         return jsonify({'error': 'Futu not connected/unlocked'}), 400
     try:
@@ -102,7 +98,7 @@ def futu_positions():
              for h in holdings]
         )
         nav = detail.get('total_assets', 0)
-        _maybe_snapshot(tracker, nav)
+        state._maybe_snapshot(tracker, nav)
         return jsonify({
             'nav': nav,
             'total_unrealized_pnl': detail.get('unrealized_pl', 0),
@@ -119,8 +115,8 @@ def futu_positions():
 
 @futu_bp.route('/api/futu/orders', methods=['GET'])
 def futu_orders():
-    with _futu_lock:
-        broker = _get_futu_broker()
+    with state._futu_lock:
+        broker = state._get_futu_broker()
     if broker is None or not broker.is_connected() or not broker.is_unlocked():
         return jsonify({'error': 'Futu not connected/unlocked'}), 400
     try:

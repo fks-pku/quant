@@ -1,15 +1,9 @@
 from datetime import date, timedelta
 
-try:
-    from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
-        AShareGoldEquityBarbellTimingStrategy,
-        DEFAULT_RISK_ETFS,
-    )
-except ModuleNotFoundError:
-    from quant.features.rejected_strategy.ashare_gold_equity_barbell_timing.strategy import (
-        AShareGoldEquityBarbellTimingStrategy,
-        DEFAULT_RISK_ETFS,
-    )
+from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
+    AShareGoldEquityBarbellTimingStrategy,
+    DEFAULT_RISK_ETFS,
+)
 
 
 class _Portfolio:

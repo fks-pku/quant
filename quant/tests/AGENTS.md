@@ -1,4 +1,4 @@
-# Tests — 回测测试套件
+# Tests — 回测测试套件 (~1100 collected tests)
 
 ## 结构
 
@@ -30,7 +30,7 @@ quant/tests/
 ## 运行
 
 ```bash
-python3 -m pytest quant/tests/ -q                      # 全部 (~900 tests)
+python3 -m pytest quant/tests/ -q                      # 全部 (~1100 collected tests)
 python3 -m pytest quant/tests/test_market_rules.py -q  # 市场规则单元测试
 python3 -m pytest quant/tests/test_commission.py -q    # 佣金单元测试
 python3 -m pytest quant/tests/test_cn_market.py -q     # A股集成测试

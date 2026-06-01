@@ -1,0 +1,39 @@
+strategy:
+  name: ashare_csi300_quality_low_vol_dividend_enhanced
+  enabled: false
+  status: candidate
+  priority: 999
+
+parameters:
+  holding_days: 20
+  max_positions: 40
+  target_weight_slots: 40
+  max_position_pct: 0.95
+  cap_percentile_low: 0.60
+  cap_percentile_high: 1.00
+  min_price: 5.0
+  min_turnover: 200000.0
+  use_market_timing: false
+  symbol_trend_ma: 0
+  min_long_momentum: -0.40
+  min_recent_momentum: -0.30
+  max_volatility: 1.20
+  min_drawdown: -0.60
+  max_pb: 30.0
+  max_ps_ttm: 50.0
+  min_roe: 0.0
+  max_debt_to_assets: 0.0
+  min_dividend_yield: 0.0
+  score_profile: csi300_quality_low_vol_dividend_index_enhanced_v2
+  max_replacements_per_rebalance: 10
+  excluded_board_prefixes:
+    - "300"
+    - "301"
+    - "688"
+    - "689"
+  enable_risk_exit: true
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.20
+    take_profit_pct: 0.55
+    trailing_stop_pct: 0.16

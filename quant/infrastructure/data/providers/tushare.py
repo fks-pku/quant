@@ -31,8 +31,19 @@ except ImportError:
     TUSHARE_AVAILABLE = False
 
 _CN_INDEX_CODES = {
-    "000016", "000300", "000905",
-    "399001", "399006", "399673",
+    "000300",
+    "399001",
+    "399006",
+    "399673",
+}
+_CN_EXPLICIT_INDEX_CODES = {
+    "000001",
+    "000016",
+    "000300",
+    "000905",
+    "399001",
+    "399006",
+    "399673",
 }
 _CN_FUND_PREFIXES = ("15", "16", "50", "51", "52", "56", "58")
 
@@ -127,6 +138,13 @@ class TushareProvider(DataFeed):
         return f"{symbol}.SZ"
 
     @staticmethod
+    def _to_index_ts_code(symbol: str) -> str:
+        value = symbol.split(".")[0]
+        if value.startswith("399"):
+            return f"{value}.SZ"
+        return f"{value}.SH"
+
+    @staticmethod
     def _from_ts_code(ts_code: str) -> str:
         return ts_code.split(".")[0]
 
@@ -178,6 +196,49 @@ class TushareProvider(DataFeed):
                 )
         except Exception as e:
             self.logger.warning(f"Error fetching bars for {symbol} ({start_str}-{end_str}): {e}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        return self._normalize_bars(df, symbol)
+
+    def _fetch_index_daily(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+        if self._api is None:
+            return pd.DataFrame()
+
+        ts_code = self._to_index_ts_code(symbol)
+        total_days = (end - start).days
+        if total_days <= self._MAX_DAYS_PER_REQUEST:
+            return self._fetch_index_daily_chunk(symbol, ts_code, start, end)
+
+        chunks: List[pd.DataFrame] = []
+        chunk_start = start
+        from datetime import timedelta
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=self._MAX_DAYS_PER_REQUEST), end)
+            chunk_df = self._fetch_index_daily_chunk(symbol, ts_code, chunk_start, chunk_end)
+            if not chunk_df.empty:
+                chunks.append(chunk_df)
+            chunk_start = chunk_end + timedelta(days=1)
+
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).drop_duplicates(
+            subset=["timestamp", "symbol"],
+        ).sort_values("timestamp").reset_index(drop=True)
+
+    def _fetch_index_daily_chunk(self, symbol: str, ts_code: str, start: datetime, end: datetime) -> pd.DataFrame:
+        start_str = start.strftime("%Y%m%d")
+        end_str = end.strftime("%Y%m%d")
+
+        self._rate_limit()
+        try:
+            df = self._api.index_daily(
+                ts_code=ts_code, start_date=start_str, end_date=end_str,
+            )
+        except Exception as e:
+            self.logger.warning(f"Error fetching index bars for {symbol} ({start_str}-{end_str}): {e}")
             return pd.DataFrame()
 
         if df is None or df.empty:
@@ -429,7 +490,7 @@ class TushareProvider(DataFeed):
         if self._api is None:
             return []
 
-        ts_code = self._to_ts_code(index_code)
+        ts_code = self._to_index_ts_code(index_code)
 
         dates_to_try: List[str] = []
         if trade_date:
@@ -661,6 +722,19 @@ class TushareProvider(DataFeed):
         for col in ("open", "high", "low", "close"):
             bars[f"adj_{col}"] = bars[col] * bars["adj_factor"]
 
+        return bars
+
+    def fetch_index_daily_with_hfq(
+        self, symbol: str, start: datetime, end: datetime,
+    ) -> pd.DataFrame:
+        bars = self._fetch_index_daily(symbol, start, end)
+        if bars.empty:
+            return bars
+        bars["adj_open"] = bars["open"]
+        bars["adj_high"] = bars["high"]
+        bars["adj_low"] = bars["low"]
+        bars["adj_close"] = bars["close"]
+        bars["adj_factor"] = 1.0
         return bars
 
     def get_quote(self, symbol: str) -> dict:

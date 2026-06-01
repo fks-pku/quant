@@ -5,6 +5,7 @@
 | Document | Description |
 |----------|-------------|
 | `data-architecture.md` | Two-port data architecture, providers, DuckDB connection rules |
+| `parquet-lake.md` | Publish live DuckDB sidecars as an OSS-backed partitioned Parquet lake |
 | `symbol-registry.md` | Market code patterns (US/HK/CN), DuckDB table mapping |
 | `commission-models.md` | Per-market commission, stamp duty, fees (US/HK/CN) |
 | `import-paths.md` | Complete import reference for domain/infrastructure/features/shared |

@@ -24,16 +24,10 @@ from quant.domain.models.market import is_cn_symbol
 from quant.features.backtest.benchmark import BenchmarkProvider
 from quant.features.backtest.engine import Backtester
 from quant.features.research.production_gate import evaluate_production_readiness
-try:
-    from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
-        AShareGoldEquityBarbellTimingStrategy,
-        DEFAULT_PIT_SIZE_FIELDS,
-    )
-except ModuleNotFoundError:
-    from quant.features.rejected_strategy.ashare_gold_equity_barbell_timing.strategy import (
-        AShareGoldEquityBarbellTimingStrategy,
-        DEFAULT_PIT_SIZE_FIELDS,
-    )
+from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
+    AShareGoldEquityBarbellTimingStrategy,
+    DEFAULT_PIT_SIZE_FIELDS,
+)
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
 from quant.features.trading.sub_portfolio import SubPortfolio
@@ -46,7 +40,7 @@ from quant.infrastructure.research.reporting import build_research_full_report_h
 
 
 START = datetime(2016, 1, 1)
-END = datetime(2025, 12, 31)
+END = datetime(2026, 5, 1)
 UNIVERSE_AS_OF = None
 UNIVERSE_MIN_HISTORY_DAYS_AS_OF = 0
 UNIVERSE_MAX_SYMBOLS_PER_CATEGORY = 0

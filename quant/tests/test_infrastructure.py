@@ -126,7 +126,7 @@ class TestDuckDBStorage:
             index_db_path=str(index_db),
         )
         try:
-            for symbol, close in (("600519", 100.0), ("510300", 3.5), ("000300", 3300.0)):
+            for symbol, close in (("600519", 100.0), ("000016", 15.0), ("510300", 3.5), ("000300", 3300.0)):
                 storage.save_bars(
                     pd.DataFrame(
                         [
@@ -143,12 +143,31 @@ class TestDuckDBStorage:
                     ),
                     "1d",
                 )
+            storage.save_cn_index_bars(
+                pd.DataFrame(
+                    [
+                        {
+                            "timestamp": start,
+                            "symbol": "000016",
+                            "open": 2500.0,
+                            "high": 2500.0,
+                            "low": 2500.0,
+                            "close": 2500.0,
+                            "volume": 1000,
+                        }
+                    ]
+                ),
+                "1d",
+            )
         finally:
             storage.close()
 
         conn = duckdb.connect(str(stock_db), read_only=True)
         try:
-            assert conn.execute("SELECT symbol FROM daily_cn_ochl").fetchall() == [("600519",)]
+            assert conn.execute("SELECT symbol FROM daily_cn_ochl ORDER BY symbol").fetchall() == [
+                ("000016",),
+                ("600519",),
+            ]
         finally:
             conn.close()
         conn = duckdb.connect(str(etf_db), read_only=True)
@@ -158,7 +177,10 @@ class TestDuckDBStorage:
             conn.close()
         conn = duckdb.connect(str(index_db), read_only=True)
         try:
-            assert conn.execute("SELECT symbol FROM daily_cn_ochl").fetchall() == [("000300",)]
+            assert conn.execute("SELECT symbol FROM daily_cn_ochl ORDER BY symbol").fetchall() == [
+                ("000016",),
+                ("000300",),
+            ]
         finally:
             conn.close()
 
@@ -174,6 +196,67 @@ class TestDuckDBStorage:
             storage.close()
 
         assert set(bars["symbol"]) == {"600519", "510300", "000300"}
+
+    def test_save_cn_dividends_coalesces_same_ex_date_rows(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        stock_db = tmp_path / "cn_ohlcv.duckdb"
+        corporate_db = tmp_path / "cn_corporate_actions.duckdb"
+        storage = DuckDBStorage(str(stock_db), corporate_actions_db_path=str(corporate_db))
+        dividends = pd.DataFrame(
+            [
+                {
+                    "symbol": "000002",
+                    "ex_date": datetime(2024, 6, 3),
+                    "cash_dividend": 0.1,
+                    "stock_dividend": 0.0,
+                    "allotment_ratio": 0.0,
+                    "allotment_price": 0.0,
+                    "record_date": "20240531",
+                    "pay_date": "20240603",
+                    "ann_date": "20240520",
+                },
+                {
+                    "symbol": "000002",
+                    "ex_date": datetime(2024, 6, 3),
+                    "cash_dividend": 0.1,
+                    "stock_dividend": 0.0,
+                    "allotment_ratio": 0.0,
+                    "allotment_price": 0.0,
+                    "record_date": "20240531",
+                    "pay_date": "20240603",
+                    "ann_date": "20240520",
+                },
+                {
+                    "symbol": "000002",
+                    "ex_date": datetime(2024, 6, 3),
+                    "cash_dividend": 0.2,
+                    "stock_dividend": 0.0,
+                    "allotment_ratio": 0.0,
+                    "allotment_price": 0.0,
+                    "record_date": "20240531",
+                    "pay_date": "20240603",
+                    "ann_date": "20240521",
+                },
+            ]
+        )
+        try:
+            assert storage.save_cn_dividends(dividends) == 1
+            assert storage.save_cn_dividends(dividends) == 1
+        finally:
+            storage.close()
+
+        conn = duckdb.connect(str(corporate_db), read_only=True)
+        try:
+            rows = conn.execute(
+                """
+                SELECT symbol, ex_date, cash_dividend, ann_date
+                FROM cn_dividends
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+
+        assert rows == [("000002", datetime(2024, 6, 3), pytest.approx(0.2), "20240521")]
 
     def test_research_daily_provider_reads_index_sidecar_when_status_exists(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")
@@ -380,6 +463,46 @@ class TestDuckDBStorage:
         assert TushareProvider._to_ts_code("920000") == "920000.BJ"
         assert TushareProvider._to_ts_code("600519") == "600519.SH"
         assert TushareProvider._to_ts_code("000001") == "000001.SZ"
+        assert TushareProvider._to_ts_code("000016") == "000016.SZ"
+        assert TushareProvider._to_ts_code("000905") == "000905.SZ"
+
+    def test_tushare_provider_fetches_ambiguous_index_with_explicit_index_api(self):
+        class FakeApi:
+            def __init__(self):
+                self.calls = []
+
+            def index_daily(self, **kwargs):
+                self.calls.append(("index_daily", kwargs))
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000905.SH",
+                            "trade_date": "20240102",
+                            "open": 5000.0,
+                            "high": 5010.0,
+                            "low": 4990.0,
+                            "close": 5005.0,
+                            "vol": 1000,
+                            "amount": 5005000,
+                        }
+                    ]
+                )
+
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+        provider._connected = True
+
+        frame = provider.fetch_index_daily_with_hfq("000905", datetime(2024, 1, 2), datetime(2024, 1, 3))
+
+        assert provider._api.calls == [
+            (
+                "index_daily",
+                {"ts_code": "000905.SH", "start_date": "20240102", "end_date": "20240103"},
+            )
+        ]
+        assert frame["symbol"].iloc[0] == "000905"
+        assert frame["adj_factor"].iloc[0] == pytest.approx(1.0)
+        assert frame["adj_close"].iloc[0] == pytest.approx(5005.0)
 
     def test_tushare_provider_fetches_cn_etfs_from_fund_daily(self):
         class FakeApi:

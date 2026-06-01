@@ -1,6 +1,104 @@
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 
+from flask import Flask
+
 from quant.api.state import runtime
+
+
+def _client_for(blueprint):
+    app = Flask(__name__)
+    app.register_blueprint(blueprint)
+    return app.test_client()
+
+
+def test_api_blueprints_reference_runtime_module_state():
+    api_root = Path(__file__).resolve().parents[1] / "api"
+    violations = []
+
+    for path in sorted(api_root.glob("*_bp.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "quant.api.state.runtime":
+                imported = ", ".join(alias.name for alias in node.names)
+                violations.append(f"{path.name}: {imported}")
+
+    assert violations == []
+
+
+def test_strategy_select_writes_shared_runtime_state(monkeypatch):
+    from quant.api.strategies_bp import strategies_bp
+
+    monkeypatch.setattr(runtime, "selected_strategy", None)
+    monkeypatch.setattr(
+        runtime,
+        "AVAILABLE_STRATEGIES",
+        {"registry_alpha": {"id": "alpha", "name": "Alpha Strategy"}},
+    )
+
+    response = _client_for(strategies_bp).post("/api/strategies/select", json={"strategy_id": "alpha"})
+
+    assert response.status_code == 200
+    assert runtime.selected_strategy == "registry_alpha"
+
+
+def test_status_endpoint_reads_current_runtime_state(monkeypatch):
+    from quant.api.system_bp import system_bp
+
+    monkeypatch.setattr(runtime, "system_status", "running")
+    monkeypatch.setattr(runtime, "selected_strategy", "registry_alpha")
+
+    response = _client_for(system_bp).get("/api/status")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "running"
+    assert response.get_json()["selected_strategy"] == "registry_alpha"
+
+
+def test_futu_status_reads_current_runtime_broker(monkeypatch):
+    from quant.api.futu_bp import futu_bp
+
+    class Broker:
+        def is_connected(self):
+            return True
+
+        def is_unlocked(self):
+            return True
+
+    monkeypatch.setattr(runtime, "_futu_broker", Broker())
+
+    response = _client_for(futu_bp).get("/api/futu/status")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"connected": True, "unlocked": True}
+
+
+def test_backtest_list_reads_current_runtime_results(monkeypatch):
+    from quant.api.backtest_bp import backtest_bp
+
+    monkeypatch.setattr(
+        runtime,
+        "_backtest_results",
+        {
+            "bt-1": {
+                "status": "completed",
+                "strategy_id": "alpha",
+                "metrics": {"total_return_pct": 12.5, "sharpe_ratio": 1.2},
+            }
+        },
+    )
+
+    response = _client_for(backtest_bp).get("/api/backtest/list")
+
+    assert response.status_code == 200
+    assert response.get_json()["backtests"] == [{
+        "backtest_id": "bt-1",
+        "status": "completed",
+        "strategy_id": "alpha",
+        "total_return_pct": 12.5,
+        "sharpe_ratio": 1.2,
+    }]
 
 
 def test_maybe_snapshot_records_strategy_history_in_runtime_state(monkeypatch):

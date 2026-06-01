@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from quant.features.strategies.joinquant_wufu_daily_etf_lof.strategy import (
+from quant.features.rejected_strategy.joinquant_wufu_daily_etf_lof.strategy import (
     JoinquantWufuDailyEtfLofStrategy,
 )
 

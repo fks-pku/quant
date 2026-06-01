@@ -50,18 +50,21 @@ class _Context:
         return f"order-{len(self.orders)}"
 
 
-def test_forum_large_cap_strategies_are_registered():
-    for name in [
-        "ashare_csi300_low_turnover_multifactor",
-        "ashare_csi300_index_enhanced_multifactor",
-        "ashare_alpha158_factor_composite",
-        "ashare_white_horse_market_temperature",
-        "ashare_low_vol_value_momentum",
-        "ashare_dividend_low_vol_smart_beta",
-        "ashare_dividend_low_vol_quality_enhanced",
-        "ashare_etf_rsrs_momentum_rotation",
-    ]:
-        assert StrategyRegistry.is_registered(name)
+def test_forum_large_cap_strategies_keep_metadata_outside_active_registry():
+    expected = [
+        (AShareCsi300LowTurnoverMultifactorStrategy, "ashare_csi300_low_turnover_multifactor"),
+        (AShareCsi300IndexEnhancedMultifactorStrategy, "ashare_csi300_index_enhanced_multifactor"),
+        (AShareAlpha158FactorCompositeStrategy, "ashare_alpha158_factor_composite"),
+        (AShareWhiteHorseMarketTemperatureStrategy, "ashare_white_horse_market_temperature"),
+        (AShareLowVolValueMomentumStrategy, "ashare_low_vol_value_momentum"),
+        (AShareDividendLowVolSmartBetaStrategy, "ashare_dividend_low_vol_smart_beta"),
+        (AShareDividendLowVolQualityEnhancedStrategy, "ashare_dividend_low_vol_quality_enhanced"),
+        (AShareEtfRsrsMomentumRotationStrategy, "ashare_etf_rsrs_momentum_rotation"),
+    ]
+    for cls, name in expected:
+        assert cls._registry_name == name
+        assert cls._registry_active is False
+        assert not StrategyRegistry.is_registered(name)
 
 
 def test_low_turnover_strategy_limits_daily_replacements():

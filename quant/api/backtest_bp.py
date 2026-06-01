@@ -3,9 +3,7 @@ import threading
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 
-from quant.api.state.runtime import (
-    _backtest_results, _backtest_lock, STRATEGY_ID_TO_REGISTRY,
-)
+from quant.api.state import runtime as state
 
 backtest_bp = Blueprint('backtest', __name__)
 
@@ -26,8 +24,8 @@ def run_backtest():
         return jsonify({'error': 'strategy_id is required. No built-in strategies are currently registered.'}), 400
 
     backtest_id = str(uuid.uuid4())[:8]
-    with _backtest_lock:
-        _backtest_results[backtest_id] = {"status": "running", "backtest_id": backtest_id}
+    with state._backtest_lock:
+        state._backtest_results[backtest_id] = {"status": "running", "backtest_id": backtest_id}
 
     def _run():
         def detect_benchmark_symbol(symbols):
@@ -60,8 +58,8 @@ def run_backtest():
                     available_hk = db.get_symbols('daily', 'hk')
                     available_us = db.get_symbols('daily', 'us')
                     available_cn = db.get_symbols('daily', 'cn')
-                    with _backtest_lock:
-                        _backtest_results[backtest_id] = {
+                    with state._backtest_lock:
+                        state._backtest_results[backtest_id] = {
                             "status": "error",
                             "error": f"No data found in DuckDB for symbols: {missing_symbols}. "
                                      f"Available: {available_hk + available_us + available_cn}",
@@ -76,8 +74,8 @@ def run_backtest():
 
                 validation_report = DataValidator.validate(data_df)
                 if not validation_report.ok:
-                    with _backtest_lock:
-                        _backtest_results[backtest_id] = {
+                    with state._backtest_lock:
+                        state._backtest_results[backtest_id] = {
                             "status": "error",
                             "error": f"Data validation failed: {'; '.join(validation_report.errors)}",
                             "backtest_id": backtest_id,
@@ -87,7 +85,7 @@ def run_backtest():
                 import inspect as _inspect
 
                 registry = StrategyRegistry()
-                registry_key = STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
+                registry_key = state.STRATEGY_ID_TO_REGISTRY.get(strategy_id, strategy_id)
                 strategy_class = registry.get(registry_key)
                 if strategy_class is None:
                     sid_norm = strategy_id.lower().replace('_', '').replace('-', '')
@@ -96,8 +94,8 @@ def run_backtest():
                             strategy_class = registry.get(name)
                             break
                 if strategy_class is None:
-                    with _backtest_lock:
-                        _backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}
+                    with state._backtest_lock:
+                        state._backtest_results[backtest_id] = {"status": "error", "error": f"Strategy {strategy_id} not found", "backtest_id": backtest_id}
                     return
                 sig = _inspect.signature(strategy_class.__init__)
                 accepted = set(list(sig.parameters.keys())[1:])
@@ -243,8 +241,8 @@ def run_backtest():
                 "information_ratio": float(result.metrics.information_ratio) if result.metrics.information_ratio is not None else None,
             }
 
-            with _backtest_lock:
-                _backtest_results[backtest_id] = {
+            with state._backtest_lock:
+                state._backtest_results[backtest_id] = {
                     "status": "completed",
                     "backtest_id": backtest_id,
                     "strategy_id": strategy_id,
@@ -256,8 +254,8 @@ def run_backtest():
                     "description": f"{strategy_id} backtest from {start_date} to {end_date} on {', '.join(symbols)}",
                 }
         except Exception as e:
-            with _backtest_lock:
-                _backtest_results[backtest_id] = {"status": "error", "error": str(e), "backtest_id": backtest_id}
+            with state._backtest_lock:
+                state._backtest_results[backtest_id] = {"status": "error", "error": str(e), "backtest_id": backtest_id}
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
@@ -267,8 +265,8 @@ def run_backtest():
 
 @backtest_bp.route('/api/backtest/result/<backtest_id>')
 def get_backtest_result(backtest_id):
-    with _backtest_lock:
-        result = _backtest_results.get(backtest_id)
+    with state._backtest_lock:
+        result = state._backtest_results.get(backtest_id)
     if result is None:
         return jsonify({"error": "Backtest not found"}), 404
     return jsonify(result)
@@ -277,8 +275,8 @@ def get_backtest_result(backtest_id):
 @backtest_bp.route('/api/backtest/list')
 def list_backtests():
     results = []
-    with _backtest_lock:
-        for bid, r in _backtest_results.items():
+    with state._backtest_lock:
+        for bid, r in state._backtest_results.items():
             results.append({
                 "backtest_id": bid,
                 "status": r.get("status"),

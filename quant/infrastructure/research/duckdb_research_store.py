@@ -313,15 +313,21 @@ class DuckDBResearchStore(ResearchStore):
         self._write_json(report_root / "runs" / f"{run_name}_result.json", data)
         self._delete_file(report_root / "full_research_report.md")
         self._delete_file(LATEST_REPORT_DIR / "full_research_report.md")
-        full_report = build_research_full_report_html(data, hypotheses, generated_at=data["saved_at"])
-        self._write_text(report_root / FULL_REPORT_HTML, full_report)
-        self._write_text(latest_full_report_html_path(), full_report)
-        self._write_text(report_root / "runs" / f"{run_name}_{FULL_REPORT_HTML.name}", full_report)
-        full_metadata = {
-            "path": str(report_root / FULL_REPORT_HTML),
-            "latest_path": str(latest_full_report_html_path()),
-            "filename": FULL_REPORT_HTML.as_posix(),
-        }
+        full_metadata = {"available": False}
+        if hypotheses:
+            full_report = build_research_full_report_html(data, hypotheses, generated_at=data["saved_at"])
+            self._write_text(report_root / FULL_REPORT_HTML, full_report)
+            self._write_text(latest_full_report_html_path(), full_report)
+            self._write_text(report_root / "runs" / f"{run_name}_{FULL_REPORT_HTML.name}", full_report)
+            full_metadata = {
+                "available": True,
+                "path": str(report_root / FULL_REPORT_HTML),
+                "latest_path": str(latest_full_report_html_path()),
+                "filename": FULL_REPORT_HTML.as_posix(),
+            }
+        else:
+            self._delete_file(report_root / FULL_REPORT_HTML)
+            self._delete_file(latest_full_report_html_path())
         stage_metadata = {}
         for stage_key, filename in STAGE_REPORT_HTML.items():
             stage_report = build_research_stage_report_html(stage_key, data, hypotheses, generated_at=data["saved_at"])

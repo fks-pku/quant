@@ -9,8 +9,10 @@ from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy impor
 from quant.features.strategies.registry import StrategyRegistry
 
 
-def test_strategy_is_registered():
-    assert StrategyRegistry.is_registered("joinquant_value_rsrs_timing")
+def test_strategy_keeps_metadata_outside_active_registry():
+    assert JoinquantValueRsrsTimingStrategy._registry_name == "joinquant_value_rsrs_timing"
+    assert JoinquantValueRsrsTimingStrategy._registry_active is False
+    assert not StrategyRegistry.is_registered("joinquant_value_rsrs_timing")
 
 
 def test_value_score_prefers_cheaper_higher_dividend_candidate():

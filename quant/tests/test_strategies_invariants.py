@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import importlib
 import json
 import math
 from pathlib import Path
@@ -301,6 +302,20 @@ class TestCase5DailyRiskExitStateMachine:
 
         assert rejected is False
 
+        large_cap = AShareAlpha158FactorCompositeStrategy(
+            symbols=["002475", "000300"],
+            min_turnover=0.0,
+            stop_loss_pct=0.10,
+            take_profit_pct=0.25,
+            trailing_stop_pct=0.10,
+        )
+        large_cap._positions["002475"] = 100
+        large_cap._entry_prices["002475"] = 10.0
+
+        reason = large_cap._candidate_rejection("002475", _value_rsrs_bar("002475", 8.9))
+
+        assert reason == ""
+
     def test_s5_05_zero_price_stock_dividend_fill_keeps_internal_cost_in_sync(self):
         strategy = JoinquantValueRsrsTimingStrategy(symbols=["000001"])
         strategy.on_fill(
@@ -508,6 +523,75 @@ class TestCase6TopLevelStrategyPromotionGate:
                 violations.append((item.name, "bundled report is not the strategy full report"))
 
         assert violations == []
+
+    def test_s6_03_archived_strategy_tests_do_not_import_missing_top_level_modules(self):
+        package_root = Path(__file__).resolve().parents[1]
+        strategies_root = package_root / "features" / "strategies"
+        rejected_strategy_root = package_root / "features" / "rejected_strategy"
+        tests_root = package_root / "tests"
+        active_strategy_ids = {
+            item.name
+            for item in strategies_root.iterdir()
+            if item.is_dir() and (item / "strategy.py").exists()
+        }
+        archived_strategy_ids = {
+            item.name
+            for item in rejected_strategy_root.iterdir()
+            if item.is_dir() and (item / "strategy.py").exists()
+        }
+        direct_import = re.compile(
+            r"from\s+quant\.features\.strategies\.([A-Za-z0-9_]+)\.strategy\s+import"
+        )
+
+        violations = []
+        for test_file in sorted(tests_root.glob("test_*.py")):
+            text = test_file.read_text(encoding="utf-8")
+            for match in direct_import.finditer(text):
+                strategy_id = match.group(1)
+                if strategy_id in archived_strategy_ids and strategy_id not in active_strategy_ids:
+                    violations.append(f"{test_file.name}:{strategy_id}")
+
+        assert violations == []
+
+    def test_s6_04_promoted_strategy_entrypoints_do_not_fallback_to_rejected_archive(self):
+        package_root = Path(__file__).resolve().parents[1]
+        strategies_root = package_root / "features" / "strategies"
+        scan_roots = [package_root / "tests", package_root / "scripts"]
+        active_strategy_ids = {
+            item.name
+            for item in strategies_root.iterdir()
+            if item.is_dir() and (item / "strategy.py").exists()
+        }
+        rejected_import = re.compile(
+            r"quant\.features\.rejected_strategy\.([A-Za-z0-9_]+)\.strategy"
+        )
+
+        violations = []
+        invariant_test_file = Path(__file__).resolve()
+        for root in scan_roots:
+            for py_file in sorted(root.rglob("*.py")):
+                if py_file.resolve() == invariant_test_file:
+                    continue
+                text = py_file.read_text(encoding="utf-8")
+                for match in rejected_import.finditer(text):
+                    strategy_id = match.group(1)
+                    if strategy_id in active_strategy_ids:
+                        violations.append(f"{py_file.relative_to(package_root)}:{strategy_id}")
+
+        assert violations == []
+
+    def test_s6_05_archive_and_reject_imports_do_not_mutate_active_registry(self):
+        active_gold_cls = StrategyRegistry.get("ashare_gold_equity_barbell_timing")
+        names_before = set(StrategyRegistry.list_strategies())
+
+        importlib.import_module("quant.features.rejected_strategy.ashare_gold_equity_barbell_timing.strategy")
+        importlib.import_module("quant.features.rejected_strategy.joinquant_wufu_daily_etf_lof.strategy")
+        importlib.import_module("quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy")
+
+        assert StrategyRegistry.get("ashare_gold_equity_barbell_timing") is active_gold_cls
+        assert StrategyRegistry.get("joinquant_wufu_daily_etf_lof") is None
+        assert StrategyRegistry.get("joinquant_value_rsrs_timing") is None
+        assert set(StrategyRegistry.list_strategies()) == names_before
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,36 @@
+strategy:
+  name: ashare_csi300_strict_index_enhanced
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  benchmark_symbol: "000300"
+  holding_days: 20
+  max_positions: 90
+  target_exposure: 0.98
+  active_tilt: 3.10
+  min_weight_multiplier: 0.0
+  max_weight_multiplier: 7.20
+  max_single_weight: 0.11
+  min_price: 2.0
+  min_turnover: 50000.0
+  max_volatility: 0.0
+  min_drawdown: -1.0
+  min_recent_momentum: -1.0
+  min_long_momentum: -1.0
+  enable_risk_exit: true
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.40
+    take_profit_pct: 1.00
+    trailing_stop_pct: 0.30
+
+research:
+  benchmark: "000300"
+  universe: "Tushare index_weight historical CSI300 constituents only"
+  source: "Tushare index_weight 000300.SH"
+  notes:
+    - "Strict index enhancement: no non-CSI300 constituent can be bought."
+    - "Target weights start from point-in-time index weights and apply bounded active multifactor tilt."
+    - "This is a high active-share CSI300 internal enhancement variant, not a low-deviation full replication portfolio."

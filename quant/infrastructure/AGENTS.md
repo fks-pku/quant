@@ -35,6 +35,8 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `DuckDBStorage` read_only=True must be used in API endpoints and backtest — prevents write-lock conflicts
 - Provider subclasses should not import from features/ — only from domain ports
 - Tushare provider requires token configuration in config.yaml
+- Bare 6-digit CN codes can be ambiguous between stocks and indices (for example `000001`, `000016`, `000905`). Default provider/storage routing treats them as stocks; index ingestion must use `TushareProvider.fetch_index_daily_with_hfq()` and `DuckDBStorage.save_cn_index_bars()`.
+- Tushare dividend rows can contain repeated lifecycle records for the same `(symbol, ex_date)`. `DuckDBStorage.save_cn_dividends()` must coalesce them before writing because `cn_dividends` is keyed by `(symbol, ex_date)`.
 
 ## Research Adapters
 
@@ -57,6 +59,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `cn_status.duckdb::cn_security_status_daily` stores daily listing/tradability/ST/suspension/limit status.
 - `cn_financial_indicators.duckdb::cn_financial_indicators` stores Tushare `fina_indicator` quality/growth fields with `ann_date` and `end_date` for point-in-time joins.
 - `cn_corporate_actions.duckdb::cn_dividends` stores CN dividend and allotment records.
+- `quant/scripts/update_cn_live_data.py` is the daily live-data updater. It incrementally updates existing stock/index/ETF symbols and then fills valuation, financial, status, and index-weight sidecars to the target date. Stock bars and ETF bars default to date-based all-market fetches; ETF `adj_factor` is carried forward from the latest local value. Full dividend-history refresh (`--refresh-dividends` or `--dividends-only`) and per-fund NAV refresh (`--refresh-fund-nav` or `--nav-only`) are opt-in because they are too slow for daily all-market runs.
 
 ## Security Status Data
 

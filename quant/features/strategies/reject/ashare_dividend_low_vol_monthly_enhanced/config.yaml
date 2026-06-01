@@ -1,0 +1,41 @@
+strategy:
+  name: ashare_dividend_low_vol_monthly_enhanced
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  holding_days: 20
+  max_positions: 30
+  target_weight_slots: 30
+  max_position_pct: 0.95
+  cap_percentile_low: 0.20
+  cap_percentile_high: 1.00
+  min_price: 5.0
+  min_turnover: 80000.0
+  use_market_timing: false
+  min_long_momentum: -1.0
+  min_recent_momentum: -1.0
+  max_volatility: 0.80
+  min_drawdown: -0.60
+  max_pb: 8.0
+  max_ps_ttm: 20.0
+  min_roe: 0.0
+  max_debt_to_assets: 0.0
+  min_dividend_yield: 2.0
+  score_profile: ashare_dividend_low_vol_monthly_enhanced
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.18
+    take_profit_pct: 0.45
+    trailing_stop_pct: 0.16
+
+research:
+  benchmark: "000300"
+  universe: "historical daily top total_mv 3000 union, then current cap and dividend-low-vol filters"
+  source:
+    - "BigQuant / Guosheng financial engineering dividend low-vol enhancement summary"
+    - "Huatai financial engineering dividend low-vol logic and value"
+  notes:
+    - "Implements reproducible daily-data parts: monthly rebalance, high dividend yield, low realized volatility, valuation and quality controls."
+    - "Intraday high-frequency volatility and exact CSI dividend-low-vol constituent BP spread are not available locally, so they are retained as residual research gaps."

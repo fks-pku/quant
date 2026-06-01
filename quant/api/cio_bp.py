@@ -1,25 +1,22 @@
 from flask import Blueprint, jsonify, request
 
-from quant.api.state.runtime import (
-    AVAILABLE_STRATEGIES, MOCK_PRICES, portfolio_data,
-    STRATEGY_PARAMETERS, _get_cio_engine,
-)
+from quant.api.state import runtime as state
 
 cio_bp = Blueprint('cio', __name__)
 
 
 @cio_bp.route('/api/cio/assessment', methods=['GET'])
 def get_cio_assessment():
-    engine = _get_cio_engine()
+    engine = state._get_cio_engine()
 
     indicators = {
-        "vix": MOCK_PRICES.get("VIX", 14.5),
+        "vix": state.MOCK_PRICES.get("VIX", 14.5),
         "vix_percentile": 22.0,
         "trend_strength": 0.72,
         "market_breadth": 0.65,
     }
 
-    strategy_ids = [info["id"] for info in AVAILABLE_STRATEGIES.values()]
+    strategy_ids = [info["id"] for info in state.AVAILABLE_STRATEGIES.values()]
 
     result = engine.assess(indicators=indicators, enabled_strategies=strategy_ids)
     return jsonify(result)
@@ -27,18 +24,18 @@ def get_cio_assessment():
 
 @cio_bp.route('/api/cio/refresh', methods=['POST'])
 def refresh_cio_assessment():
-    engine = _get_cio_engine()
+    engine = state._get_cio_engine()
     data = request.get_json() or {}
     news_text = data.get("news_text") if data else None
 
     indicators = {
-        "vix": MOCK_PRICES.get("VIX", 14.5),
+        "vix": state.MOCK_PRICES.get("VIX", 14.5),
         "vix_percentile": 22.0,
         "trend_strength": 0.72,
         "market_breadth": 0.65,
     }
 
-    strategy_ids = [info["id"] for info in AVAILABLE_STRATEGIES.values()]
+    strategy_ids = [info["id"] for info in state.AVAILABLE_STRATEGIES.values()]
 
     result = engine.assess(indicators=indicators, news_text=news_text, enabled_strategies=strategy_ids)
     return jsonify({"success": True, "assessment": result})
@@ -46,13 +43,13 @@ def refresh_cio_assessment():
 
 @cio_bp.route('/api/strategy-pool', methods=['GET'])
 def get_strategy_pool():
-    total_nav = portfolio_data.get("nav", 100000.0)
+    total_nav = state.portfolio_data.get("nav", 100000.0)
 
-    engine = _get_cio_engine()
+    engine = state._get_cio_engine()
     cached = engine.get_cached()
 
     pool = []
-    for name, info in AVAILABLE_STRATEGIES.items():
+    for name, info in state.AVAILABLE_STRATEGIES.items():
         strat_id = info["id"]
         weight = 0.0
         pnl = 0.0
@@ -62,7 +59,7 @@ def get_strategy_pool():
 
         allocated = total_nav * weight
 
-        params = STRATEGY_PARAMETERS.get(strat_id, {})
+        params = state.STRATEGY_PARAMETERS.get(strat_id, {})
         param_values = {k: v['default'] for k, v in params.items()}
 
         pool.append({
@@ -86,9 +83,7 @@ def get_strategy_pool():
 
 @cio_bp.route('/api/strategy-pool/weights', methods=['POST'])
 def update_strategy_weights():
-    global portfolio_data
-
-    data = request.get_json()
+    data = request.get_json() or {}
     manual_weights = data.get("weights", {})
 
     total = sum(manual_weights.values())

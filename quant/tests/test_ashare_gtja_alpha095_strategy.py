@@ -53,8 +53,10 @@ def _bar(symbol, close=10.0, amount=1000000.0, **extra):
     }
 
 
-def test_gtja_alpha095_strategy_is_registered():
-    assert StrategyRegistry.is_registered("ashare_gtja_alpha095_amount_std")
+def test_gtja_alpha095_strategy_keeps_metadata_outside_active_registry():
+    assert AShareGtjaAlpha095AmountStdStrategy._registry_name == "ashare_gtja_alpha095_amount_std"
+    assert AShareGtjaAlpha095AmountStdStrategy._registry_active is False
+    assert not StrategyRegistry.is_registered("ashare_gtja_alpha095_amount_std")
 
 
 def test_gtja_alpha095_matches_twenty_day_amount_std():

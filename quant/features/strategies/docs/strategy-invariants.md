@@ -99,16 +99,16 @@ S5-06  送股/拆分等事件产生小于 1 股的内部残留仓位时，风险
 
 ## CASE-6: Top-level strategy promotion gate
 
-顶层 `quant/features/strategies/<strategy_id>/` 是生产注册表自动发现区，不再存放所有研究候选。只有严格本地回测报告证明当前生产 checklist 全部通过的策略，才能留在顶层；目录内还必须携带与研究报告目录同步的 `full_research_report.html`，方便策略代码与完整审计证据一起归档。其它策略必须迁入 `quant/features/strategies/reject/<strategy_id>/`，可用于审计、复现和单测，但不会被 `StrategyRegistry` 自动发现。
+顶层 `quant/features/strategies/<strategy_id>/` 是生产注册表自动发现区，不再存放所有研究候选。只有严格本地回测报告证明当前生产 checklist 全部通过的策略，才能留在顶层；目录内还必须携带与研究报告目录同步的 `full_research_report.html`，方便策略代码与完整审计证据一起归档。尚未最终 No-Go 的候选留在 `quant/features/strategies/reject/<strategy_id>/`；完整研究最终 rejected 的生成策略迁出 `strategies/`，归档到 `quant/features/rejected_strategy/<strategy_id>/`，只能通过显式归档路径或 loader 做审计/复盘。
 
 ### 断言
 
 ```
-S6-01  `strategies/reject/` 目录存在
-S6-02  顶层每个含 strategy.py 的策略目录都必须有 strict last_result/grid_result/batch_result checklist 证据
-S6-03  顶层策略必须通过当前生产 checklist：CAGR/MaxDD 分层门槛、total_trades > 50、max_adv_participation <= 5% ADV
-S6-04  顶层策略目录必须附带与 `quant/infrastructure/var/research/reports/<strategy_id>/full_research_report.html` 同步的 `full_research_report.html`
-S6-05  `strategies/reject/<strategy_id>/strategy.py` 不参与默认目录自动发现
+S6-01  `strategies/reject/` 目录存在，且顶层每个含 strategy.py 的策略目录都必须通过当前生产 checklist：CAGR/MaxDD 分层门槛、total_trades > 50、max_adv_participation <= 5% ADV
+S6-02  顶层策略目录必须附带与 `quant/infrastructure/var/research/reports/<strategy_id>/full_research_report.html` 同步的 `full_research_report.html`
+S6-03  测试和审计脚本不得通过缺失的顶层 `quant.features.strategies.<strategy_id>` 路径加载最终 rejected 归档策略；必须使用 `quant.features.rejected_strategy...` 或显式 archive loader
+S6-04  已 promoted 的顶层策略入口不得回退导入同名 `features/rejected_strategy/<strategy_id>` 归档代码
+S6-05  显式导入 `features/rejected_strategy/` 或 `strategies/reject/` 下的 `@strategy` 类，不得新增 active registry id，也不得覆盖同名 promoted 策略类
 ```
 
 ## CASE-7: Audited ETF registry universe

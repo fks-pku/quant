@@ -3060,7 +3060,7 @@ def _validation_config(cfg: ResearchConfig) -> dict:
     validation_cfg = dict(getattr(cfg, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(cfg, "validation_min_obs", 252))
     validation_cfg.setdefault("start_date", getattr(cfg, "default_backtest_start", "2016-01-01"))
-    validation_cfg.setdefault("end_date", getattr(cfg, "default_backtest_end", "2025-12-31"))
+    validation_cfg.setdefault("end_date", getattr(cfg, "default_backtest_end", "2026-05-01"))
     return validation_cfg
 
 

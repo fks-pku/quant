@@ -301,7 +301,12 @@ class AShareLargeCapForumCompositeStrategy(AShareMidCapCompositeBase):
     def _candidate_rejection(self, symbol: str, bar: Any) -> str:
         if symbol == self.timing_symbol:
             return "timing_symbol"
-        return super()._candidate_rejection(symbol, bar)
+        reason = AShareMidCapCompositeBase._position_exit_reason(self, symbol, bar)
+        if reason:
+            return reason
+        if self._average_turnover(symbol) < self.min_turnover:
+            return "low_turnover"
+        return ""
 
     def _position_exit_reason(self, symbol: str, bar: Any) -> str:
         if symbol == self.timing_symbol:

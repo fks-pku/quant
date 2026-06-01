@@ -458,6 +458,22 @@ class DuckDBStorage(Storage):
         if df is None or df.empty:
             return 0
 
+        df, symbol = self._normalize_bar_frame_for_save(df)
+        table_name = self._resolve_table(symbol, timeframe)
+        return self._save_bar_frame_to_table(df, table_name, symbol)
+
+    def save_cn_index_bars(self, df: pd.DataFrame, timeframe: str = "1d") -> int:
+        if timeframe not in ("1d", "day", "daily"):
+            raise ValueError("CN index sidecar only supports daily bars")
+        if df is None or df.empty:
+            return 0
+
+        df, symbol = self._normalize_bar_frame_for_save(df)
+        self._ensure_sidecar_attached(_INDEX_SCHEMA, self._index_db_path)
+        table_name = f"{_INDEX_SCHEMA}.{_CN_DAILY_TABLE}"
+        return self._save_bar_frame_to_table(df, table_name, symbol)
+
+    def _normalize_bar_frame_for_save(self, df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
         df = df.copy()
         if "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -468,20 +484,29 @@ class DuckDBStorage(Storage):
                 df[adj_col] = pd.NA
 
         symbol = df["symbol"].iloc[0] if "symbol" in df.columns else ""
-        table_name = self._resolve_table(symbol, timeframe)
-        self._ensure_table(table_name)
-
         cols = [c for c in [
             "timestamp", "symbol", "open", "high", "low", "close", "volume", "turnover",
             "adj_open", "adj_high", "adj_low", "adj_close", "adj_factor",
         ] if c in df.columns]
-        df = df[cols]
+        return df[cols], str(symbol)
 
+    def _save_bar_frame_to_table(self, df: pd.DataFrame, table_name: str, symbol: str) -> int:
+        self._ensure_table(table_name)
+        symbols = sorted({str(value) for value in df["symbol"].dropna().unique()}) if "symbol" in df.columns else []
+        label = symbols[0] if len(symbols) == 1 else f"{len(symbols)} symbols"
         with self._lock:
-            self.conn.execute(f"DELETE FROM {table_name} WHERE symbol = ? AND timestamp IN (SELECT timestamp FROM df WHERE symbol = ?)", [symbol, symbol])
+            self.conn.execute(
+                f"""
+                DELETE FROM {table_name}
+                WHERE (timestamp, symbol) IN (
+                    SELECT timestamp, symbol
+                    FROM df
+                )
+                """
+            )
             self.conn.execute(f"INSERT INTO {table_name} SELECT * FROM df")
             row_count = len(df)
-        self.logger.info(f"Saved {row_count} bars to {table_name} for {symbol}")
+        self.logger.info(f"Saved {row_count} bars to {table_name} for {label}")
         return row_count
 
     def get_bars(
@@ -1196,12 +1221,40 @@ class DuckDBStorage(Storage):
             "allotment_ratio", "allotment_price", "record_date", "pay_date", "ann_date",
         ] if c in df.columns]
         df = df[cols]
-        df = df.drop_duplicates(subset=["symbol", "ex_date"], keep="last")
+        for column in ("cash_dividend", "stock_dividend", "allotment_ratio", "allotment_price"):
+            if column not in df.columns:
+                df[column] = 0.0
+        for column in ("record_date", "pay_date", "ann_date"):
+            if column not in df.columns:
+                df[column] = ""
+        for column in ("cash_dividend", "stock_dividend", "allotment_ratio", "allotment_price"):
+            if column in df.columns:
+                df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+        for column in ("record_date", "pay_date", "ann_date"):
+            if column in df.columns:
+                df[column] = df[column].fillna("").astype(str)
+        df = df.drop_duplicates()
+        if not df.empty:
+            df = (
+                df.sort_values(["symbol", "ex_date", "ann_date"])
+                .groupby(["symbol", "ex_date"], as_index=False)
+                .agg(
+                    cash_dividend=("cash_dividend", "max"),
+                    stock_dividend=("stock_dividend", "max"),
+                    allotment_ratio=("allotment_ratio", "max"),
+                    allotment_price=("allotment_price", "max"),
+                    record_date=("record_date", "last"),
+                    pay_date=("pay_date", "last"),
+                    ann_date=("ann_date", "last"),
+                )
+            )
         with self._lock:
-            symbol = df["symbol"].iloc[0] if "symbol" in df.columns else ""
-            self.conn.execute(f"DELETE FROM {table_name} WHERE symbol = ?", [symbol])
+            symbols = df["symbol"].dropna().unique().tolist() if "symbol" in df.columns else []
+            for symbol in symbols:
+                self.conn.execute(f"DELETE FROM {table_name} WHERE symbol = ?", [symbol])
             self.conn.execute(f"INSERT INTO {table_name} SELECT * FROM df")
-        self.logger.info(f"Saved {len(df)} dividend records for {symbol}")
+        symbol_label = ",".join(symbols[:3]) if symbols else ""
+        self.logger.info(f"Saved {len(df)} dividend records for {symbol_label}")
         return len(df)
 
     def save_cn_fund_instruments(self, df: pd.DataFrame) -> int:

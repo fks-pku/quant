@@ -1,13 +1,8 @@
 from datetime import date
 
-try:
-    from quant.features.strategies.joinquant_wufu_etf_momentum.strategy import (
-        JoinquantWufuEtfMomentumStrategy,
-    )
-except ModuleNotFoundError:
-    from quant.features.rejected_strategy.joinquant_wufu_etf_momentum.strategy import (
-        JoinquantWufuEtfMomentumStrategy,
-    )
+from quant.features.rejected_strategy.joinquant_wufu_etf_momentum.strategy import (
+    JoinquantWufuEtfMomentumStrategy,
+)
 
 
 class _Portfolio:

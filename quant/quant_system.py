@@ -4,7 +4,7 @@
 Usage:
     python quant_system.py --mode paper
     python quant_system.py --mode live --config config.yaml
-    python quant_system.py --backtest --start 2025-01-01 --end 2025-12-31
+    python quant_system.py --backtest --start 2025-01-01 --end 2026-05-01
 """
 
 import argparse
@@ -263,7 +263,7 @@ class QuantSystem:
     def _run_backtest(self) -> None:
         """Run backtest mode."""
         start_date_str = self.config.get("system", {}).get("start_date", "2025-01-01")
-        end_date_str = self.config.get("system", {}).get("end_date", "2025-12-31")
+        end_date_str = self.config.get("system", {}).get("end_date", "2026-05-01")
         speed = self.config.get("system", {}).get("backtest_speed", "1x")
 
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d")

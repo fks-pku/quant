@@ -3,7 +3,7 @@
 import argparse
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -59,6 +59,10 @@ ETF_BASIC_STATUSES = {"L", "D", "P"}
 
 def _parse_date(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%d")
+
+
+def _default_end_date() -> str:
+    return (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def _parse_symbols(value: str) -> List[str]:
@@ -318,7 +322,7 @@ def update_research_state(symbols: Sequence[str], args: argparse.Namespace, meta
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest Tushare CN ETF/LOF daily data into split DuckDB files")
     parser.add_argument("--start", default="2012-01-01", help="Start date YYYY-MM-DD")
-    parser.add_argument("--end", default="2025-12-31", help="End date YYYY-MM-DD")
+    parser.add_argument("--end", default=_default_end_date(), help="End date YYYY-MM-DD")
     parser.add_argument("--statuses", default="L", help="Comma-separated fund statuses, e.g. L or L,D")
     parser.add_argument("--metadata-statuses", default="", help="Statuses fetched into fund metadata; defaults to --statuses")
     parser.add_argument("--listed-before", default=None, help="Keep funds listed on or before this date; defaults to --end")

@@ -116,7 +116,7 @@ class FactorValidator:
         self._factor_validation_enabled = bool(self._config.get("factor_validation_enabled", False))
         self._sensitivity_enabled = bool(self._config.get("sensitivity_enabled", False))
         self._start_date = str(self._config.get("start_date", "2016-01-01"))
-        self._end_date = str(self._config.get("end_date", "2025-12-31"))
+        self._end_date = str(self._config.get("end_date", "2026-05-01"))
 
     def validate(self, spec: StrategySpec) -> ValidationReport:
         if spec.status != "ready":

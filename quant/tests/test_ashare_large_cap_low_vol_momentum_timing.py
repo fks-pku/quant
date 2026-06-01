@@ -9,8 +9,10 @@ from quant.features.strategies.reject.ashare_large_cap_low_vol_momentum_timing.s
 from quant.features.strategies.registry import StrategyRegistry
 
 
-def test_large_cap_timing_strategy_is_registered():
-    assert StrategyRegistry.is_registered(STRATEGY_NAME)
+def test_large_cap_timing_strategy_keeps_metadata_outside_active_registry():
+    assert AShareLargeCapLowVolMomentumTimingStrategy._registry_name == STRATEGY_NAME
+    assert AShareLargeCapLowVolMomentumTimingStrategy._registry_active is False
+    assert not StrategyRegistry.is_registered(STRATEGY_NAME)
 
 
 def test_large_cap_timing_strategy_is_not_single_stock():

@@ -93,20 +93,20 @@ quant/
 7. **Inter-layer communication**: direct call + Event Bus (pub/sub) + Dependency Injection (DI)
 8. **domain ports return `Any` type**, not `pd.DataFrame` — keeps domain zero-dependency. pandas conversion happens in infrastructure layer
 
-## Strategies (7 active)
+## Strategies (2 active)
 
 All strategies extend `DailyBarStrategy` (in `features/strategies/daily_bar.py`) which provides
 bar buffering, price helpers, rebalance gating, position liquidation, and serialization.
 
 | Strategy | Directory | CN Compatible | Type |
 |----------|-----------|---------------|------|
-| a_share_range_contraction_breakout | `features/strategies/a_share_range_contraction_breakout/` | Yes | A-share breakout |
-| a_share_liquidity_weighted_low_volatility | `features/strategies/a_share_liquidity_weighted_low_volatility/` | Yes | A-share low volatility |
-| a_share_low_volatility_momentum | `features/strategies/a_share_low_volatility_momentum/` | Yes | A-share momentum |
-| a_share_volatility_scaled_reversal | `features/strategies/a_share_volatility_scaled_reversal/` | Yes | A-share reversal |
-| a_share_volume_exhaustion_reversal | `features/strategies/a_share_volume_exhaustion_reversal/` | Yes | A-share volume exhaustion |
-| joinquant_small_cap_ma_stop | `features/strategies/joinquant_small_cap_ma_stop/` | Yes | A-share small-cap MA stop |
-| worldquant_101_alpha_010 | `features/strategies/worldquant_101_alpha_010/` | Yes | WorldQuant Alpha 010 |
+| ashare_gold_equity_barbell_timing | `features/strategies/ashare_gold_equity_barbell_timing/` | Yes | A-share audited ETF barbell timing |
+| xueqiu_small_cap_financial_filter | `features/strategies/xueqiu_small_cap_financial_filter/` | Yes | A-share small-cap financial filter |
+
+Candidate strategies that have not passed the current production checklist stay under
+`features/strategies/reject/<strategy_id>/`. Final No-Go research archives live under
+`features/rejected_strategy/<strategy_id>/`; they are available for explicit audit/replay
+but are not part of default strategy discovery.
 
 ## Key Conventions
 
