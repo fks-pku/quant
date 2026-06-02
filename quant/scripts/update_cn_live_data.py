@@ -18,6 +18,7 @@ _PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PKG_DIR.parent))
 
 from quant.infrastructure.data.providers.tushare import TushareProvider
+from quant.infrastructure.data.parquet_lake_storage import ParquetLakeStorage
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
 from quant.scripts.build_cn_security_status import build_cn_security_status
 from quant.scripts.ingest_tushare_daily_basic import ingest_tushare_daily_basic
@@ -38,6 +39,8 @@ DEFAULT_STATUS_DB = DEFAULT_DUCKDB_DIR / "cn_status.duckdb"
 DEFAULT_INDEX_WEIGHT_DB = DEFAULT_DUCKDB_DIR / "cn_index_weight.duckdb"
 DEFAULT_FUND_NAV_DB = DEFAULT_DUCKDB_DIR / "cn_fund_nav.duckdb"
 DEFAULT_CORPORATE_ACTIONS_DB = DEFAULT_DUCKDB_DIR / "cn_corporate_actions.duckdb"
+DEFAULT_PARQUET_LAKE_ROOT = ROOT / "quant" / "infrastructure" / "var" / "parquet_lake"
+DEFAULT_PARQUET_LAKE_REMOTE_PREFIX = "oss:quant-duckdb-backup/vk-quant/parquet-lake"
 DEFAULT_MAJOR_INDICES = ("000001", "000016", "000300", "000905", "399001", "399006", "399673")
 DEFAULT_INDEX_WEIGHT_CODES = ("000300.SH",)
 
@@ -60,6 +63,11 @@ class StepSummary:
     rows: int
     start: Optional[date]
     end: date
+
+
+class _NoopProviderStorage:
+    def close(self) -> None:
+        return None
 
 
 def _parse_date(value: str) -> date:
@@ -146,6 +154,63 @@ def _load_latest_adj_factors(db_path: Path, table: str) -> Dict[str, float]:
     finally:
         conn.close()
     return {str(symbol): float(adj_factor) for symbol, adj_factor in rows if adj_factor is not None}
+
+
+def _lake_ranges(storage: ParquetLakeStorage, dataset: str) -> Dict[str, SymbolRange]:
+    return {
+        symbol: SymbolRange(symbol, start, end, rows)
+        for symbol, (start, end, rows) in storage.load_ranges(dataset).items()
+    }
+
+
+def _lake_sidecar_start(storage: ParquetLakeStorage, dataset: str, target_end: date) -> Optional[date]:
+    ranges = _lake_ranges(storage, dataset)
+    max_date = max((item.end for item in ranges.values() if item.end is not None), default=None)
+    if max_date is None:
+        return None
+    candidate = max_date + timedelta(days=1)
+    if candidate > target_end:
+        return None
+    return candidate
+
+
+def _copy_duckdb_range_to_lake(
+    storage: ParquetLakeStorage,
+    db_path: Path,
+    table: str,
+    dataset: str,
+    date_column: str,
+    start: Optional[date],
+    end: date,
+) -> int:
+    if start is None or not db_path.exists():
+        return 0
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        exists = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = ?
+            """,
+            [table],
+        ).fetchone()[0]
+        if not exists:
+            return 0
+        frame = conn.execute(
+            f"""
+            SELECT *
+            FROM {table}
+            WHERE CAST({date_column} AS DATE) >= ?
+              AND CAST({date_column} AS DATE) <= ?
+            """,
+            [start, end],
+        ).fetchdf()
+    finally:
+        conn.close()
+    if frame.empty:
+        return 0
+    return storage.write_frame(dataset, frame)
 
 
 def _next_start(
@@ -658,6 +723,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--start", default=None, help="Optional explicit bar start date YYYY-MM-DD")
     parser.add_argument("--full-start", default="2011-01-01", help="Start date for empty tables")
     parser.add_argument("--duckdb-dir", default=str(DEFAULT_DUCKDB_DIR), help="Live DuckDB directory")
+    parser.add_argument("--storage-backend", choices=("duckdb", "parquet-lake"), default="duckdb", help="Write daily market data to DuckDB sidecars or directly to the Parquet lake")
+    parser.add_argument("--parquet-lake-root", default=str(DEFAULT_PARQUET_LAKE_ROOT), help="Local Parquet lake root used when --storage-backend=parquet-lake")
+    parser.add_argument("--sync-parquet-lake", action="store_true", help="After a parquet-lake update, sync touched partitions to OSS with rclone")
+    parser.add_argument("--parquet-lake-remote-prefix", default=DEFAULT_PARQUET_LAKE_REMOTE_PREFIX, help="rclone remote prefix for Parquet lake sync")
+    parser.add_argument("--sync-dry-run", action="store_true", help="Print rclone sync commands without uploading")
     parser.add_argument("--indices", default=",".join(DEFAULT_MAJOR_INDICES), help="Comma-separated index symbols to update")
     parser.add_argument("--index-weight-codes", default=",".join(DEFAULT_INDEX_WEIGHT_CODES), help="Comma-separated Tushare index_weight codes")
     parser.add_argument("--min-interval", type=float, default=0.12)
@@ -695,23 +765,31 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     fund_nav_db = db_dir / "cn_fund_nav.duckdb"
     corporate_actions_db = db_dir / "cn_corporate_actions.duckdb"
     summaries: List[StepSummary] = []
-    stock_ranges = _load_ranges(stock_db, "daily_cn_ochl", "timestamp")
-    index_ranges = _load_ranges(index_db, "daily_cn_ochl", "timestamp")
-    etf_ranges = _load_ranges(etf_db, "daily_cn_ochl", "timestamp")
-    nav_ranges = _load_ranges(fund_nav_db, "cn_fund_nav", "nav_date")
-    latest_etf_adj_factors = _load_latest_adj_factors(etf_db, "daily_cn_ochl")
+    if args.storage_backend == "parquet-lake":
+        storage = ParquetLakeStorage(args.parquet_lake_root, auto_flush_manifest=False)
+        stock_ranges = _lake_ranges(storage, "stock_ohlcv")
+        index_ranges = _lake_ranges(storage, "index_ohlcv")
+        etf_ranges = _lake_ranges(storage, "etf_ohlcv")
+        nav_ranges = _lake_ranges(storage, "fund_nav")
+        latest_etf_adj_factors = storage.load_latest_adj_factors("etf_ohlcv")
+    else:
+        storage = DuckDBStorage(
+            db_path=str(stock_db),
+            etf_db_path=str(etf_db),
+            index_db_path=str(index_db),
+            daily_basic_db_path=str(daily_basic_db),
+            financial_indicator_db_path=str(financial_db),
+            status_db_path=str(status_db),
+            fund_nav_db_path=str(fund_nav_db),
+            corporate_actions_db_path=str(corporate_actions_db),
+        )
+        stock_ranges = _load_ranges(stock_db, "daily_cn_ochl", "timestamp")
+        index_ranges = _load_ranges(index_db, "daily_cn_ochl", "timestamp")
+        etf_ranges = _load_ranges(etf_db, "daily_cn_ochl", "timestamp")
+        nav_ranges = _load_ranges(fund_nav_db, "cn_fund_nav", "nav_date")
+        latest_etf_adj_factors = _load_latest_adj_factors(etf_db, "daily_cn_ochl")
 
-    storage = DuckDBStorage(
-        db_path=str(stock_db),
-        etf_db_path=str(etf_db),
-        index_db_path=str(index_db),
-        daily_basic_db_path=str(daily_basic_db),
-        financial_indicator_db_path=str(financial_db),
-        status_db_path=str(status_db),
-        fund_nav_db_path=str(fund_nav_db),
-        corporate_actions_db_path=str(corporate_actions_db),
-    )
-    provider = TushareProvider(storage=storage, min_interval=args.min_interval)
+    provider = TushareProvider(storage=_NoopProviderStorage(), min_interval=args.min_interval)
     provider.connect()
     try:
         _preflight_tushare(provider, target_end)
@@ -810,10 +888,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 )
     finally:
         provider.disconnect()
-        storage.close()
+        if args.storage_backend == "duckdb":
+            storage.close()
+        else:
+            storage.flush_manifest()
 
     if not args.skip_daily_basic:
-        start = explicit_start or _sidecar_start(daily_basic_db, "cn_daily_basic", "trade_date", target_end)
+        start = explicit_start or (
+            _lake_sidecar_start(storage, "daily_basic", target_end)
+            if args.storage_backend == "parquet-lake"
+            else _sidecar_start(daily_basic_db, "cn_daily_basic", "trade_date", target_end)
+        )
         summaries.append(
             _run_sidecar_step(
                 "daily_basic",
@@ -829,8 +914,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 ),
             )
         )
+        if args.storage_backend == "parquet-lake":
+            rows = _copy_duckdb_range_to_lake(storage, daily_basic_db, "cn_daily_basic", "daily_basic", "trade_date", start, target_end)
+            logger.info("daily_basic parquet lake bridge rows=%s", rows)
+            storage.flush_manifest()
     if not args.skip_financials:
-        start = explicit_start or _sidecar_start(financial_db, "cn_financial_indicators", "ann_date", target_end)
+        start = explicit_start or (
+            _lake_sidecar_start(storage, "financial_indicators", target_end)
+            if args.storage_backend == "parquet-lake"
+            else _sidecar_start(financial_db, "cn_financial_indicators", "ann_date", target_end)
+        )
         summaries.append(
             _run_sidecar_step(
                 "financial_indicators",
@@ -847,8 +940,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 ),
             )
         )
+        if args.storage_backend == "parquet-lake":
+            rows = _copy_duckdb_range_to_lake(storage, financial_db, "cn_financial_indicators", "financial_indicators", "ann_date", start, target_end)
+            logger.info("financial_indicators parquet lake bridge rows=%s", rows)
+            storage.flush_manifest()
     if not args.skip_status:
-        start = explicit_start or _sidecar_start(status_db, "cn_security_status_daily", "trade_date", target_end)
+        start = explicit_start or (
+            _lake_sidecar_start(storage, "security_status", target_end)
+            if args.storage_backend == "parquet-lake"
+            else _sidecar_start(status_db, "cn_security_status_daily", "trade_date", target_end)
+        )
         summaries.append(
             _run_sidecar_step(
                 "security_status",
@@ -864,10 +965,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 ),
             )
         )
+        if args.storage_backend == "parquet-lake":
+            rows = _copy_duckdb_range_to_lake(storage, status_db, "cn_security_status_daily", "security_status", "trade_date", start, target_end)
+            logger.info("security_status parquet lake bridge rows=%s", rows)
+            storage.flush_manifest()
     if not args.skip_index_weights:
         codes = [item.strip() for item in args.index_weight_codes.split(",") if item.strip()]
         for code in codes:
-            start = explicit_start or _sidecar_start(index_weight_db, "cn_index_weight", "trade_date", target_end)
+            start = explicit_start or (
+                _lake_sidecar_start(storage, "index_weight", target_end)
+                if args.storage_backend == "parquet-lake"
+                else _sidecar_start(index_weight_db, "cn_index_weight", "trade_date", target_end)
+            )
             summaries.append(
                 _run_sidecar_step(
                     f"index_weight:{code}",
@@ -883,7 +992,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     ),
                 )
             )
+            if args.storage_backend == "parquet-lake":
+                rows = _copy_duckdb_range_to_lake(storage, index_weight_db, "cn_index_weight", "index_weight", "trade_date", start, target_end)
+                logger.info("index_weight:%s parquet lake bridge rows=%s", code, rows)
+                storage.flush_manifest()
 
+    if args.storage_backend == "parquet-lake":
+        if args.sync_parquet_lake:
+            storage.sync_touched(args.parquet_lake_remote_prefix, dry_run=args.sync_dry_run)
+        storage.close()
     _print_summaries(summaries)
 
 

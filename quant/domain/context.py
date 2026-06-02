@@ -22,3 +22,4 @@ class StrategyContext:
     execution_manager: Any = None
     data_provider: Any = None
     broker: Any = None
+    execution_reference_resolver: Any = None

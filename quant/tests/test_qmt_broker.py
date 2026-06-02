@@ -93,6 +93,7 @@ def fake_xtquant(monkeypatch):
     xttrader = types.ModuleType("xtquant.xttrader")
     xttype = types.ModuleType("xtquant.xttype")
     xtconstant = types.ModuleType("xtquant.xtconstant")
+    xtdata = types.ModuleType("xtquant.xtdata")
 
     xttrader.XtQuantTrader = FakeTrader
     xttrader.XtQuantTraderCallback = FakeCallback
@@ -101,15 +102,30 @@ def fake_xtquant(monkeypatch):
     xtconstant.STOCK_SELL = 24
     xtconstant.LATEST_PRICE = 5
     xtconstant.FIX_PRICE = 11
+    xtdata.full_ticks = {
+        "600519.SH": {
+            "openPrice": 102.0,
+            "lastPrice": 103.0,
+            "bidPrice": [101.9],
+            "askPrice": [102.1],
+        }
+    }
+
+    def get_full_tick(symbols):
+        return {symbol: xtdata.full_ticks.get(symbol, {}) for symbol in symbols}
+
+    xtdata.get_full_tick = get_full_tick
 
     xtquant.xttrader = xttrader
     xtquant.xttype = xttype
     xtquant.xtconstant = xtconstant
+    xtquant.xtdata = xtdata
 
     monkeypatch.setitem(sys.modules, "xtquant", xtquant)
     monkeypatch.setitem(sys.modules, "xtquant.xttrader", xttrader)
     monkeypatch.setitem(sys.modules, "xtquant.xttype", xttype)
     monkeypatch.setitem(sys.modules, "xtquant.xtconstant", xtconstant)
+    monkeypatch.setitem(sys.modules, "xtquant.xtdata", xtdata)
     FakeTrader.instances.clear()
 
 
@@ -185,6 +201,18 @@ def test_queries_map_xtquant_asset_and_position_objects():
     assert positions[0].avg_cost == pytest.approx(101.5)
     assert positions[0].market_value == pytest.approx(21_000.0)
     assert positions[0].unrealized_pnl == pytest.approx(700.0)
+
+
+def test_qmt_quote_reference_price_prefers_open_price():
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
+    broker.connect()
+
+    quote = broker.get_quote("600519")
+    reference = broker.get_execution_reference_price("600519", "BUY")
+
+    assert quote["open_price"] == pytest.approx(102.0)
+    assert quote["last_price"] == pytest.approx(103.0)
+    assert reference["open_price"] == pytest.approx(102.0)
 
 
 def test_qmt_trade_callback_notifies_registered_fill_callback():

@@ -37,6 +37,12 @@ class PaperBroker(BrokerAdapter):
     def update_price(self, symbol: str, price: float) -> None:
         self._latest_prices[symbol] = price
 
+    def get_execution_reference_price(self, symbol: str, side: Optional[str] = None) -> Optional[Dict[str, float]]:
+        price = self._get_current_price(symbol)
+        if price <= 0:
+            return None
+        return {"last_price": price}
+
     def set_data_provider(self, provider: Any) -> None:
         self.data_provider = provider
 

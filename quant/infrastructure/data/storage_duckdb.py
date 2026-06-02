@@ -27,6 +27,7 @@ from quant.shared.utils.symbol_utils import detect_market as _detect_market
 
 _PKG_DIR = Path(__file__).resolve().parent.parent  # infrastructure/
 _DEFAULT_DUCKDB_DIR = _PKG_DIR / "var" / "duckdb" / "live"
+_DEFAULT_PARQUET_LAKE_ROOT = _PKG_DIR / "var" / "parquet_lake"
 _DEFAULT_DB = str(_DEFAULT_DUCKDB_DIR / "cn_ohlcv.duckdb")
 _DEFAULT_ETF_DB = str(_DEFAULT_DUCKDB_DIR / "cn_etf_ohlcv.duckdb")
 _DEFAULT_INDEX_DB = str(_DEFAULT_DUCKDB_DIR / "cn_index_ohlcv.duckdb")
@@ -62,6 +63,18 @@ _FUND_CLASSIFICATION_COLUMNS = (
 )
 _CN_ETF_PREFIXES = ("15", "16", "50", "51", "52", "56", "58")
 _CN_INDEX_SYMBOLS = {"000300", "399001", "399006", "399673"}
+_PARQUET_LAKE_DATASETS = (
+    ("stock_ohlcv", None, _CN_DAILY_TABLE, True),
+    ("etf_ohlcv", _ETF_SCHEMA, _CN_DAILY_TABLE, True),
+    ("index_ohlcv", _INDEX_SCHEMA, _CN_DAILY_TABLE, True),
+    ("daily_basic", "daily_basic", _DAILY_BASIC_TABLE, True),
+    ("security_status", "security_status", _STATUS_TABLE, True),
+    ("financial_indicators", _FINANCIAL_INDICATOR_SCHEMA, _FINANCIAL_INDICATOR_TABLE, True),
+    ("corporate_actions_dividends", _CORPORATE_ACTIONS_SCHEMA, "cn_dividends", True),
+    ("index_weight", "index_weight", "cn_index_weight", True),
+    ("fund_nav", _FUND_NAV_SCHEMA, _FUND_NAV_TABLE, True),
+    ("fund_meta", _FUND_META_SCHEMA, _FUND_INSTRUMENTS_TABLE, False),
+)
 
 BAR_COLUMNS = "timestamp TIMESTAMP, symbol VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, turnover DOUBLE, adj_open DOUBLE, adj_high DOUBLE, adj_low DOUBLE, adj_close DOUBLE, adj_factor DOUBLE"
 BAR_INDEX = "timestamp, symbol"
@@ -109,6 +122,8 @@ class DuckDBStorage(Storage):
         corporate_actions_db_path: str = _DEFAULT_CORPORATE_ACTIONS_DB,
         fund_meta_db_path: str = _DEFAULT_FUND_META_DB,
         fund_nav_db_path: str = _DEFAULT_FUND_NAV_DB,
+        parquet_lake_root: Optional[str] = None,
+        prefer_parquet_lake: Optional[bool] = None,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,9 +143,17 @@ class DuckDBStorage(Storage):
         self._fund_meta_db_path = Path(fund_meta_db_path)
         self._fund_nav_db_path = Path(fund_nav_db_path)
         self._sidecar_attach_failed: set[str] = set()
+        self._parquet_lake_root = Path(parquet_lake_root) if parquet_lake_root else _DEFAULT_PARQUET_LAKE_ROOT
+        self._prefer_parquet_lake = prefer_parquet_lake
+        self._using_parquet_lake = self._should_use_parquet_lake()
         self._init_database()
 
     def _init_database(self) -> None:
+        if self._using_parquet_lake:
+            self._conn = duckdb.connect(":memory:")
+            self._register_parquet_lake_views()
+            self.logger.info(f"DuckDB initialized from Parquet lake at {self._parquet_lake_root} (read_only=True)")
+            return
         self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
         if not self._read_only:
             self._conn.execute("SET threads=4")
@@ -149,6 +172,55 @@ class DuckDBStorage(Storage):
             self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path)
         self.logger.info(f"DuckDB initialized at {self.db_path} (read_only={self._read_only})")
 
+    def _should_use_parquet_lake(self) -> bool:
+        if not self._read_only:
+            return False
+        if self._prefer_parquet_lake is False:
+            return False
+        if self._prefer_parquet_lake is True:
+            return self._parquet_lake_available()
+        return self.db_path == Path(_DEFAULT_DB) and self._parquet_lake_available()
+
+    def _parquet_lake_available(self) -> bool:
+        return (self._parquet_lake_root / "_manifest.json").exists()
+
+    def _register_parquet_lake_views(self) -> None:
+        for dataset, schema, table, partitioned in _PARQUET_LAKE_DATASETS:
+            dataset_dir = self._parquet_lake_root / dataset
+            if not dataset_dir.exists() or not any(dataset_dir.rglob("*.parquet")):
+                continue
+            glob_path = self._parquet_dataset_glob(dataset_dir, partitioned)
+            target = self._qualified_table_name(schema, table)
+            if schema:
+                self._conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self._quote_ident(schema)}")
+            self._conn.execute(
+                f"""
+                CREATE OR REPLACE VIEW {target} AS
+                SELECT *
+                FROM read_parquet({self._sql_string(glob_path)}, hive_partitioning=false)
+                """
+            )
+
+    @staticmethod
+    def _parquet_dataset_glob(dataset_dir: Path, partitioned: bool) -> str:
+        if partitioned:
+            return str(dataset_dir / "year=*" / "month=*" / "day=*" / "*.parquet")
+        return str(dataset_dir / "*.parquet")
+
+    @classmethod
+    def _qualified_table_name(cls, schema: Optional[str], table: str) -> str:
+        if not schema:
+            return cls._quote_ident(table)
+        return f"{cls._quote_ident(schema)}.{cls._quote_ident(table)}"
+
+    @staticmethod
+    def _quote_ident(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+    @staticmethod
+    def _sql_string(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
     @staticmethod
     def is_cn_etf_symbol(symbol: str) -> bool:
         value = str(symbol).strip()
@@ -163,6 +235,8 @@ class DuckDBStorage(Storage):
         return str(table_name).split(".")[-1]
 
     def _ensure_sidecar_attached(self, schema: str, path: Path) -> bool:
+        if self._using_parquet_lake:
+            return self._schema_exists(schema)
         if schema in self._sidecar_attach_failed:
             return False
         if self._read_only and not path.exists():
@@ -186,6 +260,20 @@ class DuckDBStorage(Storage):
                 self._sidecar_attach_failed.add(schema)
                 self.logger.warning(f"DuckDB sidecar {schema} unavailable: {e}")
                 return False
+
+    def _schema_exists(self, schema: str) -> bool:
+        try:
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.schemata
+                WHERE schema_name = ?
+                """,
+                [schema],
+            ).fetchone()
+            return bool(row and row[0])
+        except Exception:
+            return False
 
     def _table_exists(self, table_name: str) -> bool:
         try:
@@ -438,7 +526,11 @@ class DuckDBStorage(Storage):
         if self._conn is None:
             with self._lock:
                 if self._conn is None:
-                    self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
+                    if self._using_parquet_lake:
+                        self._conn = duckdb.connect(":memory:")
+                        self._register_parquet_lake_views()
+                    else:
+                        self._conn = duckdb.connect(str(self.db_path), read_only=self._read_only)
         return self._conn
 
     def _resolve_table(self, symbol: str, timeframe: str) -> str:
@@ -632,6 +724,8 @@ class DuckDBStorage(Storage):
     def _daily_basic_available(self) -> bool:
         if self._daily_basic_attach_failed:
             return False
+        if self._using_parquet_lake:
+            return self._table_exists(f"daily_basic.{_DAILY_BASIC_TABLE}")
         if not self._daily_basic_db_path.exists():
             return False
         with self._lock:
@@ -660,6 +754,8 @@ class DuckDBStorage(Storage):
                 return False
 
     def _fund_meta_available(self) -> bool:
+        if self._using_parquet_lake:
+            return self._table_exists(f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}")
         if not self._fund_meta_db_path.exists():
             return False
         if not self._ensure_sidecar_attached(_FUND_META_SCHEMA, self._fund_meta_db_path):
@@ -667,6 +763,8 @@ class DuckDBStorage(Storage):
         return self._table_exists(f"{_FUND_META_SCHEMA}.{_FUND_INSTRUMENTS_TABLE}")
 
     def _fund_nav_available(self) -> bool:
+        if self._using_parquet_lake:
+            return self._table_exists(f"{_FUND_NAV_SCHEMA}.{_FUND_NAV_TABLE}")
         if not self._fund_nav_db_path.exists():
             return False
         if not self._ensure_sidecar_attached(_FUND_NAV_SCHEMA, self._fund_nav_db_path):
@@ -784,15 +882,26 @@ class DuckDBStorage(Storage):
         if not self._daily_basic_available():
             return set()
         try:
-            rows = self.conn.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_catalog = 'daily_basic'
-                  AND table_name = ?
-                """,
-                [_DAILY_BASIC_TABLE],
-            ).fetchall()
+            if self._using_parquet_lake:
+                rows = self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'daily_basic'
+                      AND table_name = ?
+                    """,
+                    [_DAILY_BASIC_TABLE],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_catalog = 'daily_basic'
+                      AND table_name = ?
+                    """,
+                    [_DAILY_BASIC_TABLE],
+                ).fetchall()
         except Exception:
             return set()
         return {str(row[0]) for row in rows}
@@ -852,6 +961,8 @@ class DuckDBStorage(Storage):
     def _status_available(self) -> bool:
         if not self._use_security_status or self._status_attach_failed:
             return False
+        if self._using_parquet_lake:
+            return self._table_exists(f"security_status.{_STATUS_TABLE}")
         if not self._status_db_path.exists():
             return False
         with self._lock:
@@ -1129,16 +1240,21 @@ class DuckDBStorage(Storage):
         main_catalog = self.conn.execute("SELECT current_database()").fetchone()[0]
         rows = self.conn.execute(
             """
-            SELECT table_catalog, table_name
+            SELECT table_catalog, table_schema, table_name
             FROM information_schema.tables
-            WHERE table_schema = 'main'
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
             ORDER BY table_catalog, table_name
             """
         ).fetchall()
-        return [
-            str(table) if str(catalog) == str(main_catalog) else f"{catalog}.{table}"
-            for catalog, table in rows
-        ]
+        tables = []
+        for catalog, schema, table in rows:
+            if str(catalog) != str(main_catalog):
+                tables.append(f"{catalog}.{table}")
+            elif str(schema) == "main":
+                tables.append(str(table))
+            else:
+                tables.append(f"{schema}.{table}")
+        return tables
 
     def table_info(self, table_name: str) -> pd.DataFrame:
         return self.conn.execute(f"DESCRIBE {table_name}").fetchdf()

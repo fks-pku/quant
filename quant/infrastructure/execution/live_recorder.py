@@ -1,15 +1,17 @@
 """File-backed live trading recorder for strategy signals, fills, and performance."""
 
 import json
-import math
 import threading
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from statistics import mean, stdev
 from typing import Any, Dict, Iterable, List, Optional
 
+import pandas as pd
+
+from quant.analytics.performance import calculate_performance_metrics, calculate_round_trip_pnls
+from quant.domain.models.trade import Trade
 from quant.domain.models.order import Order
 from quant.shared.utils.logger import setup_logger
 
@@ -181,25 +183,31 @@ class LiveTradingRecorder:
     def get_strategy_performance(self, strategy_name: str, days: int = 365) -> Dict[str, Any]:
         fills = self._read_all("fills", strategy_name, days)
         snapshots = self._read_all("snapshots", strategy_name, days)
-        closed_trades = self._closed_trades(fills)
-        realized_pnl = sum(t["pnl"] for t in closed_trades)
-        gross_profit = sum(t["pnl"] for t in closed_trades if t["pnl"] > 0)
-        gross_loss = abs(sum(t["pnl"] for t in closed_trades if t["pnl"] < 0))
-        wins = len([t for t in closed_trades if t["pnl"] > 0])
-        win_rate = wins / len(closed_trades) if closed_trades else 0.0
-        latest_snapshot = self._latest_daily_snapshots(snapshots)[-1] if snapshots else {}
-        unrealized = float(latest_snapshot.get("unrealized_pnl", 0.0) or 0.0)
         pnl_curve = self._latest_daily_snapshots(snapshots)
+        latest_snapshot = pnl_curve[-1] if pnl_curve else {}
+        trades = self._trades_from_fills(fills)
+        metrics = calculate_performance_metrics(
+            self._equity_curve_from_snapshots(pnl_curve),
+            trades,
+        )
+        round_trip_pnls = calculate_round_trip_pnls(trades)
+        realized_pnl = sum(round_trip_pnls)
+        unrealized = float(latest_snapshot.get("unrealized_pnl", 0.0) or 0.0)
+        closed_trades = self._closed_trades(fills)
         return {
             "strategy_name": strategy_name,
             "total_pnl": round(realized_pnl + unrealized, 4),
             "realized_pnl": round(realized_pnl, 4),
             "unrealized_pnl": round(unrealized, 4),
-            "total_trades": len(closed_trades),
-            "win_rate": round(win_rate, 6),
-            "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else 0.0,
-            "max_drawdown": round(self._max_drawdown(pnl_curve), 6),
-            "sharpe_ratio": round(self._sharpe(pnl_curve), 6),
+            "total_trades": metrics.total_trades,
+            "win_rate": round(metrics.win_rate, 6),
+            "profit_factor": round(metrics.profit_factor, 6),
+            "max_drawdown": round(abs(metrics.max_drawdown_pct), 6),
+            "max_drawdown_pct": round(metrics.max_drawdown_pct, 6),
+            "sharpe_ratio": round(metrics.sharpe_ratio, 6),
+            "sortino_ratio": round(metrics.sortino_ratio, 6),
+            "calmar_ratio": round(metrics.calmar_ratio, 6),
+            "total_return": round(metrics.total_return, 6),
             "pnl_curve": pnl_curve,
             "recent_trades": closed_trades[-20:],
             "latest_snapshot": latest_snapshot,
@@ -226,15 +234,17 @@ class LiveTradingRecorder:
         return records
 
     def _closed_trades(self, fills: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        lots: Dict[str, List[List[float]]] = {}
+        lots: Dict[str, List[List[Any]]] = {}
         trades: List[Dict[str, Any]] = []
         for fill in sorted(fills, key=lambda item: item.get("timestamp", "")):
             symbol = fill.get("symbol", "")
             side = str(fill.get("side", "")).upper()
             qty = float(fill.get("quantity", 0.0) or 0.0)
             price = float(fill.get("price", 0.0) or 0.0)
+            commission = float(fill.get("commission", 0.0) or 0.0)
             if side == "BUY":
-                lots.setdefault(symbol, []).append([qty, price])
+                commission_per_share = commission / qty if qty > 0 else 0.0
+                lots.setdefault(symbol, []).append([qty, price, commission_per_share])
                 continue
             if side != "SELL":
                 continue
@@ -243,9 +253,10 @@ class LiveTradingRecorder:
             closed_qty = 0.0
             symbol_lots = lots.setdefault(symbol, [])
             while remaining > 1e-9 and symbol_lots:
-                lot_qty, lot_price = symbol_lots[0]
+                lot_qty, lot_price, commission_per_share = symbol_lots[0]
                 take = min(lot_qty, remaining)
-                pnl += (price - lot_price) * take
+                sell_commission = commission * (take / qty) if qty > 0 else 0.0
+                pnl += (price - lot_price) * take - commission_per_share * take - sell_commission
                 closed_qty += take
                 lot_qty -= take
                 remaining -= take
@@ -265,6 +276,80 @@ class LiveTradingRecorder:
                 })
         return trades
 
+    def _trades_from_fills(self, fills: Iterable[Dict[str, Any]]) -> List[Trade]:
+        lots: Dict[str, List[List[Any]]] = {}
+        trades: List[Trade] = []
+        for fill in sorted(fills, key=lambda item: item.get("timestamp", "")):
+            symbol = str(fill.get("symbol", "") or "")
+            side = str(fill.get("side", "") or "").upper()
+            qty = float(fill.get("quantity", 0.0) or 0.0)
+            price = float(fill.get("price", 0.0) or 0.0)
+            commission = float(fill.get("commission", 0.0) or 0.0)
+            timestamp = self._parse_datetime(fill.get("timestamp"))
+            strategy_name = fill.get("strategy_name")
+            if not symbol or qty <= 0 or price <= 0:
+                continue
+            if side == "BUY":
+                lots.setdefault(symbol, []).append([qty, price, timestamp])
+                trades.append(Trade(
+                    symbol=symbol,
+                    quantity=qty,
+                    entry_price=price,
+                    exit_price=price,
+                    entry_time=timestamp,
+                    exit_time=timestamp,
+                    side="BUY",
+                    pnl=-commission,
+                    commission=commission,
+                    realized_pnl=-commission,
+                    fill_date=timestamp,
+                    fill_price=price,
+                    strategy_name=strategy_name,
+                ))
+                continue
+            if side != "SELL":
+                continue
+            remaining = qty
+            symbol_lots = lots.setdefault(symbol, [])
+            while remaining > 1e-9 and symbol_lots:
+                lot_qty, lot_price, lot_timestamp = symbol_lots[0]
+                take = min(lot_qty, remaining)
+                sell_commission = commission * (take / qty) if qty > 0 else 0.0
+                realized = (price - lot_price) * take
+                trades.append(Trade(
+                    symbol=symbol,
+                    quantity=take,
+                    entry_price=lot_price,
+                    exit_price=price,
+                    entry_time=lot_timestamp,
+                    exit_time=timestamp,
+                    side="SELL",
+                    pnl=realized - sell_commission,
+                    commission=sell_commission,
+                    realized_pnl=realized,
+                    fill_date=timestamp,
+                    fill_price=price,
+                    strategy_name=strategy_name,
+                ))
+                lot_qty -= take
+                remaining -= take
+                if lot_qty <= 1e-9:
+                    symbol_lots.pop(0)
+                else:
+                    symbol_lots[0][0] = lot_qty
+        return trades
+
+    def _equity_curve_from_snapshots(self, snapshots: Iterable[Dict[str, Any]]) -> pd.Series:
+        values = []
+        index = []
+        for snapshot in snapshots:
+            nav = float(snapshot.get("nav", 0.0) or 0.0)
+            if nav <= 0:
+                continue
+            index.append(self._parse_datetime(snapshot.get("timestamp") or snapshot.get("date")))
+            values.append(nav)
+        return pd.Series(values, index=pd.DatetimeIndex(index), dtype=float).sort_index()
+
     def _latest_daily_snapshots(self, snapshots: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         by_date: Dict[str, Dict[str, Any]] = {}
         for snap in snapshots:
@@ -272,29 +357,13 @@ class LiveTradingRecorder:
             by_date[key] = snap
         return [by_date[key] for key in sorted(by_date.keys())]
 
-    def _max_drawdown(self, curve: List[Dict[str, Any]]) -> float:
-        peak = -math.inf
-        max_dd = 0.0
-        for point in curve:
-            nav = float(point.get("nav", 0.0) or 0.0)
-            peak = max(peak, nav)
-            if peak > 0:
-                max_dd = max(max_dd, (peak - nav) / peak)
-        return max_dd
-
-    def _sharpe(self, curve: List[Dict[str, Any]]) -> float:
-        navs = [float(point.get("nav", 0.0) or 0.0) for point in curve]
-        returns = [
-            navs[i] / navs[i - 1] - 1.0
-            for i in range(1, len(navs))
-            if navs[i - 1] > 0
-        ]
-        if len(returns) < 2:
-            return 0.0
-        vol = stdev(returns)
-        if vol <= 0:
-            return 0.0
-        return mean(returns) / vol * math.sqrt(252)
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime(value.year, value.month, value.day)
+        return datetime.fromisoformat(str(value))
 
     def _jsonable(self, value: Any) -> Any:
         if isinstance(value, datetime):

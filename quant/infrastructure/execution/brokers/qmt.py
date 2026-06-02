@@ -53,6 +53,8 @@ def _qmt_symbol_to_cn(symbol: str) -> str:
 def _safe_float(val: Any, default: float = 0.0) -> float:
     if val is None or val == "":
         return default
+    if isinstance(val, (list, tuple)):
+        val = val[0] if val else default
     return float(val)
 
 
@@ -80,6 +82,13 @@ def _get_field(record: Any, *names: str, default: Any = None) -> Any:
             if value is not None:
                 return value
     return default
+
+
+def _safe_price_field(record: Any, *names: str) -> float:
+    try:
+        return _safe_float(_get_field(record, *names, default=0.0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _records(data: Any) -> List[Any]:
@@ -138,6 +147,7 @@ class QMTBroker(BrokerAdapter):
         self._pending_orders: Dict[str, Order] = {}
         self._trade_callbacks: List[Callable[..., None]] = []
         self._positions_cache: Dict[str, Position] = {}
+        self._quote_cache: Dict[str, Dict[str, float]] = {}
         self._account_info_cache: Optional[AccountInfo] = None
         self._lock = threading.RLock()
         self.logger = setup_logger("QMTBroker")
@@ -362,6 +372,30 @@ class QMTBroker(BrokerAdapter):
                 currency="CNY",
             )
 
+    def get_quote(self, symbol: str) -> Optional[Dict[str, float]]:
+        self._ensure_connected()
+        qmt_code = _cn_symbol_to_qmt(symbol)
+        try:
+            from xtquant import xtdata
+            ticks = xtdata.get_full_tick([qmt_code])
+        except Exception as e:
+            self.logger.warning(f"QMT quote query failed for {symbol}: {e}")
+            return self._quote_cache.get(_qmt_symbol_to_cn(qmt_code))
+        record = None
+        if isinstance(ticks, dict):
+            record = ticks.get(qmt_code) or ticks.get(symbol)
+        else:
+            records = _records(ticks)
+            record = records[0] if records else None
+        quote = self._quote_from_record(record)
+        if quote:
+            with self._lock:
+                self._quote_cache[_qmt_symbol_to_cn(qmt_code)] = quote
+        return quote
+
+    def get_execution_reference_price(self, symbol: str, side: Optional[str] = None) -> Optional[Dict[str, float]]:
+        return self.get_quote(symbol)
+
     def _refresh_positions(self) -> None:
         if not self._connected or not self._trader or not self._account:
             return
@@ -433,6 +467,18 @@ class QMTBroker(BrokerAdapter):
             margin_available=cash,
             maintenance_margin=frozen_cash,
         )
+
+    def _quote_from_record(self, record: Any) -> Optional[Dict[str, float]]:
+        if record is None:
+            return None
+        quote = {
+            "open_price": _safe_price_field(record, "open", "openPrice", "open_price"),
+            "last_price": _safe_price_field(record, "lastPrice", "last_price", "price"),
+            "bid_price": _safe_price_field(record, "bidPrice", "bid_price", "bid1", "bid1Price"),
+            "ask_price": _safe_price_field(record, "askPrice", "ask_price", "ask1", "ask1Price"),
+        }
+        quote = {key: value for key, value in quote.items() if value > 0}
+        return quote or None
 
     def _ensure_connected(self) -> None:
         if not self._connected or not self._trader or not self._account:

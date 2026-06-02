@@ -1,7 +1,6 @@
 """Main event loop and orchestration engine."""
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Any
 import threading
@@ -13,6 +12,9 @@ from quant.domain.events.base import EventType
 from quant.features.trading.scheduler import Scheduler
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
+from quant.runtime.daily_strategy_runner import extract_bar_date, extract_bar_symbol, run_daily_snapshot
+from quant.runtime.execution_reference import ExecutionReferencePriceResolver
+from quant.runtime.strategy_cycle import after_trading, before_trading, feed_strategy_bars, start_strategy, stop_strategy
 from quant.shared.utils.logger import setup_logger
 
 
@@ -33,10 +35,19 @@ class Context(StrategyContext):
     def submit_order(self, symbol: str, quantity: float, side: str,
                      order_type: str = "MARKET", price: Optional[float] = None,
                      strategy_name: Optional[str] = None) -> Optional[str]:
-        if self.execution_manager is not None and price is not None and order_type.upper() == "MARKET":
-            return self.execution_manager.submit_target_order(
-                symbol, quantity, side, price, strategy_name,
-            )
+        order_type_text = (order_type or "MARKET").upper()
+        if self.execution_manager is not None and order_type_text == "MARKET":
+            reference_price = price
+            resolver = getattr(self, "execution_reference_resolver", None)
+            if resolver is not None:
+                reference = resolver.resolve(symbol, side, strategy_price=price)
+                if reference is None:
+                    return None
+                reference_price = reference.price
+            if reference_price is not None:
+                return self.execution_manager.submit_target_order(
+                    symbol, quantity, side, reference_price, strategy_name,
+                )
         if self.order_manager is None:
             return None
         return self.order_manager.submit_order(
@@ -60,6 +71,12 @@ class Engine:
         self.scheduler = Scheduler(config, self.event_bus)
         self.order_manager = None
         self.execution_manager = None
+        live_config = config.get("live_trading", {})
+        self._daily_snapshot_mode = bool(live_config.get("daily_snapshot_mode", True))
+        self._strict_daily_snapshot = bool(live_config.get("strict_daily_snapshot", True))
+        self._feed_intraday_bars = bool(live_config.get("feed_intraday_bars", False))
+        reference_config = live_config.get("execution_reference", {})
+        self._allow_strategy_reference_fallback = bool(reference_config.get("allow_strategy_price_fallback", False))
 
         self.strategies: List[Any] = []
         self.data_providers: Dict[str, Any] = {}
@@ -71,6 +88,9 @@ class Engine:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._subscribed_symbols: List[str] = []
+        self._daily_bar_buffer: Dict[date, Dict[str, Any]] = {}
+        self._completed_daily_snapshots: set[date] = set()
+        self._daily_snapshot_processed: Dict[date, set[str]] = {}
 
     def set_data_provider(self, name: str, provider: Any) -> None:
         """Set a data provider."""
@@ -114,6 +134,7 @@ class Engine:
             execution_manager=self.execution_manager,
             data_provider=self.data_providers.get("default"),
             broker=self.broker,
+            execution_reference_resolver=self._make_execution_reference_resolver(),
         )
         self.strategies.append(strategy)
 
@@ -121,21 +142,106 @@ class Engine:
         self.event_bus.subscribe(EventType.MARKET_OPEN, lambda event: self._dispatch_market_open(strategy, event))
         self.event_bus.subscribe(EventType.MARKET_CLOSE, lambda event: self._dispatch_market_close(strategy, event))
 
+    def _make_execution_reference_resolver(self) -> ExecutionReferencePriceResolver:
+        return ExecutionReferencePriceResolver(
+            mode=self.mode.value,
+            broker=self.broker,
+            data_provider=self.data_providers.get("default"),
+            allow_strategy_price_fallback=self._allow_strategy_reference_fallback,
+        )
+
     def _dispatch_bar(self, strategy: Any, event: Any) -> None:
-        if hasattr(strategy, "on_data") and strategy.context:
-            strategy.on_data(strategy.context, event.data)
+        if not self._daily_snapshot_mode:
+            feed_strategy_bars(strategy, [event.data])
+            return
+
+        data = event.data
+        trading_date = extract_bar_date(data) or self._event_trading_date(event)
+        symbol = extract_bar_symbol(data)
+        bucket = self._daily_bar_buffer.setdefault(trading_date, {})
+        if symbol is None:
+            symbol = f"__bar_{len(bucket) + 1}"
+        bucket[symbol] = data
+        if self._feed_intraday_bars:
+            feed_strategy_bars(strategy, [data])
 
     def _dispatch_market_open(self, strategy: Any, event: Any) -> None:
-        if hasattr(strategy, "on_before_trading") and strategy.context:
-            ts = event.data.get("timestamp", datetime.now()) if isinstance(event.data, dict) else datetime.now()
-            trading_date = ts.date() if hasattr(ts, "date") else ts
-            strategy.on_before_trading(strategy.context, trading_date)
+        trading_date = self._event_trading_date(event)
+        if self._daily_snapshot_mode:
+            self._run_completed_daily_snapshot(strategy, trading_date)
+        before_trading(strategy, trading_date)
 
     def _dispatch_market_close(self, strategy: Any, event: Any) -> None:
-        if hasattr(strategy, "on_after_trading") and strategy.context:
-            ts = event.data.get("timestamp", datetime.now()) if isinstance(event.data, dict) else datetime.now()
-            trading_date = ts.date() if hasattr(ts, "date") else ts
-            strategy.on_after_trading(strategy.context, trading_date)
+        trading_date = self._event_trading_date(event)
+        if self._daily_snapshot_mode:
+            if trading_date in self._daily_bar_buffer:
+                self._completed_daily_snapshots.add(trading_date)
+            return
+        after_trading(strategy, trading_date)
+
+    def _run_completed_daily_snapshot(self, strategy: Any, current_date: date) -> None:
+        eligible_dates = [
+            trading_date
+            for trading_date in self._completed_daily_snapshots
+            if trading_date < current_date and not self._strategy_processed_snapshot(strategy, trading_date)
+        ]
+        if not eligible_dates:
+            return
+        trading_date = max(eligible_dates)
+        for stale_date in eligible_dates:
+            if stale_date != trading_date:
+                self._daily_snapshot_processed.pop(stale_date, None)
+                self._completed_daily_snapshots.discard(stale_date)
+                self._daily_bar_buffer.pop(stale_date, None)
+        bars = list(self._daily_bar_buffer.get(trading_date, {}).values())
+        result = run_daily_snapshot(
+            strategy,
+            trading_date,
+            bars,
+            strict=self._strict_daily_snapshot,
+        )
+        if not result.ran:
+            self.logger.warning(
+                "Skipped daily snapshot for %s on %s: missing=%s stale=%s",
+                getattr(strategy, "name", strategy.__class__.__name__),
+                trading_date,
+                result.missing_symbols,
+                result.stale_symbols,
+            )
+        self._mark_strategy_processed_snapshot(strategy, trading_date)
+
+    def _strategy_processed_snapshot(self, strategy: Any, trading_date: date) -> bool:
+        strategy_name = getattr(strategy, "name", strategy.__class__.__name__)
+        return strategy_name in self._daily_snapshot_processed.get(trading_date, set())
+
+    def _mark_strategy_processed_snapshot(self, strategy: Any, trading_date: date) -> None:
+        strategy_name = getattr(strategy, "name", strategy.__class__.__name__)
+        processed = self._daily_snapshot_processed.setdefault(trading_date, set())
+        processed.add(strategy_name)
+        expected = {
+            getattr(item, "name", item.__class__.__name__)
+            for item in self.strategies
+        }
+        if expected and expected.issubset(processed):
+            self._daily_snapshot_processed.pop(trading_date, None)
+            self._completed_daily_snapshots.discard(trading_date)
+            self._daily_bar_buffer.pop(trading_date, None)
+
+    def _event_trading_date(self, event: Any) -> date:
+        data = getattr(event, "data", None)
+        value = data.get("timestamp") if isinstance(data, dict) else getattr(data, "timestamp", None)
+        if value is None:
+            value = datetime.now()
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if len(text) == 8 and text.isdigit():
+                return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+            return datetime.fromisoformat(text[:10]).date()
+        return datetime.now().date()
 
     def subscribe(self, symbols: List[str]) -> None:
         """Subscribe to symbols for real-time data."""
@@ -161,8 +267,7 @@ class Engine:
         self._running = True
 
         for strategy in self.strategies:
-            if hasattr(strategy, "on_start"):
-                strategy.on_start(strategy.context)
+            start_strategy(strategy)
 
         self.scheduler.start()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -179,8 +284,7 @@ class Engine:
         self.scheduler.stop()
 
         for strategy in self.strategies:
-            if hasattr(strategy, "on_stop"):
-                strategy.on_stop(strategy.context)
+            stop_strategy(strategy)
 
         for name, provider in self.data_providers.items():
             if hasattr(provider, "disconnect"):
@@ -242,11 +346,14 @@ class Engine:
         speed_multiplier = {"1x": 1, "10x": 10, "100x": 100, "end_of_day": float("inf")}.get(speed, 1)
 
         for strategy in self.strategies:
-            if hasattr(strategy, "on_start"):
-                strategy.on_start(strategy.context)
+            start_strategy(strategy)
 
         current_date = start_date
         while current_date <= end_date:
+            self.event_bus.publish_nowait(
+                EventType.MARKET_OPEN,
+                {"timestamp": current_date},
+            )
             for name, provider in self.data_providers.items():
                 if hasattr(provider, "get_bars"):
                     data = provider.get_bars(
@@ -258,11 +365,20 @@ class Engine:
                     for _, row in data.iterrows():
                         self.event_bus.publish_nowait(EventType.BAR, row, name)
 
+            self.event_bus.publish_nowait(
+                EventType.MARKET_CLOSE,
+                {"timestamp": current_date},
+            )
             current_date = current_date + timedelta(days=1)
 
+        if self._daily_snapshot_mode:
+            flush_date = end_date + timedelta(days=1)
+            flush_day = flush_date.date() if hasattr(flush_date, "date") else flush_date
+            for strategy in self.strategies:
+                self._run_completed_daily_snapshot(strategy, flush_day)
+
         for strategy in self.strategies:
-            if hasattr(strategy, "on_stop"):
-                strategy.on_stop(strategy.context)
+            stop_strategy(strategy)
 
     def get_portfolio_status(self) -> Dict[str, Any]:
         """Get current portfolio status."""

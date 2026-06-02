@@ -23,6 +23,8 @@ Trading 模块管理组合状态、风控检查、SubPortfolio 隔离。
 - T8 实盘策略分账时，OrderManager 必须使用该策略的 RiskEngine，FillHandler 必须更新该策略的 SubPortfolio
 - T9 带 `strategy_name` 的实盘成交只派发给所属策略，不广播给其他策略
 - T10 实盘 `MARKET + reference price` 信号单必须经限成本执行器转换为 LIMIT 单；到期未完成的目标单必须撤单并标记 dropped
+- T11 默认日线实盘策略必须用完整 EOD 快照触发，D 日 BAR 不即时下单，D+1 `MARKET_OPEN` 才用 D 日完整快照生成信号
+- T12 实盘 MARKET 目标单的 reference price 必须来自 broker/data-provider 执行行情 resolver；默认不得使用策略传入价兜底
 
 ---
 
@@ -269,3 +271,57 @@ T9-06  已成交、已撤销或已拒绝的目标单到期时不得再次撤单
 ```
 
 ### 对应测试: `test_live_execution_manager_*`, `test_trading_context_*` in `test_live_trading_records.py`
+
+---
+
+## CASE-11: Live 日线快照触发时点
+
+### 前置条件
+
+`Engine(live_trading.daily_snapshot_mode=True, strict_daily_snapshot=True)`，策略 required symbols 为 `["600519", "000001"]`。
+
+### 操作序列
+
+1. D 日收到 `600519` 和 `000001` 的 BAR
+2. D 日 `MARKET_CLOSE` 只标记快照完成，不调用策略 `on_after_trading`
+3. D+1 `MARKET_OPEN` 用 D 日完整快照调用 `on_data_batch` 和 `on_after_trading`
+4. 若 D 日快照缺少任一 required symbol，则 D+1 跳过策略信号生成
+5. 若中断恢复后存在多个完成快照，则只消费最新完成快照，旧快照不得补发过期信号
+
+### 断言
+
+```
+T11-01  D 日 BAR 和 MARKET_CLOSE 不提交策略订单
+T11-02  D+1 MARKET_OPEN 才用 D 日完整快照触发 on_data_batch/on_after_trading
+T11-03  batch 顺序按策略 symbols 排列，避免实盘事件到达顺序影响策略输入
+T11-04  缺失 required symbol 时不调用 on_data_batch/on_after_trading，不提交订单
+T11-05  gap 恢复时只消费最新完成快照，不按旧日期补下单
+```
+
+### 对应测试: `test_daily_snapshot_runner_requires_complete_symbol_batch`, `test_trading_engine_runs_completed_daily_snapshot_on_next_market_open`, `test_trading_engine_skips_incomplete_daily_snapshot`, `test_trading_engine_uses_latest_completed_snapshot_after_gap` in `test_live_trading_records.py`
+
+---
+
+## CASE-12: Live MARKET 执行参考价来源
+
+### 前置条件
+
+策略在 T+1 开盘提交 `Context.submit_order(..., order_type="MARKET", price=strategy_price)`，`Context` 配置了 `ExecutionReferencePriceResolver` 和 `LiveExecutionManager`。
+
+### 操作序列
+
+1. broker quote 返回 `open_price=12.0`
+2. 策略传入 `price=10.0`
+3. `Context.submit_order()` 生成 live target order
+4. broker quote 缺失时再次提交 MARKET target
+
+### 断言
+
+```
+T12-01  target reference_price 使用 broker open_price=12.0，不使用策略 price=10.0
+T12-02  LiveExecutionManager 以 resolver price 计算限成本 LIMIT
+T12-03  resolver 取不到价格且未开启 fallback 时不得提交订单
+T12-04  QMT broker quote 将 MiniQMT full_tick 的 openPrice/lastPrice 映射为 open_price/last_price
+```
+
+### 对应测试: `test_trading_context_uses_broker_reference_price_for_market_targets`, `test_trading_context_drops_market_target_when_reference_price_missing` in `test_live_trading_records.py`; `test_qmt_quote_reference_price_prefers_open_price` in `test_qmt_broker.py`

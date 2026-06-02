@@ -7,10 +7,11 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 ## 对外契约
 
 - `EventBus` — implements `EventPublisher` port
-- `DuckDBStorage` — implements `Storage` port, supports `read_only=True`, bulk `get_bars_for_symbols()`, and optional CN security-status enrichment
+- `DuckDBStorage` — implements `Storage` port, supports `read_only=True`, bulk `get_bars_for_symbols()`, optional CN security-status enrichment, and local Parquet lake views for read-only default CN data
+- `ParquetLakeStorage` — writes day-partitioned lake datasets under `var/parquet_lake/`; use it when Parquet/OSS is the source of truth and DuckDB is only the query engine/cache
 - `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
 - `PaperBroker`, `FutuProvider`, `QMTBroker` — implement `BrokerAdapter` port
-- `LiveTradingRecorder` — writes daily JSONL live records for strategy signals, broker orders, fills, and strategy snapshots under `infrastructure/var/live_trading/`
+- `LiveTradingRecorder` — writes daily JSONL live records for strategy signals, broker orders, fills, and strategy snapshots under `infrastructure/var/live_trading/`; performance views are derived with `quant.analytics`
 - `LiveExecutionManager` — converts live target signals into cost-bounded LIMIT orders and drops unfilled orders after the configured intraday deadline
 
 ## 依赖
@@ -20,21 +21,23 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 ## 不变量
 
-- DuckDB writers: `DuckDBStorage()` — default read-write
-- DuckDB readers: `DuckDBStorage(read_only=True)`
+- DuckDB writers: `DuckDBStorage()` — default read-write legacy sidecar backend
+- Parquet lake writers: `ParquetLakeStorage()` — partition upsert backend for Parquet-native daily data
+- DuckDB readers: `DuckDBStorage(read_only=True)`; when the default local Parquet lake manifest exists, default read-only storage treats the lake as truth and registers DuckDB views instead of opening mutable sidecars
 - Never open write connections from API endpoints
 - Providers fetch external data then write to Storage — never expose Storage as a Provider
 
 ## 修改守则
 
 - Change event bus: edit `infrastructure/events/event_bus.py`
-- Change storage: edit `infrastructure/data/storage_duckdb.py`
+- Change DuckDB storage: edit `infrastructure/data/storage_duckdb.py`
+- Change Parquet lake storage: edit `infrastructure/data/parquet_lake_storage.py`
 - Change providers: edit `infrastructure/data/providers/`
 - Change broker adapters: edit `infrastructure/execution/brokers/`
 
 ## Known Pitfalls
 
-- `DuckDBStorage` read_only=True must be used in API endpoints and backtest — prevents write-lock conflicts
+- `DuckDBStorage` read_only=True must be used in API endpoints and backtest — prevents write-lock conflicts and allows the local Parquet lake to act as the default read source
 - Provider subclasses should not import from features/ — only from domain ports
 - Tushare provider requires token configuration in config.yaml
 - Tushare per-symbol dividend refresh must treat API rate limits as retryable failures, not as empty dividend histories.
@@ -57,7 +60,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 ## DuckDB Data Layout
 
-- Live mutable DuckDB data is stored under ignored `var/duckdb/live/`.
+- Live mutable DuckDB data is stored under ignored `var/duckdb/live/`; local Parquet lake truth is stored under ignored `var/parquet_lake/`.
 - `cn_ohlcv.duckdb::daily_cn_ochl` stores CN stock OHLCV only.
 - `cn_etf_ohlcv.duckdb::daily_cn_ochl` stores CN ETF OHLCV and is attached as `cn_etf`.
 - `cn_fund_nav.duckdb::cn_fund_nav` stores ETF/LOF unit NAV, accumulated NAV, adjusted NAV, and asset size fields used to normalize fund splits in strict research providers.
@@ -67,8 +70,8 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `cn_status.duckdb::cn_security_status_daily` stores daily listing/tradability/ST/suspension/limit status.
 - `cn_financial_indicators.duckdb::cn_financial_indicators` stores Tushare `fina_indicator` quality/growth fields with `ann_date` and `end_date` for point-in-time joins.
 - `cn_corporate_actions.duckdb::cn_dividends` stores CN dividend and allotment records.
-- `quant/scripts/update_cn_live_data.py` is the daily live-data updater. It incrementally updates existing stock/index/ETF symbols and then fills valuation, financial, status, and index-weight sidecars to the target date. Stock bars and ETF bars default to date-based all-market fetches; ETF `adj_factor` is carried forward from the latest local value. Full dividend-history refresh (`--refresh-dividends` or `--dividends-only`) and per-fund NAV refresh (`--refresh-fund-nav` or `--nav-only`) are opt-in because they are too slow for daily all-market runs.
-- `quant/scripts/publish_parquet_lake.py snapshot` is the routine DuckDB-to-OSS publisher. Date-bearing datasets are exported as day partitions (`year=YYYY/month=MM/day=DD/data.parquet`), uploaded through `rclone`, and can be pulled/restored on another machine with `pull` then `restore --force`.
+- `quant/scripts/update_cn_live_data.py` is the daily live-data updater. It incrementally updates existing stock/index/ETF symbols and then fills valuation, financial, status, and index-weight sidecars to the target date. Stock bars and ETF bars default to date-based all-market fetches; ETF `adj_factor` is carried forward from the latest local value. Full dividend-history refresh (`--refresh-dividends` or `--dividends-only`) and per-fund NAV refresh (`--refresh-fund-nav` or `--nav-only`) are opt-in because they are too slow for daily all-market runs. Use `--storage-backend parquet-lake --sync-parquet-lake` for Parquet-native daily writes and touched-partition OSS sync.
+- `quant/scripts/publish_parquet_lake.py snapshot` is the routine DuckDB-to-OSS publisher. Date-bearing datasets are exported as day partitions (`year=YYYY/month=MM/day=DD/data.parquet`) and uploaded through `rclone`. On another machine, run `pull`; default read-only `DuckDBStorage` can query the pulled lake directly through DuckDB views. `restore --force` is now only for tools that still require materialized `.duckdb` sidecars.
 
 ## Security Status Data
 

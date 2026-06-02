@@ -3,13 +3,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from quant.domain.events.base import EventType
 from quant.domain.models.order import Order, OrderSide, OrderStatus, OrderType
+from quant.features.trading.engine import Engine
 from quant.infrastructure.events.event_bus import EventBus
 from quant.infrastructure.execution.fill_handler import FillHandler
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
 from quant.infrastructure.execution.live_executor import LiveExecutionManager, TargetOrder
 from quant.infrastructure.execution.order_manager import OrderManager
 from quant.features.portfolio.tracker import StrategyPositionTracker
+from quant.runtime.daily_strategy_runner import build_daily_snapshot, run_daily_snapshot
+from quant.runtime.execution_reference import ExecutionReferencePriceResolver
+from quant.runtime.strategy_cycle import feed_strategy_bars
 
 
 class ApprovingRisk:
@@ -76,6 +81,27 @@ class RecordingOrderManager:
     def cancel_order(self, order_id):
         self.cancelled.append(order_id)
         return True
+
+
+class DailySnapshotStrategy:
+    name = "DailySnapshotStrategy"
+    symbols = ["600519", "000001"]
+
+    def __init__(self):
+        self.context = None
+        self.batches = []
+        self.before_dates = []
+        self.after_dates = []
+
+    def on_before_trading(self, context, trading_date):
+        self.before_dates.append(trading_date)
+
+    def on_data_batch(self, context, bars):
+        self.batches.append([bar["symbol"] for bar in bars])
+
+    def on_after_trading(self, context, trading_date):
+        self.after_dates.append(trading_date)
+        context.submit_order("600519", 100, "BUY", "MARKET", 10.0, self.name)
 
 
 def test_live_trading_recorder_persists_daily_signals_fills_and_performance(tmp_path):
@@ -171,12 +197,164 @@ def test_live_trading_recorder_persists_daily_signals_fills_and_performance(tmp_
     assert signals[0]["status"] == "accepted"
     assert len(fills) == 3
     assert perf["total_trades"] == 2
-    assert perf["total_pnl"] == pytest.approx(100.0)
-    assert perf["realized_pnl"] == pytest.approx(100.0)
+    assert perf["total_pnl"] == pytest.approx(96.0)
+    assert perf["realized_pnl"] == pytest.approx(96.0)
     assert perf["win_rate"] == pytest.approx(0.5)
-    assert perf["profit_factor"] == pytest.approx(2.0)
+    assert perf["profit_factor"] == pytest.approx(198.0 / 102.0)
+    assert "sortino_ratio" in perf
+    assert "calmar_ratio" in perf
+    assert "total_return" in perf
     assert perf["pnl_curve"][-1]["nav"] == pytest.approx(100020)
     assert perf["recent_trades"][-1]["symbol"] == "000001"
+
+
+def test_strategy_runtime_feed_uses_batch_hook():
+    class BatchStrategy:
+        context = object()
+
+        def __init__(self):
+            self.batches = []
+            self.singles = []
+
+        def on_data_batch(self, context, bars):
+            self.batches.append((context, list(bars)))
+
+        def on_data(self, context, bar):
+            self.singles.append((context, bar))
+
+    strategy = BatchStrategy()
+    bars = [{"symbol": "600519"}, {"symbol": "000001"}]
+
+    feed_strategy_bars(strategy, bars)
+
+    assert len(strategy.batches) == 1
+    assert strategy.batches[0][0] is strategy.context
+    assert strategy.batches[0][1] == bars
+    assert strategy.singles == []
+
+
+def test_daily_snapshot_runner_requires_complete_symbol_batch():
+    class Strategy:
+        name = "Strategy"
+        symbols = ["600519", "000001"]
+        context = None
+
+        def __init__(self):
+            self.batches = []
+            self.after_dates = []
+
+        def on_data_batch(self, context, bars):
+            self.batches.append([bar["symbol"] for bar in bars])
+
+        def on_after_trading(self, context, trading_date):
+            self.after_dates.append(trading_date)
+
+    strategy = Strategy()
+    trading_date = datetime(2026, 6, 1)
+
+    snapshot = build_daily_snapshot(
+        [{"symbol": "600519", "timestamp": trading_date}],
+        trading_date,
+        strategy.symbols,
+    )
+    result = run_daily_snapshot(
+        strategy,
+        trading_date,
+        [{"symbol": "600519", "timestamp": trading_date}],
+    )
+
+    assert snapshot.missing_symbols == ("000001",)
+    assert result.ran is False
+    assert result.missing_symbols == ("000001",)
+    assert strategy.batches == []
+    assert strategy.after_dates == []
+
+
+def test_trading_engine_runs_completed_daily_snapshot_on_next_market_open():
+    bus = EventBus()
+    order_manager = RecordingOrderManager()
+    engine = Engine(
+        {
+            "system": {"mode": "paper", "initial_cash": 100000},
+            "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+        },
+        bus,
+    )
+    engine.set_order_manager(order_manager)
+    strategy = DailySnapshotStrategy()
+    engine.add_strategy(strategy)
+    day1_close = datetime(2026, 6, 1, 15, 0)
+    day2_open = datetime(2026, 6, 2, 9, 30)
+
+    bus.publish_nowait(EventType.BAR, {"symbol": "000001", "timestamp": day1_close, "close": 11.0})
+    bus.publish_nowait(EventType.BAR, {"symbol": "600519", "timestamp": day1_close, "close": 10.0})
+    bus.publish_nowait(EventType.MARKET_CLOSE, {"timestamp": day1_close})
+
+    assert strategy.batches == []
+    assert strategy.after_dates == []
+    assert order_manager.submitted == []
+
+    bus.publish_nowait(EventType.MARKET_OPEN, {"timestamp": day2_open})
+
+    assert strategy.batches == [["600519", "000001"]]
+    assert strategy.after_dates == [day1_close.date()]
+    assert strategy.before_dates == [day2_open.date()]
+    assert order_manager.submitted[-1]["symbol"] == "600519"
+    assert order_manager.submitted[-1]["strategy_name"] == "DailySnapshotStrategy"
+
+
+def test_trading_engine_skips_incomplete_daily_snapshot():
+    bus = EventBus()
+    order_manager = RecordingOrderManager()
+    engine = Engine(
+        {
+            "system": {"mode": "paper", "initial_cash": 100000},
+            "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+        },
+        bus,
+    )
+    engine.set_order_manager(order_manager)
+    strategy = DailySnapshotStrategy()
+    engine.add_strategy(strategy)
+    day1_close = datetime(2026, 6, 1, 15, 0)
+    day2_open = datetime(2026, 6, 2, 9, 30)
+
+    bus.publish_nowait(EventType.BAR, {"symbol": "600519", "timestamp": day1_close, "close": 10.0})
+    bus.publish_nowait(EventType.MARKET_CLOSE, {"timestamp": day1_close})
+    bus.publish_nowait(EventType.MARKET_OPEN, {"timestamp": day2_open})
+
+    assert strategy.batches == []
+    assert strategy.after_dates == []
+    assert strategy.before_dates == [day2_open.date()]
+    assert order_manager.submitted == []
+
+
+def test_trading_engine_uses_latest_completed_snapshot_after_gap():
+    bus = EventBus()
+    order_manager = RecordingOrderManager()
+    engine = Engine(
+        {
+            "system": {"mode": "paper", "initial_cash": 100000},
+            "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+        },
+        bus,
+    )
+    engine.set_order_manager(order_manager)
+    strategy = DailySnapshotStrategy()
+    engine.add_strategy(strategy)
+    day1_close = datetime(2026, 6, 1, 15, 0)
+    day3_close = datetime(2026, 6, 3, 15, 0)
+    day4_open = datetime(2026, 6, 4, 9, 30)
+
+    for close_time in (day1_close, day3_close):
+        bus.publish_nowait(EventType.BAR, {"symbol": "600519", "timestamp": close_time, "close": 10.0})
+        bus.publish_nowait(EventType.BAR, {"symbol": "000001", "timestamp": close_time, "close": 11.0})
+        bus.publish_nowait(EventType.MARKET_CLOSE, {"timestamp": close_time})
+
+    bus.publish_nowait(EventType.MARKET_OPEN, {"timestamp": day4_open})
+
+    assert strategy.after_dates == [day3_close.date()]
+    assert len(order_manager.submitted) == 1
 
 
 def test_order_manager_records_strategy_signal_and_broker_order(tmp_path):
@@ -639,6 +817,56 @@ def test_trading_context_routes_priced_orders_through_live_execution_manager():
     assert order_id == "ORD-1"
     assert order_manager.submitted[-1]["order_type"] == "LIMIT"
     assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
+
+
+def test_trading_context_uses_broker_reference_price_for_market_targets():
+    from quant.features.trading.engine import Context
+
+    class QuoteBroker:
+        def get_execution_reference_price(self, symbol, side=None):
+            return {"open_price": 12.0, "last_price": 11.5}
+
+    order_manager = RecordingOrderManager()
+    executor = LiveExecutionManager(order_manager, default_max_cost_bps=25)
+    resolver = ExecutionReferencePriceResolver(mode="live", broker=QuoteBroker())
+    context = Context(
+        portfolio=None,
+        risk_engine=None,
+        event_bus=None,
+        order_manager=order_manager,
+        execution_manager=executor,
+        execution_reference_resolver=resolver,
+    )
+
+    order_id = context.submit_order("600519", 1000, "BUY", "MARKET", 10.0, "DemoStrategy")
+
+    assert order_id == "ORD-1"
+    assert order_manager.submitted[-1]["price"] == pytest.approx(12.03)
+
+
+def test_trading_context_drops_market_target_when_reference_price_missing():
+    from quant.features.trading.engine import Context
+
+    class EmptyBroker:
+        def get_execution_reference_price(self, symbol, side=None):
+            return None
+
+    order_manager = RecordingOrderManager()
+    executor = LiveExecutionManager(order_manager, default_max_cost_bps=25)
+    resolver = ExecutionReferencePriceResolver(mode="live", broker=EmptyBroker())
+    context = Context(
+        portfolio=None,
+        risk_engine=None,
+        event_bus=None,
+        order_manager=order_manager,
+        execution_manager=executor,
+        execution_reference_resolver=resolver,
+    )
+
+    order_id = context.submit_order("600519", 1000, "BUY", "MARKET", 10.0, "DemoStrategy")
+
+    assert order_id is None
+    assert order_manager.submitted == []
 
 
 def test_trading_context_keeps_explicit_limit_orders_direct():

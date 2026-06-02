@@ -20,11 +20,15 @@ class DuckDBProvider(DataFeed):
         db_path: str = _DEFAULT_DB,
         use_security_status: bool = True,
         status_db_path: str = _DEFAULT_STATUS_DB,
+        parquet_lake_root: Optional[str] = None,
+        prefer_parquet_lake: Optional[bool] = None,
     ):
         self._connected = False
         self._db_path = db_path
         self._use_security_status = use_security_status
         self._status_db_path = status_db_path
+        self._parquet_lake_root = parquet_lake_root
+        self._prefer_parquet_lake = prefer_parquet_lake
         self._storage: Optional[DuckDBStorage] = None
         self.logger = setup_logger("DuckDBProvider")
 
@@ -38,6 +42,8 @@ class DuckDBProvider(DataFeed):
             read_only=True,
             use_security_status=self._use_security_status,
             status_db_path=self._status_db_path,
+            parquet_lake_root=self._parquet_lake_root,
+            prefer_parquet_lake=self._prefer_parquet_lake,
         )
         self._connected = True
         tables = self._storage.list_tables()

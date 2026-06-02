@@ -15,6 +15,11 @@ from quant.domain.models.fill import Fill
 from quant.domain.models.order import Order
 
 
+def _write_parquet(conn, sql: str, path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn.execute(f"COPY ({sql}) TO ? (FORMAT parquet)", [str(path)])
+
+
 class TestEventBus:
     def test_subscribe_and_publish(self):
         bus = EventBus()
@@ -112,6 +117,143 @@ class TestDuckDBStorage:
         assert bars["total_mv"].iloc[0] == pytest.approx(12345)
         assert bars["circ_mv"].iloc[0] == pytest.approx(6789)
         assert bulk["total_mv"].iloc[0] == pytest.approx(12345)
+
+    def test_read_only_storage_can_query_parquet_lake_views(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        lake = tmp_path / "parquet_lake"
+        start = datetime(2024, 1, 2)
+        (lake / "_manifest.json").parent.mkdir(parents=True, exist_ok=True)
+        (lake / "_manifest.json").write_text("{}", encoding="utf-8")
+
+        conn = duckdb.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE stock_bars (
+                    timestamp TIMESTAMP,
+                    symbol VARCHAR,
+                    open DOUBLE,
+                    high DOUBLE,
+                    low DOUBLE,
+                    close DOUBLE,
+                    volume BIGINT,
+                    turnover DOUBLE,
+                    adj_open DOUBLE,
+                    adj_high DOUBLE,
+                    adj_low DOUBLE,
+                    adj_close DOUBLE,
+                    adj_factor DOUBLE
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO stock_bars VALUES
+                ('2024-01-02', '600001', 10, 11, 9, 10.5, 1000, 10500, 10, 11, 9, 10.5, 1)
+                """
+            )
+            _write_parquet(
+                conn,
+                "SELECT * FROM stock_bars",
+                lake / "stock_ohlcv" / "year=2024" / "month=01" / "day=02" / "data.parquet",
+            )
+            conn.execute(
+                """
+                CREATE TABLE etf_bars AS
+                SELECT TIMESTAMP '2024-01-02' AS timestamp, '510300' AS symbol,
+                       3.5 AS open, 3.6 AS high, 3.4 AS low, 3.55 AS close,
+                       2000::BIGINT AS volume, 7100.0 AS turnover,
+                       3.5 AS adj_open, 3.6 AS adj_high, 3.4 AS adj_low, 3.55 AS adj_close, 1.0 AS adj_factor
+                """
+            )
+            _write_parquet(
+                conn,
+                "SELECT * FROM etf_bars",
+                lake / "etf_ohlcv" / "year=2024" / "month=01" / "day=02" / "data.parquet",
+            )
+            conn.execute(
+                """
+                CREATE TABLE daily_basic (
+                    trade_date DATE,
+                    symbol VARCHAR,
+                    total_mv DOUBLE,
+                    circ_mv DOUBLE,
+                    turnover_rate_f DOUBLE
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO daily_basic VALUES
+                ('2024-01-02', '600001', 12345, 6789, 2.5)
+                """
+            )
+            _write_parquet(
+                conn,
+                "SELECT * FROM daily_basic",
+                lake / "daily_basic" / "year=2024" / "month=01" / "day=02" / "data.parquet",
+            )
+            conn.execute(
+                """
+                CREATE TABLE status (
+                    symbol VARCHAR,
+                    trade_date DATE,
+                    is_trade_day BOOLEAN,
+                    is_listed BOOLEAN,
+                    list_status VARCHAR,
+                    is_st BOOLEAN,
+                    st_type VARCHAR,
+                    is_suspended BOOLEAN,
+                    suspend_type VARCHAR,
+                    suspend_timing VARCHAR,
+                    has_daily_bar BOOLEAN,
+                    pre_close DOUBLE,
+                    up_limit DOUBLE,
+                    down_limit DOUBLE,
+                    tradable BOOLEAN,
+                    source VARCHAR,
+                    updated_at TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO status VALUES
+                ('600001', '2024-01-02', true, true, 'L', false, '', false, '', '', true, 10.0, 11.0, 9.0, true, 'fixture', '2024-01-03'),
+                ('600002', '2024-01-02', true, true, 'L', false, '', true, 'S', 'D', false, 8.0, 8.8, 7.2, false, 'fixture', '2024-01-03')
+                """
+            )
+            _write_parquet(
+                conn,
+                "SELECT * FROM status",
+                lake / "security_status" / "year=2024" / "month=01" / "day=02" / "data.parquet",
+            )
+        finally:
+            conn.close()
+
+        storage = DuckDBStorage(
+            str(tmp_path / "missing.duckdb"),
+            read_only=True,
+            use_security_status=True,
+            parquet_lake_root=str(lake),
+            prefer_parquet_lake=True,
+        )
+        try:
+            tables = set(storage.list_tables())
+            bars = storage.get_bars_for_symbols(["600001", "600002", "510300"], start, start, "1d")
+        finally:
+            storage.close()
+
+        assert "daily_cn_ochl" in tables
+        assert "daily_basic.cn_daily_basic" in tables
+        assert "security_status.cn_security_status_daily" in tables
+        assert "cn_etf.daily_cn_ochl" in tables
+        by_symbol = {row["symbol"]: row for row in bars.to_dict(orient="records")}
+        assert by_symbol["600001"]["total_mv"] == pytest.approx(12345)
+        assert by_symbol["600001"]["tradable"] is True
+        assert by_symbol["600002"]["_suspended"] is True
+        assert by_symbol["600002"]["close"] == pytest.approx(8.0)
+        assert by_symbol["510300"]["close"] == pytest.approx(3.55)
 
     def test_cn_etf_and_index_bars_route_to_sidecars(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")

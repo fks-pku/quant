@@ -32,6 +32,10 @@ Pure business logic with zero external dependencies. Contains models, events, an
 - `Storage` — `save_bars(symbol, bars)`, `get_bars(symbol, start, end)`, `get_symbols()`, `get_lot_size(symbol)`
 - `EventPublisher` — `subscribe(event_type, handler)`, `publish(event)`, `publish_nowait(event)`
 
+### Context (`quant.domain.context`)
+
+- `StrategyContext.execution_reference_resolver` — 策略上下文中的执行参考价解析器；策略不直接依赖 broker quote，实盘 MARKET 参考价由 trading Context/执行层解析
+
 ## 依赖
 
 None. Domain has zero external dependencies — the most important invariant.

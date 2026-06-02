@@ -25,6 +25,8 @@ quant/
 │   │   └── providers/        # External data fetchers (implement DataFeed port)
 │   ├── execution/       # Broker adapters + order execution
 │   └── var/             # Runtime data (DuckDB, gitignore)
+├── analytics/           # Mode-agnostic performance metrics
+├── runtime/             # Shared strategy lifecycle dispatch helpers
 ├── features/            # Business use case orchestration (APPLICATION LAYER)
 │   ├── backtest/        # Full backtest闭环
 │   ├── trading/         # Live/paper trading
@@ -124,6 +126,8 @@ but are not part of default strategy discovery.
 |--------|---------------|-----------|
 | `domain/` | Pure business logic | models/, events/, ports/ |
 | `infrastructure/` | External adapter implementations | events/, data/, execution/, research/ |
+| `analytics/` | Performance metric calculations shared by backtest/live | performance.py |
+| `runtime/` | Shared strategy lifecycle dispatch helpers | strategy_cycle.py |
 | `features/` | Use case orchestration | backtest/, trading/, portfolio/, cio/, strategies/, research/ |
 | `shared/` | Cross-cutting utilities | utils/, config/, models/ |
 | `api/` | HTTP routing | *_bp.py, state/runtime.py |
