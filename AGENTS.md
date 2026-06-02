@@ -41,6 +41,7 @@ python quant/api_server.py                                     # API 服务
 python -m pytest quant/tests/ -q                               # 测试
 python quant/backtest_runner.py --strategy <RegisteredStrategy> ...  # CLI 回测
 python quant/quant_system.py --mode paper                      # 实盘/模拟
+python quant/scripts/check_qmt_connection.py                   # MiniQMT 连接自检（不下单）
 python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 2025-01-01
 ```
 

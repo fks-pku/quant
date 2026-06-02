@@ -33,6 +33,10 @@ class Context(StrategyContext):
     def submit_order(self, symbol: str, quantity: float, side: str,
                      order_type: str = "MARKET", price: Optional[float] = None,
                      strategy_name: Optional[str] = None) -> Optional[str]:
+        if self.execution_manager is not None and price is not None and order_type.upper() == "MARKET":
+            return self.execution_manager.submit_target_order(
+                symbol, quantity, side, price, strategy_name,
+            )
         if self.order_manager is None:
             return None
         return self.order_manager.submit_order(
@@ -55,6 +59,7 @@ class Engine:
         self.risk_engine = RiskEngine(config, self.portfolio, self.event_bus)
         self.scheduler = Scheduler(config, self.event_bus)
         self.order_manager = None
+        self.execution_manager = None
 
         self.strategies: List[Any] = []
         self.data_providers: Dict[str, Any] = {}
@@ -106,6 +111,7 @@ class Engine:
             risk_engine=re,
             event_bus=self.event_bus,
             order_manager=self.order_manager,
+            execution_manager=self.execution_manager,
             data_provider=self.data_providers.get("default"),
             broker=self.broker,
         )
@@ -260,4 +266,18 @@ class Engine:
 
     def get_portfolio_status(self) -> Dict[str, Any]:
         """Get current portfolio status."""
-        return self.portfolio.to_dict()
+        status = self.portfolio.to_dict()
+        if not self._sub_portfolios:
+            return status
+        strategy_portfolios = {
+            name: sub.to_dict()
+            for name, sub in self._sub_portfolios.items()
+        }
+        sub_nav = sum(float(item.get("nav", 0.0) or 0.0) for item in strategy_portfolios.values())
+        sub_unrealized = sum(float(item.get("total_unrealized_pnl", 0.0) or 0.0) for item in strategy_portfolios.values())
+        sub_realized = sum(float(item.get("total_realized_pnl", 0.0) or 0.0) for item in strategy_portfolios.values())
+        status["nav"] = float(status.get("cash", 0.0) or 0.0) + sub_nav
+        status["total_unrealized_pnl"] = float(status.get("total_unrealized_pnl", 0.0) or 0.0) + sub_unrealized
+        status["total_realized_pnl"] = float(status.get("total_realized_pnl", 0.0) or 0.0) + sub_realized
+        status["strategy_portfolios"] = strategy_portfolios
+        return status

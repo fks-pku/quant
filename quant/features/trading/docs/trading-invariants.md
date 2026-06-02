@@ -20,6 +20,9 @@ Trading 模块管理组合状态、风控检查、SubPortfolio 隔离。
 - T4 `master.cash` 始终等于所有子组合的 cash 之和加上储备
 - T5 `RiskEngine.reset_daily()` 清零 `_daily_order_count` 和 `_pending_order_values`
 - T6 `Position.remove_sell_lots` 按 FIFO 顺序消耗 lots
+- T8 实盘策略分账时，OrderManager 必须使用该策略的 RiskEngine，FillHandler 必须更新该策略的 SubPortfolio
+- T9 带 `strategy_name` 的实盘成交只派发给所属策略，不广播给其他策略
+- T10 实盘 `MARKET + reference price` 信号单必须经限成本执行器转换为 LIMIT 单；到期未完成的目标单必须撤单并标记 dropped
 
 ---
 
@@ -213,3 +216,56 @@ T7-03  US symbol 不受 T+1 限制
 ```
 
 ### 对应测试: `test_t7_*` in `test_trading_invariants.py`
+
+---
+
+## CASE-8: Live 策略分账与成交归因
+
+### 前置条件
+
+两个策略共享同一个真实 broker，但在 `Engine` 内各有独立 `SubPortfolio` 和 `RiskEngine`。
+
+### 操作序列
+
+1. `DemoStrategy` 提交 `600519 BUY 100 @ 10.0`
+2. OrderManager 执行风控检查并提交 broker
+3. broker 回报 `DemoStrategy` 的成交
+
+### 断言
+
+```
+T8-01  OrderManager.check_order 使用 DemoStrategy 对应的 RiskEngine
+T8-02  record_order(symbol, order_value) 写入该策略的 pending order value
+T8-03  broker_order_id 能反查到 DemoStrategy
+T8-04  FillHandler 只更新 DemoStrategy 的 SubPortfolio
+T8-05  QuantSystem._on_fill 只调用 DemoStrategy.on_fill，不调用其他策略
+```
+
+### 对应测试: `test_order_manager_uses_strategy_specific_risk_engine`, `test_fill_handler_updates_strategy_specific_portfolio`, `test_quant_system_dispatches_fill_only_to_owning_strategy` in `test_live_trading_records.py`
+
+---
+
+## CASE-9: Live 限成本目标单与到期丢单
+
+### 前置条件
+
+`LiveExecutionManager(default_max_cost_bps=25, default_deadline="14:50")`，策略通过 `Context.submit_order(..., order_type="MARKET", price=reference_price)` 发出信号量。
+
+### 操作序列
+
+1. BUY 信号 `reference_price=10.0` 转为 LIMIT 单
+2. SELL 信号 `reference_price=10.0` 转为 LIMIT 单
+3. 目标单超过当日截止时间仍未完成
+
+### 断言
+
+```
+T9-01  BUY limit_price == reference_price * (1 + max_cost_bps / 10000)
+T9-02  SELL limit_price == reference_price * (1 - max_cost_bps / 10000)
+T9-03  显式 LIMIT 单保持原限价，不再套用执行器成本 bps
+T9-04  未完成目标单到期后调用 cancel_order(order_id)
+T9-05  dropped 状态表示当日未下完的剩余目标被丢弃，不跨日补单
+T9-06  已成交、已撤销或已拒绝的目标单到期时不得再次撤单
+```
+
+### 对应测试: `test_live_execution_manager_*`, `test_trading_context_*` in `test_live_trading_records.py`

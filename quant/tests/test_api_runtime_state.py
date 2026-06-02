@@ -43,6 +43,70 @@ def test_strategy_select_writes_shared_runtime_state(monkeypatch):
     assert runtime.selected_strategy == "registry_alpha"
 
 
+def test_strategy_performance_includes_live_recorder_data(monkeypatch):
+    from quant.api import strategies_bp as strategies_module
+
+    class Recorder:
+        def get_strategy_performance(self, strategy_name):
+            return {
+                "strategy_name": strategy_name,
+                "total_pnl": 12.5,
+                "realized_pnl": 10.0,
+                "unrealized_pnl": 2.5,
+                "total_trades": 2,
+                "win_rate": 0.5,
+                "profit_factor": 2.0,
+                "max_drawdown": 0.01,
+                "sharpe_ratio": 1.4,
+                "pnl_curve": [{"date": "2026-06-01", "nav": 100012.5}],
+                "recent_trades": [{"symbol": "600519", "pnl": 12.5}],
+                "latest_snapshot": {"date": "2026-06-01", "nav": 100012.5},
+            }
+
+    monkeypatch.setattr(strategies_module, "get_live_recorder", lambda: Recorder())
+    monkeypatch.setattr(runtime, "system_status", "stopped")
+    monkeypatch.setattr(
+        runtime,
+        "AVAILABLE_STRATEGIES",
+        {
+            "registry_alpha": {
+                "id": "alpha",
+                "name": "Alpha Strategy",
+                "description": "demo",
+                "symbols": ["600519"],
+                "backtest": {
+                    "test_sharpe": 0.1,
+                    "max_dd": 0.2,
+                    "cagr": 0.3,
+                    "win_rate": 0.4,
+                },
+            }
+        },
+    )
+
+    response = _client_for(strategies_module.strategies_bp).get("/api/strategies/performance/alpha")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["performance"]["total_pnl"] == 12.5
+    assert data["performance"]["sharpe_ratio"] == 1.4
+    assert data["pnl_curve"] == [{"date": "2026-06-01", "nav": 100012.5}]
+
+
+def test_live_records_endpoint_validates_record_kind(monkeypatch):
+    from quant.api import strategies_bp as strategies_module
+
+    class Recorder:
+        def read_day(self, kind, trading_date, strategy_name=None):
+            raise ValueError(f"Unsupported live record kind: {kind}")
+
+    monkeypatch.setattr(strategies_module, "get_live_recorder", lambda: Recorder())
+
+    response = _client_for(strategies_module.strategies_bp).get("/api/strategies/live-records/bad-kind")
+
+    assert response.status_code == 400
+
+
 def test_status_endpoint_reads_current_runtime_state(monkeypatch):
     from quant.api.system_bp import system_bp
 

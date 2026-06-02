@@ -466,6 +466,39 @@ class TestDuckDBStorage:
         assert TushareProvider._to_ts_code("000016") == "000016.SZ"
         assert TushareProvider._to_ts_code("000905") == "000905.SZ"
 
+    def test_tushare_provider_retries_dividend_rate_limit(self, monkeypatch):
+        class FakeApi:
+            def __init__(self):
+                self.calls = 0
+
+            def dividend(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise Exception("Rate limit exceeded")
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "div_proc": "实施",
+                            "ex_date": "20240530",
+                            "cash_div": 10.0,
+                            "stk_div": 0.0,
+                        }
+                    ]
+                )
+
+        sleeps = []
+        monkeypatch.setattr("quant.infrastructure.data.providers.tushare.time.sleep", sleeps.append)
+        provider = TushareProvider(min_interval=0.0)
+        provider._api = FakeApi()
+
+        frame = provider.fetch_dividends("000001")
+
+        assert provider._api.calls == 2
+        assert sleeps
+        assert frame["symbol"].iloc[0] == "000001"
+        assert frame["cash_dividend"].iloc[0] == pytest.approx(1.0)
+
     def test_tushare_provider_fetches_ambiguous_index_with_explicit_index_api(self):
         class FakeApi:
             def __init__(self):

@@ -5,9 +5,11 @@ import pandas as pd
 import pytest
 
 from quant.features.trading.portfolio import Portfolio
+from quant.features.trading.engine import Engine
 from quant.features.trading.sub_portfolio import SubPortfolio
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.data_provider import DataFrameProvider
+from quant.infrastructure.events.event_bus import EventBus
 from quant.tests.conftest import make_backtester
 
 
@@ -90,6 +92,26 @@ class TestSubPortfolioUnit:
         subB.cash -= 10000
         total_nav = master.cash + subA.nav + subB.nav
         assert total_nav == pytest.approx(100000.0, rel=1e-4)
+
+    def test_engine_status_aggregates_live_sub_portfolios(self):
+        class DummyStrategy:
+            def __init__(self, name):
+                self.name = name
+                self.context = None
+
+        engine = Engine(
+            {"system": {"initial_cash": 100000, "currency": "CNY"}},
+            EventBus(),
+        )
+        engine.add_strategy(DummyStrategy("A"), allocation_pct=0.2)
+        engine.add_strategy(DummyStrategy("B"), allocation_pct=0.2)
+
+        status = engine.get_portfolio_status()
+
+        assert status["nav"] == pytest.approx(100000.0)
+        assert status["cash"] == pytest.approx(60000.0)
+        assert status["strategy_portfolios"]["A"]["nav"] == pytest.approx(20000.0)
+        assert status["strategy_portfolios"]["B"]["nav"] == pytest.approx(20000.0)
 
     def test_check_daily_loss(self):
         master = Portfolio(initial_cash=100000)

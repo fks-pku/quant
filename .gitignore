@@ -10,6 +10,8 @@ frontend.log
 
 # Dependencies
 quant/frontend/node_modules/
+.venv-qmt/
+_pytest_tmp/
 
 # Runtime data
 quant/infrastructure/var/*

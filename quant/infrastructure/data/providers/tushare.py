@@ -438,12 +438,23 @@ class TushareProvider(DataFeed):
             return pd.DataFrame()
 
         ts_code = self._to_ts_code(symbol)
-        self._rate_limit()
-        try:
-            df = self._api.dividend(ts_code=ts_code)
-        except Exception as e:
-            self.logger.warning(f"Error fetching dividends for {symbol}: {e}")
-            return pd.DataFrame()
+        for attempt in range(3):
+            self._rate_limit()
+            try:
+                df = self._api.dividend(ts_code=ts_code)
+                break
+            except Exception as e:
+                message = str(e).lower()
+                rate_limited = "rate limit" in message or "每分钟" in message
+                if rate_limited and attempt < 2:
+                    wait_seconds = max(self._min_interval * 10, 2.0) * (attempt + 1)
+                    self.logger.warning(f"Rate limited fetching dividends for {symbol}; retrying in {wait_seconds:.1f}s")
+                    time.sleep(wait_seconds)
+                    continue
+                if rate_limited:
+                    raise RuntimeError(f"Rate limited fetching dividends for {symbol}") from e
+                self.logger.warning(f"Error fetching dividends for {symbol}: {e}")
+                return pd.DataFrame()
 
         if df is None or df.empty:
             return pd.DataFrame()

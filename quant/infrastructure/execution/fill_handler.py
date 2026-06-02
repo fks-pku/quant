@@ -19,11 +19,15 @@ class FillHandler:
         event_bus: EventPublisher,
         config: Dict[str, Any],
         strategy_tracker: Any = None,
+        live_recorder: Any = None,
+        portfolio_resolver: Optional[Callable[[Optional[str]], Any]] = None,
     ):
         self.portfolio = portfolio
         self.event_bus = event_bus
         self.config = config
         self._strategy_tracker = strategy_tracker
+        self._live_recorder = live_recorder
+        self._portfolio_resolver = portfolio_resolver
 
         self._fills: List[Fill] = []
         self._fill_callbacks: List[Callable] = []
@@ -59,6 +63,7 @@ class FillHandler:
         )
 
         self._update_tracker(fill)
+        self._record_fill(fill)
 
         with self._lock:
             self._fills.append(fill)
@@ -74,10 +79,11 @@ class FillHandler:
         return fill
 
     def _update_portfolio(self, fill: Fill) -> None:
+        portfolio = self._portfolio_for(fill.strategy_name)
         if fill.side.upper() == "BUY":
             cost = fill.price * fill.quantity + fill.commission
             today = fill.timestamp.date() if hasattr(fill.timestamp, 'date') else date.today()
-            self.portfolio.update_position(
+            portfolio.update_position(
                 symbol=fill.symbol,
                 quantity=fill.quantity,
                 price=fill.price,
@@ -85,7 +91,7 @@ class FillHandler:
                 trade_date=today,
             )
         elif fill.side.upper() == "SELL":
-            pos = self.portfolio.get_position(fill.symbol)
+            pos = portfolio.get_position(fill.symbol)
             available = pos.quantity if pos else 0
 
             if _is_cn_symbol(fill.symbol) and pos and hasattr(fill.timestamp, 'date'):
@@ -97,13 +103,19 @@ class FillHandler:
             if sell_qty <= 0:
                 return
             proceeds = fill.price * sell_qty - fill.commission
-            self.portfolio.update_position(
+            portfolio.update_position(
                 symbol=fill.symbol,
                 quantity=-sell_qty,
                 price=fill.price,
                 cost=0,
             )
-            self.portfolio.cash += proceeds
+            portfolio.cash += proceeds
+
+    def _portfolio_for(self, strategy_name: Optional[str]) -> Any:
+        if self._portfolio_resolver is None:
+            return self.portfolio
+        portfolio = self._portfolio_resolver(strategy_name)
+        return portfolio or self.portfolio
 
     def _notify_callbacks(self, fill: Fill) -> None:
         """Notify registered callbacks of the fill."""
@@ -142,6 +154,25 @@ class FillHandler:
             )
         except Exception as e:
             self.logger.error(f"Failed to update strategy tracker: {e}")
+
+    def _record_fill(self, fill: Fill) -> None:
+        if self._live_recorder is None:
+            return
+        try:
+            side = fill.side.value if hasattr(fill.side, "value") else str(fill.side)
+            self._live_recorder.record_fill(
+                order_id=fill.order_id,
+                timestamp=fill.timestamp,
+                strategy_name=fill.strategy_name,
+                symbol=fill.symbol,
+                side=side,
+                quantity=fill.quantity,
+                price=fill.price,
+                commission=fill.commission,
+                fill_id=fill.fill_id,
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to record fill: {e}")
 
     def get_fills(
         self,

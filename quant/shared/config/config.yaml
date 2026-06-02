@@ -3,7 +3,7 @@ system:
   log_level: INFO
   data_dir: ./data
   start_date: "2025-01-01"
-  end_date: "2026-05-01"
+  end_date: "2026-05-31"
   initial_cash: 100000
   currency: USD
 
@@ -23,8 +23,8 @@ markets:
 
 data:
   tushare:
-    token: "5ddaa1a631aaf5618813242492b54237cb53879d"
-    api_url: "http://14.nat0.cn:32817"
+    token: "c1d24a4f56a07e0df527b14c209f7067110319374552b8a865ddda38"
+    api_url: ""
   providers:
     - yahoo
     - alpha_vantage
@@ -67,6 +67,13 @@ risk:
 portfolio:
   construction_method: quarter_kelly
   kelly_fraction: 0.25
+
+live_trading:
+  strategy_initial_cash: 20000
+  execution:
+    max_cost_bps: 30
+    deadline: "14:50"
+    drop_unfilled: true
 
 scheduler:
   jobs:

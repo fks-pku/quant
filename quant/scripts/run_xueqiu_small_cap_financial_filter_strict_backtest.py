@@ -37,7 +37,7 @@ from quant.infrastructure.research.reporting import build_research_full_report_h
 
 
 START = datetime(2016, 1, 1)
-END = datetime(2026, 5, 1)
+END = datetime(2026, 5, 31)
 INITIAL_CASH = 20000.0
 STRATEGY_ID = "xueqiu_small_cap_financial_filter"
 TITLE = "Xueqiu small-cap financial-filter rotation"

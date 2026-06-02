@@ -20,14 +20,21 @@ qmt:
   # MiniQMT (xtquant) - A-share trading
   host: "127.0.0.1"
   port: 58610
-  # 资金账号，留空自动取默认账号
+  # 资金账号，留空时尝试从 QMT 终端查询；建议显式填写国金资金账号
   account: ""
+  # 账号类型: STOCK 普通股票账户, CREDIT 信用账户
+  account_type: STOCK
   # 交易密码（实盘必填，模拟盘留空）
   password: ""
   # 交易模式: SIMULATE (模拟盘) 或 REAL (实盘)
   trade_mode: SIMULATE
-  # xtquant 库路径（非必填，默认从 QMT 安装目录自动发现）
+  # MiniQMT userdata_mini 目录（必填）
+  # 示例: "D:/国金证券QMT交易端/userdata_mini"
+  userdata_mini_path: "D:/国金证券QMT交易端/userdata_mini"
+  # xtquant 包目录（可选；仅当当前 Python 找不到 xtquant 时填写）
   # 示例: "D:/国金证券QMT交易端/bin.x64/Lib/site-packages"
+  xtquant_path: ""
+  # 旧字段兼容：如果已使用 mini_qmt_path，可保留；新配置请用 userdata_mini_path
   mini_qmt_path: ""
 
 ibkr:

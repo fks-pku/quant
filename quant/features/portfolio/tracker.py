@@ -147,6 +147,11 @@ class StrategyPositionTracker:
                 actual_qty = float(bp.get("qty", bp.get("quantity", 0)))
                 tracked_qty = tracker_totals.get(symbol, 0.0)
                 diff = actual_qty - tracked_qty
+                market_value = float(bp.get("market_value", 0.0) or 0.0)
+                current_price = float(bp.get("current_price", bp.get("price", 0.0)) or 0.0)
+                if current_price <= 0 and actual_qty > 0 and market_value > 0:
+                    current_price = market_value / actual_qty
+                broker_unrealized = float(bp.get("unrealized_pnl", 0.0) or 0.0)
 
                 if diff > 0.001:
                     if DEFAULT_STRATEGY not in self._positions:
@@ -163,8 +168,38 @@ class StrategyPositionTracker:
                 elif diff < -0.001:
                     self._reduce_proportionally(symbol, abs(diff))
 
+                if actual_qty > 0 and symbol:
+                    self._mark_to_market(
+                        symbol=symbol,
+                        actual_qty=actual_qty,
+                        market_value=market_value,
+                        current_price=current_price,
+                        broker_unrealized=broker_unrealized,
+                    )
+
             self._save()
             return self.get_breakdown()
+
+    def _mark_to_market(
+        self,
+        symbol: str,
+        actual_qty: float,
+        market_value: float,
+        current_price: float,
+        broker_unrealized: float,
+    ) -> None:
+        if actual_qty <= 0:
+            return
+        for positions in self._positions.values():
+            if symbol not in positions:
+                continue
+            pos = positions[symbol]
+            share = pos.qty / actual_qty
+            pos.market_value = market_value * share if market_value > 0 else pos.qty * current_price
+            if current_price > 0:
+                pos.unrealized_pnl = (current_price - pos.avg_cost) * pos.qty
+            else:
+                pos.unrealized_pnl = broker_unrealized * share
 
     def _reduce_proportionally(self, symbol: str, qty_to_reduce: float) -> None:
         remaining = qty_to_reduce

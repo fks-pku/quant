@@ -27,6 +27,7 @@ SKIP_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
     ".venv",
+    ".venv-qmt",
     "__pycache__",
     "build",
     "dist",

@@ -15,6 +15,8 @@ quant/tests/
 ├── test_strategies.py         # 策略注册与单元测试 (~25 tests)
 ├── test_analytics.py          # 分析指标测试 (~41 tests)
 ├── test_infrastructure.py     # 基础设施测试 (~25 tests)
+├── test_qmt_broker.py         # MiniQMT/QMT broker adapter tests
+├── test_live_trading_records.py # Live strategy signals, fills, snapshots, attribution, and cost-bounded execution
 ├── test_sub_portfolio.py      # SubPortfolio 测试
 ├── test_domain_invariants.py  # Domain 不变量 CASE 套件
 ├── test_trading_invariants.py # Trading 不变量 CASE 套件
@@ -22,6 +24,7 @@ quant/tests/
 ├── test_invariant_docs_contract.py # 不变量 CASE 文档同步契约
 ├── test_research_*.py         # Research pipeline/rigor/report contract 测试
 ├── test_*ingest*.py           # 数据导入/sidecar 测试
+├── test_publish_parquet_lake.py # DuckDB to day-partitioned Parquet lake snapshot/pull/restore tests
 ├── test_backtest_fuzz.py      # Hypothesis fuzz 测试
 ├── test_text_encoding.py      # 文本编码检查
 └── test_symbol_utils.py       # Symbol 工具测试
@@ -132,5 +135,7 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 - 新增策略状态机/策略框架不变量 → `test_strategies_invariants.py`，并同步 `quant/features/strategies/docs/strategy-invariants.md`；单个策略的回归测试仍放在对应 `test_<strategy>.py`
 - 修改不变量 CASE 编号或新增不变量文档 → `test_invariant_docs_contract.py` 必须保持通过
 - 新增分析指标 → `test_analytics.py`
+- 新增 broker adapter 行为 → `test_<broker>_broker.py`
+- 新增实盘信号、成交、策略表现记录、限成本执行 → `test_live_trading_records.py`
 - 新增回归测试 → 对应功能测试文件（如 `test_backtest_core.py`、`test_analytics.py`）
 - 共享数据生成逻辑 → `conftest.py`

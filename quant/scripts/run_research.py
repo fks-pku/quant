@@ -246,7 +246,7 @@ def _create_validation_components(config):
     validation_cfg = dict(getattr(config, "validation_config", {}) or {})
     validation_cfg.setdefault("min_observations", getattr(config, "validation_min_obs", 252))
     validation_cfg.setdefault("start_date", getattr(config, "default_backtest_start", "2016-01-01"))
-    validation_cfg.setdefault("end_date", getattr(config, "default_backtest_end", "2026-05-01"))
+    validation_cfg.setdefault("end_date", getattr(config, "default_backtest_end", "2026-05-31"))
     market_data = _create_research_market_data(config)
     validation_cfg.setdefault("default_universe", _default_research_universe(market_data))
     return (

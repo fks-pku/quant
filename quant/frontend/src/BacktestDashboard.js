@@ -150,7 +150,7 @@ function CollapsibleSection({ title, defaultOpen = false, children }) {
 export default function BacktestDashboard() {
   const [strategy, setStrategy] = useState('');
   const [startDate, setStartDate] = useState('2020-01-01');
-  const [endDate, setEndDate] = useState('2024-12-31');
+  const [endDate, setEndDate] = useState('2026-05-31');
   const [symbols, setSymbols] = useState('HK.00700');
   const [initialCash, setInitialCash] = useState(100000);
   const [slippageBps, setSlippageBps] = useState(5);

@@ -28,5 +28,5 @@
 
 ## Known Pitfalls
 
-- `calibrate()` 方法目前只返回简单映射，需要与实盘持仓对账
+- `calibrate()` must reconcile broker quantities and update strategy-level market value/unrealized P&L before live performance snapshots are recorded.
 - 策略名称作为 key 的一部分，改名会导致历史数据丢失

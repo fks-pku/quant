@@ -4,7 +4,7 @@
 Usage:
     python quant_system.py --mode paper
     python quant_system.py --mode live --config config.yaml
-    python quant_system.py --backtest --start 2025-01-01 --end 2026-05-01
+    python quant_system.py --backtest --start 2025-01-01 --end 2026-05-31
 """
 
 import argparse
@@ -30,6 +30,9 @@ from quant.infrastructure.execution.brokers.paper import PaperBroker
 from quant.infrastructure.execution.brokers.futu import FutuBroker
 from quant.infrastructure.execution.order_manager import OrderManager
 from quant.infrastructure.execution.fill_handler import FillHandler
+from quant.infrastructure.execution.live_executor import LiveExecutionManager
+from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
+from quant.features.portfolio.tracker import get_tracker
 from quant.features.strategies.registry import StrategyRegistry
 from quant.shared.utils.config_loader import ConfigLoader
 from quant.shared.utils.logger import setup_logger
@@ -47,6 +50,7 @@ class QuantSystem:
         )
         self.engine: Optional[Engine] = None
         self.storage: Optional[SQLiteStorage] = None
+        self.live_recorder = LiveTradingRecorder()
         self._setup_signal_handlers()
 
     def _setup_signal_handlers(self) -> None:
@@ -136,16 +140,22 @@ class QuantSystem:
             host = self.config_loader.get("brokers.yaml", "qmt", "host", default="127.0.0.1")
             port = self.config_loader.get("brokers.yaml", "qmt", "port", default=58610)
             account = self.config_loader.get("brokers.yaml", "qmt", "account", default="")
+            account_type = self.config_loader.get("brokers.yaml", "qmt", "account_type", default="STOCK")
             password = self.config_loader.get("brokers.yaml", "qmt", "password", default="")
             trade_mode = self.config_loader.get("brokers.yaml", "qmt", "trade_mode", default="SIMULATE")
+            userdata_mini_path = self.config_loader.get("brokers.yaml", "qmt", "userdata_mini_path", default="")
+            xtquant_path = self.config_loader.get("brokers.yaml", "qmt", "xtquant_path", default="")
             mini_qmt_path = self.config_loader.get("brokers.yaml", "qmt", "mini_qmt_path", default="")
             from quant.infrastructure.execution.brokers.qmt import QMTBroker
             broker = QMTBroker(
                 host=host,
                 port=port,
                 account=account,
+                account_type=account_type,
                 password=password,
                 trade_mode=trade_mode,
+                userdata_mini_path=userdata_mini_path,
+                xtquant_path=xtquant_path,
                 mini_qmt_path=mini_qmt_path,
             )
             broker.connect()
@@ -154,32 +164,120 @@ class QuantSystem:
 
     def _setup_order_manager(self) -> None:
         """Setup order manager and fill handler, wire to engine."""
+        strategy_tracker = get_tracker()
         order_manager = OrderManager(
             portfolio=self.engine.portfolio,
             risk_engine=self.engine.risk_engine,
             event_bus=self.engine.event_bus,
             config=self.config,
+            strategy_tracker=strategy_tracker,
+            live_recorder=self.live_recorder,
+            risk_engine_resolver=self._risk_engine_for_strategy,
         )
         if self.engine.broker:
             broker_name = getattr(self.engine.broker, '_name', 'paper')
             order_manager.register_broker(broker_name, self.engine.broker)
         self.engine.set_order_manager(order_manager)
+        self.engine.execution_manager = self._create_live_execution_manager(order_manager)
         self.logger.info("OrderManager initialized")
 
         fill_handler = FillHandler(
             portfolio=self.engine.portfolio,
             event_bus=self.engine.event_bus,
             config=self.config,
+            strategy_tracker=strategy_tracker,
+            live_recorder=self.live_recorder,
+            portfolio_resolver=self._portfolio_for_strategy,
         )
         fill_handler.register_fill_callback(self._on_fill)
         self._fill_handler = fill_handler
+        if self.engine.broker and hasattr(self.engine.broker, "register_trade_callback"):
+            self.engine.broker.register_trade_callback(self._on_broker_trade)
         self.logger.info("FillHandler initialized")
+
+    def _create_live_execution_manager(self, order_manager: OrderManager) -> LiveExecutionManager:
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        execution_config = live_config.get("execution", {}) if isinstance(live_config, dict) else {}
+        base_execution = self.config.get("execution", {}) if isinstance(self.config, dict) else {}
+        max_cost_bps = execution_config.get("max_cost_bps", base_execution.get("max_cost_bps", 30))
+        deadline = execution_config.get("deadline")
+        return LiveExecutionManager(
+            order_manager,
+            default_max_cost_bps=max_cost_bps,
+            default_deadline=deadline,
+        )
 
     def _on_fill(self, fill: Any) -> None:
         """Handle fill events from FillHandler."""
+        strategy_name = getattr(fill, "strategy_name", None)
         for strategy in self.engine.strategies:
+            if strategy_name and getattr(strategy, "name", None) != strategy_name:
+                continue
             if hasattr(strategy, "on_fill"):
                 strategy.on_fill(strategy.context, fill)
+
+    def _risk_engine_for_strategy(self, strategy_name: Optional[str]) -> Any:
+        if not self.engine or not strategy_name:
+            return self.engine.risk_engine if self.engine else None
+        return self.engine._sub_risk_engines.get(strategy_name, self.engine.risk_engine)
+
+    def _portfolio_for_strategy(self, strategy_name: Optional[str]) -> Any:
+        if not self.engine or not strategy_name:
+            return self.engine.portfolio if self.engine else None
+        return self.engine._sub_portfolios.get(strategy_name, self.engine.portfolio)
+
+    def _on_broker_trade(self, **trade: Any) -> None:
+        if not hasattr(self, "_fill_handler"):
+            return
+        self._fill_handler.process_fill(
+            order_id=str(trade.get("order_id", "")),
+            symbol=str(trade.get("symbol", "")),
+            side=str(trade.get("side", "")),
+            quantity=float(trade.get("quantity", 0.0) or 0.0),
+            price=float(trade.get("price", 0.0) or 0.0),
+            commission=float(trade.get("commission", 0.0) or 0.0),
+            timestamp=trade.get("timestamp"),
+            strategy_name=trade.get("strategy_name"),
+        )
+
+    def _record_live_strategy_snapshots(self) -> None:
+        try:
+            tracker = get_tracker()
+            broker_positions = self._broker_positions_for_tracker()
+            if broker_positions:
+                breakdown = tracker.calibrate(broker_positions)
+            else:
+                breakdown = tracker.get_breakdown()
+            if not breakdown:
+                return
+            self.live_recorder.record_strategy_breakdown(
+                breakdown,
+                total_nav=self._broker_account_nav(),
+                timestamp=datetime.now(),
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to record live strategy snapshots: {e}")
+
+    def _broker_positions_for_tracker(self) -> list:
+        if not self.engine or not self.engine.broker or not hasattr(self.engine.broker, "get_positions"):
+            return []
+        positions = []
+        for pos in self.engine.broker.get_positions():
+            positions.append({
+                "symbol": getattr(pos, "symbol", ""),
+                "quantity": getattr(pos, "quantity", 0.0),
+                "avg_cost": getattr(pos, "avg_cost", 0.0),
+                "market_value": getattr(pos, "market_value", 0.0),
+                "unrealized_pnl": getattr(pos, "unrealized_pnl", 0.0),
+            })
+        return positions
+
+    def _broker_account_nav(self) -> float:
+        if self.engine and self.engine.broker and hasattr(self.engine.broker, "get_account_info"):
+            account = self.engine.broker.get_account_info()
+            return float(getattr(account, "equity", 0.0) or 0.0)
+        status = self.engine.get_portfolio_status() if self.engine else {}
+        return float(status.get("nav", 0.0) or 0.0)
 
     def _setup_strategies(self) -> None:
         """Setup and register strategies from both config.yaml and strategies.yaml."""
@@ -204,8 +302,28 @@ class QuantSystem:
 
             strategy = self._create_strategy(name, symbols, params)
             if strategy:
-                self.engine.add_strategy(strategy)
+                allocation_pct = self._strategy_allocation_pct(strategy_cfg)
+                self.engine.add_strategy(strategy, allocation_pct=allocation_pct)
                 self.logger.info(f"Strategy {name} enabled")
+
+    def _strategy_allocation_pct(self, strategy_cfg: dict) -> Optional[float]:
+        if "allocation_pct" in strategy_cfg:
+            return float(strategy_cfg["allocation_pct"])
+
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        allocation_cash = strategy_cfg.get(
+            "allocation_cash",
+            strategy_cfg.get("initial_cash", live_config.get("strategy_initial_cash")),
+        )
+        if allocation_cash is None:
+            return None
+
+        total_cash = float(self.config.get("system", {}).get("initial_cash", 0.0) or 0.0)
+        if total_cash <= 0 and self.engine and getattr(self.engine, "portfolio", None):
+            total_cash = float(getattr(self.engine.portfolio, "initial_cash", 0.0) or 0.0)
+        if total_cash <= 0:
+            raise ValueError("Strategy allocation requires positive system.initial_cash")
+        return float(allocation_cash) / total_cash
 
     def _create_strategy(self, name: str, symbols: list, params: dict) -> Any:
         """Create a strategy instance by name using the registry."""
@@ -256,6 +374,10 @@ class QuantSystem:
                     f"Unrealized P&L=${status['total_unrealized_pnl']:.2f}, "
                     f"Realized P&L=${status['total_realized_pnl']:.2f}"
                 )
+                execution_manager = getattr(self.engine, "execution_manager", None)
+                if execution_manager is not None:
+                    execution_manager.drop_expired_targets()
+                self._record_live_strategy_snapshots()
                 time.sleep(60)
         except KeyboardInterrupt:
             self.engine.stop()
@@ -263,7 +385,7 @@ class QuantSystem:
     def _run_backtest(self) -> None:
         """Run backtest mode."""
         start_date_str = self.config.get("system", {}).get("start_date", "2025-01-01")
-        end_date_str = self.config.get("system", {}).get("end_date", "2026-05-01")
+        end_date_str = self.config.get("system", {}).get("end_date", "2026-05-31")
         speed = self.config.get("system", {}).get("backtest_speed", "1x")
 
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d")

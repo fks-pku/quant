@@ -8,7 +8,7 @@ Flask thin routing layer. Exposes features via REST endpoints. Read-only storage
 
 Blueprints:
 - `backtest_bp` — backtest execution and results
-- `strategies_bp` — strategy registry and parameters
+- `strategies_bp` — strategy registry, parameters, live strategy performance, and daily live record reads
 - `positions_bp` — position queries
 - `orders_bp` — order management
 - `system_bp` — system status and control
@@ -41,6 +41,7 @@ Blueprints:
 
 - `runtime.py` uses threading.RLock for thread-safe state access
 - Blueprint functions must not raise — return error dicts with appropriate HTTP status codes
+- Live record endpoints must validate record kind and return HTTP 400 for unsupported kinds.
 - Do not cache DuckDB connections across requests
 - Large-universe strict backtests may reuse `_DuckDBDailyDateProvider` chunk caches under `quant/infrastructure/var/research/cache/daily_date_provider/`; keys include source DuckDB file size/mtime, including ETF fund NAV when ETF symbols are present, so data rebuilds naturally invalidate the cache
 - `_DuckDBDailyDateProvider` must split stock, ETF, and index symbols before loading bars: stocks use status-enriched `daily_cn_ochl`, ETFs use `cn_etf.daily_cn_ochl`, and indexes use `cn_index.daily_cn_ochl`.

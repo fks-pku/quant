@@ -13,7 +13,7 @@ def run_backtest():
     data = request.json or {}
     strategy_id = data.get('strategy_id')
     start_date = data.get('start_date', '2020-01-01')
-    end_date = data.get('end_date', '2024-12-31')
+    end_date = data.get('end_date', '2026-05-31')
     symbols = data.get('symbols', ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY'])
     initial_cash = data.get('initial_cash', 100000)
     slippage_bps = data.get('slippage_bps', 5)

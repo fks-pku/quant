@@ -19,5 +19,6 @@ class StrategyContext:
     risk_engine: Any
     event_bus: Any
     order_manager: Any = None
+    execution_manager: Any = None
     data_provider: Any = None
     broker: Any = None

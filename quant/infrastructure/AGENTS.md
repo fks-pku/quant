@@ -9,7 +9,9 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `EventBus` — implements `EventPublisher` port
 - `DuckDBStorage` — implements `Storage` port, supports `read_only=True`, bulk `get_bars_for_symbols()`, and optional CN security-status enrichment
 - `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
-- `PaperBroker`, `FutuProvider` — implement `BrokerAdapter` port
+- `PaperBroker`, `FutuProvider`, `QMTBroker` — implement `BrokerAdapter` port
+- `LiveTradingRecorder` — writes daily JSONL live records for strategy signals, broker orders, fills, and strategy snapshots under `infrastructure/var/live_trading/`
+- `LiveExecutionManager` — converts live target signals into cost-bounded LIMIT orders and drops unfilled orders after the configured intraday deadline
 
 ## 依赖
 
@@ -35,6 +37,12 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `DuckDBStorage` read_only=True must be used in API endpoints and backtest — prevents write-lock conflicts
 - Provider subclasses should not import from features/ — only from domain ports
 - Tushare provider requires token configuration in config.yaml
+- Tushare per-symbol dividend refresh must treat API rate limits as retryable failures, not as empty dividend histories.
+- QMT/MiniQMT uses `userdata_mini_path` for `XtQuantTrader(path, session_id)` and optional `xtquant_path` only for importing the SDK; do not pass the SDK site-packages path as the MiniQMT data path.
+- QMT trade APIs require a `StockAccount` object and `subscribe(account)` before asset, position, order, and trade callbacks are reliable.
+- QMT trade callbacks must pass fills through the registered callback chain so `FillHandler`, strategy attribution, and `LiveTradingRecorder` stay in sync.
+- Live execution adapters must stay feature-agnostic: strategy-level risk/portfolio ownership is supplied by injected resolvers from the composition root, not by importing `features/`.
+- Cost-bounded live execution must preserve explicit LIMIT prices; only strategy `MARKET + reference price` signals are converted to bounded LIMIT orders.
 - Bare 6-digit CN codes can be ambiguous between stocks and indices (for example `000001`, `000016`, `000905`). Default provider/storage routing treats them as stocks; index ingestion must use `TushareProvider.fetch_index_daily_with_hfq()` and `DuckDBStorage.save_cn_index_bars()`.
 - Tushare dividend rows can contain repeated lifecycle records for the same `(symbol, ex_date)`. `DuckDBStorage.save_cn_dividends()` must coalesce them before writing because `cn_dividends` is keyed by `(symbol, ex_date)`.
 
@@ -60,6 +68,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `cn_financial_indicators.duckdb::cn_financial_indicators` stores Tushare `fina_indicator` quality/growth fields with `ann_date` and `end_date` for point-in-time joins.
 - `cn_corporate_actions.duckdb::cn_dividends` stores CN dividend and allotment records.
 - `quant/scripts/update_cn_live_data.py` is the daily live-data updater. It incrementally updates existing stock/index/ETF symbols and then fills valuation, financial, status, and index-weight sidecars to the target date. Stock bars and ETF bars default to date-based all-market fetches; ETF `adj_factor` is carried forward from the latest local value. Full dividend-history refresh (`--refresh-dividends` or `--dividends-only`) and per-fund NAV refresh (`--refresh-fund-nav` or `--nav-only`) are opt-in because they are too slow for daily all-market runs.
+- `quant/scripts/publish_parquet_lake.py snapshot` is the routine DuckDB-to-OSS publisher. Date-bearing datasets are exported as day partitions (`year=YYYY/month=MM/day=DD/data.parquet`), uploaded through `rclone`, and can be pulled/restored on another machine with `pull` then `restore --force`.
 
 ## Security Status Data
 

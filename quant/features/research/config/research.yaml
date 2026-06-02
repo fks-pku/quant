@@ -11,7 +11,7 @@ research:
   backtest_sharpe_threshold: 0.5
   auto_backtest: true
   default_backtest_start: "2016-01-01"
-  default_backtest_end: "2026-05-01"
+  default_backtest_end: "2026-05-31"
   default_initial_cash: 20000
   default_symbols:
     - "000300"

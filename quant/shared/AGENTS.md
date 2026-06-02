@@ -17,7 +17,7 @@ Cross-feature pure utilities. No business semantics.
 
 ### config/
 - `config.yaml` — main system configuration
-- `brokers.yaml` — broker credentials
+- `brokers.yaml` — broker credentials and adapter paths, including QMT `userdata_mini_path` and optional `xtquant_path`
 - `strategies.yaml` — strategy parameters
 
 ## 依赖
@@ -39,4 +39,4 @@ None — shared has no business logic, only utilities.
 ## Known Pitfalls
 
 - Adding business logic to shared/ creates hidden coupling — keep shared/ purely mechanical
-- ConfigLoader uses yaml — do not mix JSON configs
+- ConfigLoader uses YAML and reads configs as explicit UTF-8; config files may contain Chinese comments and must not depend on the OS default encoding

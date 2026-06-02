@@ -1,6 +1,9 @@
+from datetime import date
+
 from flask import Blueprint, jsonify, request
 
 from quant.api.state import runtime as state
+from quant.infrastructure.execution.live_recorder import get_live_recorder
 
 strategies_bp = Blueprint('strategies', __name__)
 
@@ -85,22 +88,52 @@ def get_strategy_performance(strategy_id):
     for name, info in state.AVAILABLE_STRATEGIES.items():
         if info['id'] == strategy_id:
             bt = info['backtest']
+            live_perf = get_live_recorder().get_strategy_performance(info['name'])
+            has_live_data = bool(live_perf['pnl_curve']) or live_perf['total_trades'] > 0
             return jsonify({
                 'strategy_id': info['id'],
                 'strategy_name': info['name'],
                 'description': info['description'],
                 'backtest': bt,
                 'performance': {
-                    'sharpe_ratio': bt['test_sharpe'],
-                    'max_drawdown': bt['max_dd'],
+                    'sharpe_ratio': live_perf['sharpe_ratio'] if has_live_data else bt['test_sharpe'],
+                    'max_drawdown': live_perf['max_drawdown'] if has_live_data else bt['max_dd'],
                     'cagr': bt['cagr'],
-                    'win_rate': bt['win_rate'],
+                    'win_rate': live_perf['win_rate'] if has_live_data else bt['win_rate'],
+                    'total_pnl': live_perf['total_pnl'],
+                    'realized_pnl': live_perf['realized_pnl'],
+                    'unrealized_pnl': live_perf['unrealized_pnl'],
+                    'total_trades': live_perf['total_trades'],
+                    'profit_factor': live_perf['profit_factor'],
                 },
-                'pnl_curve': [],
-                'recent_trades': [],
+                'pnl_curve': live_perf['pnl_curve'],
+                'recent_trades': live_perf['recent_trades'],
+                'latest_snapshot': live_perf['latest_snapshot'],
                 'positions': [p for p in state.positions_data if p.get('symbol') in info.get('symbols', [])] if state.system_status == 'running' else []
             })
     return jsonify({'error': 'Strategy not found'}), 404
+
+
+@strategies_bp.route('/api/strategies/live-records/<kind>', methods=['GET'])
+def get_strategy_live_records(kind):
+    trading_date = request.args.get('date') or date.today().isoformat()
+    strategy_name = request.args.get('strategy_name')
+    strategy_id = request.args.get('strategy_id')
+    if strategy_id and not strategy_name:
+        for _name, info in state.AVAILABLE_STRATEGIES.items():
+            if info['id'] == strategy_id:
+                strategy_name = info['name']
+                break
+    try:
+        records = get_live_recorder().read_day(kind, trading_date, strategy_name=strategy_name)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({
+        'date': trading_date,
+        'kind': kind,
+        'strategy_name': strategy_name,
+        'records': records,
+    })
 
 
 @strategies_bp.route('/api/strategies/select', methods=['POST'])

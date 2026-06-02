@@ -40,7 +40,7 @@ from quant.infrastructure.research.reporting import build_research_full_report_h
 
 
 START = datetime(2016, 1, 1)
-END = datetime(2026, 5, 1)
+END = datetime(2026, 5, 31)
 UNIVERSE_AS_OF = None
 UNIVERSE_MIN_HISTORY_DAYS_AS_OF = 0
 UNIVERSE_MAX_SYMBOLS_PER_CATEGORY = 0
