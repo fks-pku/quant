@@ -2859,6 +2859,31 @@ class TestCase33MultiStrategyDefaultIsolation:
         assert len(positions) == 1
         assert positions[0]["strategy"] == "IsoA"
 
+    def test_c33_03_backtest_context_order_manager_is_strategy_scoped(self):
+        from quant.features.backtest.entities import _BacktestContext
+        from quant.features.trading.portfolio import Portfolio
+        from quant.features.trading.risk import RiskEngine
+
+        portfolio = Portfolio(initial_cash=100_000)
+        context = _BacktestContext(
+            portfolio=portfolio,
+            risk_engine=RiskEngine(CASE1_CONFIG, portfolio, None),
+            event_bus=None,
+            data_provider=None,
+            strategy_name="IsoA",
+        )
+        context.prepare_for_trading_day(date(2024, 6, 3), {"AAPL": 100.0})
+
+        assert not hasattr(context.order_manager, "_buffer")
+        with pytest.raises(ValueError):
+            context.order_manager.submit_order("AAPL", 10, "BUY", "MARKET", None, "IsoB")
+
+        context.order_manager.submit_order("AAPL", 10, "BUY", "MARKET", None, None)
+        orders = context.drain_orders(signal_date=datetime(2024, 6, 3))
+
+        assert len(orders) == 1
+        assert orders[0].strategy == "IsoA"
+
 
 # ============================================================================
 # CASE-34: Multi-strategy stock dividend position sync

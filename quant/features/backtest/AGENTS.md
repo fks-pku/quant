@@ -107,7 +107,7 @@ while current_date ≤ end:
 - `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` 在每个日循环末尾调用，勿遗漏
 - `order_executor` 中 SELL 路径的 settled_quantity 检查：CN T+1 用 `pos.settled_quantity()`，其他市场用 `pos.quantity`
 - 未成交订单不重试：策略应自行在 `on_after_trading` 中基于最新数据重新判断
-- `_BacktestContext` 和 `_BacktestOrderManager` 定义在 `entities.py`，不要暴露到外部
+- `_BacktestContext` 和 `_BacktestOrderManager` 定义在 `entities.py`，策略只能看到 scoped `order_manager` 代理；不要把 raw `_BacktestOrderManager` 暴露给策略
 - Engine 通过 `_BacktestContext.prepare_for_trading_day()` 和 `drain_orders()` 公开方法与 Context 交互，不要直接访问 `_pending_orders`、`_current_date`、`_last_prices` 等私有属性
 - Market order 无有效价格时（`effective_price <= 0`）直接 reject，不再用 share count 充当 dollar value 绕过风控
 - CN 回测数据应通过 `DuckDBProvider`/`DuckDBStorage(use_security_status=True)` 读取；它会用 `cn_status.duckdb::cn_security_status_daily` 给股票 `daily_cn_ochl` 补 `_suspended`、`tradable`、`is_st`、`up_limit/down_limit`，并为无 OHLC 的停牌日生成 synthetic bar；ETF 和指数日线分别从 `cn_etf`/`cn_index` sidecar 读取

@@ -83,6 +83,9 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
             self.liquidity_window,
         ) + (260 if self.require_pit_size else 5)
 
+    def required_snapshot_symbols(self) -> List[str]:
+        return []
+
     def on_after_trading(self, context: "Context", trading_date: date) -> None:
         if not self._check_rebalance_gate(trading_date):
             return

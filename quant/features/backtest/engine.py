@@ -145,6 +145,7 @@ class Backtester:
                 base_slippage_bps=self.slippage_bps,
                 execution_cost_model=self.execution_cost_model,
                 market_impact_factor=self.market_impact_factor,
+                strategy_name=sname,
             )
             start_strategy(strategy)
 

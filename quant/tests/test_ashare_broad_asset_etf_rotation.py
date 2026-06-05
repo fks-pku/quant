@@ -71,6 +71,12 @@ def test_default_universe_includes_csi1000_and_excludes_cross_border_etfs():
     assert not {"513100", "513050", "159920", "510900"}.intersection(symbols)
 
 
+def test_dynamic_universe_does_not_require_every_candidate_in_daily_snapshot():
+    strategy = AShareBroadAssetEtfRotationStrategy()
+
+    assert strategy.required_snapshot_symbols() == []
+
+
 def test_gold_cash_and_bond_are_ranked_candidates_not_forced_fallbacks():
     strategy = AShareBroadAssetEtfRotationStrategy(
         category_symbols={"gold": ["518880"], "cash": ["511990"], "bond_rate": ["511010"]},

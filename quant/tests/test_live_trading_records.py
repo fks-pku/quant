@@ -588,6 +588,39 @@ def test_context_signal_gate_blocks_direct_order_submission():
     assert order_manager.submitted == []
 
 
+def test_context_exposes_strategy_scoped_order_surface_only():
+    class RawOrderManager(RecordingOrderManager):
+        def get_all_orders(self):
+            return ["global-order"]
+
+    order_manager = RawOrderManager()
+    context = Context(
+        portfolio=None,
+        risk_engine=None,
+        event_bus=None,
+        order_manager=order_manager,
+        broker=object(),
+        strategy_name="Alpha",
+    )
+
+    assert context.broker is None
+    assert not hasattr(context.order_manager, "get_all_orders")
+    with pytest.raises(ValueError):
+        context.order_manager.submit_order("600519", 100, "BUY", "LIMIT", 10.0, "Beta")
+
+    order_id = context.submit_order("600519", 100, "BUY", "LIMIT", 10.0)
+
+    assert order_id == "ORD-1"
+    assert order_manager.submitted == [{
+        "symbol": "600519",
+        "quantity": 100,
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "price": 10.0,
+        "strategy_name": "Alpha",
+    }]
+
+
 def test_trading_engine_market_clock_uses_configured_market(monkeypatch):
     from quant.shared.utils import datetime_utils
 
@@ -856,6 +889,34 @@ def test_fill_handler_updates_strategy_specific_portfolio(tmp_path):
 
     assert len(strategy_portfolio.updated) == 1
     assert default_portfolio.updated == []
+
+
+def test_fill_handler_buy_deducts_strategy_shadow_cash():
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.sub_portfolio import SubPortfolio
+
+    master = Portfolio(initial_cash=100000)
+    sub = SubPortfolio("DemoStrategy", 20000, master)
+    handler = FillHandler(
+        portfolio=master,
+        event_bus=EventBus(),
+        config={},
+        portfolio_resolver=lambda strategy_name: sub if strategy_name == "DemoStrategy" else master,
+    )
+
+    handler.process_fill(
+        order_id="BRK-1",
+        symbol="600519",
+        side="BUY",
+        quantity=100,
+        price=50.0,
+        commission=5.0,
+        timestamp=datetime(2026, 6, 1, 10, 1),
+        strategy_name="DemoStrategy",
+    )
+
+    assert sub.cash == pytest.approx(20000 - 5005.0)
+    assert master.cash == pytest.approx(80000.0)
 
 
 def test_recorder_accepts_domain_order_objects(tmp_path):

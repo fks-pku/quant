@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import threading
 import time
 
-from quant.domain.context import StrategyContext
+from quant.domain.context import StrategyContext, StrategyScopedOrderManager
 from quant.domain.ports.event_publisher import EventPublisher
 from quant.domain.events.base import EventType
 from quant.features.trading.scheduler import Scheduler
@@ -32,16 +32,51 @@ class Context(StrategyContext):
     Context from this module. New code should import StrategyContext from domain.
     """
 
+    def __init__(
+        self,
+        portfolio: Any,
+        risk_engine: Any,
+        event_bus: Any,
+        order_manager: Any = None,
+        execution_manager: Any = None,
+        data_provider: Any = None,
+        broker: Any = None,
+        execution_reference_resolver: Any = None,
+        signal_gate: Any = None,
+        strategy_name: Optional[str] = None,
+    ):
+        scoped_order_manager = (
+            StrategyScopedOrderManager(order_manager, strategy_name)
+            if order_manager is not None
+            else None
+        )
+        super().__init__(
+            portfolio=portfolio,
+            risk_engine=risk_engine,
+            event_bus=event_bus,
+            order_manager=scoped_order_manager,
+            execution_manager=None,
+            data_provider=data_provider,
+            broker=None,
+            execution_reference_resolver=execution_reference_resolver,
+            signal_gate=signal_gate,
+            strategy_name=str(strategy_name) if strategy_name else None,
+        )
+        self._order_manager = order_manager
+        self._execution_manager = execution_manager
+        self._broker = broker
+
     def submit_order(self, symbol: str, quantity: float, side: str,
                      order_type: str = "MARKET", price: Optional[float] = None,
                      strategy_name: Optional[str] = None) -> Optional[str]:
+        strategy_name = self._resolve_strategy_name(strategy_name)
         gate = getattr(self, "signal_gate", None)
         if callable(gate) and not gate(strategy_name):
             return None
         order_type_text = (order_type or "MARKET").upper()
-        if self.execution_manager is not None and order_type_text == "MARKET":
+        if self._execution_manager is not None and order_type_text == "MARKET":
             reference_price = price if isinstance(price, (int, float)) and price > 0 else None
-            signal_reference = getattr(self.execution_manager, "get_signal_reference_price", None)
+            signal_reference = getattr(self._execution_manager, "get_signal_reference_price", None)
             if reference_price is None and callable(signal_reference):
                 reference_price = signal_reference(symbol)
             resolver = getattr(self, "execution_reference_resolver", None)
@@ -51,7 +86,7 @@ class Context(StrategyContext):
                     return None
                 reference_price = reference.price
             if reference_price is not None:
-                return self.execution_manager.submit_target_order(
+                return self._execution_manager.submit_target_order(
                     symbol, quantity, side, reference_price, strategy_name,
                 )
         if self.order_manager is None:
@@ -59,6 +94,15 @@ class Context(StrategyContext):
         return self.order_manager.submit_order(
             symbol, quantity, side, order_type, price, strategy_name,
         )
+
+    def _resolve_strategy_name(self, strategy_name: Optional[str]) -> Optional[str]:
+        if not self.strategy_name:
+            return strategy_name
+        if strategy_name and str(strategy_name) != self.strategy_name:
+            raise ValueError(
+                f"strategy context for {self.strategy_name} cannot submit for {strategy_name}"
+            )
+        return self.strategy_name
 
 
 class Engine:
@@ -143,6 +187,7 @@ class Engine:
             broker=self.broker,
             execution_reference_resolver=self._make_execution_reference_resolver(),
             signal_gate=self._context_accepts_strategy_signals,
+            strategy_name=sname,
         )
         self.strategies.append(strategy)
 

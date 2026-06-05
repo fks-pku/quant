@@ -2800,6 +2800,50 @@ def test_promoted_strategy_report_scripts_use_current_default_end_date():
         assert namespace["END"].date().isoformat() == "2026-05-31"
 
 
+def test_broad_asset_etf_rotation_report_script_uses_domestic_default_universe():
+    import runpy
+
+    script = Path("quant/scripts/run_ashare_broad_asset_etf_rotation_strict_backtest.py")
+
+    namespace = runpy.run_path(str(script))
+
+    assert namespace["START"].date().isoformat() == "2016-01-01"
+    assert namespace["END"].date().isoformat() == "2026-05-31"
+    scenario = namespace["SCENARIOS"][0]
+    assert "csi1000" in namespace["DEFAULT_CATEGORY_SYMBOLS"]
+    assert scenario["category_symbols"]["csi1000"] == ["512100"]
+    blocked = {"nasdaq", "hsi", "hshares", "china_internet", "cross_border"}
+    assert blocked.isdisjoint(set(scenario["category_symbols"]))
+
+
+def test_broad_asset_etf_rotation_report_script_keeps_registered_missing_data_buckets():
+    import runpy
+
+    namespace = runpy.run_path(str(Path("quant/scripts/run_ashare_broad_asset_etf_rotation_strict_backtest.py")))
+    universe = {
+        "category_symbols": {
+            "sse50": ["510050"],
+            "csi300": ["510300"],
+            "csi1000": ["512100"],
+            "chinext": ["159915"],
+            "chinext50": ["159949"],
+            "dividend": ["510880"],
+            "gold": ["518880"],
+            "cash": ["511990"],
+            "bond_rate": [],
+        },
+        "registered_universe_counts": {"registered_symbol_count": 9, "active_symbol_count": 8, "missing_data_count": 1},
+        "universe_registry_version": "audited_stable_etf_registry_v1",
+        "universe_selection_policy": "audited_stable_etf_registry",
+    }
+
+    scenario = namespace["_with_pit_universe"](namespace["SCENARIOS"][0], universe)
+
+    assert scenario["category_symbols"]["bond_rate"] == ["511010"]
+    assert "511010" in scenario["symbols"]
+    assert scenario["missing_pit_categories"] == ["bond_rate"]
+
+
 def test_api_yearly_returns_from_equity_uses_calendar_years():
     from quant.api.research_bp import _yearly_returns_from_equity
 

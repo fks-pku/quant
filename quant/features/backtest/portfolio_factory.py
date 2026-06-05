@@ -100,6 +100,7 @@ def create_context(
     base_slippage_bps: float = 5.0,
     execution_cost_model: Any = None,
     market_impact_factor: float = 0.0,
+    strategy_name: Optional[str] = None,
 ) -> Any:
     return _BacktestContext(
         portfolio=portfolio,
@@ -109,4 +110,5 @@ def create_context(
         base_slippage_bps=base_slippage_bps,
         execution_cost_model=execution_cost_model,
         market_impact_factor=market_impact_factor,
+        strategy_name=strategy_name,
     )

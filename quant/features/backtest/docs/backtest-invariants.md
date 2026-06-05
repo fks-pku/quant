@@ -1364,6 +1364,7 @@ C28-03  final_nav == initial_cash
     C33-01  Strategy B 不能卖出 Strategy A 的持仓，记录 no_position 拒绝
     C33-02  open_positions 包含 strategy owner
     C33-03  master 不持有策略仓位，仅保留未分配/回收现金
+    C33-04  Backtest strategy context exposes a scoped order manager: no raw `_BacktestOrderManager` internals and no cross-strategy submit
 
 ---
 

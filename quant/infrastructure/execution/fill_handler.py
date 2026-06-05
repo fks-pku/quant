@@ -90,6 +90,7 @@ class FillHandler:
                 cost=cost,
                 trade_date=today,
             )
+            portfolio.cash -= cost
         elif fill.side.upper() == "SELL":
             pos = portfolio.get_position(fill.symbol)
             available = pos.quantity if pos else 0

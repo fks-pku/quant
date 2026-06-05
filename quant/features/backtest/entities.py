@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional
 import pandas as pd
 
 from quant.domain.models.trade import Trade
+from quant.domain.context import StrategyScopedOrderManager
 from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
 from quant.features.backtest.market_rules import get_market
 from quant.features.backtest.schemas import DeferredOrder
@@ -288,17 +289,20 @@ class _BacktestContext:
         base_slippage_bps: float = 5.0,
         execution_cost_model: Optional[Dict[str, Any]] = None,
         market_impact_factor: float = 0.0,
+        strategy_name: Optional[str] = None,
     ) -> None:
         self.portfolio = portfolio
         self.risk_engine = risk_engine
         self.event_bus = event_bus
         self.data_provider = data_provider
-        self.order_manager = _BacktestOrderManager(
+        self.strategy_name = str(strategy_name) if strategy_name else None
+        self._order_manager = _BacktestOrderManager(
             risk_engine,
             base_slippage_bps=base_slippage_bps,
             execution_cost_model=execution_cost_model,
             market_impact_factor=market_impact_factor,
         )
+        self.order_manager = StrategyScopedOrderManager(self._order_manager, self.strategy_name)
 
     def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
         return self.order_manager.submit_order(symbol, quantity, side, order_type, price, strategy_name)
@@ -310,10 +314,10 @@ class _BacktestContext:
         tradable_today: Optional[Dict[str, bool]] = None,
         current_bars: Optional[Dict[str, Any]] = None,
     ):
-        self.order_manager._current_date = trading_date
-        self.order_manager._last_prices = last_prices
-        self.order_manager._tradable_today = tradable_today
-        self.order_manager._current_bars = current_bars or {}
+        self._order_manager._current_date = trading_date
+        self._order_manager._last_prices = last_prices
+        self._order_manager._tradable_today = tradable_today
+        self._order_manager._current_bars = current_bars or {}
 
     def drain_orders(self, signal_date: Optional[date] = None):
-        return self.order_manager.drain_pending(signal_date)
+        return self._order_manager.drain_pending(signal_date)

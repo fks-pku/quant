@@ -28,6 +28,9 @@
 - `risk_engine.reset_daily()` 在每个交易日结束时调用，重置订单计数器和 pending 追踪
 - `portfolio.update_position()` SELL 路径通过 `realized_pnl` 参数跟踪已实现盈亏
 - 实盘策略分账时，OrderManager/FillHandler 必须通过 resolver 使用所属策略的 RiskEngine/SubPortfolio
+- Live/Paper strategy-mode BUY orders must pass an `available_cash` hard risk check against that strategy's shadow portfolio cash, including pending order value; a strategy may reuse returned/earned cash but must not borrow from the shared real account.
+- Strategy-mode BUY fills must debit cost plus commission from that strategy's shadow portfolio cash; the master account cash must not be used again after initial allocation.
+- Strategy `Context` must expose only a scoped order surface: no raw broker/execution manager, no global order list, and submitted orders must be attributed to the owning strategy.
 - 带 `strategy_name` 的实盘成交只能派发给所属策略，不能广播到其他策略
 - Live/Paper `MARKET + D-known price` 信号单经成本保护执行器转为 LIMIT；显式 LIMIT 保持原限价；到期目标单撤单并丢弃
 - 默认 `live_trading.daily_snapshot_mode=True`：BAR 事件只进入日线快照缓存；`MARKET_CLOSE` 标记快照完成；下一次 `MARKET_OPEN` 用最新完整交易日快照批量触发所有策略，顺序为 feed all → mark portfolios by D close → after_trading all；缺失 required symbol 时跳过对应策略
@@ -55,6 +58,7 @@
 - Strategy dashboard order rows must come from the server-side display contract: include order-date open price, paper fill price displays as limit price, live fill price displays as broker fill price, commission is separate, and slippage satisfies `fill_price = open_price * (1 + slippage_bps / 10000)`.
 - Strategy dashboard holdings and metrics must reuse the same display contract: avg_cost includes the contract fill price plus commission, cash starts from per-strategy initial cash, and total NAV equals cash plus market value.
 - Strategy dashboard initial allocation cash is immutable after strategy configuration; the dashboard may display it but must not edit `allocation_cash` or submit broker orders.
+- Strategy dashboard may create the first mode configuration only through Start with a positive `initial_cash`; after that, the strategy-mode allocation is immutable and feeds the SubPortfolio shadow-account cash limit.
 - Strategy dashboard controls are scoped by `strategy_name` and mode (`live`/`paper`): live actions must not change paper gates, and paper actions must not change live gates.
 - Live/Paper daily snapshot startup must restore strategy runtime `_positions` and SubPortfolio lots from `StrategyPositionTracker` before signal generation.
 - Post-close live pending generation must use `execution.record_pending_only=True`: record accepted D-day signals for D+1 submission, write a signal-date strategy snapshot marker even on no-action days, update risk pending state, and never call broker `submit_order`.
@@ -63,7 +67,7 @@
 - Strategy dashboard payloads must expose per-mode operations ledger, recovery status, and top-level operations health so interrupted runs are visible before the next D-close/D+1 action cycle.
 - Strategy dashboard payloads must materialize legacy daily JSONL rows into canonical `strategy_modes/<mode>/<strategy_name>/` append-only records, canonicalize snapshots from that mode's filled order ledger plus initial cash and daily closes, then derive status, records, holdings, metrics, pending orders, and curves only from that strategy-mode source.
 - Configured running/paused live or paper modes with no signals/orders/fills must still materialize a cash-only `strategy_modes/<mode>/<strategy_name>/snapshots.jsonl` NAV point for the latest market data date.
-- Strategy dashboard mode controls must avoid no-op actions: render Start only for stopped/liquidating modes, show already-started plus Pause while running, show Resume while paused, and no action buttons for not-configured modes.
+- Strategy dashboard mode controls must avoid no-op actions: render Start only for stopped/liquidating modes, show already-started plus Pause while running, show Resume while paused, and render first-start Initial Cash plus Start for not-configured modes.
 - Strategy dashboard live and paper views are separate `/live` and `/paper` mode subpages that share the same component functions; do not reintroduce split live/paper tables in one stacked page.
 - Strategy dashboard `/`, `/live`, and `/paper` entrypoints all serve the no-cache dashboard page; each mode view must expose immutable Initial Cash only in the top mode/overview area; the Windows launcher opens port 8791 and restarts stale payloads that do not expose per-mode initial cash; the page must reload when the served dashboard asset version changes.
 - Strategy dashboard equity curves must align all series by trading date, include an initial-cash baseline before the first filled trading date, derive missing strategy NAV curve points from filled order rows plus daily closes when snapshots are absent, normalize benchmark only from the strategy curve start, and show data freshness plus latest scheduled job status/error when market data, holdings, signals, or pending orders lag.
@@ -73,7 +77,7 @@
 ## Known Pitfalls
 
 - `Engine._on_data()` 使用 `hasattr(self.broker, 'update_price')` 多态调用，不使用 isinstance
-- 策略通过 Context 访问所有系统组件，不要直接引用 Engine
+- 策略通过 Context 访问 scoped 策略级能力，不要直接引用 Engine、broker、全局 OrderManager
 - `RiskEngine._check_order_rate()` 回测模式（as_of_date != None）用 `_daily_order_count` 日计数器替代 wall clock，实盘模式仍用 `_order_timestamps` 时间戳列表
 - Backtest order-rate limiting is disabled by default; set `risk.max_orders_per_day` or explicit `risk.max_orders_minute` when a daily order cap is intended.
 - `RiskEngine._check_position_size()` 累计 `_pending_order_values[symbol]` 防止同日多次下单绕过仓位限制，`record_order()` 负责更新此字典

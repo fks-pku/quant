@@ -673,15 +673,19 @@ def test_strategy_dashboard_renders_only_state_appropriate_mode_actions():
     assert "already started" in html
     assert "Initial ${initialCash}" in html
     assert "Initial Cash ${initialCashText(modeInitialCash(strategy, mode))}" in html
-    assert "Total PnL %" in html
-    assert "perf.total_pnl_pct" in html
+    assert "Total Return" in html
+    assert "perf.total_return" in html
+    assert "Total PnL %" not in html
+    assert "perf.total_pnl_pct" not in html
     assert "function initialCashText(value)" in html
     assert "function modeInitialCash(strategy, mode)" in html
     assert "strategy?.initial_cash?.default" in html
     assert "dashboard_asset_version" in html
     assert "window.location.reload()" in html
     assert "locked-cash" not in html
-    assert 'data-allocation-input' not in html
+    assert "function renderUnconfiguredStart" in html
+    assert "data-initial-cash-input" in html
+    assert "initial_cash" in html
 
 
 def test_strategy_dashboard_uses_mode_subpages_with_shared_components():
@@ -815,6 +819,50 @@ def test_strategy_dashboard_allocation_endpoint_rejects_configured_cash_change(t
     assert "allocation_cash" not in config["strategies"][0]
     payload = build_dashboard_payload(root)
     assert payload["strategies"][0]["live"]["initial_cash"] == pytest.approx(20000.0)
+
+
+def test_strategy_dashboard_start_unconfigured_mode_assigns_initial_cash(tmp_path):
+    root = tmp_path
+    strategy_dir = root / "quant" / "features" / "strategies" / "DemoStrategy"
+    paper_config = root / "quant" / "infrastructure" / "var" / "paper_config"
+    strategy_dir.mkdir(parents=True)
+    paper_config.mkdir(parents=True)
+    (strategy_dir / "strategy.py").write_text("class DemoStrategy: pass\n", encoding="utf-8")
+    (paper_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": []}),
+        encoding="utf-8",
+    )
+
+    res = create_app(root).test_client().post(
+        "/api/strategies/DemoStrategy/control",
+        json={"action": "start", "mode": "paper", "initial_cash": 25000},
+    )
+
+    assert res.status_code == 200
+    body = res.get_json()["control"]
+    assert body["mode"] == "paper"
+    assert body["live_state"] == "running"
+    config = yaml.safe_load((paper_config / "config.yaml").read_text(encoding="utf-8"))
+    assert config["strategies"] == [{"name": "DemoStrategy", "enabled": True, "initial_cash": 25000.0}]
+    payload = build_dashboard_payload(root)
+    strategy = payload["strategies"][0]
+    assert strategy["paper"]["configured"] is True
+    assert strategy["paper"]["initial_cash"] == pytest.approx(25000.0)
+
+
+def test_strategy_dashboard_start_unconfigured_mode_requires_initial_cash(tmp_path):
+    root = tmp_path
+    strategy_dir = root / "quant" / "features" / "strategies" / "DemoStrategy"
+    strategy_dir.mkdir(parents=True)
+    (strategy_dir / "strategy.py").write_text("class DemoStrategy: pass\n", encoding="utf-8")
+
+    res = create_app(root).test_client().post(
+        "/api/strategies/DemoStrategy/control",
+        json={"action": "start", "mode": "live"},
+    )
+
+    assert res.status_code == 400
+    assert "initial_cash" in res.get_json()["error"]
 
 
 def test_strategy_dashboard_control_endpoint_updates_modes_independently(tmp_path):

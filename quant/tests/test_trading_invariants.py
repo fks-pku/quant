@@ -239,6 +239,37 @@ class TestCase5RiskPositionLimit:
 
 
 # ---------------------------------------------------------------------------
+# CASE-5B: RiskEngine cash isolation
+# ---------------------------------------------------------------------------
+
+class TestCase5BRiskCashIsolation:
+    def test_t5b_01_buy_cannot_exceed_available_cash(self):
+        pf = Portfolio(initial_cash=100_000)
+        pf.cash = 25_000
+        config = {"risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999}}
+        re = RiskEngine(config, pf, None)
+
+        approved, results = re.check_order("AAPL", 300, 100.0, 30_000, side="BUY")
+
+        cash_checks = [r for r in results if r.check_name == "available_cash"]
+        assert approved is False
+        assert any(not r.passed for r in cash_checks)
+
+    def test_t5b_02_buy_can_use_returned_or_earned_cash(self):
+        pf = Portfolio(initial_cash=100_000)
+        pf.cash = 25_000
+        pf.cash += 5_000
+        config = {"risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999}}
+        re = RiskEngine(config, pf, None)
+
+        approved, results = re.check_order("AAPL", 300, 100.0, 30_000, side="BUY")
+
+        cash_checks = [r for r in results if r.check_name == "available_cash"]
+        assert approved is True
+        assert all(r.passed for r in cash_checks)
+
+
+# ---------------------------------------------------------------------------
 # CASE-6: RiskEngine daily loss
 # ---------------------------------------------------------------------------
 

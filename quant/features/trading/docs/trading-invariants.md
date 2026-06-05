@@ -178,6 +178,30 @@ T5-04  reset_daily 清零 pending
 
 ---
 
+## CASE-5B: RiskEngine 影子账户 cash 限制
+
+### 前置条件
+
+`Portfolio(initial_cash=100_000)`, `RiskEngine` with `max_position_pct=1.0`, strategy shadow portfolio cash is the only callable cash for BUY orders.
+
+### 操作序列
+
+1. `portfolio.cash=25_000`, BUY order value is `30_000` -> rejected by `available_cash`.
+2. `portfolio.cash` receives returned/earned cash to `30_000`, BUY order value is `30_000` -> accepted.
+3. `FillHandler` processes a BUY fill for `SubPortfolio("DemoStrategy", 20_000, master)` with cost plus commission of `5_005` -> `sub.cash` becomes `14_995` and `master.cash` remains `80_000`.
+
+### 断言
+
+```
+T5B-01 BUY order value above current shadow cash is rejected
+T5B-02 Returned or earned cash increases the shadow account's callable cash
+T5B-03 BUY fill deducts cost plus commission from strategy shadow cash without drawing extra master cash
+```
+
+### 对应测试: `test_t5b_*` in `test_trading_invariants.py`; `test_fill_handler_buy_deducts_strategy_shadow_cash` in `test_live_trading_records.py`
+
+---
+
 ## CASE-6: RiskEngine 日损失限制
 
 ### 前置条件
@@ -243,9 +267,10 @@ T8-02  record_order(symbol, order_value) 写入该策略的 pending order value
 T8-03  broker_order_id 能反查到 DemoStrategy
 T8-04  FillHandler 只更新 DemoStrategy 的 SubPortfolio
 T8-05  QuantSystem._on_fill 只调用 DemoStrategy.on_fill，不调用其他策略
+T8-06  Strategy Context exposes only a scoped order surface: no raw broker, no raw execution manager, no global order list, and cross-strategy submit attempts are rejected
 ```
 
-### 对应测试: `test_order_manager_uses_strategy_specific_risk_engine`, `test_fill_handler_updates_strategy_specific_portfolio`, `test_quant_system_dispatches_fill_only_to_owning_strategy` in `test_live_trading_records.py`
+### 对应测试: `test_order_manager_uses_strategy_specific_risk_engine`, `test_fill_handler_updates_strategy_specific_portfolio`, `test_fill_handler_buy_deducts_strategy_shadow_cash`, `test_quant_system_dispatches_fill_only_to_owning_strategy`, `test_context_exposes_strategy_scoped_order_surface_only` in `test_live_trading_records.py`
 
 ---
 
@@ -358,12 +383,13 @@ T13-09  Dashboard holdings, cash, total NAV, and total return must be derived fr
 T13-10  Live/Paper daily snapshot startup must restore strategy runtime _positions and strategy SubPortfolio lots from StrategyPositionTracker before signal generation
 T13-11  Post-close live pending generation must run D-day strategy snapshots in record_pending_only mode: record accepted signals with D-day timestamps for D+1 submission, write a signal-date strategy snapshot marker even when no new orders are produced, preserve cash-only strategies as NAV/Cash equal to their initial allocation, update risk pending state, and never call broker submit_order
 T13-12  Dashboard initial allocation cash is immutable after strategy configuration: allocation endpoints must reject changes, leave qmt_live_config/paper_config unchanged, and never submit broker orders
+T13-12B Dashboard first Start for a not-configured strategy-mode must require positive initial_cash, append that mode's config entry, then start the mode; subsequent Start/control actions must not mutate the configured initial_cash.
 T13-13  Strategy control state is scoped by strategy_name and mode: live actions must not change paper signal gates, paper actions must not change live signal gates, and dashboard controls must send the target mode explicitly
 T13-14  Dashboard control actions must append strategy+mode scoped audit rows so pause/resume/stop/liquidate transitions survive process restarts
 T13-15  Dashboard liquidate_stop creates a mode-scoped liquidation plan from tracked strategy positions and must not directly submit broker orders
 T13-16  Dashboard payloads must expose per-mode operations ledgers, recovery status, and top-level operations health from durable records
 T13-17  Live startup broker-history reconciliation must import missing broker fills idempotently before strategy initialization; unresolved order attribution must be audited instead of silently crossing strategy boundaries
-T13-18  Dashboard mode controls must be state-appropriate: Start is rendered only for stopped/liquidating modes, running modes show already-started status plus Pause, paused modes show Resume, and not-configured modes render no no-op action buttons
+T13-18  Dashboard mode controls must be state-appropriate: Start is rendered for stopped/liquidating modes, running modes show already-started status plus Pause, paused modes show Resume, and not-configured modes render a first-start Initial Cash input plus Start rather than no-op controls
 T13-19  Dashboard live and paper views must be separate `/live` and `/paper` mode subpages that use the same component functions; live/paper data must not be shown as split tables in one stacked page
 T13-20  Dashboard root, live, and paper entrypoints must all serve the no-cache dashboard page, each mode view must expose immutable Initial Cash only in the top mode/overview area, the launcher must open the current 8791 dashboard and restart stale payloads that do not expose per-mode initial cash, and the page must reload when the served dashboard asset version changes
 T13-21  Dashboard equity curves must align all series by trading date, include an initial-cash baseline before the first filled trading date, normalize benchmark only from the strategy curve start, derive missing strategy NAV curve points from filled order rows plus daily closes when durable snapshots are absent, and stale dashboard data must expose expected market date plus latest scheduled job status/error
@@ -373,7 +399,7 @@ T13-24  CN live/paper post-close scheduling must resolve open days, next trading
 T13-25  The QMT live trade-history recovery job is read-only: it may connect to the live broker and import missing broker fills into strategy-mode ledgers, but it must not run simulate-daily, pending-only signal generation, or broker order submission. Post-close live pending generation must wait for successful recovery; no 09:30 real-order task should be enabled by this recovery path.
 ```
 
-### Tests: `test_strategy_control_actions_gate_live_signals`, `test_strategy_control_actions_are_mode_isolated`, `test_quant_system_live_signal_gate_reads_strategy_control_file`, `test_quant_system_paper_signal_gate_reads_paper_control_file`, `test_quant_system_paper_mode_uses_separate_recorder_and_tracker`, `test_live_trading_recorder_writes_strategy_mode_records`, `test_quant_system_restores_strategy_runtime_positions_from_tracker`, `test_quant_system_allocates_default_live_strategy_cash`, `test_order_manager_record_pending_only_does_not_submit_to_broker`, `test_quant_system_pending_only_daily_snapshot_records_signal_day_snapshot_marker`, `test_trading_engine_signal_gate_blocks_daily_snapshot_orders`, `test_context_signal_gate_blocks_direct_order_submission` in `test_live_trading_records.py`; `test_strategy_dashboard_payload_reads_live_records_positions_and_controls`, `test_strategy_dashboard_materializes_and_reads_strategy_mode_records`, `test_strategy_dashboard_cash_only_configured_strategy_uses_initial_cash`, `test_strategy_dashboard_derives_live_curve_from_fills_when_snapshots_missing`, `test_strategy_dashboard_does_not_mark_near_timestamp_order_as_pending`, `test_strategy_dashboard_expires_past_submit_date_from_pending_orders`, `test_strategy_dashboard_pending_orders_default_to_next_trading_date`, `test_strategy_dashboard_renders_only_state_appropriate_mode_actions`, `test_strategy_dashboard_uses_mode_subpages_with_shared_components`, `test_strategy_dashboard_serves_live_and_paper_subpages`, `test_strategy_dashboard_launcher_opens_current_port_and_restarts_stale_payload`, `test_strategy_dashboard_surfaces_scheduled_job_failures`, `test_strategy_dashboard_surfaces_live_recovery_job_status`, `test_strategy_dashboard_start_action_enables_paper_mode`, `test_strategy_dashboard_allocation_endpoint_rejects_configured_cash_change`, `test_strategy_dashboard_control_endpoint_updates_modes_independently`, `test_strategy_dashboard_liquidate_stop_creates_mode_scoped_plan` in `test_strategy_dashboard_server.py`; `test_strategy_mode_record_store_isolates_strategy_and_mode`, `test_strategy_control_action_writes_mode_operation`, `test_sync_broker_trade_history_imports_missing_fills_once`, `test_sync_broker_trade_history_marks_unknown_order_attribution` in `test_strategy_operations_ledger.py`; `test_cn_trading_calendar_uses_cached_real_holiday_window`, `test_cn_trading_calendar_latest_two_data_dates_use_common_available_sources` in `test_cn_trading_calendar.py`; `test_scheduled_scripts_replay_paper_after_post_close_data_update` in `test_paper_backfill_from_live_records.py`
+### Tests: `test_strategy_control_actions_gate_live_signals`, `test_strategy_control_actions_are_mode_isolated`, `test_quant_system_live_signal_gate_reads_strategy_control_file`, `test_quant_system_paper_signal_gate_reads_paper_control_file`, `test_quant_system_paper_mode_uses_separate_recorder_and_tracker`, `test_live_trading_recorder_writes_strategy_mode_records`, `test_quant_system_restores_strategy_runtime_positions_from_tracker`, `test_quant_system_allocates_default_live_strategy_cash`, `test_order_manager_record_pending_only_does_not_submit_to_broker`, `test_quant_system_pending_only_daily_snapshot_records_signal_day_snapshot_marker`, `test_trading_engine_signal_gate_blocks_daily_snapshot_orders`, `test_context_signal_gate_blocks_direct_order_submission` in `test_live_trading_records.py`; `test_strategy_dashboard_payload_reads_live_records_positions_and_controls`, `test_strategy_dashboard_materializes_and_reads_strategy_mode_records`, `test_strategy_dashboard_cash_only_configured_strategy_uses_initial_cash`, `test_strategy_dashboard_derives_live_curve_from_fills_when_snapshots_missing`, `test_strategy_dashboard_does_not_mark_near_timestamp_order_as_pending`, `test_strategy_dashboard_expires_past_submit_date_from_pending_orders`, `test_strategy_dashboard_pending_orders_default_to_next_trading_date`, `test_strategy_dashboard_renders_only_state_appropriate_mode_actions`, `test_strategy_dashboard_uses_mode_subpages_with_shared_components`, `test_strategy_dashboard_serves_live_and_paper_subpages`, `test_strategy_dashboard_launcher_opens_current_port_and_restarts_stale_payload`, `test_strategy_dashboard_surfaces_scheduled_job_failures`, `test_strategy_dashboard_surfaces_live_recovery_job_status`, `test_strategy_dashboard_start_action_enables_paper_mode`, `test_strategy_dashboard_start_unconfigured_mode_assigns_initial_cash`, `test_strategy_dashboard_start_unconfigured_mode_requires_initial_cash`, `test_strategy_dashboard_allocation_endpoint_rejects_configured_cash_change`, `test_strategy_dashboard_control_endpoint_updates_modes_independently`, `test_strategy_dashboard_liquidate_stop_creates_mode_scoped_plan` in `test_strategy_dashboard_server.py`; `test_strategy_mode_record_store_isolates_strategy_and_mode`, `test_strategy_control_action_writes_mode_operation`, `test_sync_broker_trade_history_imports_missing_fills_once`, `test_sync_broker_trade_history_marks_unknown_order_attribution` in `test_strategy_operations_ledger.py`; `test_cn_trading_calendar_uses_cached_real_holiday_window`, `test_cn_trading_calendar_latest_two_data_dates_use_common_available_sources` in `test_cn_trading_calendar.py`; `test_scheduled_scripts_replay_paper_after_post_close_data_update` in `test_paper_backfill_from_live_records.py`
 
 ---
 

@@ -196,6 +196,28 @@
     }
     .control-state { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .start-allocation {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 4px;
+      border: 1px solid rgba(60, 60, 67, 0.12);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.74);
+    }
+    .cash-input {
+      width: 128px;
+      min-height: 30px;
+      padding: 0 9px;
+      border: 1px solid rgba(60, 60, 67, 0.16);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 720;
+      font-variant-numeric: tabular-nums;
+    }
     .action-btn {
       min-height: 34px;
       padding: 0 13px;
@@ -658,7 +680,6 @@
           ${tile('Initial Cash', initialCashText(initialCash), 'strategy allocation')}
           ${tile('Total NAV', money(perf.total_nav), `latest ${modeLabel(mode)} snapshot`)}
           ${tile('Cash', money(perf.cash), `available ${modeLabel(mode)} cash`)}
-          ${tile('Total PnL %', pnlPct(perf.total_pnl_pct), pnlText(perf))}
           ${tile('Total Return', pnlPct(perf.total_return), pnlText(perf))}
           ${tile('Commission', money(perf.total_commission), 'separate from slippage')}
           ${tile('Median Slippage', bps(perf.median_slippage_bps), `${samples} fills`)}
@@ -709,7 +730,8 @@
 
     function renderModeActions(configured, controlState, mode) {
       if (!configured) {
-        return `<span class="pill amber">not configured in ${escapeHtml(modeLabel(mode))}</span>`;
+        const strategy = findStrategy(state.selected);
+        return renderUnconfiguredStart(mode, modeInitialCash(strategy, mode));
       }
       const actions = [];
       if (controlState === 'stopped' || controlState === 'liquidating') {
@@ -725,6 +747,16 @@
       }
       actions.push(actionButton('liquidate_stop', 'Liquidate Stop', 'danger', false, mode));
       return actions.join('');
+    }
+
+    function renderUnconfiguredStart(mode, initialCash) {
+      return `
+        <span class="pill amber">not configured in ${escapeHtml(modeLabel(mode))}</span>
+        <span class="start-allocation">
+          <input class="cash-input" data-initial-cash-input="${mode}" type="number" min="1" step="1000" value="${Number(initialCash || 0).toFixed(0)}" aria-label="${escapeHtml(modeLabel(mode))} initial_cash">
+          ${actionButton('start', 'Start', 'primary', false, mode)}
+        </span>
+      `;
     }
 
     function renderModeLedger(data, mode) {
@@ -777,16 +809,23 @@
             const ok = window.confirm(`确认记录 ${mode.toUpperCase()} 清盘（停止）指令？页面不会直接向券商发单。`);
             if (!ok) return;
           }
-          await postControl(strategy.name, action, mode);
+          let initialCash = null;
+          if (action === 'start') {
+            const input = document.querySelector(`[data-initial-cash-input="${mode}"]`);
+            if (input) initialCash = Number(input.value);
+          }
+          await postControl(strategy.name, action, mode, initialCash);
         });
       });
     }
 
-    async function postControl(strategyName, action, mode) {
+    async function postControl(strategyName, action, mode, initialCash = null) {
+      const body = { action, mode };
+      if (Number.isFinite(initialCash) && initialCash > 0) body.initial_cash = initialCash;
       const res = await fetch(`/api/strategies/${encodeURIComponent(strategyName)}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, mode })
+        body: JSON.stringify(body)
       });
       const payload = await res.json();
       if (!res.ok) {
@@ -957,7 +996,6 @@
         ['Median Slippage', bps(perf.median_slippage_bps)],
         ['Weighted Avg Slippage', bps(perf.weighted_avg_slippage_bps)],
         ['Total PnL', pnlMoney(perf.total_pnl)],
-        ['Total PnL %', pnlPct(perf.total_pnl_pct)],
         ['Realized PnL', pnlMoney(perf.realized_pnl)],
         ['Unrealized PnL', pnlMoney(perf.unrealized_pnl)],
         ['Total Return', pnlPct(perf.total_return)],

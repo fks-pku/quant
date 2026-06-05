@@ -65,6 +65,11 @@ class RiskEngine(RiskEngineLike):
         if not results[-1].passed:
             approved = False
 
+        if side != 'SELL' and as_of_date is None:
+            results.append(self._check_available_cash(order_value))
+            if not results[-1].passed:
+                approved = False
+
         if side != 'SELL':
             results.append(self._check_position_size(symbol, order_value))
             if not results[-1].passed:
@@ -87,6 +92,21 @@ class RiskEngine(RiskEngineLike):
             self._risk_rejected_count += 1
 
         return approved, results
+
+    def _check_available_cash(self, order_value: float) -> RiskCheckResult:
+        cash = float(getattr(self.portfolio, "cash", 0.0) or 0.0)
+        pending_value = sum(self._pending_order_values.values())
+        available = max(cash - pending_value, 0.0)
+        passed = order_value <= available
+
+        return RiskCheckResult(
+            passed=passed,
+            is_hard_limit=True,
+            check_name="available_cash",
+            message=f"Order value ${order_value:.2f} exceeds available cash ${available:.2f}",
+            current_value=order_value,
+            limit_value=available,
+        )
 
     def _check_cn_t1_settlement(self, symbol: str, quantity: float, as_of_date: Optional[date] = None) -> RiskCheckResult:
         if not Portfolio.is_cn_symbol(symbol):

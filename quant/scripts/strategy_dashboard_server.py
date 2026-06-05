@@ -86,6 +86,12 @@ def create_app(root: Path = ROOT) -> Flask:
             return jsonify({"ok": False, "error": "mode must be live or paper"}), 400
         config_dir = _mode_config_dir(root, mode)
         configured = strategy_name in _configured_strategies(config_dir)
+        if action == "start" and not configured:
+            initial_cash = _float(payload.get("initial_cash"))
+            if initial_cash <= 0:
+                return jsonify({"ok": False, "error": "initial_cash is required for first start"}), 400
+            _configure_strategy_mode(root, mode, strategy_name, initial_cash)
+            configured = True
         if action in {"start", "resume", "pause", "liquidate_stop"} and not configured:
             return jsonify({
                 "ok": False,
@@ -517,6 +523,20 @@ def _configured_strategies(config_dir: Path) -> Dict[str, Dict[str, Any]]:
         if name:
             result[name] = item
     return result
+
+
+def _configure_strategy_mode(root: Path, mode: str, strategy_name: str, initial_cash: float) -> None:
+    config_path = _mode_config_dir(root, mode) / "config.yaml"
+    config = _read_yaml(config_path)
+    strategies = config.setdefault("strategies", [])
+    if not isinstance(strategies, list):
+        strategies = []
+        config["strategies"] = strategies
+    for item in strategies:
+        if isinstance(item, dict) and str(item.get("name", "")) == strategy_name:
+            return
+    strategies.append({"name": strategy_name, "enabled": True, "initial_cash": float(initial_cash)})
+    _write_yaml(config_path, config)
 
 
 def _mode_config_dir(root: Path, mode: str) -> Path:
