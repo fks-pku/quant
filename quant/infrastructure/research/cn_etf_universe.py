@@ -17,6 +17,7 @@ REGISTERED_ETF_UNIVERSE_VERSION = "audited_stable_etf_registry_v1"
 _RISK_CATEGORY_ORDER = ("sse50", "csi300", "chinext", "chinext50", "dividend")
 _DEFENSIVE_CATEGORY_ORDER = ("gold",)
 _BARBELL_CATEGORY_GROUPS = set(_RISK_CATEGORY_ORDER + _DEFENSIVE_CATEGORY_ORDER)
+_BROAD_ASSET_CATEGORY_ORDER = ("sse50", "csi300", "csi1000", "chinext", "chinext50", "dividend", "gold", "cash", "bond_rate")
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,60 @@ def build_gold_equity_barbell_pit_universe(
         "risk_category_symbols": risk_symbols,
         "defensive_category_symbols": defensive_symbols,
         "symbols": flatten_category_symbols(risk_symbols, defensive_symbols),
+        "audit": rows,
+        "universe_as_of": as_of.date().isoformat() if as_of else "",
+        "universe_start": window_start.date().isoformat() if window_start else "",
+        "universe_end": window_end.date().isoformat() if window_end else "",
+        "universe_min_history_days_as_of": max(0, int(min_history_days_as_of or 0)),
+        "universe_max_symbols_per_category": category_cap,
+        "universe_selection_policy": "audited_stable_etf_registry",
+        "universe_registry_version": REGISTERED_ETF_UNIVERSE_VERSION,
+        "registered_universe_counts": _registered_universe_counts(entries, rows),
+    }
+
+
+def build_broad_asset_etf_pit_universe(
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    fund_meta_db_path: str = _DEFAULT_FUND_META_DB,
+    etf_db_path: str = _DEFAULT_ETF_DB,
+    fund_nav_db_path: str = _DEFAULT_FUND_NAV_DB,
+    universe_as_of: Optional[Any] = None,
+    min_history_days_as_of: int = 0,
+    max_symbols_per_category: int = 0,
+    universe_start: Optional[Any] = None,
+    universe_end: Optional[Any] = None,
+) -> Dict[str, Any]:
+    entries = [
+        entry
+        for entry in _REGISTERED_ETFS
+        if entry.category_group in _BROAD_ASSET_CATEGORY_ORDER
+    ]
+    rows = _load_registered_etf_rows(
+        entries,
+        start=start,
+        end=end,
+        fund_meta_db_path=fund_meta_db_path,
+        etf_db_path=etf_db_path,
+        fund_nav_db_path=fund_nav_db_path,
+        universe_as_of=universe_as_of,
+        min_history_days_as_of=min_history_days_as_of,
+        universe_start=universe_start,
+        universe_end=universe_end,
+    )
+    buckets = {category: [] for category in _BROAD_ASSET_CATEGORY_ORDER}
+    for row in rows:
+        category = str(row.get("category_group") or "")
+        if category in buckets:
+            buckets[category].append(row)
+    category_cap = max(0, int(max_symbols_per_category or 0))
+    category_symbols = _category_symbol_map(buckets, category_cap)
+    as_of = _parse_datetime(universe_as_of)
+    window_start = _parse_datetime(universe_start) or start
+    window_end = _parse_datetime(universe_end) or end
+    return {
+        "category_symbols": category_symbols,
+        "symbols": flatten_category_symbols(category_symbols),
         "audit": rows,
         "universe_as_of": as_of.date().isoformat() if as_of else "",
         "universe_start": window_start.date().isoformat() if window_start else "",

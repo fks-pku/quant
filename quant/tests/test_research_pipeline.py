@@ -799,6 +799,77 @@ def test_pit_fund_category_universe_selects_stable_categories(tmp_path):
     assert universe["registered_universe_counts"]["active_symbol_count"] == 3
 
 
+def test_broad_asset_etf_pit_universe_uses_domestic_audited_categories(tmp_path):
+    import duckdb
+
+    from quant.infrastructure.research.cn_etf_universe import build_broad_asset_etf_pit_universe
+
+    meta_path = tmp_path / "fund_meta.duckdb"
+    etf_path = tmp_path / "cn_etf_o'clock.duckdb"
+    nav_path = tmp_path / "cn_nav_o'clock.duckdb"
+
+    conn = duckdb.connect(str(meta_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_instruments (
+                symbol VARCHAR,
+                name VARCHAR,
+                index_name VARCHAR,
+                index_code VARCHAR,
+                list_date DATE,
+                delist_date DATE,
+                instrument_type VARCHAR
+            )
+            """
+        )
+    finally:
+        conn.close()
+
+    domestic_symbols = ["510050", "510300", "512100", "159915", "159949", "510880", "518880", "511990", "511010"]
+    excluded_cross_border = ["513100", "513050", "159920", "510900"]
+
+    conn = duckdb.connect(str(etf_path))
+    try:
+        conn.execute("CREATE TABLE daily_cn_ochl (timestamp TIMESTAMP, symbol VARCHAR)")
+        values = ", ".join(f"(TIMESTAMP '2020-01-02', '{symbol}')" for symbol in [*domestic_symbols, *excluded_cross_border])
+        conn.execute(f"INSERT INTO daily_cn_ochl VALUES {values}")
+    finally:
+        conn.close()
+
+    conn = duckdb.connect(str(nav_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cn_fund_nav (
+                symbol VARCHAR,
+                nav_date DATE,
+                total_netasset DOUBLE,
+                net_asset DOUBLE
+            )
+            """
+        )
+        values = ", ".join(f"('{symbol}', DATE '2020-01-02', 100000000.0, NULL)" for symbol in domestic_symbols)
+        conn.execute(f"INSERT INTO cn_fund_nav VALUES {values}")
+    finally:
+        conn.close()
+
+    universe = build_broad_asset_etf_pit_universe(
+        fund_meta_db_path=str(meta_path),
+        etf_db_path=str(etf_path),
+        fund_nav_db_path=str(nav_path),
+        universe_start="2020-01-01",
+        universe_end="2020-12-31",
+    )
+
+    assert universe["universe_selection_policy"] == "audited_stable_etf_registry"
+    assert universe["universe_registry_version"] == "audited_stable_etf_registry_v1"
+    assert universe["category_symbols"]["csi1000"] == ["512100"]
+    assert "512100" in universe["symbols"]
+    assert not set(excluded_cross_border).intersection(universe["symbols"])
+    assert universe["registered_universe_counts"]["registered_symbol_count"] == 9
+
+
 def test_pit_fund_category_universe_ignores_unregistered_benchmark_classification(tmp_path):
     import duckdb
 
