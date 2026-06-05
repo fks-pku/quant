@@ -8,6 +8,8 @@ import pytest
 
 from quant.features.backtest.engine import Backtester
 from quant.features.backtest.data_provider import DataFrameProvider
+from quant.features.trading.engine import Engine
+from quant.infrastructure.events.event_bus import EventBus
 from quant.tests.conftest import make_backtester
 
 
@@ -2969,6 +2971,199 @@ class TestCase35RoundTripEntryCommission:
 # Regression: B1 — last trading day deferred orders must expire
 # ============================================================================
 
+# ============================================================================
+# CASE-39: Shared daily snapshot signal pipeline
+# ============================================================================
+
+CASE39_CONFIG = {
+    "backtest": {"slippage_bps": 0, "strict_daily_snapshot": True},
+    "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+class _C39DailyStrategy:
+    def __init__(self, name, symbols, log=None, seed_position_on_feed=False):
+        self.name = name
+        self.symbols = symbols
+        self.context = None
+        self.batches = []
+        self.after_dates = []
+        self.signals = []
+        self.log = log
+        self.seed_position_on_feed = seed_position_on_feed
+        self.seeded = False
+        self.feed_market_values = []
+        self.after_market_values = []
+
+    def on_start(self, ctx):
+        self.context = ctx
+
+    def on_before_trading(self, ctx, td):
+        pass
+
+    def on_data_batch(self, ctx, bars):
+        symbols = tuple(bar["symbol"] for bar in bars)
+        closes = tuple(float(bar["close"]) for bar in bars)
+        self.batches.append((symbols, closes))
+        if self.seed_position_on_feed and not self.seeded:
+            ctx.portfolio.update_position("AAPL", 10, 100.0, 1000.0)
+            self.seeded = True
+            self.feed_market_values.append(ctx.portfolio.get_position("AAPL").market_value)
+        if self.log is not None:
+            self.log.append(f"{self.name}:feed")
+
+    def on_after_trading(self, ctx, td):
+        nav = float(getattr(ctx.portfolio, "nav", 0.0) or 0.0)
+        position = ctx.portfolio.get_position("AAPL")
+        if position is not None:
+            self.after_market_values.append(round(float(position.market_value), 2))
+        self.after_dates.append(td)
+        self.signals.append((td, "AAPL", "BUY", 10, round(nav, 2)))
+        if self.log is not None:
+            self.log.append(f"{self.name}:after")
+        ctx.order_manager.submit_order("AAPL", 10, "BUY", "MARKET", None, self.name)
+
+    def on_fill(self, ctx, fill):
+        pass
+
+    def on_stop(self, ctx):
+        pass
+
+    def get_position(self, symbol):
+        return 0
+
+
+class _C39RecordingOrderManager:
+    def __init__(self):
+        self.submitted = []
+
+    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name=None):
+        self.submitted.append((symbol, quantity, side, order_type, price, strategy_name))
+        return f"C39-{len(self.submitted)}"
+
+
+class TestCase39SharedDailySnapshotSignalPipeline:
+    def test_c39_01_incomplete_required_snapshot_skips_backtest_signal(self):
+        data = _make_bars("AAPL", [(START, 100.0, 101.0, 1_000_000)])
+        bt = make_backtester(CASE39_CONFIG)
+        strategy = _C39DailyStrategy("C39Missing", ["AAPL", "MSFT"])
+
+        result = bt.run(
+            start=START, end=START,
+            strategies=[strategy], initial_cash=100_000,
+            data_provider=DataFrameProvider(data), symbols=["AAPL", "MSFT"],
+        )
+
+        assert strategy.batches == []
+        assert strategy.after_dates == []
+        assert strategy.signals == []
+        assert result.trades == []
+        assert result.diagnostics.expired_orders == 0
+
+    def test_c39_01b_dynamic_universe_snapshot_does_not_require_all_symbols(self):
+        data = _make_bars("AAPL", [(START, 100.0, 101.0, 1_000_000)])
+        bt = make_backtester(CASE39_CONFIG)
+        strategy = _C39DailyStrategy("C39DynamicUniverse", ["AAPL", "MSFT"])
+        strategy.required_snapshot_symbols = []
+
+        result = bt.run(
+            start=START, end=START,
+            strategies=[strategy], initial_cash=100_000,
+            data_provider=DataFrameProvider(data), symbols=["AAPL", "MSFT"],
+        )
+
+        assert strategy.batches == [(("AAPL",), (101.0,))]
+        assert strategy.after_dates == [START.date()]
+        assert strategy.signals == [(START.date(), "AAPL", "BUY", 10, 100000.0)]
+        assert result.trades == []
+        assert result.diagnostics.expired_orders == 1
+
+    def test_c39_02_backtest_and_paper_snapshot_signals_match(self):
+        data = pd.concat([
+            _make_bars("MSFT", [(START, 50.0, 52.0, 1_000_000)]),
+            _make_bars("AAPL", [(START, 100.0, 101.0, 1_000_000)]),
+        ], ignore_index=True)
+        bt_strategy = _C39DailyStrategy("C39Parity", ["AAPL", "MSFT"])
+        bt = make_backtester(CASE39_CONFIG)
+
+        bt.run(
+            start=START, end=START,
+            strategies=[bt_strategy], initial_cash=100_000,
+            data_provider=DataFrameProvider(data), symbols=["AAPL", "MSFT"],
+        )
+
+        paper_strategy = _C39DailyStrategy("C39Parity", ["AAPL", "MSFT"])
+        paper_orders = _C39RecordingOrderManager()
+        engine = Engine(
+            {
+                "system": {"mode": "paper", "initial_cash": 100000},
+                "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+            },
+            EventBus(),
+        )
+        engine.set_order_manager(paper_orders)
+        engine.add_strategy(paper_strategy)
+        engine.inject_daily_snapshot(
+            START,
+            data.to_dict("records"),
+            START + timedelta(days=1),
+        )
+
+        assert paper_strategy.batches == bt_strategy.batches
+        assert paper_strategy.after_dates == bt_strategy.after_dates
+        assert paper_strategy.signals == bt_strategy.signals
+        assert paper_orders.submitted == [("AAPL", 10, "BUY", "MARKET", None, "C39Parity")]
+
+    def test_c39_03_multi_strategy_feeds_all_before_any_after(self):
+        data = pd.concat([
+            _make_bars("AAPL", [(START, 100.0, 101.0, 1_000_000)]),
+            _make_bars("MSFT", [(START, 50.0, 52.0, 1_000_000)]),
+        ], ignore_index=True)
+        log = []
+        strategies = [
+            _C39DailyStrategy("C39A", ["AAPL", "MSFT"], log),
+            _C39DailyStrategy("C39B", ["AAPL", "MSFT"], log),
+        ]
+        bt = make_backtester(CASE39_CONFIG)
+
+        bt.run(
+            start=START, end=START,
+            strategies=strategies, initial_cash=100_000,
+            data_provider=DataFrameProvider(data), symbols=["AAPL", "MSFT"],
+        )
+
+        assert log == ["C39A:feed", "C39B:feed", "C39A:after", "C39B:after"]
+
+    def test_c39_04_portfolio_is_marked_by_close_before_after(self):
+        data = _make_bars("AAPL", [(START, 100.0, 120.0, 1_000_000)])
+        bt_strategy = _C39DailyStrategy("C39Mark", ["AAPL"], seed_position_on_feed=True)
+        bt = make_backtester(CASE39_CONFIG)
+
+        bt.run(
+            start=START, end=START,
+            strategies=[bt_strategy], initial_cash=100_000,
+            data_provider=DataFrameProvider(data), symbols=["AAPL"],
+        )
+
+        paper_strategy = _C39DailyStrategy("C39Mark", ["AAPL"], seed_position_on_feed=True)
+        engine = Engine(
+            {
+                "system": {"mode": "paper", "initial_cash": 100000},
+                "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+            },
+            EventBus(),
+        )
+        engine.set_order_manager(_C39RecordingOrderManager())
+        engine.add_strategy(paper_strategy)
+        engine.inject_daily_snapshot(START, data.to_dict("records"), START + timedelta(days=1))
+
+        assert bt_strategy.feed_market_values == [1000.0]
+        assert paper_strategy.feed_market_values == [1000.0]
+        assert bt_strategy.after_market_values == [1200.0]
+        assert paper_strategy.after_market_values == [1200.0]
+
+
 REGRESSION_B1_BARS = [
     (datetime(2024, 6, 3), 100.00, 102.00, 1_000_000),
     (datetime(2024, 6, 4), 105.00, 108.00, 1_000_000),
@@ -3096,3 +3291,81 @@ class TestRegressionR2Guardrails:
         )
 
         assert list(result.equity_curve.index) == list(data["timestamp"])
+
+
+# ============================================================================
+# CASE-40: Historical cost-protection limit at signal time
+# ============================================================================
+
+CASE40_MODEL = {
+    "enabled": True,
+    "markets": ["CN"],
+    "tick_size": 0.01,
+    "half_spread_ticks": 0.5,
+    "min_slippage_bps": 5,
+    "impact_coefficient": 0.15,
+    "volatility_fallback": 0.01,
+}
+
+
+def test_case40_01_market_signal_becomes_historical_limit_order():
+    from quant.features.backtest.entities import _BacktestOrderManager
+
+    class DummyRisk:
+        def check_order(self, *args, **kwargs):
+            return True, None
+
+        def record_order(self, *args, **kwargs):
+            pass
+
+    manager = _BacktestOrderManager(
+        DummyRisk(),
+        base_slippage_bps=5,
+        execution_cost_model=CASE40_MODEL,
+    )
+    manager._current_date = date(2024, 6, 3)
+    manager._last_prices = {"600519": 10.0}
+    manager._current_bars = {
+        "600519": {
+            "symbol": "600519",
+            "close": 10.0,
+            "adv20_value": 1_000_000.0,
+            "volatility20": 0.04,
+        }
+    }
+
+    order_id = manager.submit_order("600519", 1000, "BUY", "MARKET", None, "Case40")
+    orders = manager.drain_pending(signal_date=datetime(2024, 6, 3))
+
+    assert order_id is not None
+    assert orders[0].order_type == "LIMIT"
+    assert orders[0].price == pytest.approx(10.011)
+    assert orders[0].risk_check_price == pytest.approx(10.0)
+
+
+def test_case40_02_historical_limit_does_not_use_execution_day_cost_fields():
+    data = _make_bars("600519", [
+        (START, 10.0, 10.0, 1_000_000),
+        (START + timedelta(days=1), 10.02, 10.02, 1_000_000),
+    ])
+    data["adv20_value"] = [1_000_000.0, 10_000.0]
+    data["volatility20"] = [0.04, 1.00]
+    config = {
+        "backtest": {"slippage_bps": 5, "execution_cost_model": CASE40_MODEL},
+        "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+        "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+    }
+    bt = make_backtester(config)
+    strat = _signal_strategy("Case40", "600519", buy_on={0}, sell_on=set(), qty=1000)
+
+    result = bt.run(
+        start=data["timestamp"].min(),
+        end=data["timestamp"].max(),
+        strategies=[strat],
+        initial_cash=100_000,
+        data_provider=DataFrameProvider(data),
+        symbols=["600519"],
+    )
+
+    assert len(result.trades) == 0
+    assert result.diagnostics.rejection_counts.get("limit_not_marketable", 0) == 1

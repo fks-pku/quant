@@ -148,6 +148,9 @@ class XueqiuSmallCapFinancialFilterStrategy(AShareSmallCapRotationBase):
             for _, symbol in sorted(candidates, key=lambda item: (-item[0], item[1]))[: self.max_positions]
         ]
 
+    def required_snapshot_symbols(self) -> List[str]:
+        return [self.risk_index_symbol] if self.risk_index_symbol else []
+
     def _sell_unwanted(self, selected: set, exited: set) -> None:
         for symbol, quantity in list(self._positions.items()):
             if quantity > 0 and symbol not in selected and symbol not in exited:

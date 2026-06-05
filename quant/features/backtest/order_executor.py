@@ -22,6 +22,16 @@ from quant.features.backtest.market_rules import (
     get_settled_quantity,
     fifo_lot_slices,
 )
+from quant.runtime.execution_cost import (
+    cost_model_enabled as _shared_cost_model_enabled,
+    execution_adv_quantity as _shared_execution_adv_quantity,
+    execution_adv_value as _shared_execution_adv_value,
+    execution_bar_volume as _shared_execution_bar_volume,
+    execution_impact_bps,
+    model_participation_limit as _shared_model_participation_limit,
+    model_slippage_bps as _shared_model_slippage_bps,
+    safe_positive_number,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,35 +81,15 @@ def compute_market_impact(quantity: float, daily_volume: float, impact_factor: f
 
 
 def _safe_number(value: Any) -> Optional[float]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(number) or number <= 0:
-        return None
-    return number
+    return safe_positive_number(value)
 
 
 def _cost_model_enabled(model: Optional[Dict[str, Any]], market: str) -> bool:
-    if not isinstance(model, dict) or not model.get("enabled"):
-        return False
-    markets = model.get("markets")
-    if not markets:
-        return True
-    return market in {str(item) for item in markets}
+    return _shared_cost_model_enabled(model, market)
 
 
 def _execution_adv_value(bar: "BacktestBar", price: float) -> float:
-    for key in ("adv20_value", "adv_value", "avg_turnover_20", "turnover20", "avg_turnover", "turnover"):
-        value = _safe_number(bar.get(key))
-        if value is not None:
-            return _normalize_turnover_value(value, bar, price)
-    for key in ("adv20_volume", "adv_volume", "avg_volume_20", "volume20", "avg_daily_volume", "avg_volume"):
-        value = _safe_number(bar.get(key))
-        if value is not None and price > 0:
-            return value * price
-    volume = _safe_number(bar.get("volume"))
-    return float(volume * price) if volume is not None and price > 0 else 0.0
+    return _shared_execution_adv_value(bar, price)
 
 
 def _normalize_turnover_value(value: float, bar: "BacktestBar", price: float) -> float:
@@ -114,45 +104,19 @@ def _normalize_turnover_value(value: float, bar: "BacktestBar", price: float) ->
 
 
 def _execution_bar_volume(bar: "BacktestBar", price: float, market: str) -> float:
-    volume = _non_negative_volume(bar.get("volume", 0))
-    if market != "CN" or volume <= 0 or price <= 0:
-        return volume
-    turnover = _safe_number(bar.get("turnover"))
-    if turnover is None or turnover <= 0:
-        return volume
-    ratio = price * volume / turnover
-    if 5.0 <= ratio <= 20.0:
-        return volume * 100.0
-    return volume
+    return _shared_execution_bar_volume(bar, price, market)
 
 
 def _execution_adv_quantity(bar: "BacktestBar", price: float) -> float:
-    for key in ("adv20_volume", "adv_volume", "avg_volume_20", "volume20", "avg_daily_volume", "avg_volume"):
-        value = _safe_number(bar.get(key))
-        if value is not None:
-            return value
-    adv_value = _execution_adv_value(bar, price)
-    if adv_value > 0 and price > 0:
-        return adv_value / price
-    return 0.0
+    return _shared_execution_adv_quantity(bar, price)
 
 
 def _model_slippage_bps(price: float, base_bps: float, market: str, model: Optional[Dict[str, Any]]) -> float:
-    if not _cost_model_enabled(model, market):
-        return base_bps
-    effective_bps = max(float(base_bps or 0), float(model.get("min_slippage_bps", 0) or 0))
-    tick_size = float(model.get("tick_size", 0) or 0)
-    half_spread_ticks = float(model.get("half_spread_ticks", 0.5) or 0.0)
-    if price > 0 and tick_size > 0 and half_spread_ticks > 0:
-        effective_bps = max(effective_bps, half_spread_ticks * tick_size / price * 10000)
-    return effective_bps
+    return _shared_model_slippage_bps(price, base_bps, market, model)
 
 
 def _model_participation_limit(default_limit: float, market: str, model: Optional[Dict[str, Any]]) -> float:
-    if not _cost_model_enabled(model, market):
-        return default_limit
-    limit = _safe_number(model.get("max_participation_rate"))
-    return min(default_limit, limit) if limit is not None else default_limit
+    return _shared_model_participation_limit(default_limit, market, model)
 
 
 def _liquidity_quantity_cap(
@@ -204,25 +168,15 @@ def compute_execution_impact(
     fallback_daily_volume: float,
     fallback_impact_factor: float,
 ) -> float:
-    if not _cost_model_enabled(model, market):
-        return compute_market_impact(quantity, fallback_daily_volume, fallback_impact_factor)
-    adv_value = _execution_adv_value(bar, fill_price)
-    if adv_value <= 0 or fill_price <= 0 or quantity <= 0:
-        return 0.0
-    volatility = (
-        _safe_number(bar.get("volatility20"))
-        or _safe_number(bar.get("volatility_20d"))
-        or _safe_number(bar.get("daily_volatility"))
-        or _safe_number(model.get("volatility_fallback"))
-        or 0.0
+    return execution_impact_bps(
+        quantity,
+        fill_price,
+        bar,
+        market,
+        model,
+        fallback_daily_volume,
+        fallback_impact_factor,
     )
-    coefficient = float(model.get("impact_coefficient", 0.0) or 0.0)
-    if volatility <= 0 or coefficient <= 0:
-        return 0.0
-    participation = quantity * fill_price / adv_value
-    if participation <= 0:
-        return 0.0
-    return coefficient * volatility * (participation ** 0.5) * 10000
 
 
 def apply_market_impact(fill_price: float, side: str, impact_bps: float) -> float:

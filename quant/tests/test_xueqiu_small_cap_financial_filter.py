@@ -125,6 +125,19 @@ def test_xueqiu_empty_months_accepts_empty_list():
     assert strategy.empty_months == set()
 
 
+def test_xueqiu_dynamic_universe_requires_only_static_risk_index_for_snapshot():
+    strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001", "002475"])
+
+    assert strategy.required_snapshot_symbols() == []
+
+    strategy = XueqiuSmallCapFinancialFilterStrategy(
+        symbols=["000001", "002475"],
+        risk_index_symbol="399001",
+    )
+
+    assert strategy.required_snapshot_symbols() == ["399001"]
+
+
 def test_xueqiu_stop_loss_uses_portfolio_average_cost():
     context = _Context({"000001": _Position(avg_cost=10.0)})
     strategy = XueqiuSmallCapFinancialFilterStrategy(

@@ -52,6 +52,8 @@ class OrderManager:
         execution_config = config.get("execution", {}) if isinstance(config, dict) else {}
         self._max_retries = int(execution_config.get("max_retries", 3) or 3)
         self._retry_delay = float(execution_config.get("retry_delay", 1.0) or 1.0)
+        self._record_pending_only = bool(execution_config.get("record_pending_only", False))
+        self._signal_timestamp: Optional[datetime] = None
         self.logger = setup_logger("OrderManager")
 
     def register_broker(self, name: str, broker: BrokerAdapter, symbols: Optional[List[str]] = None) -> None:
@@ -153,9 +155,21 @@ class OrderManager:
         )
         self._record_strategy(order_id, strategy_name)
         self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value)
+        if self._record_pending_only:
+            self.logger.info(
+                f"Order signal recorded pending submission: {order_id} {symbol} {side} {quantity}"
+            )
+            return order_id
         self._submit_to_broker(order)
 
         return order_id
+
+    def set_signal_timestamp(self, timestamp: Optional[datetime]) -> None:
+        with self._lock:
+            self._signal_timestamp = timestamp
+
+    def clear_signal_timestamp(self) -> None:
+        self.set_signal_timestamp(None)
 
     def _submit_to_broker(self, order: Order) -> None:
         """Submit order to broker with retry logic."""
@@ -183,6 +197,8 @@ class OrderManager:
                         "side": order.side.value if hasattr(order.side, 'value') else order.side,
                     }
                 )
+                if hasattr(broker, "flush_trade_callbacks"):
+                    broker.flush_trade_callbacks()
                 return
 
             except Exception as e:
@@ -329,8 +345,10 @@ class OrderManager:
         if self._live_recorder is None:
             return
         try:
+            with self._lock:
+                timestamp = self._signal_timestamp or datetime.now()
             self._live_recorder.record_signal(
-                timestamp=datetime.now(),
+                timestamp=timestamp,
                 strategy_name=strategy_name,
                 symbol=symbol,
                 side=side,

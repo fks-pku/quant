@@ -91,10 +91,22 @@ def create_portfolio_contexts(
     return portfolio_map, risk_map, primary_portfolio, use_subs
 
 
-def create_context(portfolio: Any, risk_engine: Any, event_bus: Any, data_provider: Any) -> Any:
+def create_context(
+    portfolio: Any,
+    risk_engine: Any,
+    event_bus: Any,
+    data_provider: Any,
+    *,
+    base_slippage_bps: float = 5.0,
+    execution_cost_model: Any = None,
+    market_impact_factor: float = 0.0,
+) -> Any:
     return _BacktestContext(
         portfolio=portfolio,
         risk_engine=risk_engine,
         event_bus=event_bus,
         data_provider=data_provider,
+        base_slippage_bps=base_slippage_bps,
+        execution_cost_model=execution_cost_model,
+        market_impact_factor=market_impact_factor,
     )

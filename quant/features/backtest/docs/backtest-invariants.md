@@ -1590,6 +1590,22 @@ C38-03  SELL qty == 5000，entry_price == 2.00，realized_pnl == 0
 
 ---
 
+## CASE-39: Shared daily snapshot signal pipeline
+
+Backtest, paper, and live signal generation must use the same daily close snapshot runner. The shared signal cycle is: validate one same-date D close batch, feed all runnable strategies, mark portfolios with D close prices, then call `on_after_trading` for D signals that execute under each mode's own D+1 fill logic.
+
+### Assertions
+
+```text
+C39-01  Strict required-symbol snapshots skip both feed and after_trading when a required symbol is missing.
+C39-01b Dynamic PIT universe strategies may expose `required_snapshot_symbols` so missing future/non-member candidates do not skip the whole daily signal cycle.
+C39-02  Backtest and paper snapshot injection produce identical signal logs from the same D close bars.
+C39-03  Multi-strategy runs feed every runnable strategy before any strategy enters after_trading.
+C39-04  Portfolios are marked by D close prices after feed and before after_trading in both backtest and paper.
+```
+
+---
+
 ## Regression B1: 结束日 deferred order 过期
 
 验证最后一个真实交易日 after-close 产生的订单没有下一交易日时不会用 synthetic bar 成交。
@@ -1632,6 +1648,25 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 
 ---
 
+## CASE-40: Historical cost-protection limit at signal time
+
+For CN daily execution, when `execution_cost_model` is enabled, a daily MARKET signal is frozen as a D+1 LIMIT order during the D close signal step. Other markets opt in with `market_orders_as_limits: true`. The limit price must use only D-or-earlier reference price and D signal bar liquidity fields; D+1 open/ADV/volatility may decide marketability and fill outcome, but must not widen the submitted limit.
+
+### Assertions
+
+    C40-01  D close MARKET BUY becomes DeferredOrder(order_type="LIMIT").
+    C40-02  limit_price == D reference_price adjusted by the historical cost model.
+    C40-03  risk_check_price remains the D reference price, not the cost-protection limit.
+    C40-04  D+1 execution-day cost fields cannot widen the submitted LIMIT.
+
+### Tests
+
+`test_case40_01_market_signal_becomes_historical_limit_order`,
+`test_case40_02_historical_limit_does_not_use_execution_day_cost_fields`
+in `test_backtest_invariants.py`.
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -1669,6 +1704,8 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 |36|CN|status 表驱动 ST 5% fallback、显式涨跌停、停牌 synthetic bar|
 |37|CN|小市值低价策略退市风险护栏：价格/流动性/status 买入过滤 + 每日风险退出|
 |38|CN|ETF adj_factor 大幅跳变按份额折算同步组合与策略仓位|
+|39|N/A|Backtest/paper/live use one D-close daily snapshot signal runner before mode-specific D+1 execution|
+|40|CN|Enabled execution_cost_model freezes D-close MARKET signals as D-known cost-protection LIMIT orders|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
 |R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

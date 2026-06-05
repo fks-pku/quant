@@ -8,11 +8,38 @@
         "avg_cost": 300.0,
         "market_value": 0.0,
         "unrealized_pnl": 0.0
+      },
+      "588000": {
+        "symbol": "588000",
+        "strategy_name": "default",
+        "qty": 100.0,
+        "avg_cost": 1.985,
+        "market_value": 179.29999999999998,
+        "unrealized_pnl": -19.200000000000017
+      }
+    },
+    "ashare_gold_equity_barbell_timing": {
+      "159949": {
+        "symbol": "159949",
+        "strategy_name": "ashare_gold_equity_barbell_timing",
+        "qty": 4900.0,
+        "avg_cost": 1.9950204081632652,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
+      },
+      "518880": {
+        "symbol": "518880",
+        "strategy_name": "ashare_gold_equity_barbell_timing",
+        "qty": 1000.0,
+        "avg_cost": 9.307,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
       }
     }
   },
   "realized_pnl": {
-    "default": 67149.99999999999
+    "default": 67149.99999999999,
+    "ashare_gold_equity_barbell_timing": 0.0
   },
   "order_map": {
     "2F218A7A-454": "default",
@@ -92,6 +119,12 @@
     "117418D7-E79": "default",
     "A9D7FA0C-685": "default",
     "0E089AEB-013": "default",
-    "4C86EE1D-1E4": "default"
+    "4C86EE1D-1E4": "default",
+    "FDD9E123-459": "ashare_gold_equity_barbell_timing",
+    "1090532861": "ashare_gold_equity_barbell_timing",
+    "396A1438-A83": "ashare_gold_equity_barbell_timing",
+    "1090532862": "ashare_gold_equity_barbell_timing",
+    "1090542144": "ashare_gold_equity_barbell_timing",
+    "9ADD6DA5-39A": "ashare_gold_equity_barbell_timing"
   }
 }

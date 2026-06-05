@@ -3,6 +3,7 @@ import threading
 import time
 from dataclasses import fields as dc_fields
 from datetime import datetime
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -16,6 +17,10 @@ from quant.shared.utils.logger import setup_logger
 _SZ_PREFIXES = ("000", "001", "002", "003", "300", "301", "159", "184")
 _BJ_PREFIXES = ("4", "8", "920")
 _MARKET_PREFIXES = ("SH", "SZ", "BJ")
+_QMT_CN_FUND_PREFIXES = ("15", "16", "18", "50", "51", "52", "56", "58")
+_QMT_CN_DEFAULT_COMMISSION_RATE = 0.00025
+_QMT_CN_MAX_COMMISSION_RATE = 0.003
+_QMT_CN_MIN_COMMISSION = 5.0
 
 
 def _cn_symbol_to_qmt(symbol: str) -> str:
@@ -107,9 +112,79 @@ def _constant(module: Any, name: str, fallback: int) -> int:
     return int(getattr(module, name, fallback))
 
 
+def _qmt_limit_price_tick(qmt_code: str) -> Decimal:
+    raw = str(qmt_code).strip().upper()
+    code, market = raw.split(".", 1) if "." in raw else (raw, "")
+    if market == "SH" and code.startswith("5"):
+        return Decimal("0.001")
+    if market == "SZ" and code.startswith(("15", "16", "184")):
+        return Decimal("0.001")
+    return Decimal("0.01")
+
+
+def _normalize_qmt_limit_price(qmt_code: str, side: OrderSide, price: float) -> float:
+    value = Decimal(str(price))
+    if value <= 0:
+        return 0.0
+    tick = _qmt_limit_price_tick(qmt_code)
+    rounding = ROUND_CEILING if side == OrderSide.SELL else ROUND_FLOOR
+    normalized = (value / tick).to_integral_value(rounding=rounding) * tick
+    if normalized <= 0:
+        raise ValueError(f"QMT limit price too small for {qmt_code}: {price}")
+    return float(normalized)
+
+
 def _order_identifier(data: Any) -> str:
     value = _get_field(data, "order_id", "m_nOrderID", "m_strOrderSysID", "order_sysid", default="")
     return str(value) if value is not None else ""
+
+
+def _trade_identifier(data: Any) -> str:
+    value = _get_field(data, "trade_id", "fill_id", "m_strTradeID", "deal_id", default="")
+    return str(value) if value is not None else ""
+
+
+def _qmt_side_from_record(record: Any) -> str:
+    raw = _get_field(record, "side", "direction", "order_side", "order_type", "entrust_bs", "m_nOrderType", default="")
+    text = str(raw).upper()
+    if text in {"BUY", "B", "23", "STOCK_BUY"}:
+        return "BUY"
+    if text in {"SELL", "S", "24", "STOCK_SELL"}:
+        return "SELL"
+    return ""
+
+
+def _qmt_timestamp_from_record(record: Any) -> Optional[str]:
+    value = _get_field(record, "timestamp", "traded_time", "trade_time", "m_strTradeTime", "order_time", default=None)
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text = str(value).strip().replace(" ", "T")
+    try:
+        return datetime.fromisoformat(text).isoformat()
+    except ValueError:
+        return text
+
+
+def _commission_config_for_market(commission_config: Any, market: str) -> Dict[str, Any]:
+    if isinstance(commission_config, dict):
+        value = commission_config.get(market, commission_config)
+        return value if isinstance(value, dict) else {}
+    value = getattr(commission_config, market, None)
+    return value if isinstance(value, dict) else {}
+
+
+def _is_qmt_cn_fund_symbol(symbol: str) -> bool:
+    code = _qmt_symbol_to_cn(symbol)
+    return code.isdigit() and len(code) == 6 and code.startswith(_QMT_CN_FUND_PREFIXES)
+
+
+def _configured_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class QMTBroker(BrokerAdapter):
@@ -126,6 +201,7 @@ class QMTBroker(BrokerAdapter):
         xtquant_path: str = "",
         account_type: str = "STOCK",
         session_id: Optional[int] = None,
+        commission_config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__("qmt")
         self._host = host
@@ -136,6 +212,7 @@ class QMTBroker(BrokerAdapter):
         self._password = password
         self._userdata_mini_path = userdata_mini_path or mini_qmt_path
         self._xtquant_path = xtquant_path
+        self._commission_config = commission_config or {}
         if not xtquant_path and mini_qmt_path and "site-packages" in mini_qmt_path.lower():
             self._xtquant_path = mini_qmt_path
             self._userdata_mini_path = ""
@@ -290,6 +367,11 @@ class QMTBroker(BrokerAdapter):
     def submit_order(self, order: Order) -> str:
         with self._lock:
             self._ensure_connected()
+            if self._trade_mode != "REAL":
+                raise RuntimeError(
+                    "QMT trade_mode=SIMULATE is not a verified sandbox order route; "
+                    "use PaperBroker for paper trading or set trade_mode=REAL for confirmed live orders."
+                )
 
             qmt_code = _cn_symbol_to_qmt(order.symbol)
             volume = int(order.quantity)
@@ -305,7 +387,7 @@ class QMTBroker(BrokerAdapter):
                 price = 0.0
             else:
                 price_type = _constant(self._xtconstant, "FIX_PRICE", 11)
-                price = float(order.price or 0.0)
+                price = _normalize_qmt_limit_price(qmt_code, order.side, float(order.price or 0.0))
             strategy_name = (getattr(order, "strategy_name", "") or "quant")[:32]
             order_remark = ""
 
@@ -371,6 +453,26 @@ class QMTBroker(BrokerAdapter):
                 equity=0.0,
                 currency="CNY",
             )
+
+    def get_trade_history(self, start_date: Any = None, end_date: Any = None) -> List[Dict[str, Any]]:
+        with self._lock:
+            self._ensure_connected()
+            records = self._query_history(
+                ("query_stock_trades", "query_trades", "query_stock_trade"),
+                start_date=start_date,
+                end_date=end_date,
+            )
+            return [row for row in (self._trade_history_row(record) for record in records) if row]
+
+    def get_order_history(self, start_date: Any = None, end_date: Any = None) -> List[Dict[str, Any]]:
+        with self._lock:
+            self._ensure_connected()
+            records = self._query_history(
+                ("query_stock_orders", "query_orders", "query_stock_order"),
+                start_date=start_date,
+                end_date=end_date,
+            )
+            return [row for row in (self._order_history_row(record) for record in records) if row]
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, float]]:
         self._ensure_connected()
@@ -480,6 +582,66 @@ class QMTBroker(BrokerAdapter):
         quote = {key: value for key, value in quote.items() if value > 0}
         return quote or None
 
+    def _query_history(self, method_names: tuple, start_date: Any = None, end_date: Any = None) -> List[Any]:
+        if not self._trader or not self._account:
+            return []
+        start_text = start_date.isoformat() if hasattr(start_date, "isoformat") else start_date
+        end_text = end_date.isoformat() if hasattr(end_date, "isoformat") else end_date
+        for method_name in method_names:
+            if not hasattr(self._trader, method_name):
+                continue
+            method = getattr(self._trader, method_name)
+            attempts = [
+                (self._account, start_text, end_text),
+                (self._account,),
+                tuple(),
+            ]
+            for args in attempts:
+                try:
+                    return _records(method(*args))
+                except TypeError:
+                    continue
+                except Exception as e:
+                    self.logger.warning(f"QMT history query failed via {method_name}: {e}")
+                    return []
+        return []
+
+    def _trade_history_row(self, record: Any) -> Optional[Dict[str, Any]]:
+        order_id = _order_identifier(record)
+        symbol = _qmt_symbol_to_cn(_get_field(record, "symbol", "stock_code", "m_strStockCode", "m_strInstrumentID", default=""))
+        side = _qmt_side_from_record(record)
+        quantity = _safe_float(_get_field(record, "quantity", "traded_volume", "m_nVolume", "volume", default=0.0))
+        price = _safe_float(_get_field(record, "price", "traded_price", "m_dPrice", default=0.0))
+        if not order_id or not symbol or not side or quantity <= 0 or price <= 0:
+            return None
+        return {
+            "order_id": order_id,
+            "trade_id": _trade_identifier(record),
+            "timestamp": _qmt_timestamp_from_record(record),
+            "strategy_name": str(_get_field(record, "strategy_name", "strategy", "order_remark", "remark", default="") or ""),
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price": price,
+            "commission": self._commission_from_trade_record(record),
+        }
+
+    def _order_history_row(self, record: Any) -> Optional[Dict[str, Any]]:
+        order_id = _order_identifier(record)
+        symbol = _qmt_symbol_to_cn(_get_field(record, "symbol", "stock_code", "m_strStockCode", "m_strInstrumentID", default=""))
+        if not order_id or not symbol:
+            return None
+        return {
+            "order_id": order_id,
+            "timestamp": _qmt_timestamp_from_record(record),
+            "strategy_name": str(_get_field(record, "strategy_name", "strategy", "order_remark", "remark", default="") or ""),
+            "symbol": symbol,
+            "side": _qmt_side_from_record(record),
+            "quantity": _safe_float(_get_field(record, "quantity", "order_volume", "m_nVolume", "volume", default=0.0)),
+            "price": _safe_float(_get_field(record, "price", "order_price", "m_dPrice", default=0.0)),
+            "status": str(_get_field(record, "status", "order_status", "m_nOrderStatus", default="")),
+        }
+
     def _ensure_connected(self) -> None:
         if not self._connected or not self._trader or not self._account:
             raise RuntimeError("QMT broker not connected")
@@ -505,6 +667,7 @@ class QMTBroker(BrokerAdapter):
         side: str,
         quantity: float,
         price: float,
+        commission: float,
         strategy_name: Optional[str],
         timestamp: datetime,
     ) -> None:
@@ -517,11 +680,47 @@ class QMTBroker(BrokerAdapter):
                     side=side,
                     quantity=quantity,
                     price=price,
+                    commission=commission,
                     timestamp=timestamp,
                     strategy_name=strategy_name,
                 )
             except Exception as e:
                 self.logger.error(f"QMT trade callback failed: {e}")
+
+    def _commission_from_trade_record(self, trade: Any) -> float:
+        value = _get_field(
+            trade,
+            "commission",
+            "m_dCommission",
+            "entrust_fee",
+            "m_dEntrustFee",
+            "fee",
+            "m_dFee",
+            default=None,
+        )
+        try:
+            commission = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return commission if commission > 0 else 0.0
+
+    def estimate_commission(self, symbol: str, side: str, quantity: float, price: float) -> float:
+        code = _qmt_symbol_to_cn(symbol)
+        if not (code.isdigit() and len(code) == 6):
+            return 0.0
+        trade_value = abs(float(quantity) * float(price))
+        if trade_value <= 0:
+            return 0.0
+        cfg = _commission_config_for_market(self._commission_config, "CN")
+        if _is_qmt_cn_fund_symbol(code):
+            raw_rate = cfg.get("fund_percent", cfg.get("percent", _QMT_CN_DEFAULT_COMMISSION_RATE))
+            raw_min = cfg.get("fund_min_per_order", cfg.get("min_per_order", _QMT_CN_MIN_COMMISSION))
+        else:
+            raw_rate = cfg.get("percent", _QMT_CN_DEFAULT_COMMISSION_RATE)
+            raw_min = cfg.get("min_per_order", _QMT_CN_MIN_COMMISSION)
+        rate = min(max(_configured_float(raw_rate, _QMT_CN_DEFAULT_COMMISSION_RATE), 0.0), _QMT_CN_MAX_COMMISSION_RATE)
+        minimum = max(_configured_float(raw_min, _QMT_CN_MIN_COMMISSION), _QMT_CN_MIN_COMMISSION)
+        return max(trade_value * rate, minimum)
 
 
 _ORDER_STATUS_MAP = {
@@ -573,12 +772,16 @@ def _qmt_trade_callback(broker: QMTBroker, trade: Any) -> None:
                 {"filled_quantity": filled_qty, "avg_fill_price": avg_price, "status": status},
             )
     if fill_qty > 0 and fill_price > 0:
+        commission = broker._commission_from_trade_record(trade)
+        if commission <= 0:
+            commission = broker.estimate_commission(symbol, side, fill_qty, fill_price)
         broker._notify_trade_callbacks(
             order_id=order_id,
             symbol=symbol,
             side=side,
             quantity=fill_qty,
             price=fill_price,
+            commission=commission,
             strategy_name=strategy_name,
             timestamp=fill_ts,
         )

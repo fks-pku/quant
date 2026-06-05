@@ -8,7 +8,13 @@ import pandas as pd
 
 from quant.domain.models.trade import Trade
 from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
+from quant.features.backtest.market_rules import get_market
 from quant.features.backtest.schemas import DeferredOrder
+from quant.runtime.execution_cost import (
+    bar_close_price,
+    estimate_cost_protection_limit,
+    has_historical_cost_model,
+)
 
 
 @dataclass
@@ -116,12 +122,23 @@ class BacktestResultExporter:
 
 
 class _BacktestOrderManager:
-    def __init__(self, risk_engine: Any) -> None:
+    def __init__(
+        self,
+        risk_engine: Any,
+        *,
+        base_slippage_bps: float = 5.0,
+        execution_cost_model: Optional[Dict[str, Any]] = None,
+        market_impact_factor: float = 0.0,
+    ) -> None:
         self._risk_engine = risk_engine
+        self._base_slippage_bps = float(base_slippage_bps or 0.0)
+        self._execution_cost_model = execution_cost_model
+        self._market_impact_factor = float(market_impact_factor or 0.0)
         self._buffer: List[Dict] = []
         self._buy_dedup_set: set = set()
         self._current_date: Optional[date] = None
         self._last_prices: Dict[str, float] = {}
+        self._current_bars: Dict[str, Any] = {}
         self._tradable_today: Optional[Dict[str, bool]] = None
         self._rejected_count: int = 0
 
@@ -165,9 +182,49 @@ class _BacktestOrderManager:
             raise OrderRejectedError(OrderRejectionReason.RISK_REJECTED, symbol)
         self._risk_engine.record_order(symbol=symbol, order_value=value, as_of_date=self._current_date)
 
+    def _as_historical_limit_order(
+        self,
+        symbol: str,
+        quantity: float,
+        side: str,
+        order_type: str,
+        price: Optional[float],
+        reference_price: float,
+    ) -> tuple[str, Optional[float]]:
+        order_type_text = (order_type or "MARKET").upper()
+        if order_type_text != "MARKET":
+            return order_type, price
+        market = get_market(symbol)
+        if not has_historical_cost_model(self._execution_cost_model, symbol, market):
+            return order_type, price
+        auto_limit = bool(
+            (self._execution_cost_model or {}).get(
+                "market_orders_as_limits",
+                market == "CN",
+            )
+        )
+        if not auto_limit:
+            return order_type, price
+        signal_bar = self._current_bars.get(symbol) or {}
+        bar_reference = bar_close_price(signal_bar)
+        estimate = estimate_cost_protection_limit(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            reference_price=bar_reference or reference_price,
+            market=market,
+            signal_bar=signal_bar,
+            base_slippage_bps=self._base_slippage_bps,
+            execution_cost_model=self._execution_cost_model,
+            fallback_max_cost_bps=None,
+            fallback_impact_factor=self._market_impact_factor,
+        )
+        return "LIMIT", estimate.limit_price
+
     def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
         try:
-            if (order_type or "MARKET").upper() == "LIMIT" and (
+            order_type_text = (order_type or "MARKET").upper()
+            if order_type_text == "LIMIT" and (
                 not isinstance(price, (int, float)) or price <= 0
             ):
                 raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
@@ -176,6 +233,9 @@ class _BacktestOrderManager:
             effective = self._resolve_price(price, symbol)
             self._passes_dedup(symbol, side)
             self._passes_risk(symbol, quantity, effective, side)
+            submitted_order_type, submitted_price = self._as_historical_limit_order(
+                symbol, quantity, side, order_type_text, price, effective,
+            )
         except OrderRejectedError:
             self._rejected_count += 1
             return None
@@ -183,8 +243,8 @@ class _BacktestOrderManager:
             "symbol": symbol,
             "quantity": quantity,
             "side": side,
-            "order_type": order_type,
-            "price": price,
+            "order_type": submitted_order_type,
+            "price": submitted_price,
             "strategy": strategy_name,
             "_risk_check_price": effective,
         }
@@ -218,12 +278,27 @@ class _BacktestOrderManager:
 
 
 class _BacktestContext:
-    def __init__(self, portfolio: Any, risk_engine: Any, event_bus: Any, data_provider: Any) -> None:
+    def __init__(
+        self,
+        portfolio: Any,
+        risk_engine: Any,
+        event_bus: Any,
+        data_provider: Any,
+        *,
+        base_slippage_bps: float = 5.0,
+        execution_cost_model: Optional[Dict[str, Any]] = None,
+        market_impact_factor: float = 0.0,
+    ) -> None:
         self.portfolio = portfolio
         self.risk_engine = risk_engine
         self.event_bus = event_bus
         self.data_provider = data_provider
-        self.order_manager = _BacktestOrderManager(risk_engine)
+        self.order_manager = _BacktestOrderManager(
+            risk_engine,
+            base_slippage_bps=base_slippage_bps,
+            execution_cost_model=execution_cost_model,
+            market_impact_factor=market_impact_factor,
+        )
 
     def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
         return self.order_manager.submit_order(symbol, quantity, side, order_type, price, strategy_name)
@@ -233,10 +308,12 @@ class _BacktestContext:
         trading_date: date,
         last_prices: Dict[str, float],
         tradable_today: Optional[Dict[str, bool]] = None,
+        current_bars: Optional[Dict[str, Any]] = None,
     ):
         self.order_manager._current_date = trading_date
         self.order_manager._last_prices = last_prices
         self.order_manager._tradable_today = tradable_today
+        self.order_manager._current_bars = current_bars or {}
 
     def drain_orders(self, signal_date: Optional[date] = None):
         return self.order_manager.drain_pending(signal_date)

@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
 import threading
 import time
 
@@ -12,7 +12,7 @@ from quant.domain.events.base import EventType
 from quant.features.trading.scheduler import Scheduler
 from quant.features.trading.portfolio import Portfolio
 from quant.features.trading.risk import RiskEngine
-from quant.runtime.daily_strategy_runner import extract_bar_date, extract_bar_symbol, run_daily_snapshot
+from quant.runtime.daily_strategy_runner import extract_bar_date, extract_bar_symbol, run_daily_snapshots
 from quant.runtime.execution_reference import ExecutionReferencePriceResolver
 from quant.runtime.strategy_cycle import after_trading, before_trading, feed_strategy_bars, start_strategy, stop_strategy
 from quant.shared.utils.logger import setup_logger
@@ -35,11 +35,17 @@ class Context(StrategyContext):
     def submit_order(self, symbol: str, quantity: float, side: str,
                      order_type: str = "MARKET", price: Optional[float] = None,
                      strategy_name: Optional[str] = None) -> Optional[str]:
+        gate = getattr(self, "signal_gate", None)
+        if callable(gate) and not gate(strategy_name):
+            return None
         order_type_text = (order_type or "MARKET").upper()
         if self.execution_manager is not None and order_type_text == "MARKET":
-            reference_price = price
+            reference_price = price if isinstance(price, (int, float)) and price > 0 else None
+            signal_reference = getattr(self.execution_manager, "get_signal_reference_price", None)
+            if reference_price is None and callable(signal_reference):
+                reference_price = signal_reference(symbol)
             resolver = getattr(self, "execution_reference_resolver", None)
-            if resolver is not None:
+            if reference_price is None and resolver is not None:
                 reference = resolver.resolve(symbol, side, strategy_price=price)
                 if reference is None:
                     return None
@@ -71,6 +77,7 @@ class Engine:
         self.scheduler = Scheduler(config, self.event_bus)
         self.order_manager = None
         self.execution_manager = None
+        self.strategy_signal_gate: Optional[Callable[[str], bool]] = None
         live_config = config.get("live_trading", {})
         self._daily_snapshot_mode = bool(live_config.get("daily_snapshot_mode", True))
         self._strict_daily_snapshot = bool(live_config.get("strict_daily_snapshot", True))
@@ -90,7 +97,7 @@ class Engine:
         self._subscribed_symbols: List[str] = []
         self._daily_bar_buffer: Dict[date, Dict[str, Any]] = {}
         self._completed_daily_snapshots: set[date] = set()
-        self._daily_snapshot_processed: Dict[date, set[str]] = {}
+        self._daily_snapshot_results: Dict[tuple[date, str], Any] = {}
 
     def set_data_provider(self, name: str, provider: Any) -> None:
         """Set a data provider."""
@@ -135,12 +142,16 @@ class Engine:
             data_provider=self.data_providers.get("default"),
             broker=self.broker,
             execution_reference_resolver=self._make_execution_reference_resolver(),
+            signal_gate=self._context_accepts_strategy_signals,
         )
         self.strategies.append(strategy)
 
         self.event_bus.subscribe(EventType.BAR, lambda event: self._dispatch_bar(strategy, event))
         self.event_bus.subscribe(EventType.MARKET_OPEN, lambda event: self._dispatch_market_open(strategy, event))
         self.event_bus.subscribe(EventType.MARKET_CLOSE, lambda event: self._dispatch_market_close(strategy, event))
+
+    def set_strategy_signal_gate(self, gate: Optional[Callable[[str], bool]]) -> None:
+        self.strategy_signal_gate = gate
 
     def _make_execution_reference_resolver(self) -> ExecutionReferencePriceResolver:
         return ExecutionReferencePriceResolver(
@@ -162,14 +173,15 @@ class Engine:
         if symbol is None:
             symbol = f"__bar_{len(bucket) + 1}"
         bucket[symbol] = data
-        if self._feed_intraday_bars:
+        if self._feed_intraday_bars and self._accepts_strategy_signals(strategy):
             feed_strategy_bars(strategy, [data])
 
     def _dispatch_market_open(self, strategy: Any, event: Any) -> None:
         trading_date = self._event_trading_date(event)
         if self._daily_snapshot_mode:
-            self._run_completed_daily_snapshot(strategy, trading_date)
-        before_trading(strategy, trading_date)
+            self._run_completed_daily_snapshots(trading_date)
+        if self._accepts_strategy_signals(strategy):
+            before_trading(strategy, trading_date)
 
     def _dispatch_market_close(self, strategy: Any, event: Any) -> None:
         trading_date = self._event_trading_date(event)
@@ -177,55 +189,152 @@ class Engine:
             if trading_date in self._daily_bar_buffer:
                 self._completed_daily_snapshots.add(trading_date)
             return
-        after_trading(strategy, trading_date)
+        if self._accepts_strategy_signals(strategy):
+            after_trading(strategy, trading_date)
 
     def _run_completed_daily_snapshot(self, strategy: Any, current_date: date) -> None:
+        self._run_completed_daily_snapshots(current_date)
+
+    def _run_completed_daily_snapshots(self, current_date: date) -> None:
         eligible_dates = [
             trading_date
             for trading_date in self._completed_daily_snapshots
-            if trading_date < current_date and not self._strategy_processed_snapshot(strategy, trading_date)
+            if trading_date < current_date
         ]
         if not eligible_dates:
             return
         trading_date = max(eligible_dates)
         for stale_date in eligible_dates:
             if stale_date != trading_date:
-                self._daily_snapshot_processed.pop(stale_date, None)
                 self._completed_daily_snapshots.discard(stale_date)
                 self._daily_bar_buffer.pop(stale_date, None)
         bars = list(self._daily_bar_buffer.get(trading_date, {}).values())
-        result = run_daily_snapshot(
-            strategy,
+        runnable_strategies = [
+            strategy for strategy in self.strategies
+            if self._accepts_strategy_signals(strategy)
+        ]
+        if not runnable_strategies:
+            self._mark_snapshot_portfolios_from_bars(bars)
+            self._completed_daily_snapshots.discard(trading_date)
+            self._daily_bar_buffer.pop(trading_date, None)
+            return
+        self._set_execution_signal_bars(bars, trading_date)
+        results = run_daily_snapshots(
+            runnable_strategies,
             trading_date,
             bars,
             strict=self._strict_daily_snapshot,
+            after_feed=self._mark_snapshot_portfolios,
         )
-        if not result.ran:
-            self.logger.warning(
-                "Skipped daily snapshot for %s on %s: missing=%s stale=%s",
-                getattr(strategy, "name", strategy.__class__.__name__),
-                trading_date,
-                result.missing_symbols,
-                result.stale_symbols,
-            )
-        self._mark_strategy_processed_snapshot(strategy, trading_date)
+        if results and not any(result.ran for _, result in results):
+            self._mark_snapshot_portfolios_from_bars(bars)
+        for strategy, result in results:
+            self._daily_snapshot_results[(trading_date, self._strategy_name(strategy))] = result
+            if not result.ran:
+                self.logger.warning(
+                    "Skipped daily snapshot for %s on %s: missing=%s stale=%s",
+                    self._strategy_name(strategy),
+                    trading_date,
+                    result.missing_symbols,
+                    result.stale_symbols,
+                )
+        self._completed_daily_snapshots.discard(trading_date)
+        self._daily_bar_buffer.pop(trading_date, None)
 
-    def _strategy_processed_snapshot(self, strategy: Any, trading_date: date) -> bool:
-        strategy_name = getattr(strategy, "name", strategy.__class__.__name__)
-        return strategy_name in self._daily_snapshot_processed.get(trading_date, set())
+    def inject_daily_snapshot(
+        self,
+        trading_date: Any,
+        bars: List[Any],
+        execution_date: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Inject one EOD bar batch through the live daily-snapshot event path."""
+        trading_day = self._coerce_date(trading_date)
+        if trading_day is None:
+            raise ValueError(f"Cannot coerce trading_date to date: {trading_date!r}")
+        execution_day = self._coerce_date(execution_date) if execution_date is not None else trading_day + timedelta(days=1)
+        if execution_day is None:
+            raise ValueError(f"Cannot coerce execution_date to date: {execution_date!r}")
 
-    def _mark_strategy_processed_snapshot(self, strategy: Any, trading_date: date) -> None:
-        strategy_name = getattr(strategy, "name", strategy.__class__.__name__)
-        processed = self._daily_snapshot_processed.setdefault(trading_date, set())
-        processed.add(strategy_name)
-        expected = {
-            getattr(item, "name", item.__class__.__name__)
-            for item in self.strategies
+        for key in list(self._daily_snapshot_results):
+            if key[0] == trading_day:
+                self._daily_snapshot_results.pop(key, None)
+        for bar in bars:
+            self.event_bus.publish_nowait(EventType.BAR, bar, "daily_snapshot")
+        self.event_bus.publish_nowait(EventType.MARKET_CLOSE, {"timestamp": trading_day})
+        self.event_bus.publish_nowait(EventType.MARKET_OPEN, {"timestamp": execution_day})
+        return {
+            strategy_name: result
+            for (result_day, strategy_name), result in self._daily_snapshot_results.items()
+            if result_day == trading_day
         }
-        if expected and expected.issubset(processed):
-            self._daily_snapshot_processed.pop(trading_date, None)
-            self._completed_daily_snapshots.discard(trading_date)
-            self._daily_bar_buffer.pop(trading_date, None)
+
+    def _strategy_name(self, strategy: Any) -> str:
+        return getattr(strategy, "name", strategy.__class__.__name__)
+
+    def _accepts_strategy_signals(self, strategy: Any) -> bool:
+        return self._context_accepts_strategy_signals(self._strategy_name(strategy))
+
+    def _context_accepts_strategy_signals(self, strategy_name: Optional[str]) -> bool:
+        if self.strategy_signal_gate is None:
+            return True
+        if not strategy_name:
+            return True
+        try:
+            return bool(self.strategy_signal_gate(str(strategy_name)))
+        except Exception as exc:
+            self.logger.error(f"Strategy signal gate failed for {strategy_name}: {exc}")
+            return False
+
+    def _mark_snapshot_portfolios(self, snapshot: Any) -> None:
+        prices = self._snapshot_close_prices(snapshot.bars.values())
+        for portfolio in self._snapshot_portfolios():
+            self._update_portfolio_market_prices(portfolio, prices)
+
+    def _mark_snapshot_portfolios_from_bars(self, bars: Any) -> None:
+        prices = self._snapshot_close_prices(bars)
+        for portfolio in self._snapshot_portfolios():
+            self._update_portfolio_market_prices(portfolio, prices)
+
+    def _set_execution_signal_bars(self, bars: Any, trading_date: date) -> None:
+        manager = self.execution_manager
+        setter = getattr(manager, "set_signal_bars", None)
+        if callable(setter):
+            setter(list(bars or []), trading_date=trading_date)
+
+    def _snapshot_portfolios(self) -> List[Any]:
+        portfolios: List[Any] = [self.portfolio]
+        portfolios.extend(self._sub_portfolios.values())
+        return portfolios
+
+    @staticmethod
+    def _snapshot_close_prices(bars: Any) -> Dict[str, float]:
+        prices: Dict[str, float] = {}
+        for bar in bars:
+            symbol = extract_bar_symbol(bar)
+            price = Engine._bar_close_price(bar)
+            if symbol is not None and price is not None and price > 0:
+                prices[symbol] = price
+        return prices
+
+    @staticmethod
+    def _bar_close_price(bar: Any) -> Optional[float]:
+        value = bar.get("close") if isinstance(bar, dict) else getattr(bar, "close", None)
+        if value is None:
+            getter = getattr(bar, "get", None)
+            if callable(getter):
+                value = getter("close", None)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _update_portfolio_market_prices(portfolio: Any, prices: Dict[str, float]) -> None:
+        for symbol, position in getattr(portfolio, "positions", {}).items():
+            quantity = float(getattr(position, "quantity", 0.0) or 0.0)
+            price = prices.get(symbol)
+            if quantity != 0 and price is not None and price > 0:
+                position.update_market_price(price)
 
     def _event_trading_date(self, event: Any) -> date:
         data = getattr(event, "data", None)
@@ -242,6 +351,22 @@ class Engine:
                 return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
             return datetime.fromisoformat(text[:10]).date()
         return datetime.now().date()
+
+    def _coerce_date(self, value: Any) -> Optional[date]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            if len(text) == 8 and text.isdigit():
+                return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+            return datetime.fromisoformat(text[:10]).date()
+        return None
 
     def subscribe(self, symbols: List[str]) -> None:
         """Subscribe to symbols for real-time data."""
@@ -328,7 +453,10 @@ class Engine:
         """Check if market is currently open."""
         from quant.shared.utils.datetime_utils import get_current_time, is_market_open
 
-        market_config = self.config.get("markets", {}).get("US", {})
+        system_config = self.config.get("system", {}) if isinstance(self.config, dict) else {}
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        market = live_config.get("market", system_config.get("market", "US"))
+        market_config = self.config.get("markets", {}).get(market, {})
         now = get_current_time(market_config.get("timezone", "America/New_York"))
         return is_market_open(
             now,
@@ -374,8 +502,7 @@ class Engine:
         if self._daily_snapshot_mode:
             flush_date = end_date + timedelta(days=1)
             flush_day = flush_date.date() if hasattr(flush_date, "date") else flush_date
-            for strategy in self.strategies:
-                self._run_completed_daily_snapshot(strategy, flush_day)
+            self._run_completed_daily_snapshots(flush_day)
 
         for strategy in self.strategies:
             stop_strategy(strategy)

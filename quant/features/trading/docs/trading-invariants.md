@@ -22,9 +22,11 @@ Trading 模块管理组合状态、风控检查、SubPortfolio 隔离。
 - T6 `Position.remove_sell_lots` 按 FIFO 顺序消耗 lots
 - T8 实盘策略分账时，OrderManager 必须使用该策略的 RiskEngine，FillHandler 必须更新该策略的 SubPortfolio
 - T9 带 `strategy_name` 的实盘成交只派发给所属策略，不广播给其他策略
-- T10 实盘 `MARKET + reference price` 信号单必须经限成本执行器转换为 LIMIT 单；到期未完成的目标单必须撤单并标记 dropped
+- T10 live/paper `MARKET + D-known reference price` 信号单必须经限成本执行器转换为 LIMIT 单；到期未完成的目标单必须撤单并标记 dropped
 - T11 默认日线实盘策略必须用完整 EOD 快照触发，D 日 BAR 不即时下单，D+1 `MARKET_OPEN` 才用 D 日完整快照生成信号
-- T12 实盘 MARKET 目标单的 reference price 必须来自 broker/data-provider 执行行情 resolver；默认不得使用策略传入价兜底
+- T12 live/paper MARKET 目标单的限价 reference price 必须优先来自 D 日策略 price 或 signal bar close；broker/data-provider resolver 只在信号参考价缺失时兜底
+- T13 Strategy dashboard must derive pending orders, order fill display, holdings, cash, NAV, and run freshness from one server-side display contract
+- T14 QMT 实盘成交记录必须携带券商佣金；若 MiniQMT 成交回报缺少费用字段，A股/ETF 默认按成交额费率与 5 元起点估算，并摊入策略持仓成本
 
 ---
 
@@ -262,15 +264,21 @@ T8-05  QuantSystem._on_fill 只调用 DemoStrategy.on_fill，不调用其他策�
 ### 断言
 
 ```
-T9-01  BUY limit_price == reference_price * (1 + max_cost_bps / 10000)
-T9-02  SELL limit_price == reference_price * (1 - max_cost_bps / 10000)
+T9-01  未启用 execution_cost_model 时 BUY limit_price == reference_price * (1 + max_cost_bps / 10000)
+T9-02  未启用 execution_cost_model 时 SELL limit_price == reference_price * (1 - max_cost_bps / 10000)
 T9-03  显式 LIMIT 单保持原限价，不再套用执行器成本 bps
 T9-04  未完成目标单到期后调用 cancel_order(order_id)
 T9-05  dropped 状态表示当日未下完的剩余目标被丢弃，不跨日补单
 T9-06  已成交、已撤销或已拒绝的目标单到期时不得再次撤单
+T9-07  QMT FIX_PRICE 出站限价必须规整到交易所 tick；BUY 向下取整、SELL 向上取整，保持成本边界
+T9-08  QMT trade_mode=SIMULATE 不是已验证沙盒下单通道，必须拒绝 submit_order；模拟盘使用 PaperBroker
+T9-09  paper mode 只能初始化和运行 PaperBroker，不得连接 QMT/Futu 等外部交易 broker
+T9-10  PaperBroker 使用执行日 open 做本地撮合；LIMIT 必须按回测 marketability 规则成交或拒绝，并通过 trade callback 进入统一 FillHandler
+T9-11  live morning 与 post-close paper replay 必须使用同一 signal_date/execution_date；paper 等执行日 open 入库后按 LIMIT marketability 撮合，live/paper 成本限价均来自 D 日可知成本模型，不复制人工补单
+T9-12  启用 execution_cost_model 时，live/paper 目标单限价使用 D 日信号 bar 的 close/ADV/volatility 估算，不得用 D+1 broker quote 放宽限价
 ```
 
-### 对应测试: `test_live_execution_manager_*`, `test_trading_context_*` in `test_live_trading_records.py`
+### 对应测试: `test_live_execution_manager_*`, `test_trading_context_*`, `test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks`, `test_order_manager_flushes_paper_broker_fills_after_submission`, `test_quant_system_rejects_external_broker_adapter_in_paper_mode` in `test_live_trading_records.py`; `test_qmt_limit_price_rounds_to_exchange_tick_preserving_side_bound`, `test_submit_order_normalizes_limit_price_before_qmt_call`, `test_qmt_simulate_trade_mode_refuses_order_submission` in `test_qmt_broker.py`
 
 ---
 
@@ -302,26 +310,99 @@ T11-05  gap 恢复时只消费最新完成快照，不按旧日期补下单
 
 ---
 
-## CASE-12: Live MARKET 执行参考价来源
+## CASE-12: Live/Paper MARKET 成本保护参考价来源
 
 ### 前置条件
 
-策略在 T+1 开盘提交 `Context.submit_order(..., order_type="MARKET", price=strategy_price)`，`Context` 配置了 `ExecutionReferencePriceResolver` 和 `LiveExecutionManager`。
+策略在 T+1 开盘提交 `Context.submit_order(..., order_type="MARKET", price=strategy_price)`，`Context` 配置了 `ExecutionReferencePriceResolver` 和成本保护执行器。
 
 ### 操作序列
 
 1. broker quote 返回 `open_price=12.0`
-2. 策略传入 `price=10.0`
-3. `Context.submit_order()` 生成 live target order
-4. broker quote 缺失时再次提交 MARKET target
+2. 策略传入 D 日可知 `price=10.0`
+3. `Context.submit_order()` 生成 live/paper target order
+4. 策略 price 缺失时优先使用执行器缓存的 D 日 signal bar close
+5. D 日 signal reference 也缺失时，才用 broker/data-provider resolver 兜底
 
 ### 断言
 
 ```
-T12-01  target reference_price 使用 broker open_price=12.0，不使用策略 price=10.0
-T12-02  LiveExecutionManager 以 resolver price 计算限成本 LIMIT
-T12-03  resolver 取不到价格且未开启 fallback 时不得提交订单
+T12-01  target reference_price 优先使用策略传入的 D 日 price=10.0，不被 broker open_price=12.0 覆盖
+T12-02  price 缺失时使用执行器缓存的 D 日 signal bar close
+T12-03  D 日 reference 缺失且 resolver 取不到价格时不得提交订单
 T12-04  QMT broker quote 将 MiniQMT full_tick 的 openPrice/lastPrice 映射为 open_price/last_price
 ```
 
-### 对应测试: `test_trading_context_uses_broker_reference_price_for_market_targets`, `test_trading_context_drops_market_target_when_reference_price_missing` in `test_live_trading_records.py`; `test_qmt_quote_reference_price_prefers_open_price` in `test_qmt_broker.py`
+### 对应测试: `test_trading_context_uses_strategy_reference_price_for_market_targets`, `test_trading_context_uses_signal_bar_reference_when_price_missing`, `test_trading_context_uses_broker_reference_when_signal_reference_missing`, `test_trading_context_drops_market_target_when_reference_price_missing` in `test_live_trading_records.py`; `test_qmt_quote_reference_price_prefers_open_price` in `test_qmt_broker.py`
+
+---
+
+## CASE-13: Live/Paper strategy control gate
+
+### Preconditions
+
+A strategy mode (`live` or `paper`) may be in one of the file-backed control states `running`, `paused`, `stopped`, or `liquidating`.
+
+### Assertions
+
+```
+T13-01  Only running + enabled + no liquidation_requested may accept new strategy signals for that mode
+T13-02  paused/stopped/liquidating strategies must not run daily snapshot hooks or submit orders through Context
+T13-03  Mode control gates signal acceptance only; portfolio marks, curves, metrics, and record reads must continue
+T13-04  Paper mode records and strategy positions must use paper_trading paths, never live_trading or live position state
+T13-05  Dashboard control actions write strategy_controls.json only; they must not directly call broker submit_order
+T13-06  Dashboard holdings and mode metrics must mark open positions with the latest DuckDB close, not stale fill prices or zero-valued snapshots
+T13-07  Dashboard pending order list shows accepted D-day strategy signals that do not yet have a matching submitted order or fill inside the current submit window; matching must tolerate broker order IDs that differ from client signal IDs and near-simultaneous submitted-order timestamps that are marginally earlier than the recorded signal timestamp; signals without explicit submit_date/execution_date default to the next real CN trading day; signals whose submit_date is before today must expire out of pending_orders so the next day is recalculated from strategy state instead of carrying old actions forward
+T13-08  Dashboard order rows are filled only by the server-side display contract: open_price is the order-date daily open, paper fill_price equals limit_price, live fill_price equals broker fill price, commission is reported separately, and slippage_bps satisfies fill_price = open_price * (1 + slippage_bps / 10000)
+T13-09  Dashboard holdings, cash, total NAV, and total return must be derived from the same order display contract: avg_cost includes contract fill price plus commission, cash starts from per-strategy initial cash, and NAV equals cash plus market value
+T13-10  Live/Paper daily snapshot startup must restore strategy runtime _positions and strategy SubPortfolio lots from StrategyPositionTracker before signal generation
+T13-11  Post-close live pending generation must run D-day strategy snapshots in record_pending_only mode: record accepted signals with D-day timestamps for D+1 submission, write a signal-date strategy snapshot marker even when no new orders are produced, preserve cash-only strategies as NAV/Cash equal to their initial allocation, update risk pending state, and never call broker submit_order
+T13-12  Dashboard initial allocation cash is immutable after strategy configuration: allocation endpoints must reject changes, leave qmt_live_config/paper_config unchanged, and never submit broker orders
+T13-13  Strategy control state is scoped by strategy_name and mode: live actions must not change paper signal gates, paper actions must not change live signal gates, and dashboard controls must send the target mode explicitly
+T13-14  Dashboard control actions must append strategy+mode scoped audit rows so pause/resume/stop/liquidate transitions survive process restarts
+T13-15  Dashboard liquidate_stop creates a mode-scoped liquidation plan from tracked strategy positions and must not directly submit broker orders
+T13-16  Dashboard payloads must expose per-mode operations ledgers, recovery status, and top-level operations health from durable records
+T13-17  Live startup broker-history reconciliation must import missing broker fills idempotently before strategy initialization; unresolved order attribution must be audited instead of silently crossing strategy boundaries
+T13-18  Dashboard mode controls must be state-appropriate: Start is rendered only for stopped/liquidating modes, running modes show already-started status plus Pause, paused modes show Resume, and not-configured modes render no no-op action buttons
+T13-19  Dashboard live and paper views must be separate `/live` and `/paper` mode subpages that use the same component functions; live/paper data must not be shown as split tables in one stacked page
+T13-20  Dashboard root, live, and paper entrypoints must all serve the no-cache dashboard page, each mode view must expose immutable Initial Cash only in the top mode/overview area, the launcher must open the current 8791 dashboard and restart stale payloads that do not expose per-mode initial cash, and the page must reload when the served dashboard asset version changes
+T13-21  Dashboard equity curves must align all series by trading date, include an initial-cash baseline before the first filled trading date, normalize benchmark only from the strategy curve start, derive missing strategy NAV curve points from filled order rows plus daily closes when durable snapshots are absent, and stale dashboard data must expose expected market date plus latest scheduled job status/error
+T13-22  Each strategy_name and mode must maintain canonical append-only strategy-mode records under strategy_modes/<mode>/<strategy_name>/ for operations, signals, orders, fills, and snapshots; legacy daily rows are materialized into that source, snapshots are canonicalized from that mode's filled order ledger plus initial cash and daily closes, and dashboard status, records, holdings, metrics, pending orders, and curves must be derived from that strategy-mode source, never by mixing another strategy or mode.
+T13-23  A configured running/paused live or paper mode must maintain a cash-only strategy-mode snapshot for the latest market data date even when there are no signals, orders, or fills, so equity curves and latest NAV show initial cash rather than disappearing.
+T13-24  CN live/paper post-close scheduling must resolve open days, next trading days, and replay signal/execution dates through the real CN trading-calendar resolver; weekday-only calendar guesses are not allowed except as a final fallback when neither calendar cache nor local market/status data is available.
+T13-25  The QMT live trade-history recovery job is read-only: it may connect to the live broker and import missing broker fills into strategy-mode ledgers, but it must not run simulate-daily, pending-only signal generation, or broker order submission. Post-close live pending generation must wait for successful recovery; no 09:30 real-order task should be enabled by this recovery path.
+```
+
+### Tests: `test_strategy_control_actions_gate_live_signals`, `test_strategy_control_actions_are_mode_isolated`, `test_quant_system_live_signal_gate_reads_strategy_control_file`, `test_quant_system_paper_signal_gate_reads_paper_control_file`, `test_quant_system_paper_mode_uses_separate_recorder_and_tracker`, `test_live_trading_recorder_writes_strategy_mode_records`, `test_quant_system_restores_strategy_runtime_positions_from_tracker`, `test_quant_system_allocates_default_live_strategy_cash`, `test_order_manager_record_pending_only_does_not_submit_to_broker`, `test_quant_system_pending_only_daily_snapshot_records_signal_day_snapshot_marker`, `test_trading_engine_signal_gate_blocks_daily_snapshot_orders`, `test_context_signal_gate_blocks_direct_order_submission` in `test_live_trading_records.py`; `test_strategy_dashboard_payload_reads_live_records_positions_and_controls`, `test_strategy_dashboard_materializes_and_reads_strategy_mode_records`, `test_strategy_dashboard_cash_only_configured_strategy_uses_initial_cash`, `test_strategy_dashboard_derives_live_curve_from_fills_when_snapshots_missing`, `test_strategy_dashboard_does_not_mark_near_timestamp_order_as_pending`, `test_strategy_dashboard_expires_past_submit_date_from_pending_orders`, `test_strategy_dashboard_pending_orders_default_to_next_trading_date`, `test_strategy_dashboard_renders_only_state_appropriate_mode_actions`, `test_strategy_dashboard_uses_mode_subpages_with_shared_components`, `test_strategy_dashboard_serves_live_and_paper_subpages`, `test_strategy_dashboard_launcher_opens_current_port_and_restarts_stale_payload`, `test_strategy_dashboard_surfaces_scheduled_job_failures`, `test_strategy_dashboard_surfaces_live_recovery_job_status`, `test_strategy_dashboard_start_action_enables_paper_mode`, `test_strategy_dashboard_allocation_endpoint_rejects_configured_cash_change`, `test_strategy_dashboard_control_endpoint_updates_modes_independently`, `test_strategy_dashboard_liquidate_stop_creates_mode_scoped_plan` in `test_strategy_dashboard_server.py`; `test_strategy_mode_record_store_isolates_strategy_and_mode`, `test_strategy_control_action_writes_mode_operation`, `test_sync_broker_trade_history_imports_missing_fills_once`, `test_sync_broker_trade_history_marks_unknown_order_attribution` in `test_strategy_operations_ledger.py`; `test_cn_trading_calendar_uses_cached_real_holiday_window`, `test_cn_trading_calendar_latest_two_data_dates_use_common_available_sources` in `test_cn_trading_calendar.py`; `test_scheduled_scripts_replay_paper_after_post_close_data_update` in `test_paper_backfill_from_live_records.py`
+
+---
+
+## CASE-14: QMT 实盘成交佣金归因
+
+### 前置条件
+
+QMT `REAL` 成交回报 `518880 BUY 1000 @ 9.302`，成交回报本身没有 commission 字段。
+
+### 操作序列
+
+1. `_qmt_trade_callback()` 收到 MiniQMT 成交回报
+2. QMTBroker 按国金 A股/ETF 佣金口径估算交易佣金：`max(成交金额 * configured_rate, 5.0)`
+3. FillHandler 写入 recorder 并更新 StrategyPositionTracker
+
+### 预期状态变化
+
+| 项目 | 数值 |
+|------|------|
+| 成交额 | 9,302.00 |
+| 估算佣金 | 5.00 |
+| 策略 avg_cost | (9,302.00 + 5.00) / 1000 = 9.307 |
+
+### 断言
+
+```
+T14-01  QMT trade callback payload includes commission==5.0 for 518880 1000@9.302
+T14-02  StrategyPositionTracker BUY avg_cost includes fill commission
+T14-03  QMT broker trade-history rows expose normalized order_id, fill_id, symbol, side, quantity, price, commission, and timestamp for live restart reconciliation
+```
+
+### 对应测试: `test_qmt_trade_callback_estimates_cn_etf_minimum_commission`, `test_qmt_trade_history_maps_xtquant_trade_records` in `test_qmt_broker.py`; `test_fill_handler_passes_commission_to_strategy_tracker_cost` in `test_live_trading_records.py`

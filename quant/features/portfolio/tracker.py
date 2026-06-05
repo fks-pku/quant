@@ -99,6 +99,11 @@ class StrategyPositionTracker:
         with self._lock:
             return self._order_strategy_map.get(order_id, DEFAULT_STRATEGY)
 
+    def get_positions_for_strategy(self, strategy_name: str) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            positions = self._positions.get(strategy_name, {})
+            return {symbol: pos.to_dict() for symbol, pos in positions.items()}
+
     def update_from_fill(
         self,
         strategy_name: Optional[str],
@@ -106,6 +111,7 @@ class StrategyPositionTracker:
         side: str,
         qty: float,
         price: float,
+        commission: float = 0.0,
     ) -> None:
         strategy = strategy_name or DEFAULT_STRATEGY
         with self._lock:
@@ -122,12 +128,13 @@ class StrategyPositionTracker:
             pos = positions[symbol]
 
             if side.upper() == "BUY":
-                total_cost = pos.avg_cost * pos.qty + price * qty
+                total_cost = pos.avg_cost * pos.qty + price * qty + max(float(commission or 0.0), 0.0)
                 pos.qty += qty
                 pos.avg_cost = total_cost / pos.qty if pos.qty > 0 else 0.0
             elif side.upper() == "SELL":
                 sell_qty = min(qty, pos.qty)
-                realized = (price - pos.avg_cost) * sell_qty
+                sell_commission = max(float(commission or 0.0), 0.0) * (sell_qty / qty) if qty > 0 else 0.0
+                realized = (price - pos.avg_cost) * sell_qty - sell_commission
                 self._realized_pnl[strategy] = self._realized_pnl.get(strategy, 0.0) + realized
                 pos.qty -= qty
                 if pos.qty <= 1e-9:

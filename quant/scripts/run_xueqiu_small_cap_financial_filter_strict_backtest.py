@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import datetime, timezone
@@ -116,7 +117,10 @@ RISK_EXIT_VARIANTS: List[Dict[str, Any]] = [
 ]
 
 
-def main() -> None:
+def main(argv: List[str] | None = None) -> None:
+    global INITIAL_CASH
+    args = _parse_args(argv)
+    INITIAL_CASH = float(args.initial_cash)
     report_dir = REPORT_ROOT / STRATEGY_ID
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / "runs").mkdir(parents=True, exist_ok=True)
@@ -165,7 +169,14 @@ def main() -> None:
         print(json.dumps(_compact_row(row), ensure_ascii=False), flush=True)
 
     best = _select_best(rows, target_cagr, target_max_drawdown)
-    report_path, result_path = _write_outputs(rows, strict_reports, best, target_cagr, target_max_drawdown)
+    report_path, result_path = _write_outputs(
+        rows,
+        strict_reports,
+        best,
+        target_cagr,
+        target_max_drawdown,
+        strict_only=args.strict_only,
+    )
     print(
         json.dumps(
             {
@@ -177,7 +188,17 @@ def main() -> None:
             ensure_ascii=False,
             indent=2,
         )
-    )
+        )
+
+
+def _parse_args(argv: List[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--initial-cash", type=float, default=INITIAL_CASH)
+    parser.add_argument("--strict-only", action="store_true")
+    args = parser.parse_args(argv)
+    if args.initial_cash <= 0:
+        parser.error("--initial-cash must be positive")
+    return args
 
 
 def _load_shared_inputs() -> Tuple[List[str], Dict[str, int], BenchmarkProvider, Dict[str, Any], Dict[str, Any]]:
@@ -445,6 +466,7 @@ def _write_outputs(
     best: Dict[str, Any],
     target_cagr: float,
     target_max_drawdown: float,
+    strict_only: bool = False,
 ) -> Tuple[Path, Path]:
     strategy_dir = REPORT_ROOT / STRATEGY_ID
     run_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -454,6 +476,7 @@ def _write_outputs(
         "run_ts": run_ts,
         "period": f"{START.date()}-{END.date()}",
         "initial_cash": INITIAL_CASH,
+        "strict_only": strict_only,
         "thresholds": {"target_cagr": target_cagr, "target_max_drawdown": target_max_drawdown},
         "rows": rows,
         "best": best,
@@ -473,26 +496,27 @@ def _write_outputs(
     generated = datetime.now(timezone.utc).isoformat()
     html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=generated)
     html = _insert_scenario_grid(html, rows, target_cagr, target_max_drawdown)
-    full_html = build_research_full_report_html(result, [row], generated_at=generated)
-    full_html = _insert_scenario_grid(full_html, rows, target_cagr, target_max_drawdown)
-    fast_html = build_research_stage_report_html("fast_research", result, [row], generated_at=generated)
-    walk_html = build_research_stage_report_html("walkforward_strict_audit", result, [row], generated_at=generated)
     report_path = strategy_dir / "strict_backtest_report.html"
     report_path.write_text(html, encoding="utf-8")
-    (strategy_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
-    _bundle_full_report_for_promoted_strategy(full_html, strict_reports[str(best["scenario"])])
-    (strategy_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
-    (strategy_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
     (strategy_dir / "runs" / f"{run_ts}_strict_backtest_report.html").write_text(html, encoding="utf-8")
-    (strategy_dir / "runs" / f"{run_ts}_full_research_report.html").write_text(full_html, encoding="utf-8")
-    (strategy_dir / "runs" / f"{run_ts}_fast_research_report.html").write_text(fast_html, encoding="utf-8")
-    (strategy_dir / "runs" / f"{run_ts}_walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
     latest_dir = REPORT_ROOT / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
     (latest_dir / "strict_backtest_report.html").write_text(html, encoding="utf-8")
-    (latest_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
-    (latest_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
-    (latest_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
+    if not strict_only:
+        full_html = build_research_full_report_html(result, [row], generated_at=generated)
+        full_html = _insert_scenario_grid(full_html, rows, target_cagr, target_max_drawdown)
+        fast_html = build_research_stage_report_html("fast_research", result, [row], generated_at=generated)
+        walk_html = build_research_stage_report_html("walkforward_strict_audit", result, [row], generated_at=generated)
+        (strategy_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
+        _bundle_full_report_for_promoted_strategy(full_html, strict_reports[str(best["scenario"])])
+        (strategy_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
+        (strategy_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
+        (strategy_dir / "runs" / f"{run_ts}_full_research_report.html").write_text(full_html, encoding="utf-8")
+        (strategy_dir / "runs" / f"{run_ts}_fast_research_report.html").write_text(fast_html, encoding="utf-8")
+        (strategy_dir / "runs" / f"{run_ts}_walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
+        (latest_dir / "full_research_report.html").write_text(full_html, encoding="utf-8")
+        (latest_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
+        (latest_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
     return report_path, result_path
 
 

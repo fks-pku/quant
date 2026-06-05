@@ -148,6 +148,7 @@ S8-02  `risk_exit.enabled=False` 时，PnL 型 stop_loss / trailing_take_profit 
 ```
 S9-01  小盘个股策略默认从 `symbols` 和买入候选中过滤创业板 `300/301` 与科创板 `688/689` 股票，并在 `get_state()["parameters"]["excluded_board_prefixes"]` 暴露该规则
 S9-02  ETF 策略不继承 A 股个股权限过滤，创业板/科创板相关 ETF 是否可交易由 ETF 策略自身 universe 与流动性/NAV 审计决定
+S9-03  动态 PIT 个股 universe 中的全量候选集不得被 strict daily snapshot 当成每日硬依赖；策略应仅通过 `required_snapshot_symbols` 暴露风控指数等静态硬依赖
 ```
 
 ### 适用范围

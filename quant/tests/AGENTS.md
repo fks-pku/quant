@@ -17,6 +17,8 @@ quant/tests/
 ├── test_infrastructure.py     # 基础设施测试 (~25 tests)
 ├── test_qmt_broker.py         # MiniQMT/QMT broker adapter tests
 ├── test_live_trading_records.py # Live strategy signals, fills, snapshots, attribution, and cost-bounded execution
+├── test_strategy_dashboard_server.py # Local strategy dashboard payload/control tests
+├── test_strategy_operations_ledger.py # Strategy operations ledger, restart reconciliation, and liquidation-plan tests
 ├── test_sub_portfolio.py      # SubPortfolio 测试
 ├── test_domain_invariants.py  # Domain 不变量 CASE 套件
 ├── test_trading_invariants.py # Trading 不变量 CASE 套件
@@ -137,5 +139,6 @@ python3 -m pytest quant/tests/test_backtest_core.py -q # 引擎核心
 - 新增分析指标 → `test_analytics.py`
 - 新增 broker adapter 行为 → `test_<broker>_broker.py`
 - 新增实盘信号、成交、策略表现记录、限成本执行 → `test_live_trading_records.py`
+- 新增策略管理看板 payload/control/ledger → `test_strategy_dashboard_server.py` 和 `test_strategy_operations_ledger.py`
 - 新增回归测试 → 对应功能测试文件（如 `test_backtest_core.py`、`test_analytics.py`）
 - 共享数据生成逻辑 → `conftest.py`

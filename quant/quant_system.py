@@ -8,10 +8,11 @@ Usage:
 """
 
 import argparse
+import inspect
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,8 +33,11 @@ from quant.infrastructure.execution.order_manager import OrderManager
 from quant.infrastructure.execution.fill_handler import FillHandler
 from quant.infrastructure.execution.live_executor import LiveExecutionManager
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
-from quant.features.portfolio.tracker import get_tracker
+from quant.infrastructure.execution.strategy_ledger import sync_broker_trade_history
+from quant.infrastructure.execution.strategy_controls import get_strategy_control
+from quant.features.portfolio.tracker import StrategyPositionTracker, get_tracker
 from quant.features.strategies.registry import StrategyRegistry
+from quant.runtime.strategy_cycle import feed_strategy_bars, start_strategy
 from quant.shared.utils.config_loader import ConfigLoader
 from quant.shared.utils.logger import setup_logger
 
@@ -50,7 +54,8 @@ class QuantSystem:
         )
         self.engine: Optional[Engine] = None
         self.storage: Optional[SQLiteStorage] = None
-        self.live_recorder = LiveTradingRecorder()
+        self.live_recorder = self._create_live_recorder()
+        self._strategy_tracker: Optional[StrategyPositionTracker] = None
         self._setup_signal_handlers()
 
     def _setup_signal_handlers(self) -> None:
@@ -74,6 +79,7 @@ class QuantSystem:
 
         self._event_bus = EventBus()
         self.engine = Engine(self.config, event_bus=self._event_bus)
+        self.engine.set_strategy_signal_gate(self._strategy_accepts_live_signals)
 
         providers = self.config.get("data", {}).get("providers", [])
         for provider_name in providers:
@@ -84,37 +90,78 @@ class QuantSystem:
             self._setup_broker(broker_name)
 
         self._setup_order_manager()
+        self._recover_live_strategy_history()
         self._setup_strategies()
 
         self.logger.info("System initialization complete")
+
+    def initialize_live_recovery_only(self) -> None:
+        """Initialize only the live broker path needed for read-only fill recovery."""
+        self.logger.info("Initializing live trade-history recovery...")
+        data_dir = self.config.get("system", {}).get("data_dir", "./data")
+        self.storage = SQLiteStorage(data_dir)
+        self._event_bus = EventBus()
+        self.engine = Engine(self.config, event_bus=self._event_bus)
+        brokers = self.config.get("execution", {}).get("brokers", [])
+        for broker_name in brokers:
+            self._setup_broker(broker_name)
+        self._recover_live_strategy_history()
+        self.logger.info("Live trade-history recovery complete")
 
     def _setup_provider(self, provider_name: str) -> None:
         """Setup a data provider."""
         if provider_name == "yahoo":
             provider = YahooProvider()
             provider.connect()
-            self.engine.set_data_provider("yahoo", provider)
+            self._register_data_provider("yahoo", provider)
             self.logger.info("Yahoo Finance provider initialized")
         elif provider_name == "alpha_vantage":
             api_key = self.config_loader.get("brokers.yaml", "alpha_vantage", "api_key", default="")
             provider = AlphaVantageProvider(api_key)
             provider.connect()
-            self.engine.set_data_provider("alpha_vantage", provider)
+            self._register_data_provider("alpha_vantage", provider)
             self.logger.info("Alpha Vantage provider initialized")
         elif provider_name == "futu":
             host = self.config_loader.get("brokers.yaml", "futu", "host", default="127.0.0.1")
             port = self.config_loader.get("brokers.yaml", "futu", "port", default=11111)
             provider = FutuProvider(host, port)
             provider.connect()
-            self.engine.set_data_provider("futu", provider)
+            self._register_data_provider("futu", provider)
             self.logger.info("Futu provider initialized")
+        elif provider_name == "duckdb":
+            from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
+
+            duckdb_config = self.config.get("data", {}).get("duckdb", {})
+            kwargs = {
+                key: duckdb_config[key]
+                for key in (
+                    "db_path",
+                    "use_security_status",
+                    "status_db_path",
+                    "parquet_lake_root",
+                    "prefer_parquet_lake",
+                )
+                if key in duckdb_config
+            }
+            provider = DuckDBProvider(**kwargs)
+            provider.connect()
+            self._register_data_provider("duckdb", provider)
+            self.logger.info("DuckDB provider initialized")
+
+    def _register_data_provider(self, provider_name: str, provider: Any) -> None:
+        self.engine.set_data_provider(provider_name, provider)
+        data_config = self.config.get("data", {}) if isinstance(self.config, dict) else {}
+        default_provider = data_config.get("default_provider")
+        if default_provider == provider_name or "default" not in self.engine.data_providers:
+            self.engine.set_data_provider("default", provider)
 
     def _setup_broker(self, broker_name: str) -> None:
         """Setup a broker adapter."""
+        self._assert_broker_adapter_allowed(broker_name)
         if broker_name == "paper":
             initial_cash = self.config.get("system", {}).get("initial_cash", 100000)
             slippage_bps = self.config.get("execution", {}).get("slippage_bps", 5)
-            broker = PaperBroker(initial_cash, slippage_bps)
+            broker = PaperBroker(initial_cash, slippage_bps, data_provider=self.engine.data_providers.get("default"))
             broker.connect()
             self.engine.set_broker(broker)
             self.logger.info("Paper broker initialized")
@@ -124,6 +171,7 @@ class QuantSystem:
             acc_list = self.config_loader.get("brokers.yaml", "futu", "acc_list", default={})
             password = self.config_loader.get("brokers.yaml", "futu", "password", default="")
             trade_mode = self.config_loader.get("brokers.yaml", "futu", "trade_mode", default="SIMULATE")
+            self._assert_broker_mode_allowed("futu", trade_mode)
             broker = FutuBroker(
                 host=host,
                 port=port,
@@ -143,9 +191,11 @@ class QuantSystem:
             account_type = self.config_loader.get("brokers.yaml", "qmt", "account_type", default="STOCK")
             password = self.config_loader.get("brokers.yaml", "qmt", "password", default="")
             trade_mode = self.config_loader.get("brokers.yaml", "qmt", "trade_mode", default="SIMULATE")
+            self._assert_broker_mode_allowed("qmt", trade_mode)
             userdata_mini_path = self.config_loader.get("brokers.yaml", "qmt", "userdata_mini_path", default="")
             xtquant_path = self.config_loader.get("brokers.yaml", "qmt", "xtquant_path", default="")
             mini_qmt_path = self.config_loader.get("brokers.yaml", "qmt", "mini_qmt_path", default="")
+            commission_config = self.config.get("execution", {}).get("commission", {})
             from quant.infrastructure.execution.brokers.qmt import QMTBroker
             broker = QMTBroker(
                 host=host,
@@ -157,14 +207,29 @@ class QuantSystem:
                 userdata_mini_path=userdata_mini_path,
                 xtquant_path=xtquant_path,
                 mini_qmt_path=mini_qmt_path,
+                commission_config=commission_config,
             )
             broker.connect()
             self.engine.set_broker(broker)
             self.logger.info(f"QMT broker initialized (mode: {trade_mode})")
 
+    def _assert_broker_adapter_allowed(self, broker_name: str) -> None:
+        system_mode = str(self.config.get("system", {}).get("mode", "paper")).lower()
+        if system_mode != "live" and str(broker_name).lower() != "paper":
+            raise RuntimeError(
+                f"paper mode only supports PaperBroker; refused broker={broker_name}"
+            )
+
+    def _assert_broker_mode_allowed(self, broker_name: str, trade_mode: str) -> None:
+        system_mode = str(self.config.get("system", {}).get("mode", "paper")).lower()
+        if system_mode != "live" and str(trade_mode).upper() == "REAL":
+            raise RuntimeError(
+                f"{broker_name} trade_mode=REAL is only allowed when system.mode=live"
+            )
+
     def _setup_order_manager(self) -> None:
         """Setup order manager and fill handler, wire to engine."""
-        strategy_tracker = get_tracker()
+        strategy_tracker = self._strategy_tracker_for_mode()
         order_manager = OrderManager(
             portfolio=self.engine.portfolio,
             risk_engine=self.engine.risk_engine,
@@ -178,7 +243,12 @@ class QuantSystem:
             broker_name = getattr(self.engine.broker, '_name', 'paper')
             order_manager.register_broker(broker_name, self.engine.broker)
         self.engine.set_order_manager(order_manager)
-        self.engine.execution_manager = self._create_live_execution_manager(order_manager)
+        system_mode = self._system_mode_text()
+        self.engine.execution_manager = (
+            self._create_live_execution_manager(order_manager)
+            if system_mode in {"live", "paper"}
+            else None
+        )
         self.logger.info("OrderManager initialized")
 
         fill_handler = FillHandler(
@@ -195,15 +265,124 @@ class QuantSystem:
             self.engine.broker.register_trade_callback(self._on_broker_trade)
         self.logger.info("FillHandler initialized")
 
+    def _recover_live_strategy_history(self) -> None:
+        if self._system_mode_text() != "live":
+            return
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        recovery_config = live_config.get("recovery", {}) if isinstance(live_config, dict) else {}
+        if isinstance(recovery_config, dict) and recovery_config.get("enabled", True) is False:
+            return
+        broker = self.engine.broker if self.engine else None
+        if broker is None:
+            return
+        overlap_days = int((recovery_config or {}).get("history_overlap_days", 7) or 7)
+        end_day = date.today()
+        start_day = end_day - timedelta(days=max(overlap_days, 1))
+        control_path = live_config.get("strategy_control_file") if isinstance(live_config, dict) else None
+        audit_path = (
+            self._resolve_repo_path(control_path).parent / "strategy_audit.jsonl"
+            if control_path
+            else Path(__file__).resolve().parent / "infrastructure" / "var" / "strategy_audit.jsonl"
+        )
+        try:
+            result = sync_broker_trade_history(
+                broker=broker,
+                recorder=self.live_recorder,
+                tracker=self._strategy_tracker_for_mode(),
+                mode="live",
+                start_date=start_day,
+                end_date=end_day,
+                audit_path=audit_path,
+            )
+        except Exception as exc:
+            self.logger.warning(f"Live strategy recovery skipped: {exc}")
+            return
+        if result.get("broker_history_supported"):
+            self.logger.info(
+                "Live strategy recovery imported=%s skipped=%s unresolved=%s",
+                result.get("imported_count", 0),
+                result.get("skipped_count", 0),
+                result.get("unresolved_count", 0),
+            )
+
+    def _create_live_recorder(self) -> LiveTradingRecorder:
+        record_dir = self._record_dir_for_mode()
+        if record_dir is None:
+            return LiveTradingRecorder()
+        return LiveTradingRecorder(record_dir)
+
+    def _strategy_tracker_for_mode(self) -> StrategyPositionTracker:
+        if getattr(self, "_strategy_tracker", None) is not None:
+            return self._strategy_tracker
+        if self._system_mode_text() != "paper":
+            self._strategy_tracker = get_tracker()
+            return self._strategy_tracker
+        self._strategy_tracker = StrategyPositionTracker(
+            self._paper_runtime_dir() / "strategy_positions.json"
+        )
+        return self._strategy_tracker
+
+    def _record_dir_for_mode(self) -> Optional[Path]:
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        configured = live_config.get("record_dir") if isinstance(live_config, dict) else None
+        if configured:
+            return self._resolve_repo_path(configured)
+        if self._system_mode_text() == "paper":
+            return self._paper_runtime_dir()
+        return None
+
+    def _paper_runtime_dir(self) -> Path:
+        return Path(__file__).resolve().parent / "infrastructure" / "var" / "paper_trading"
+
+    def _resolve_repo_path(self, value: Any) -> Path:
+        path = Path(value)
+        if path.is_absolute():
+            return path
+        return Path(__file__).resolve().parent.parent / path
+
+    def _system_mode_text(self) -> str:
+        return str(self.config.get("system", {}).get("mode", "paper")).lower()
+
+    def _strategy_accepts_live_signals(self, strategy_name: str) -> bool:
+        system_mode = self._system_mode_text()
+        if system_mode not in {"live", "paper"}:
+            return True
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        control_path = live_config.get("strategy_control_file") if isinstance(live_config, dict) else None
+        control = get_strategy_control(
+            strategy_name,
+            control_path,
+            default_live_enabled=True,
+            mode=system_mode,
+        )
+        if control.accepts_live_signals:
+            return True
+        self.logger.info(
+            f"Strategy {strategy_name} mode={system_mode} state={control.live_state}; new signals disabled"
+        )
+        return False
+
     def _create_live_execution_manager(self, order_manager: OrderManager) -> LiveExecutionManager:
         live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
         execution_config = live_config.get("execution", {}) if isinstance(live_config, dict) else {}
         base_execution = self.config.get("execution", {}) if isinstance(self.config, dict) else {}
         max_cost_bps = execution_config.get("max_cost_bps", base_execution.get("max_cost_bps", 30))
+        base_slippage_bps = base_execution.get("slippage_bps", 5)
+        execution_cost_model = (
+            base_execution.get("cost_model")
+            or self.config.get("backtest", {}).get("execution_cost_model")
+        )
+        default_market = (
+            live_config.get("market")
+            or self.config.get("system", {}).get("market")
+        )
         deadline = execution_config.get("deadline")
         return LiveExecutionManager(
             order_manager,
             default_max_cost_bps=max_cost_bps,
+            base_slippage_bps=base_slippage_bps,
+            execution_cost_model=execution_cost_model,
+            default_market=default_market,
             default_deadline=deadline,
         )
 
@@ -227,22 +406,50 @@ class QuantSystem:
         return self.engine._sub_portfolios.get(strategy_name, self.engine.portfolio)
 
     def _on_broker_trade(self, **trade: Any) -> None:
+        order_id = str(trade.get("order_id", ""))
+        quantity = float(trade.get("quantity", 0.0) or 0.0)
+        price = float(trade.get("price", 0.0) or 0.0)
+        order_manager = getattr(self.engine, "order_manager", None) if self.engine else None
+        if order_manager is not None and hasattr(order_manager, "update_order_from_fill"):
+            order_manager.update_order_from_fill(order_id, quantity, price)
         if not hasattr(self, "_fill_handler"):
             return
         self._fill_handler.process_fill(
-            order_id=str(trade.get("order_id", "")),
+            order_id=order_id,
             symbol=str(trade.get("symbol", "")),
             side=str(trade.get("side", "")),
-            quantity=float(trade.get("quantity", 0.0) or 0.0),
-            price=float(trade.get("price", 0.0) or 0.0),
+            quantity=quantity,
+            price=price,
             commission=float(trade.get("commission", 0.0) or 0.0),
             timestamp=trade.get("timestamp"),
             strategy_name=trade.get("strategy_name"),
         )
 
-    def _record_live_strategy_snapshots(self) -> None:
+    def _record_live_strategy_snapshots(self, timestamp: Optional[datetime] = None) -> None:
         try:
-            tracker = get_tracker()
+            ts = timestamp or datetime.now()
+            sub_portfolios = getattr(self.engine, "_sub_portfolios", {}) if self.engine else {}
+            if sub_portfolios:
+                for strategy in getattr(self.engine, "strategies", []) or []:
+                    strategy_name = getattr(strategy, "name", None)
+                    sub = sub_portfolios.get(strategy_name) if strategy_name else None
+                    if sub is None:
+                        continue
+                    market_value = sum(
+                        float(getattr(pos, "market_value", 0.0) or 0.0)
+                        for pos in getattr(sub, "positions", {}).values()
+                    )
+                    self.live_recorder.record_strategy_snapshot(
+                        timestamp=ts,
+                        strategy_name=strategy_name,
+                        nav=float(getattr(sub, "nav", 0.0) or 0.0),
+                        market_value=market_value,
+                        cash=float(getattr(sub, "cash", 0.0) or 0.0),
+                        realized_pnl=float(getattr(sub, "total_realized_pnl", 0.0) or 0.0),
+                        unrealized_pnl=float(getattr(sub, "total_unrealized_pnl", 0.0) or 0.0),
+                    )
+                return
+            tracker = self._strategy_tracker_for_mode()
             broker_positions = self._broker_positions_for_tracker()
             if broker_positions:
                 breakdown = tracker.calibrate(broker_positions)
@@ -253,7 +460,7 @@ class QuantSystem:
             self.live_recorder.record_strategy_breakdown(
                 breakdown,
                 total_nav=self._broker_account_nav(),
-                timestamp=datetime.now(),
+                timestamp=ts,
             )
         except Exception as e:
             self.logger.error(f"Failed to record live strategy snapshots: {e}")
@@ -294,17 +501,63 @@ class QuantSystem:
                 continue
 
             name = strategy_cfg.get("name")
-            symbols = strategy_cfg.get("symbols", [])
-            params = strategy_params.get(name, {}).get("parameters", {})
-
-            if params:
-                params["symbols"] = symbols
+            symbols = self._resolve_strategy_symbols(strategy_cfg)
+            params = dict(strategy_params.get(name, {}).get("parameters", {}) or {})
 
             strategy = self._create_strategy(name, symbols, params)
             if strategy:
                 allocation_pct = self._strategy_allocation_pct(strategy_cfg)
                 self.engine.add_strategy(strategy, allocation_pct=allocation_pct)
+                self._restore_strategy_runtime_positions(strategy, name)
                 self.logger.info(f"Strategy {name} enabled")
+
+    def _restore_strategy_runtime_positions(self, strategy: Any, strategy_name: str) -> None:
+        tracker = self._strategy_tracker_for_mode()
+        getter = getattr(tracker, "get_positions_for_strategy", None)
+        if not callable(getter):
+            return
+        positions = getter(strategy_name)
+        if not positions:
+            return
+        if hasattr(strategy, "_positions"):
+            strategy._positions.update({
+                symbol: float(data.get("qty", 0.0) or 0.0)
+                for symbol, data in positions.items()
+                if float(data.get("qty", 0.0) or 0.0) > 0
+            })
+        portfolio = self._portfolio_for_strategy(strategy_name)
+        if portfolio is None or not hasattr(portfolio, "update_position"):
+            return
+        existing_positions = getattr(portfolio, "positions", None)
+        if isinstance(existing_positions, dict) and existing_positions:
+            return
+        total_cost = 0.0
+        restore_trade_date = date.today()
+        for symbol, data in positions.items():
+            qty = float(data.get("qty", 0.0) or 0.0)
+            avg_cost = float(data.get("avg_cost", 0.0) or 0.0)
+            market_value = float(data.get("market_value", 0.0) or 0.0)
+            if qty <= 0 or avg_cost <= 0:
+                continue
+            price = market_value / qty if market_value > 0 else avg_cost
+            cost = avg_cost * qty
+            portfolio.update_position(
+                symbol=symbol,
+                quantity=qty,
+                price=price,
+                cost=cost,
+                trade_date=restore_trade_date,
+                lot_price=avg_cost,
+            )
+            total_cost += cost
+        initial_cash = float(
+            getattr(portfolio, "initial_cash", getattr(portfolio, "allocated_capital", 0.0)) or 0.0
+        )
+        if initial_cash > 0 and hasattr(portfolio, "cash"):
+            try:
+                portfolio.cash = max(initial_cash - total_cost, 0.0)
+            except Exception:
+                pass
 
     def _strategy_allocation_pct(self, strategy_cfg: dict) -> Optional[float]:
         if "allocation_pct" in strategy_cfg:
@@ -329,17 +582,102 @@ class QuantSystem:
         """Create a strategy instance by name using the registry."""
         if StrategyRegistry.is_registered(name):
             try:
-                if params:
-                    params["symbols"] = symbols
-                    return StrategyRegistry.create(name, **params)
-                else:
-                    return StrategyRegistry.create(name, symbols=symbols)
+                kwargs = self._strategy_constructor_kwargs(name, symbols, params)
+                return StrategyRegistry.create(name, **kwargs)
             except Exception as e:
                 self.logger.error(f"Failed to create strategy {name}: {e}")
                 return None
 
         self.logger.warning(f"Unknown strategy: {name}")
         return None
+
+    def _strategy_constructor_kwargs(self, name: str, symbols: list, params: dict) -> dict:
+        kwargs = dict(params or {})
+        cls = StrategyRegistry.get(name)
+        if cls is None:
+            return kwargs
+        try:
+            signature = inspect.signature(cls)
+        except (TypeError, ValueError):
+            return kwargs
+        accepted = {
+            param_name
+            for param_name, param in signature.parameters.items()
+            if param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+        }
+        has_var_kwargs = any(param.kind == param.VAR_KEYWORD for param in signature.parameters.values())
+        if not has_var_kwargs:
+            ignored = sorted(key for key in kwargs if key not in accepted)
+            if ignored:
+                self.logger.warning("Ignoring unsupported parameters for %s: %s", name, ignored)
+            kwargs = {key: value for key, value in kwargs.items() if key in accepted}
+        if symbols and (has_var_kwargs or "symbols" in accepted):
+            kwargs.setdefault("symbols", list(symbols))
+        return kwargs
+
+    def _resolve_strategy_symbols(self, strategy_cfg: dict) -> list:
+        symbols = strategy_cfg.get("symbols", [])
+        if symbols:
+            if isinstance(symbols, str):
+                return [symbols]
+            return [str(symbol) for symbol in symbols]
+        universe = strategy_cfg.get("universe") or strategy_cfg.get("symbol_universe")
+        if not universe:
+            return []
+        return self._load_universe_symbols(str(universe), strategy_cfg)
+
+    def _load_universe_symbols(self, universe: str, strategy_cfg: dict) -> list:
+        provider = self._default_data_provider()
+        if provider is None or not hasattr(provider, "list_available_symbols"):
+            raise RuntimeError(f"Strategy universe {universe} requires a default data provider")
+        universe_key = universe.lower()
+        if universe_key in {"cn", "cn_stock", "ashare", "a_share"}:
+            market = "cn"
+        else:
+            raise ValueError(f"Unsupported strategy universe: {universe}")
+        timeframe = self.config.get("data", {}).get("default_timeframe", "1d")
+        symbols = list(provider.list_available_symbols(timeframe, market))
+        as_of = strategy_cfg.get("universe_as_of") or self.config.get("system", {}).get("daily_signal_date")
+        if as_of and hasattr(provider, "get_bars_for_symbols") and symbols:
+            day = self._coerce_date(as_of)
+            frame = provider.get_bars_for_symbols(symbols, datetime.combine(day, datetime.min.time()), datetime.combine(day, datetime.min.time()), timeframe)
+            symbols = self._symbols_from_frame(frame)
+        return [str(symbol) for symbol in symbols]
+
+    def _default_data_provider(self) -> Any:
+        if not self.engine:
+            return None
+        provider = self.engine.data_providers.get("default")
+        if provider is not None:
+            return provider
+        if self.engine.data_providers:
+            return next(iter(self.engine.data_providers.values()))
+        return None
+
+    def _symbols_from_frame(self, frame: Any) -> list:
+        if frame is None or getattr(frame, "empty", False):
+            return []
+        if hasattr(frame, "__getitem__"):
+            try:
+                return list(dict.fromkeys(str(symbol) for symbol in frame["symbol"].tolist()))
+            except Exception:
+                pass
+        values = []
+        for row in frame:
+            symbol = row.get("symbol") if isinstance(row, dict) else getattr(row, "symbol", None)
+            if symbol:
+                values.append(str(symbol))
+        return list(dict.fromkeys(values))
+
+    def _coerce_date(self, value: Any) -> date:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value).strip()
+        if len(text) == 8 and text.isdigit():
+            return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+        return datetime.fromisoformat(text[:10]).date()
 
     def run(self, mode: Optional[str] = None) -> None:
         """Run the system in specified mode."""
@@ -382,6 +720,166 @@ class QuantSystem:
         except KeyboardInterrupt:
             self.engine.stop()
 
+    def run_daily_snapshot_once(
+        self,
+        signal_date: Any,
+        execution_date: Optional[Any] = None,
+        warmup_days: Optional[int] = None,
+        provider_name: Optional[str] = None,
+    ) -> dict:
+        if not self.engine:
+            raise RuntimeError("System must be initialized before running a daily snapshot")
+        self._assert_current_broker_safe_for_paper()
+        signal_day = self._coerce_date(signal_date)
+        execution_day = self._coerce_date(execution_date) if execution_date is not None else signal_day + timedelta(days=1)
+        provider = self._select_snapshot_provider(provider_name)
+        symbols = self._strategy_symbols()
+        if not symbols:
+            raise RuntimeError("No strategy symbols configured for daily snapshot")
+        warmup_count = int(
+            warmup_days
+            if warmup_days is not None
+            else self.config.get("live_trading", {}).get("daily_snapshot_warmup_days", 0)
+        )
+        for strategy in self.engine.strategies:
+            start_strategy(strategy)
+        if warmup_count > 0:
+            self._warmup_daily_strategies(provider, symbols, signal_day, warmup_count)
+        bars = self._load_snapshot_bars(provider, symbols, signal_day)
+        if not bars:
+            raise RuntimeError(f"No daily bars loaded for {signal_day}")
+        self._prepare_paper_execution_context(provider, symbols, execution_day)
+        order_manager = getattr(self.engine, "order_manager", None)
+        pending_only = bool(self.config.get("execution", {}).get("record_pending_only", False))
+        signal_timestamp_set = False
+        if pending_only and hasattr(order_manager, "set_signal_timestamp"):
+            signal_timestamp = datetime.combine(signal_day, datetime.min.time()).replace(hour=15)
+            order_manager.set_signal_timestamp(signal_timestamp)
+            signal_timestamp_set = True
+        try:
+            results = self.engine.inject_daily_snapshot(signal_day, bars, execution_day)
+        finally:
+            if signal_timestamp_set and hasattr(order_manager, "clear_signal_timestamp"):
+                order_manager.clear_signal_timestamp()
+        if pending_only:
+            self._record_live_strategy_snapshots(
+                timestamp=datetime.combine(signal_day, datetime.min.time()).replace(hour=15),
+            )
+        else:
+            self._record_live_strategy_snapshots(
+                timestamp=datetime.combine(execution_day, datetime.min.time()).replace(hour=15),
+            )
+        return results
+
+    def _assert_current_broker_safe_for_paper(self) -> None:
+        mode = str(self.config.get("system", {}).get("mode", "paper")).lower()
+        broker = self.engine.broker if self.engine else None
+        broker_name = str(getattr(broker, "name", getattr(broker, "_name", "")) or "").lower()
+        if mode != "live" and broker_name != "paper":
+            raise RuntimeError(
+                f"Daily paper snapshot only supports PaperBroker; refused broker={broker_name or type(broker).__name__}"
+            )
+        trade_mode = str(getattr(broker, "_trade_mode", "") or "").upper()
+        if mode != "live" and trade_mode == "REAL":
+            raise RuntimeError("Daily paper snapshot refuses to use a REAL broker")
+
+    def _prepare_paper_execution_context(self, provider: Any, symbols: list, execution_day: date) -> None:
+        mode = str(self.config.get("system", {}).get("mode", "paper")).lower()
+        broker = self.engine.broker if self.engine else None
+        if mode != "paper" or broker is None or not hasattr(broker, "set_execution_bars"):
+            return
+        execution_bars = self._load_snapshot_bars(provider, symbols, execution_day)
+        if not execution_bars:
+            raise RuntimeError(
+                f"Paper daily snapshot requires execution-date bars for {execution_day}; "
+                "run it after daily data is updated."
+            )
+        broker.set_execution_bars(execution_bars, trading_date=execution_day)
+
+    def _select_snapshot_provider(self, provider_name: Optional[str]) -> Any:
+        if not self.engine:
+            return None
+        provider = None
+        if provider_name:
+            provider = self.engine.data_providers.get(provider_name)
+        if provider is None:
+            provider = self._default_data_provider()
+        if provider is None:
+            raise RuntimeError("Daily snapshot requires a data provider")
+        return provider
+
+    def _strategy_symbols(self) -> list:
+        symbols = []
+        for strategy in self.engine.strategies:
+            symbols.extend(getattr(strategy, "symbols", []) or [])
+        return list(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+
+    def _warmup_daily_strategies(self, provider: Any, symbols: list, signal_day: date, warmup_days: int) -> None:
+        start = signal_day - timedelta(days=warmup_days)
+        end = signal_day - timedelta(days=1)
+        bars = self._load_snapshot_bars(provider, symbols, start, end)
+        if not bars:
+            return
+        bars_by_date: dict[date, list] = {}
+        for bar in bars:
+            bar_day = self._bar_date(bar)
+            if bar_day is None or bar_day >= signal_day:
+                continue
+            bars_by_date.setdefault(bar_day, []).append(bar)
+        for bar_day in sorted(bars_by_date):
+            for strategy in self.engine.strategies:
+                feed_strategy_bars(strategy, bars_by_date[bar_day])
+
+    def _load_snapshot_bars(self, provider: Any, symbols: list, start_day: date, end_day: Optional[date] = None) -> list:
+        end_day = end_day or start_day
+        timeframe = self.config.get("data", {}).get("default_timeframe", "1d")
+        start_dt = datetime.combine(start_day, datetime.min.time())
+        end_dt = datetime.combine(end_day, datetime.min.time())
+        if hasattr(provider, "get_bars_for_symbols"):
+            frame = provider.get_bars_for_symbols(symbols, start_dt, end_dt, timeframe)
+        else:
+            frames = []
+            for symbol in symbols:
+                frames.append(provider.get_bars(symbol, start_dt, end_dt, timeframe))
+            frame = frames
+        return self._frame_records(frame)
+
+    def _frame_records(self, frame: Any) -> list:
+        if frame is None:
+            return []
+        if isinstance(frame, list):
+            records = []
+            for item in frame:
+                records.extend(self._frame_records(item))
+            return records
+        if getattr(frame, "empty", False):
+            return []
+        if hasattr(frame, "to_dict"):
+            return frame.to_dict("records")
+        return list(frame)
+
+    def _bar_date(self, bar: Any) -> Optional[date]:
+        value = bar.get("timestamp") if isinstance(bar, dict) else getattr(bar, "timestamp", None)
+        if value is None:
+            value = bar.get("date") if isinstance(bar, dict) else getattr(bar, "date", None)
+        if value is None:
+            return None
+        return self._coerce_date(value)
+
+    def disconnect_adapters(self) -> None:
+        if not self.engine:
+            return
+        seen = set()
+        for provider in self.engine.data_providers.values():
+            provider_id = id(provider)
+            if provider_id in seen:
+                continue
+            seen.add(provider_id)
+            if hasattr(provider, "disconnect"):
+                provider.disconnect()
+        if self.engine.broker and hasattr(self.engine.broker, "disconnect"):
+            self.engine.broker.disconnect()
+
     def _run_backtest(self) -> None:
         """Run backtest mode."""
         start_date_str = self.config.get("system", {}).get("start_date", "2025-01-01")
@@ -400,6 +898,19 @@ class QuantSystem:
         self.logger.info(f"  Final NAV: ${status['nav']:.2f}")
         self.logger.info(f"  Total Unrealized P&L: ${status['total_unrealized_pnl']:.2f}")
         self.logger.info(f"  Total Realized P&L: ${status['total_realized_pnl']:.2f}")
+
+
+def _resolve_cli_mode(args: argparse.Namespace) -> Optional[str]:
+    if args.backtest:
+        return "backtest"
+    if args.simulate_daily:
+        mode = args.mode or "paper"
+        if mode == "backtest":
+            raise ValueError("--simulate-daily only supports paper or live mode")
+        return mode
+    if args.mode:
+        return args.mode
+    return None
 
 
 def main():
@@ -438,20 +949,102 @@ def main():
         default="1x",
         help="Backtest speed",
     )
+    parser.add_argument(
+        "--simulate-daily",
+        action="store_true",
+        help="Run one paper/live daily snapshot through the trading pipeline",
+    )
+    parser.add_argument(
+        "--signal-date",
+        type=str,
+        help="Daily snapshot signal date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--execution-date",
+        type=str,
+        help="Daily snapshot execution date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--warmup-days",
+        type=int,
+        default=None,
+        help="Historical daily bars to feed before the signal date without submitting orders",
+    )
+    parser.add_argument(
+        "--snapshot-provider",
+        type=str,
+        default=None,
+        help="Data provider name to load daily snapshot bars",
+    )
+    parser.add_argument(
+        "--pending-only",
+        action="store_true",
+        help="Record D-day strategy signals for next-session submission without broker submission",
+    )
+    parser.add_argument(
+        "--recover-trades-only",
+        action="store_true",
+        help="Read live broker trade history into strategy ledgers without generating or submitting orders",
+    )
 
     args = parser.parse_args()
 
-    mode = None
-    if args.backtest:
-        mode = "backtest"
-    elif args.mode:
-        mode = args.mode
+    try:
+        mode = _resolve_cli_mode(args)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     config_path = args.config
 
     system = QuantSystem(config_path)
+    if args.recover_trades_only and args.pending_only:
+        raise SystemExit("--recover-trades-only cannot be combined with --pending-only")
+    if args.recover_trades_only and args.simulate_daily:
+        raise SystemExit("--recover-trades-only cannot be combined with --simulate-daily")
+    if args.recover_trades_only and mode != "live":
+        raise SystemExit("--recover-trades-only requires --mode live")
+    if args.pending_only and not args.simulate_daily:
+        raise SystemExit("--pending-only requires --simulate-daily")
+    if args.pending_only and mode != "live":
+        raise SystemExit("--pending-only requires --mode live")
+    if mode:
+        system.config.setdefault("system", {})["mode"] = mode
+    if args.recover_trades_only:
+        try:
+            system.initialize_live_recovery_only()
+        finally:
+            system.disconnect_adapters()
+        return
+    if args.pending_only:
+        execution_config = system.config.setdefault("execution", {})
+        execution_config["record_pending_only"] = True
+        execution_config["brokers"] = ["paper"]
+    if args.signal_date:
+        system.config.setdefault("system", {})["daily_signal_date"] = args.signal_date
     system.initialize()
-    system.run(mode)
+    if args.simulate_daily:
+        if not args.signal_date:
+            raise SystemExit("--simulate-daily requires --signal-date")
+        try:
+            results = system.run_daily_snapshot_once(
+                args.signal_date,
+                execution_date=args.execution_date,
+                warmup_days=args.warmup_days,
+                provider_name=args.snapshot_provider,
+            )
+            for strategy_name, result in results.items():
+                system.logger.info(
+                    "Daily snapshot %s: ran=%s bars=%s missing=%s stale=%s",
+                    strategy_name,
+                    result.ran,
+                    result.bar_count,
+                    result.missing_symbols,
+                    result.stale_symbols,
+                )
+        finally:
+            system.disconnect_adapters()
+    else:
+        system.run(mode)
 
 
 if __name__ == "__main__":

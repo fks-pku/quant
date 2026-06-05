@@ -89,13 +89,19 @@ def get_strategy_performance(strategy_id):
         if info['id'] == strategy_id:
             bt = info['backtest']
             live_perf = get_live_recorder().get_strategy_performance(info['name'])
-            has_live_data = bool(live_perf['pnl_curve']) or live_perf['total_trades'] > 0
+            has_live_data = (
+                bool(live_perf['pnl_curve'])
+                or live_perf['total_trades'] > 0
+                or int(live_perf.get('slippage_sample_count') or 0) > 0
+            )
             return jsonify({
                 'strategy_id': info['id'],
                 'strategy_name': info['name'],
                 'description': info['description'],
                 'backtest': bt,
                 'performance': {
+                    'total_nav': live_perf.get('total_nav', 0.0),
+                    'cash': live_perf.get('cash', 0.0),
                     'sharpe_ratio': live_perf['sharpe_ratio'] if has_live_data else bt['test_sharpe'],
                     'max_drawdown': live_perf['max_drawdown'] if has_live_data else bt['max_dd'],
                     'cagr': bt['cagr'],
@@ -105,6 +111,9 @@ def get_strategy_performance(strategy_id):
                     'unrealized_pnl': live_perf['unrealized_pnl'],
                     'total_trades': live_perf['total_trades'],
                     'profit_factor': live_perf['profit_factor'],
+                    'median_slippage_bps': live_perf.get('median_slippage_bps'),
+                    'weighted_avg_slippage_bps': live_perf.get('weighted_avg_slippage_bps'),
+                    'slippage_sample_count': live_perf.get('slippage_sample_count', 0),
                 },
                 'pnl_curve': live_perf['pnl_curve'],
                 'recent_trades': live_perf['recent_trades'],
@@ -112,6 +121,11 @@ def get_strategy_performance(strategy_id):
                 'positions': [p for p in state.positions_data if p.get('symbol') in info.get('symbols', [])] if state.system_status == 'running' else []
             })
     return jsonify({'error': 'Strategy not found'}), 404
+
+
+@strategies_bp.route('/api/strategies/live-summary', methods=['GET'])
+def get_strategies_live_summary():
+    return jsonify(get_live_recorder().get_live_summary())
 
 
 @strategies_bp.route('/api/strategies/live-records/<kind>', methods=['GET'])

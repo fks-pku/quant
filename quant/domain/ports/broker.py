@@ -48,5 +48,11 @@ class BrokerAdapter(ABC):
     def get_account_info(self) -> AccountInfo:
         pass
 
+    def get_trade_history(self, start_date=None, end_date=None) -> list:
+        return []
+
+    def get_order_history(self, start_date=None, end_date=None) -> list:
+        return []
+
     def update_price(self, symbol: str, price: float) -> None:
         pass

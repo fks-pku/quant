@@ -773,6 +773,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         nav_ranges = _lake_ranges(storage, "fund_nav")
         latest_etf_adj_factors = storage.load_latest_adj_factors("etf_ohlcv")
     else:
+        stock_ranges = _load_ranges(stock_db, "daily_cn_ochl", "timestamp")
+        index_ranges = _load_ranges(index_db, "daily_cn_ochl", "timestamp")
+        etf_ranges = _load_ranges(etf_db, "daily_cn_ochl", "timestamp")
+        nav_ranges = _load_ranges(fund_nav_db, "cn_fund_nav", "nav_date")
+        latest_etf_adj_factors = _load_latest_adj_factors(etf_db, "daily_cn_ochl")
         storage = DuckDBStorage(
             db_path=str(stock_db),
             etf_db_path=str(etf_db),
@@ -783,11 +788,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             fund_nav_db_path=str(fund_nav_db),
             corporate_actions_db_path=str(corporate_actions_db),
         )
-        stock_ranges = _load_ranges(stock_db, "daily_cn_ochl", "timestamp")
-        index_ranges = _load_ranges(index_db, "daily_cn_ochl", "timestamp")
-        etf_ranges = _load_ranges(etf_db, "daily_cn_ochl", "timestamp")
-        nav_ranges = _load_ranges(fund_nav_db, "cn_fund_nav", "nav_date")
-        latest_etf_adj_factors = _load_latest_adj_factors(etf_db, "daily_cn_ochl")
 
     provider = TushareProvider(storage=_NoopProviderStorage(), min_interval=args.min_interval)
     provider.connect()

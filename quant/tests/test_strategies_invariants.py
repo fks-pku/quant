@@ -469,6 +469,19 @@ class TestCase9RetailPermissionStockUniverse:
         assert "159915" in strategy.symbols
         assert "159949" in strategy.symbols
 
+    def test_s9_03_dynamic_stock_universe_exposes_only_static_snapshot_dependencies(self):
+        strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001", "002475", "600099"])
+
+        assert strategy.symbols == ["000001", "002475", "600099"]
+        assert strategy.required_snapshot_symbols() == []
+
+        strategy = XueqiuSmallCapFinancialFilterStrategy(
+            symbols=["000001", "002475", "600099"],
+            risk_index_symbol="399001",
+        )
+
+        assert strategy.required_snapshot_symbols() == ["399001"]
+
 
 # ---------------------------------------------------------------------------
 # CASE-6: Top-level strategy promotion gate

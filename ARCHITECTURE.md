@@ -39,8 +39,7 @@ quant/
 │   ├── utils/           # Utilities (logger, config_loader, datetime_utils)
 │   └── config/          # Configuration (config.yaml, brokers.yaml, strategies.yaml)
 ├── api/                 # Flask thin routing layer
-├── frontend/            # React Dashboard UI
-├── scripts/             # CLI utility scripts
+├── scripts/             # CLI utility scripts and local ops dashboard server
 └── tests/              # Tests
 ```
 
@@ -131,4 +130,4 @@ but are not part of default strategy discovery.
 | `features/` | Use case orchestration | backtest/, trading/, portfolio/, cio/, strategies/, research/ |
 | `shared/` | Cross-cutting utilities | utils/, config/, models/ |
 | `api/` | HTTP routing | *_bp.py, state/runtime.py |
-| `frontend/` | React UI | src/*.js |
+| `scripts/` | CLI utilities and local strategy ops dashboard | strategy_dashboard_server.py, *.ps1 |

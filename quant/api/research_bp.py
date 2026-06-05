@@ -1915,6 +1915,7 @@ def _strict_supplemental_diagnostics(
         "turnover": _turnover_diagnostics(trades, equity_curve, initial_cash, start, end),
         "exposure": _exposure_diagnostics(exposure_snapshots),
         "capacity": _capacity_diagnostics(execution_observations, initial_cash),
+        "execution_cost_bps": _execution_cost_bps_diagnostics(execution_observations),
         "trade_distribution": _trade_distribution(trades),
         "drawdown_episodes": _drawdown_episodes(equity_curve),
         "rolling_stability": _rolling_stability(equity_curve, benchmark_equity_curve),
@@ -2008,6 +2009,53 @@ def _capacity_diagnostics(observations, initial_cash):
         "max_impact_bps": _metric_float(max(impacts) if impacts else 0.0),
         "estimated_capacity_at_1pct_adv_max": _metric_float(float(initial_cash) * 0.01 / max_adv if max_adv > 0 else 0.0),
         "estimated_capacity_at_1pct_adv_p95": _metric_float(float(initial_cash) * 0.01 / p95_adv if p95_adv > 0 else 0.0),
+    }
+
+
+def _execution_cost_bps_diagnostics(observations):
+    if not observations:
+        return {}
+    effective_bps = []
+    slippage_bps = []
+    impact_bps = []
+    weighted_effective = 0.0
+    weighted_slippage = 0.0
+    weighted_impact = 0.0
+    weight_sum = 0.0
+    for item in observations:
+        slippage = _safe_trade_number(item.get("slippage_bps", 0.0))
+        impact = _safe_trade_number(item.get("impact_bps", 0.0))
+        effective = slippage + impact
+        notional = _safe_trade_number(item.get("notional", 0.0))
+        effective_bps.append(effective)
+        slippage_bps.append(slippage)
+        impact_bps.append(impact)
+        if notional > 0:
+            weight_sum += notional
+            weighted_effective += effective * notional
+            weighted_slippage += slippage * notional
+            weighted_impact += impact * notional
+    if not effective_bps:
+        return {}
+    if weight_sum > 0:
+        weighted_effective /= weight_sum
+        weighted_slippage /= weight_sum
+        weighted_impact /= weight_sum
+    else:
+        weighted_effective = _mean(effective_bps)
+        weighted_slippage = _mean(slippage_bps)
+        weighted_impact = _mean(impact_bps)
+    return {
+        "observations": len(effective_bps),
+        "weighted_effective_bps": _metric_float(weighted_effective),
+        "median_effective_bps": _metric_float(_quantile(effective_bps, 0.50)),
+        "avg_effective_bps": _metric_float(_mean(effective_bps)),
+        "p95_effective_bps": _metric_float(_quantile(effective_bps, 0.95)),
+        "max_effective_bps": _metric_float(max(effective_bps) if effective_bps else 0.0),
+        "weighted_slippage_bps": _metric_float(weighted_slippage),
+        "median_slippage_bps": _metric_float(_quantile(slippage_bps, 0.50)),
+        "weighted_impact_bps": _metric_float(weighted_impact),
+        "median_impact_bps": _metric_float(_quantile(impact_bps, 0.50)),
     }
 
 

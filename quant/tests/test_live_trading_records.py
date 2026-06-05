@@ -1,12 +1,13 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from quant.domain.events.base import EventType
 from quant.domain.models.order import Order, OrderSide, OrderStatus, OrderType
-from quant.features.trading.engine import Engine
+from quant.features.trading.engine import Context, Engine
 from quant.infrastructure.events.event_bus import EventBus
+from quant.infrastructure.execution.brokers.paper import PaperBroker
 from quant.infrastructure.execution.fill_handler import FillHandler
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
 from quant.infrastructure.execution.live_executor import LiveExecutionManager, TargetOrder
@@ -204,8 +205,158 @@ def test_live_trading_recorder_persists_daily_signals_fills_and_performance(tmp_
     assert "sortino_ratio" in perf
     assert "calmar_ratio" in perf
     assert "total_return" in perf
+    assert perf["total_nav"] == pytest.approx(100020)
+    assert perf["cash"] == pytest.approx(100020)
     assert perf["pnl_curve"][-1]["nav"] == pytest.approx(100020)
     assert perf["recent_trades"][-1]["symbol"] == "000001"
+
+
+def test_live_trading_recorder_writes_strategy_mode_records(tmp_path):
+    from quant.infrastructure.execution.strategy_mode_records import StrategyModeRecordStore
+
+    recorder = LiveTradingRecorder(tmp_path / "paper_trading")
+    ts = datetime(2026, 6, 3, 15, 0)
+
+    recorder.record_signal(
+        timestamp=ts,
+        strategy_name="DemoStrategy",
+        symbol="600519",
+        side="BUY",
+        quantity=100,
+        order_type="MARKET",
+        price=10.0,
+        status="accepted",
+        order_id="ORD-1",
+    )
+    recorder.record_fill(
+        order_id="ORD-1",
+        timestamp=ts,
+        strategy_name="DemoStrategy",
+        symbol="600519",
+        side="BUY",
+        quantity=100,
+        price=10.0,
+    )
+    recorder.record_strategy_snapshot(
+        timestamp=ts,
+        strategy_name="DemoStrategy",
+        nav=20000,
+        market_value=1000,
+        cash=19000,
+        realized_pnl=0,
+        unrealized_pnl=0,
+    )
+
+    store = StrategyModeRecordStore(tmp_path / "strategy_modes")
+    records = store.read_records(mode="paper", strategy_name="DemoStrategy")
+
+    assert records["signals"][0]["order_id"] == "ORD-1"
+    assert records["fills"][0]["symbol"] == "600519"
+    assert records["snapshots"][0]["nav"] == 20000
+    assert records["operations"][0]["action"] == "daily_snapshot"
+    assert store.read("signals", mode="live", strategy_name="DemoStrategy") == []
+
+
+def test_live_trading_recorder_calculates_slippage_stats(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path)
+    buy_ts = datetime(2026, 6, 1, 9, 31)
+    sell_ts = datetime(2026, 6, 1, 10, 1)
+
+    recorder.record_order(
+        Order(
+            symbol="600519",
+            quantity=100,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            order_id="BRK-1",
+            price=10.0,
+            status=OrderStatus.SUBMITTED,
+            timestamp=buy_ts,
+            strategy_name="DemoStrategy",
+        ),
+        broker_order_id="BRK-1",
+        status="submitted",
+    )
+    recorder.record_fill(
+        order_id="BRK-1",
+        timestamp=buy_ts,
+        strategy_name="DemoStrategy",
+        symbol="600519",
+        side="BUY",
+        quantity=100,
+        price=10.10,
+    )
+    recorder.record_order(
+        Order(
+            symbol="000001",
+            quantity=200,
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            order_id="BRK-2",
+            price=20.0,
+            status=OrderStatus.SUBMITTED,
+            timestamp=sell_ts,
+            strategy_name="DemoStrategy",
+        ),
+        broker_order_id="BRK-2",
+        status="submitted",
+    )
+    recorder.record_fill(
+        order_id="BRK-2",
+        timestamp=sell_ts,
+        strategy_name="DemoStrategy",
+        symbol="000001",
+        side="SELL",
+        quantity=200,
+        price=19.90,
+    )
+
+    perf = recorder.get_strategy_performance("DemoStrategy")
+
+    assert perf["slippage_sample_count"] == 2
+    assert perf["median_slippage_bps"] == pytest.approx(75.0)
+    assert perf["weighted_avg_slippage_bps"] == pytest.approx(60.12024)
+
+
+def test_live_trading_recorder_summarizes_live_metrics(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path)
+    ts = datetime(2026, 6, 1, 9, 31)
+
+    recorder.record_strategy_snapshot(ts, "Alpha", nav=100000, market_value=70000, cash=30000, realized_pnl=0, unrealized_pnl=0)
+    recorder.record_strategy_snapshot(ts, "Beta", nav=50000, market_value=45000, cash=5000, realized_pnl=0, unrealized_pnl=0)
+    recorder.record_order(
+        Order(
+            symbol="600519",
+            quantity=100,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            order_id="BRK-1",
+            price=10.0,
+            status=OrderStatus.SUBMITTED,
+            timestamp=ts,
+            strategy_name="Alpha",
+        ),
+        broker_order_id="BRK-1",
+        status="submitted",
+    )
+    recorder.record_fill(
+        order_id="BRK-1",
+        timestamp=ts,
+        strategy_name="Alpha",
+        symbol="600519",
+        side="BUY",
+        quantity=100,
+        price=10.05,
+    )
+
+    summary = recorder.get_live_summary()
+
+    assert summary["total_nav"] == pytest.approx(150000)
+    assert summary["cash"] == pytest.approx(35000)
+    assert summary["strategy_count"] == 2
+    assert summary["slippage_sample_count"] == 1
+    assert summary["median_slippage_bps"] == pytest.approx(50.0)
+    assert summary["weighted_avg_slippage_bps"] == pytest.approx(50.0)
 
 
 def test_strategy_runtime_feed_uses_batch_hook():
@@ -357,6 +508,116 @@ def test_trading_engine_uses_latest_completed_snapshot_after_gap():
     assert len(order_manager.submitted) == 1
 
 
+def test_trading_engine_inject_daily_snapshot_uses_live_event_pipeline():
+    bus = EventBus()
+    order_manager = RecordingOrderManager()
+    engine = Engine(
+        {
+            "system": {"mode": "paper", "initial_cash": 100000},
+            "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+        },
+        bus,
+    )
+    engine.set_order_manager(order_manager)
+    strategy = DailySnapshotStrategy()
+    engine.add_strategy(strategy)
+    signal_day = datetime(2026, 6, 1)
+    execution_day = datetime(2026, 6, 2)
+
+    results = engine.inject_daily_snapshot(
+        signal_day,
+        [
+            {"symbol": "000001", "timestamp": signal_day, "close": 11.0},
+            {"symbol": "600519", "timestamp": signal_day, "close": 10.0},
+        ],
+        execution_day,
+    )
+
+    assert results["DailySnapshotStrategy"].ran is True
+    assert strategy.batches == [["600519", "000001"]]
+    assert strategy.before_dates == [execution_day.date()]
+    assert order_manager.submitted[-1]["strategy_name"] == "DailySnapshotStrategy"
+
+
+def test_trading_engine_signal_gate_blocks_daily_snapshot_orders():
+    bus = EventBus()
+    order_manager = RecordingOrderManager()
+    engine = Engine(
+        {
+            "system": {"mode": "live", "initial_cash": 100000},
+            "live_trading": {"daily_snapshot_mode": True, "strict_daily_snapshot": True},
+        },
+        bus,
+    )
+    engine.set_order_manager(order_manager)
+    engine.set_strategy_signal_gate(lambda strategy_name: False)
+    strategy = DailySnapshotStrategy()
+    engine.add_strategy(strategy)
+    signal_day = datetime(2026, 6, 1)
+    execution_day = datetime(2026, 6, 2)
+
+    results = engine.inject_daily_snapshot(
+        signal_day,
+        [
+            {"symbol": "000001", "timestamp": signal_day, "close": 11.0},
+            {"symbol": "600519", "timestamp": signal_day, "close": 10.0},
+        ],
+        execution_day,
+    )
+
+    assert results == {}
+    assert strategy.batches == []
+    assert strategy.before_dates == []
+    assert strategy.after_dates == []
+    assert order_manager.submitted == []
+
+
+def test_context_signal_gate_blocks_direct_order_submission():
+    order_manager = RecordingOrderManager()
+    context = Context(
+        portfolio=None,
+        risk_engine=None,
+        event_bus=None,
+        order_manager=order_manager,
+        signal_gate=lambda strategy_name: False,
+    )
+
+    result = context.submit_order("600519", 100, "BUY", "LIMIT", 10.0, "DemoStrategy")
+
+    assert result is None
+    assert order_manager.submitted == []
+
+
+def test_trading_engine_market_clock_uses_configured_market(monkeypatch):
+    from quant.shared.utils import datetime_utils
+
+    seen = {}
+
+    def fake_current_time(timezone):
+        seen["timezone"] = timezone
+        return datetime(2026, 6, 2, 10, 0)
+
+    monkeypatch.setattr(datetime_utils, "get_current_time", fake_current_time)
+    engine = Engine(
+        {
+            "system": {"mode": "paper", "market": "CN", "initial_cash": 100000},
+            "markets": {
+                "CN": {
+                    "timezone": "Asia/Shanghai",
+                    "open_hour": 9,
+                    "open_minute": 30,
+                    "close_hour": 15,
+                    "close_minute": 0,
+                }
+            },
+        },
+        EventBus(),
+    )
+
+    assert engine._is_market_open() is True
+    assert seen["timezone"] == "Asia/Shanghai"
+
+
 def test_order_manager_records_strategy_signal_and_broker_order(tmp_path):
     recorder = LiveTradingRecorder(tmp_path)
     broker = DummyBroker()
@@ -378,6 +639,39 @@ def test_order_manager_records_strategy_signal_and_broker_order(tmp_path):
     assert signals[-1]["status"] == "accepted"
     assert orders[-1]["broker_order_id"] == "BRK-1"
     assert orders[-1]["status"] == "submitted"
+
+
+def test_order_manager_record_pending_only_does_not_submit_to_broker(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path)
+    broker = DummyBroker()
+    risk = ApprovingRisk(True)
+    tracker = StrategyPositionTracker(tmp_path / "positions.json")
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=risk,
+        event_bus=EventBus(),
+        config={"execution": {"record_pending_only": True}},
+        strategy_tracker=tracker,
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+    manager.set_signal_timestamp(datetime(2026, 6, 3, 15, 0))
+
+    order_id = manager.submit_order("159949", 100, "SELL", "LIMIT", 2.010949, "DemoStrategy")
+
+    signals = recorder.read_day("signals", "2026-06-03")
+    orders = recorder.read_day("orders", "2026-06-03")
+    assert order_id is not None
+    assert broker.submitted == []
+    assert orders == []
+    assert signals[-1]["strategy_name"] == "DemoStrategy"
+    assert signals[-1]["symbol"] == "159949"
+    assert signals[-1]["side"] == "SELL"
+    assert signals[-1]["status"] == "accepted"
+    assert signals[-1]["order_id"] == order_id
+    assert manager.get_order_status(order_id) == OrderStatus.PENDING
+    assert risk.last_record["kwargs"]["symbol"] == "159949"
+    assert tracker.get_strategy_for_order(order_id) == "DemoStrategy"
 
 
 def test_order_manager_passes_side_and_pending_value_to_risk_engine(tmp_path):
@@ -516,6 +810,30 @@ def test_fill_handler_records_strategy_fill(tmp_path):
     assert fills[-1]["strategy_name"] == "DemoStrategy"
 
 
+def test_fill_handler_passes_commission_to_strategy_tracker_cost(tmp_path):
+    tracker = StrategyPositionTracker(tmp_path / "positions.json")
+    handler = FillHandler(
+        portfolio=DummyPortfolio(),
+        event_bus=EventBus(),
+        config={},
+        strategy_tracker=tracker,
+    )
+
+    handler.process_fill(
+        order_id="BRK-1",
+        symbol="518880",
+        side="BUY",
+        quantity=1000,
+        price=9.302,
+        commission=5.0,
+        timestamp=datetime(2026, 6, 3, 9, 47),
+        strategy_name="DemoStrategy",
+    )
+
+    holding = tracker.get_breakdown()["DemoStrategy"]["holdings"][0]
+    assert holding["avg_cost"] == pytest.approx(9.307)
+
+
 def test_fill_handler_updates_strategy_specific_portfolio(tmp_path):
     default_portfolio = DummyPortfolio()
     strategy_portfolio = DummyPortfolio()
@@ -559,6 +877,77 @@ def test_recorder_accepts_domain_order_objects(tmp_path):
     orders = recorder.read_day("orders", "2026-06-01")
     assert orders[-1]["order_id"] == "ORD-1"
     assert orders[-1]["broker_order_id"] == "BRK-1"
+
+
+def test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks():
+    broker = PaperBroker(slippage_bps=5)
+    broker.connect()
+    broker.set_execution_bars([
+        {"symbol": "518880", "open": 9.302, "close": 9.295},
+    ])
+    seen = []
+    broker.register_trade_callback(lambda **trade: seen.append(trade))
+
+    order_id = broker.submit_order(Order(
+        symbol="518880",
+        quantity=1000,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=9.307,
+        strategy_name="Barbell",
+    ))
+
+    assert broker.get_order_status(order_id) == OrderStatus.FILLED
+    assert broker.get_order(order_id).avg_fill_price == pytest.approx(9.302)
+    assert seen == []
+
+    broker.flush_trade_callbacks()
+
+    assert seen[-1]["order_id"] == order_id
+    assert seen[-1]["symbol"] == "518880"
+    assert seen[-1]["quantity"] == pytest.approx(1000)
+    assert seen[-1]["price"] == pytest.approx(9.302)
+    assert seen[-1]["strategy_name"] == "Barbell"
+
+    rejected_id = broker.submit_order(Order(
+        symbol="518880",
+        quantity=1000,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=9.300,
+        strategy_name="Barbell",
+    ))
+    broker.flush_trade_callbacks()
+
+    assert broker.get_order_status(rejected_id) == OrderStatus.REJECTED
+    assert len(seen) == 1
+
+
+def test_order_manager_flushes_paper_broker_fills_after_submission():
+    broker = PaperBroker(slippage_bps=5)
+    broker.connect()
+    broker.set_execution_bars([{"symbol": "600519", "open": 10.0, "close": 10.2}])
+    risk = ApprovingRisk(True)
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=risk,
+        event_bus=EventBus(),
+        config={"execution": {"max_retries": 1}},
+    )
+    manager.register_broker("paper", broker)
+    seen = []
+
+    def on_trade(**trade):
+        seen.append(trade)
+        manager.update_order_from_fill(trade["order_id"], trade["quantity"], trade["price"])
+
+    broker.register_trade_callback(on_trade)
+
+    manager.submit_order("600519", 100, "BUY", "LIMIT", 10.1, "DemoStrategy")
+
+    assert seen[-1]["order_id"] == "PAPER_1"
+    assert seen[-1]["price"] == pytest.approx(10.0)
+    assert manager.get_order_status("PAPER_1") == OrderStatus.FILLED
 
 
 def test_strategy_tracker_calibration_updates_live_market_values(tmp_path):
@@ -626,6 +1015,169 @@ def test_quant_system_resolves_strategy_specific_risk_and_portfolio():
     assert QuantSystem._portfolio_for_strategy(quant, "Other") is default_portfolio
 
 
+def test_quant_system_restores_strategy_runtime_positions_from_tracker(tmp_path):
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.sub_portfolio import SubPortfolio
+    from quant.quant_system import QuantSystem
+
+    tracker = StrategyPositionTracker(tmp_path / "positions.json")
+    tracker.update_from_fill(
+        strategy_name="DemoStrategy",
+        symbol="159949",
+        side="BUY",
+        qty=4900,
+        price=1.994,
+        commission=5.0,
+    )
+    master = Portfolio(initial_cash=100000)
+    sub = SubPortfolio("DemoStrategy", 20000, master)
+    quant = QuantSystem.__new__(QuantSystem)
+    quant._strategy_tracker = tracker
+    quant.engine = SimpleNamespace(
+        portfolio=master,
+        _sub_portfolios={"DemoStrategy": sub},
+    )
+    strategy = SimpleNamespace(name="DemoStrategy", _positions={})
+
+    QuantSystem._restore_strategy_runtime_positions(quant, strategy, "DemoStrategy")
+
+    avg_cost = (1.994 * 4900 + 5.0) / 4900
+    assert strategy._positions["159949"] == pytest.approx(4900)
+    assert sub.get_position("159949").quantity == pytest.approx(4900)
+    assert sub.get_position("159949").avg_cost == pytest.approx(avg_cost)
+    assert sub.cash == pytest.approx(20000 - avg_cost * 4900)
+    assert sub.settled_quantity("159949", date.today() + timedelta(days=1)) == pytest.approx(4900)
+
+
+def test_quant_system_pending_only_daily_snapshot_records_signal_day_snapshot_marker():
+    from quant.quant_system import QuantSystem
+
+    class FakeOrderManager:
+        def __init__(self):
+            self.signal_timestamp = None
+            self.cleared = False
+
+        def set_signal_timestamp(self, timestamp):
+            self.signal_timestamp = timestamp
+
+        def clear_signal_timestamp(self):
+            self.cleared = True
+            self.signal_timestamp = None
+
+    class FakeEngine:
+        def __init__(self):
+            self.order_manager = FakeOrderManager()
+            self.strategies = [SimpleNamespace(name="DemoStrategy", symbols=["159949"])]
+
+        def inject_daily_snapshot(self, signal_day, bars, execution_day):
+            assert signal_day == date(2026, 6, 3)
+            assert execution_day == date(2026, 6, 4)
+            assert self.order_manager.signal_timestamp == datetime(2026, 6, 3, 15, 0)
+            assert bars == [{"symbol": "159949", "timestamp": "2026-06-03", "close": 2.017}]
+            return {"DemoStrategy": SimpleNamespace(ran=True)}
+
+    snapshots = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.engine = FakeEngine()
+    quant.config = {"execution": {"record_pending_only": True}, "live_trading": {}}
+    quant._assert_current_broker_safe_for_paper = lambda: None
+    quant._select_snapshot_provider = lambda provider_name: object()
+    quant._strategy_symbols = lambda: ["159949"]
+    quant._load_snapshot_bars = (
+        lambda provider, symbols, start_day, end_day=None: [
+            {"symbol": "159949", "timestamp": "2026-06-03", "close": 2.017}
+        ]
+    )
+    quant._prepare_paper_execution_context = lambda provider, symbols, execution_day: None
+    quant._record_live_strategy_snapshots = lambda timestamp=None: snapshots.append(timestamp)
+
+    results = QuantSystem.run_daily_snapshot_once(
+        quant,
+        "2026-06-03",
+        execution_date="2026-06-04",
+        provider_name="duckdb",
+    )
+
+    assert results["DemoStrategy"].ran is True
+    assert quant.engine.order_manager.cleared is True
+    assert snapshots == [datetime(2026, 6, 3, 15, 0)]
+
+
+def test_quant_system_paper_daily_snapshot_records_execution_day_snapshot_marker():
+    from quant.quant_system import QuantSystem
+
+    class FakeEngine:
+        def __init__(self):
+            self.strategies = [SimpleNamespace(name="DemoStrategy", symbols=["159949"])]
+
+        def inject_daily_snapshot(self, signal_day, bars, execution_day):
+            return {"DemoStrategy": SimpleNamespace(ran=True)}
+
+    snapshots = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.engine = FakeEngine()
+    quant.config = {"execution": {}, "live_trading": {}}
+    quant._assert_current_broker_safe_for_paper = lambda: None
+    quant._select_snapshot_provider = lambda provider_name: object()
+    quant._strategy_symbols = lambda: ["159949"]
+    quant._load_snapshot_bars = (
+        lambda provider, symbols, start_day, end_day=None: [
+            {"symbol": "159949", "timestamp": str(start_day), "close": 2.017}
+        ]
+    )
+    quant._prepare_paper_execution_context = lambda provider, symbols, execution_day: None
+    quant._record_live_strategy_snapshots = lambda timestamp=None: snapshots.append(timestamp)
+
+    QuantSystem.run_daily_snapshot_once(
+        quant,
+        "2026-06-03",
+        execution_date="2026-06-04",
+        provider_name="duckdb",
+    )
+
+    assert snapshots == [datetime(2026, 6, 4, 15, 0)]
+
+
+def test_quant_system_records_cash_only_subportfolio_snapshots(tmp_path):
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.sub_portfolio import SubPortfolio
+    from quant.quant_system import QuantSystem
+
+    master = Portfolio(initial_cash=100000)
+    invested = SubPortfolio("InvestedStrategy", 20000, master)
+    cash_only = SubPortfolio("CashOnlyStrategy", 15000, master)
+    invested.update_position("159949", 100, 2.0, 200.0)
+    invested.cash -= 200.0
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.live_recorder = LiveTradingRecorder(tmp_path / "paper_trading")
+    quant.config = {"system": {"mode": "paper"}}
+    quant.logger = SimpleNamespace(error=lambda *args, **kwargs: None)
+    quant.engine = SimpleNamespace(
+        strategies=[
+            SimpleNamespace(name="InvestedStrategy"),
+            SimpleNamespace(name="CashOnlyStrategy"),
+        ],
+        _sub_portfolios={
+            "InvestedStrategy": invested,
+            "CashOnlyStrategy": cash_only,
+        },
+        broker=None,
+    )
+
+    QuantSystem._record_live_strategy_snapshots(
+        quant,
+        timestamp=datetime(2026, 6, 4, 15, 0),
+    )
+
+    invested_rows = quant.live_recorder.read_day("snapshots", "2026-06-04", "InvestedStrategy")
+    cash_rows = quant.live_recorder.read_day("snapshots", "2026-06-04", "CashOnlyStrategy")
+    assert invested_rows[0]["nav"] == pytest.approx(invested.nav)
+    assert invested_rows[0]["market_value"] == pytest.approx(200.0)
+    assert cash_rows[0]["nav"] == pytest.approx(15000.0)
+    assert cash_rows[0]["cash"] == pytest.approx(15000.0)
+    assert cash_rows[0]["market_value"] == pytest.approx(0.0)
+
+
 def test_quant_system_allocates_default_live_strategy_cash(monkeypatch):
     from quant.quant_system import QuantSystem
 
@@ -650,6 +1202,7 @@ def test_quant_system_allocates_default_live_strategy_cash(monkeypatch):
         "strategies": [
             {"name": "DemoStrategy", "enabled": True, "symbols": ["600519"]},
             {"name": "OtherStrategy", "enabled": True, "symbols": ["000001"]},
+            {"name": "CashSizedStrategy", "enabled": True, "symbols": ["000002"], "allocation_cash": 50000.0},
         ],
     }
     quant.config_loader = DummyConfigLoader()
@@ -663,8 +1216,262 @@ def test_quant_system_allocates_default_live_strategy_cash(monkeypatch):
 
     QuantSystem._setup_strategies(quant)
 
-    assert [item[0].name for item in quant.engine.added] == ["DemoStrategy", "OtherStrategy"]
-    assert [item[1] for item in quant.engine.added] == [pytest.approx(0.2), pytest.approx(0.2)]
+    assert [item[0].name for item in quant.engine.added] == [
+        "DemoStrategy",
+        "OtherStrategy",
+        "CashSizedStrategy",
+    ]
+    assert [item[1] for item in quant.engine.added] == [
+        pytest.approx(0.2),
+        pytest.approx(0.2),
+        pytest.approx(0.5),
+    ]
+
+
+def test_strategy_control_actions_gate_live_signals(tmp_path):
+    from quant.infrastructure.execution.strategy_controls import (
+        apply_strategy_control_action,
+        get_strategy_control,
+    )
+
+    control_file = tmp_path / "strategy_controls.json"
+
+    assert get_strategy_control(
+        "DemoStrategy",
+        control_file,
+        default_live_enabled=True,
+    ).accepts_live_signals
+
+    paused = apply_strategy_control_action(
+        "DemoStrategy",
+        "pause",
+        control_file,
+        default_live_enabled=True,
+    )
+    assert paused.live_state == "paused"
+    assert not paused.accepts_live_signals
+
+    resumed = apply_strategy_control_action("DemoStrategy", "resume", control_file)
+    assert resumed.live_state == "running"
+    assert resumed.accepts_live_signals
+
+    liquidating = apply_strategy_control_action("DemoStrategy", "liquidate_stop", control_file)
+    assert liquidating.live_state == "liquidating"
+    assert liquidating.liquidation_requested
+    assert not liquidating.accepts_live_signals
+
+
+def test_strategy_control_actions_are_mode_isolated(tmp_path):
+    from quant.infrastructure.execution.strategy_controls import (
+        apply_strategy_control_action,
+        get_strategy_control,
+    )
+
+    control_file = tmp_path / "strategy_controls.json"
+
+    apply_strategy_control_action(
+        "DemoStrategy",
+        "pause",
+        control_file,
+        default_live_enabled=True,
+        mode="live",
+    )
+    apply_strategy_control_action(
+        "DemoStrategy",
+        "resume",
+        control_file,
+        default_live_enabled=True,
+        mode="paper",
+    )
+
+    live = get_strategy_control("DemoStrategy", control_file, mode="live")
+    paper = get_strategy_control("DemoStrategy", control_file, mode="paper")
+    assert live.mode == "live"
+    assert live.live_state == "paused"
+    assert not live.accepts_live_signals
+    assert paper.mode == "paper"
+    assert paper.live_state == "running"
+    assert paper.accepts_live_signals
+
+
+def test_quant_system_live_signal_gate_reads_strategy_control_file(tmp_path):
+    from quant.infrastructure.execution.strategy_controls import apply_strategy_control_action
+    from quant.quant_system import QuantSystem
+
+    control_file = tmp_path / "strategy_controls.json"
+    apply_strategy_control_action(
+        "DemoStrategy",
+        "pause",
+        control_file,
+        default_live_enabled=True,
+    )
+    messages = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {
+        "system": {"mode": "live"},
+        "live_trading": {"strategy_control_file": str(control_file)},
+    }
+    quant.logger = SimpleNamespace(info=lambda message, *args, **kwargs: messages.append(message))
+
+    assert not QuantSystem._strategy_accepts_live_signals(quant, "DemoStrategy")
+
+    apply_strategy_control_action("DemoStrategy", "resume", control_file)
+    assert QuantSystem._strategy_accepts_live_signals(quant, "DemoStrategy")
+
+
+def test_quant_system_paper_signal_gate_reads_paper_control_file(tmp_path):
+    from quant.infrastructure.execution.strategy_controls import apply_strategy_control_action
+    from quant.quant_system import QuantSystem
+
+    control_file = tmp_path / "strategy_controls.json"
+    apply_strategy_control_action(
+        "DemoStrategy",
+        "pause",
+        control_file,
+        default_live_enabled=True,
+        mode="paper",
+    )
+    apply_strategy_control_action(
+        "DemoStrategy",
+        "resume",
+        control_file,
+        default_live_enabled=True,
+        mode="live",
+    )
+    messages = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {
+        "system": {"mode": "paper"},
+        "live_trading": {"strategy_control_file": str(control_file)},
+    }
+    quant.logger = SimpleNamespace(info=lambda message, *args, **kwargs: messages.append(message))
+
+    assert not QuantSystem._strategy_accepts_live_signals(quant, "DemoStrategy")
+
+    apply_strategy_control_action("DemoStrategy", "resume", control_file, mode="paper")
+    assert QuantSystem._strategy_accepts_live_signals(quant, "DemoStrategy")
+
+
+def test_quant_system_paper_mode_uses_separate_recorder_and_tracker():
+    from quant.quant_system import QuantSystem
+
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {"system": {"mode": "paper"}}
+    quant._strategy_tracker = None
+
+    recorder = QuantSystem._create_live_recorder(quant)
+    tracker = QuantSystem._strategy_tracker_for_mode(quant)
+
+    assert recorder.base_dir.name == "paper_trading"
+    assert tracker._path.name == "strategy_positions.json"
+    assert tracker._path.parent.name == "paper_trading"
+
+
+def test_quant_system_filters_strategy_params_and_symbols():
+    from quant.features.strategies.registry import StrategyRegistry
+    from quant.quant_system import QuantSystem
+
+    class SymbolStrategy:
+        def __init__(self, symbols=None, threshold=1):
+            self.name = "ParamSymbolStrategy"
+            self.symbols = symbols
+            self.threshold = threshold
+
+    class NoSymbolStrategy:
+        def __init__(self, timing_symbol="000300"):
+            self.name = "ParamNoSymbolStrategy"
+            self.symbols = []
+            self.timing_symbol = timing_symbol
+
+    StrategyRegistry.register("ParamSymbolStrategy", SymbolStrategy)
+    StrategyRegistry.register("ParamNoSymbolStrategy", NoSymbolStrategy)
+    warnings = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.logger = SimpleNamespace(
+        warning=lambda message, *args, **kwargs: warnings.append((message, args)),
+        error=lambda *args, **kwargs: None,
+    )
+
+    with_symbols = QuantSystem._create_strategy(
+        quant,
+        "ParamSymbolStrategy",
+        ["600519"],
+        {"threshold": 2, "ignored": True},
+    )
+    without_symbols = QuantSystem._create_strategy(
+        quant,
+        "ParamNoSymbolStrategy",
+        ["510300"],
+        {"timing_symbol": "000300", "ignored": True},
+    )
+
+    assert with_symbols.symbols == ["600519"]
+    assert with_symbols.threshold == 2
+    assert without_symbols.timing_symbol == "000300"
+    assert without_symbols.symbols == []
+    assert len(warnings) == 2
+
+
+def test_quant_system_resolves_cn_stock_universe_as_of_signal_date():
+    from quant.quant_system import QuantSystem
+
+    class FakeProvider:
+        def __init__(self):
+            self.requested_symbols = None
+
+        def list_available_symbols(self, timeframe="1d", market="hk"):
+            assert market == "cn"
+            return ["600001", "600002", "600003"]
+
+        def get_bars_for_symbols(self, symbols, start, end, timeframe="1d"):
+            self.requested_symbols = symbols
+            return [{"symbol": "600002"}, {"symbol": "600001"}]
+
+    provider = FakeProvider()
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {
+        "system": {"daily_signal_date": "2026-06-02"},
+        "data": {"default_timeframe": "1d"},
+    }
+    quant.engine = SimpleNamespace(data_providers={"default": provider})
+
+    symbols = QuantSystem._load_universe_symbols(quant, "cn_stock", {})
+
+    assert provider.requested_symbols == ["600001", "600002", "600003"]
+    assert symbols == ["600002", "600001"]
+
+
+def test_quant_system_rejects_real_broker_in_paper_mode():
+    from quant.quant_system import QuantSystem
+
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {"system": {"mode": "paper"}}
+
+    with pytest.raises(RuntimeError, match="trade_mode=REAL"):
+        QuantSystem._assert_broker_mode_allowed(quant, "qmt", "REAL")
+
+
+def test_quant_system_rejects_external_broker_adapter_in_paper_mode():
+    from quant.quant_system import QuantSystem
+
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {"system": {"mode": "paper"}}
+
+    with pytest.raises(RuntimeError, match="PaperBroker"):
+        QuantSystem._assert_broker_adapter_allowed(quant, "qmt")
+
+    quant.engine = SimpleNamespace(broker=SimpleNamespace(name="qmt", _trade_mode="SIMULATE"))
+    with pytest.raises(RuntimeError, match="PaperBroker"):
+        QuantSystem._assert_current_broker_safe_for_paper(quant)
+
+
+def test_quant_system_simulate_daily_mode_preserves_explicit_live():
+    from quant.quant_system import _resolve_cli_mode
+
+    assert _resolve_cli_mode(SimpleNamespace(backtest=False, simulate_daily=True, mode=None)) == "paper"
+    assert _resolve_cli_mode(SimpleNamespace(backtest=False, simulate_daily=True, mode="live")) == "live"
+    with pytest.raises(ValueError, match="paper or live"):
+        _resolve_cli_mode(SimpleNamespace(backtest=False, simulate_daily=True, mode="backtest"))
 
 
 def test_quant_system_order_manager_and_fill_handler_use_strategy_resolvers(monkeypatch):
@@ -732,6 +1539,42 @@ def test_live_execution_manager_caps_sell_limit_by_cost_budget():
     ))
 
     assert order_manager.submitted[-1]["price"] == pytest.approx(9.975)
+
+
+def test_live_execution_manager_uses_historical_cost_model_signal_bar():
+    order_manager = RecordingOrderManager()
+    model = {
+        "enabled": True,
+        "markets": ["CN"],
+        "tick_size": 0.01,
+        "half_spread_ticks": 0.5,
+        "min_slippage_bps": 5,
+        "impact_coefficient": 0.15,
+        "volatility_fallback": 0.01,
+    }
+    executor = LiveExecutionManager(
+        order_manager,
+        default_max_cost_bps=30,
+        base_slippage_bps=5,
+        execution_cost_model=model,
+        default_market="CN",
+    )
+    executor.set_signal_bars([{
+        "symbol": "600519",
+        "close": 10.0,
+        "adv20_value": 1_000_000.0,
+        "volatility20": 0.04,
+    }])
+
+    executor.submit_target(TargetOrder(
+        symbol="600519",
+        quantity=1000,
+        side="BUY",
+        reference_price=10.0,
+        strategy_name="DemoStrategy",
+    ))
+
+    assert order_manager.submitted[-1]["price"] == pytest.approx(10.011)
 
 
 def test_live_execution_manager_drops_expired_targets():
@@ -819,7 +1662,7 @@ def test_trading_context_routes_priced_orders_through_live_execution_manager():
     assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
 
 
-def test_trading_context_uses_broker_reference_price_for_market_targets():
+def test_trading_context_uses_strategy_reference_price_for_market_targets():
     from quant.features.trading.engine import Context
 
     class QuoteBroker:
@@ -841,7 +1684,52 @@ def test_trading_context_uses_broker_reference_price_for_market_targets():
     order_id = context.submit_order("600519", 1000, "BUY", "MARKET", 10.0, "DemoStrategy")
 
     assert order_id == "ORD-1"
+    assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
+
+
+def test_trading_context_uses_broker_reference_when_signal_reference_missing():
+    from quant.features.trading.engine import Context
+
+    class QuoteBroker:
+        def get_execution_reference_price(self, symbol, side=None):
+            return {"open_price": 12.0, "last_price": 11.5}
+
+    order_manager = RecordingOrderManager()
+    executor = LiveExecutionManager(order_manager, default_max_cost_bps=25)
+    resolver = ExecutionReferencePriceResolver(mode="live", broker=QuoteBroker())
+    context = Context(
+        portfolio=None,
+        risk_engine=None,
+        event_bus=None,
+        order_manager=order_manager,
+        execution_manager=executor,
+        execution_reference_resolver=resolver,
+    )
+
+    order_id = context.submit_order("600519", 1000, "BUY", "MARKET", None, "DemoStrategy")
+
+    assert order_id == "ORD-1"
     assert order_manager.submitted[-1]["price"] == pytest.approx(12.03)
+
+
+def test_trading_context_uses_signal_bar_reference_when_price_missing():
+    from quant.features.trading.engine import Context
+
+    order_manager = RecordingOrderManager()
+    executor = LiveExecutionManager(order_manager, default_max_cost_bps=25)
+    executor.set_signal_bars([{"symbol": "600519", "close": 10.0}])
+    context = Context(
+        portfolio=None,
+        risk_engine=None,
+        event_bus=None,
+        order_manager=order_manager,
+        execution_manager=executor,
+    )
+
+    order_id = context.submit_order("600519", 1000, "BUY", "MARKET", None, "DemoStrategy")
+
+    assert order_id == "ORD-1"
+    assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
 
 
 def test_trading_context_drops_market_target_when_reference_price_missing():
@@ -863,7 +1751,7 @@ def test_trading_context_drops_market_target_when_reference_price_missing():
         execution_reference_resolver=resolver,
     )
 
-    order_id = context.submit_order("600519", 1000, "BUY", "MARKET", 10.0, "DemoStrategy")
+    order_id = context.submit_order("600519", 1000, "BUY", "MARKET", None, "DemoStrategy")
 
     assert order_id is None
     assert order_manager.submitted == []
@@ -907,7 +1795,10 @@ def test_quant_system_setup_order_manager_creates_live_execution_manager(monkeyp
 
     quant = QuantSystem.__new__(QuantSystem)
     quant.engine = DummyEngine()
-    quant.config = {"live_trading": {"execution": {"max_cost_bps": 18, "deadline": "14:50"}}}
+    quant.config = {
+        "system": {"mode": "live"},
+        "live_trading": {"execution": {"max_cost_bps": 18, "deadline": "14:50"}},
+    }
     quant.live_recorder = None
     quant.logger = SimpleNamespace(info=lambda *args, **kwargs: None)
     monkeypatch.setattr("quant.quant_system.get_tracker", lambda: None)
@@ -916,3 +1807,36 @@ def test_quant_system_setup_order_manager_creates_live_execution_manager(monkeyp
 
     assert quant.engine.execution_manager.default_max_cost_bps == pytest.approx(18)
     assert quant.engine.execution_manager.default_deadline.strftime("%H:%M") == "14:50"
+
+
+def test_quant_system_setup_order_manager_creates_cost_protection_manager_for_paper(monkeypatch):
+    from quant.quant_system import QuantSystem
+
+    class DummyEngine:
+        def __init__(self):
+            self.portfolio = DummyPortfolio()
+            self.risk_engine = ApprovingRisk(True)
+            self.event_bus = EventBus()
+            self.broker = None
+            self._sub_risk_engines = {}
+            self._sub_portfolios = {}
+            self.order_manager = None
+            self.execution_manager = "existing"
+
+        def set_order_manager(self, manager):
+            self.order_manager = manager
+
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.engine = DummyEngine()
+    quant.config = {
+        "system": {"mode": "paper"},
+        "live_trading": {"execution": {"max_cost_bps": 18, "deadline": "14:50"}},
+    }
+    quant.live_recorder = None
+    quant.logger = SimpleNamespace(info=lambda *args, **kwargs: None)
+    monkeypatch.setattr("quant.quant_system.get_tracker", lambda: None)
+
+    QuantSystem._setup_order_manager(quant)
+
+    assert isinstance(quant.engine.execution_manager, LiveExecutionManager)
+    assert quant.engine.execution_manager.default_max_cost_bps == pytest.approx(18)

@@ -12,6 +12,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
 - `PaperBroker`, `FutuProvider`, `QMTBroker` — implement `BrokerAdapter` port
 - `LiveTradingRecorder` — writes daily JSONL live records for strategy signals, broker orders, fills, and strategy snapshots under `infrastructure/var/live_trading/`; performance views are derived with `quant.analytics`
+- `strategy_controls.py` — persists per-strategy live control state under `infrastructure/var/strategy_controls.json`; dashboard actions update this file and never submit broker orders directly
 - `LiveExecutionManager` — converts live target signals into cost-bounded LIMIT orders and drops unfilled orders after the configured intraday deadline
 
 ## 依赖
@@ -44,6 +45,10 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - QMT/MiniQMT uses `userdata_mini_path` for `XtQuantTrader(path, session_id)` and optional `xtquant_path` only for importing the SDK; do not pass the SDK site-packages path as the MiniQMT data path.
 - QMT trade APIs require a `StockAccount` object and `subscribe(account)` before asset, position, order, and trade callbacks are reliable.
 - QMT trade callbacks must pass fills through the registered callback chain so `FillHandler`, strategy attribution, and `LiveTradingRecorder` stay in sync.
+- QMT trade callbacks must include commission; when MiniQMT does not provide a fee field, estimate CN A-share/ETF commission with the configured rate and a CNY 5 minimum so live strategy costs match broker cost basis.
+- QMT `trade_mode=SIMULATE` is not a verified sandbox order route and must refuse `submit_order()`; paper trading should use `PaperBroker`, while QMT order submission is reserved for confirmed `REAL` live runs.
+- QMT `FIX_PRICE` orders must be quantized at the broker boundary to the exchange tick; BUY rounds down and SELL rounds up so cost-bounded limits stay bounded.
+- `PaperBroker` is the only paper-trading execution adapter; it consumes local execution-date bars, applies backtest-style open/LIMIT fill rules, and emits local trade callbacks for the shared fill recorder.
 - Live execution adapters must stay feature-agnostic: strategy-level risk/portfolio ownership is supplied by injected resolvers from the composition root, not by importing `features/`.
 - Cost-bounded live execution must preserve explicit LIMIT prices; only strategy `MARKET + reference price` signals are converted to bounded LIMIT orders.
 - Bare 6-digit CN codes can be ambiguous between stocks and indices (for example `000001`, `000016`, `000905`). Default provider/storage routing treats them as stocks; index ingestion must use `TushareProvider.fetch_index_daily_with_hfq()` and `DuckDBStorage.save_cn_index_bars()`.
@@ -80,3 +85,12 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `DuckDBStorage(use_security_status=True)` attaches the status DB read-only and filters by requested symbols/date range before joining, so backtests do not scan the whole status table unless the requested universe itself is whole-market.
 - `quant.infrastructure.data.fund_classification.classify_cn_fund()` owns deterministic metadata taxonomy for inspection only. Strategy universes must not auto-expand from current broad ETF taxonomy when the strategy is promoted.
 - `quant.infrastructure.research.cn_etf_universe` owns `audited_stable_etf_registry_v1`. ETF category strategies that use representative buckets must consume this user-approved registry and report `registered_universe_counts`; adding a new ETF category requires explicit audit and registry update.
+
+## Recent Additions
+
+- `execution/strategy_controls.py` persists per-strategy and per-mode control state in `var/strategy_controls.json`; dashboard control actions must append an audit row and must not submit broker orders directly.
+- `execution/strategy_ledger.py` owns strategy operations ledgers, dashboard audit JSONL, mode-scoped liquidation plans, and optional broker-history reconciliation after a live restart.
+- `execution/strategy_mode_records.py` owns canonical append-only `strategy_modes/<mode>/<strategy_name>/` records for operations, signals, orders, fills, and snapshots; dashboard reads should materialize legacy daily JSONL into this source and then derive mode state only from it.
+- `execution/cn_trading_calendar.py` owns CN trading-calendar resolution for live/paper schedulers, combining Tushare `trade_cal` cache with local DuckDB market/status dates.
+- Broker adapters may expose `get_trade_history(start_date=None, end_date=None)` and `get_order_history(start_date=None, end_date=None)` for restart reconciliation. Implementations must return normalized dict-like records without importing `features/`.
+- Strategy dashboard audit, liquidation plans, and broker-history reconciliation are always scoped by `strategy_name` and `mode`; sharing one real broker account must not merge virtual strategy state.

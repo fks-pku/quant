@@ -100,6 +100,7 @@ while current_date ≤ end:
 
 ## Known Pitfalls
 
+- Backtest signal generation after daily order-manager prep must call runtime `run_daily_snapshots()`; do not split D-close feed, portfolio close-price marking, and `after_trading` into a separate backtest-only path.
 - CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. Research backtests default fund fees to `fund_percent=0.0001` and `fund_min_per_order=0.0`.
 - BUY liquidity control is a global execution invariant: after market impact is applied, final BUY notional must still be `<= max_participation_rate * ADV value` (default research gate 5% ADV). Do not implement per-strategy sizing that assumes this cap can be bypassed.
 - `prev_close_bars` 在 Step ② 中必须在 `prev_bars` 更新之前捕获，否则涨跌停检查会用今日数据
@@ -141,6 +142,7 @@ while current_date ≤ end:
 - SubPortfolio 模式下送股 synthetic fill 必须只分发给对应策略，不能广播给所有持有同一 symbol 的策略
 - 严格回测报告使用的日线 provider 若底层存在 `corp_actions.cn_dividends`，必须暴露 `get_dividend_for_date()`；否则 cash dividend、CN 红利税和送股 synthetic fill 都不会进入回测
 - A 股严格回测若启用冲击成本模型，provider 必须提供模型字段（如 `adv20_value`、`volatility20`），并在报告 constraints 中写清 `execution_cost_model`
+- CN 日线启用 `execution_cost_model` 的 MARKET 信号必须在 D 日提交阶段冻结为成本保护 LIMIT；其他市场需显式 `market_orders_as_limits: true`；限价只使用 D 日可知 reference/ADV/volatility，D+1 数据只能决定可成交性和成交结果
 - 交易级统计的 round-trip PnL 必须包含按 FIFO 分摊的 BUY 佣金；SELL trade 的 `pnl` 只覆盖卖出侧佣金
 - `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询
 - Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）

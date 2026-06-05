@@ -22,7 +22,6 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 | research | `quant/features/research/` | 自动策略研究管线 | `quant/features/research/AGENTS.md` |
 | shared | `quant/shared/` | 跨模块工具 (logger, config) | `quant/shared/AGENTS.md` |
 | api | `quant/api/` | Flask REST 路由层 | `quant/api/AGENTS.md` |
-| frontend | `quant/frontend/` | React Dashboard UI | `quant/frontend/AGENTS.md` |
 | tests | `quant/tests/` | 测试套件 (~1100 collected tests) | `quant/tests/AGENTS.md` |
 | scripts | `quant/scripts/` | CLI 工具脚本 | — |
 
@@ -40,6 +39,7 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 
 ```bash
 python quant/api_server.py                                     # API 服务
+python quant/scripts/strategy_dashboard_server.py              # 策略管理看板
 python -m pytest quant/tests/ -q                               # 测试
 python quant/backtest_runner.py --strategy <RegisteredStrategy> ...  # CLI 回测
 python quant/quant_system.py --mode paper                      # 实盘/模拟

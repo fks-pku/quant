@@ -13,6 +13,7 @@ import pandas as pd
 from quant.analytics.performance import calculate_performance_metrics, calculate_round_trip_pnls
 from quant.domain.models.trade import Trade
 from quant.domain.models.order import Order
+from quant.infrastructure.execution.strategy_mode_records import StrategyModeRecordStore
 from quant.shared.utils.logger import setup_logger
 
 
@@ -34,6 +35,8 @@ def get_live_recorder() -> "LiveTradingRecorder":
 class LiveTradingRecorder:
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir is not None else _DEFAULT_BASE_DIR
+        self._mode = "paper" if self.base_dir.name == "paper_trading" else "live"
+        self._mode_store = StrategyModeRecordStore(self.base_dir.parent / "strategy_modes")
         self._lock = threading.RLock()
         self.logger = setup_logger("LiveTradingRecorder")
 
@@ -181,8 +184,25 @@ class LiveTradingRecorder:
         return records
 
     def get_strategy_performance(self, strategy_name: str, days: int = 365) -> Dict[str, Any]:
-        fills = self._read_all("fills", strategy_name, days)
-        snapshots = self._read_all("snapshots", strategy_name, days)
+        return self.get_strategy_performance_from_records(
+            strategy_name,
+            {
+                "fills": self._read_all("fills", strategy_name, days),
+                "orders": self._read_all("orders", strategy_name, days),
+                "signals": self._read_all("signals", strategy_name, days),
+                "snapshots": self._read_all("snapshots", strategy_name, days),
+            },
+        )
+
+    def get_strategy_performance_from_records(
+        self,
+        strategy_name: str,
+        records: Dict[str, Iterable[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        fills = list(records.get("fills", []))
+        orders = list(records.get("orders", []))
+        signals = list(records.get("signals", []))
+        snapshots = list(records.get("snapshots", []))
         pnl_curve = self._latest_daily_snapshots(snapshots)
         latest_snapshot = pnl_curve[-1] if pnl_curve else {}
         trades = self._trades_from_fills(fills)
@@ -194,8 +214,11 @@ class LiveTradingRecorder:
         realized_pnl = sum(round_trip_pnls)
         unrealized = float(latest_snapshot.get("unrealized_pnl", 0.0) or 0.0)
         closed_trades = self._closed_trades(fills)
+        slippage = self._slippage_stats(fills, orders, signals)
         return {
             "strategy_name": strategy_name,
+            "total_nav": round(float(latest_snapshot.get("nav", 0.0) or 0.0), 4),
+            "cash": round(float(latest_snapshot.get("cash", 0.0) or 0.0), 4),
             "total_pnl": round(realized_pnl + unrealized, 4),
             "realized_pnl": round(realized_pnl, 4),
             "unrealized_pnl": round(unrealized, 4),
@@ -211,6 +234,24 @@ class LiveTradingRecorder:
             "pnl_curve": pnl_curve,
             "recent_trades": closed_trades[-20:],
             "latest_snapshot": latest_snapshot,
+            **slippage,
+        }
+
+    def get_live_summary(self, days: int = 365) -> Dict[str, Any]:
+        fills = self._read_all("fills", None, days)
+        orders = self._read_all("orders", None, days)
+        signals = self._read_all("signals", None, days)
+        snapshots = self._read_all("snapshots", None, days)
+        latest_by_strategy: Dict[str, Dict[str, Any]] = {}
+        for snapshot in sorted(snapshots, key=lambda item: item.get("timestamp") or item.get("date") or ""):
+            strategy_name = str(snapshot.get("strategy_name") or "default")
+            latest_by_strategy[strategy_name] = snapshot
+        slippage = self._slippage_stats(fills, orders, signals)
+        return {
+            "total_nav": round(sum(float(item.get("nav", 0.0) or 0.0) for item in latest_by_strategy.values()), 4),
+            "cash": round(sum(float(item.get("cash", 0.0) or 0.0) for item in latest_by_strategy.values()), 4),
+            "strategy_count": len(latest_by_strategy),
+            **slippage,
         }
 
     def _append(self, kind: str, timestamp: datetime, record: Dict[str, Any]) -> None:
@@ -220,11 +261,29 @@ class LiveTradingRecorder:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            strategy_name = str(payload.get("strategy_name") or "default")
+            self._mode_store.append(
+                kind,
+                mode=self._mode,
+                strategy_name=strategy_name,
+                record=payload,
+                unique=True,
+            )
+            if kind == "snapshots":
+                self._mode_store.append_operation(
+                    mode=self._mode,
+                    strategy_name=strategy_name,
+                    action="daily_snapshot",
+                    timestamp=payload.get("timestamp") or payload.get("date"),
+                    source="recorder",
+                    payload={"snapshot": payload},
+                    unique=True,
+                )
 
     def _path(self, kind: str, trading_date: str) -> Path:
         return self.base_dir / trading_date / f"{kind}.jsonl"
 
-    def _read_all(self, kind: str, strategy_name: str, days: int) -> List[Dict[str, Any]]:
+    def _read_all(self, kind: str, strategy_name: Optional[str], days: int) -> List[Dict[str, Any]]:
         if not self.base_dir.exists():
             return []
         records: List[Dict[str, Any]] = []
@@ -338,6 +397,70 @@ class LiveTradingRecorder:
                 else:
                     symbol_lots[0][0] = lot_qty
         return trades
+
+    def _slippage_stats(
+        self,
+        fills: Iterable[Dict[str, Any]],
+        orders: Iterable[Dict[str, Any]],
+        signals: Iterable[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        references: Dict[str, float] = {}
+        self._add_reference_prices(references, signals)
+        self._add_reference_prices(references, orders)
+        samples: List[float] = []
+        weighted_sum = 0.0
+        weight_total = 0.0
+        for fill in fills:
+            order_id = str(fill.get("order_id") or "")
+            reference_price = references.get(order_id)
+            fill_price = self._positive_float(fill.get("price"))
+            quantity = self._positive_float(fill.get("quantity"))
+            side = str(fill.get("side") or "").upper()
+            if not order_id or reference_price is None or fill_price is None or quantity is None:
+                continue
+            if side == "BUY":
+                slippage_bps = (fill_price - reference_price) / reference_price * 10000.0
+            elif side == "SELL":
+                slippage_bps = (reference_price - fill_price) / reference_price * 10000.0
+            else:
+                continue
+            weight = abs(quantity * fill_price)
+            samples.append(slippage_bps)
+            if weight > 0:
+                weighted_sum += slippage_bps * weight
+                weight_total += weight
+        return {
+            "median_slippage_bps": round(self._median(samples), 6) if samples else None,
+            "weighted_avg_slippage_bps": round(weighted_sum / weight_total, 6) if weight_total > 0 else None,
+            "slippage_sample_count": len(samples),
+        }
+
+    def _add_reference_prices(self, references: Dict[str, float], records: Iterable[Dict[str, Any]]) -> None:
+        for record in records:
+            price = self._positive_float(record.get("price"))
+            if price is None:
+                continue
+            for key in ("order_id", "broker_order_id"):
+                order_id = str(record.get(key) or "")
+                if order_id:
+                    references[order_id] = price
+
+    @staticmethod
+    def _positive_float(value: Any) -> Optional[float]:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    @staticmethod
+    def _median(values: List[float]) -> float:
+        ordered = sorted(values)
+        count = len(ordered)
+        middle = count // 2
+        if count % 2:
+            return ordered[middle]
+        return (ordered[middle - 1] + ordered[middle]) / 2.0
 
     def _equity_curve_from_snapshots(self, snapshots: Iterable[Dict[str, Any]]) -> pd.Series:
         values = []

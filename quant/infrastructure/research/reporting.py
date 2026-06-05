@@ -953,11 +953,17 @@ def _cost_capacity_summary_table(data: Dict[str, Any], rows: List[Dict[str, Any]
     strict = _strict_backtest_for_report(data, row)
     diagnostics = strict.get("diagnostics") or {}
     capacity = strict.get("capacity") or {}
+    execution_cost_bps = strict.get("execution_cost_bps") or {}
     values = [
         ("显式佣金税费", _money(diagnostics.get("total_commission")), "只含佣金/税费；滑点和冲击体现在成交价。"),
         ("成本拖累", _pct(_cost_drag_value(diagnostics)), "显式成本相对交易毛 PnL 的拖累。"),
         ("ADV 参与率", f"p95={_pct(capacity.get('p95_adv_participation'))}; max={_pct(capacity.get('max_adv_participation'))}", "当前 checklist 使用单笔 max ADV <= 5%。"),
         ("估算资金容量", _capacity_at_adv_limit(capacity, strict, 0.05), "按最大 ADV 参与率反推，超过后单笔订单会触及 5% ADV。"),
+        (
+            "有效成本 BPS",
+            f"weighted={_fmt(execution_cost_bps.get('weighted_effective_bps'))} bps; median={_fmt(execution_cost_bps.get('median_effective_bps'))} bps",
+            "来自执行观测的 slippage_bps + impact_bps，不含显式佣金/税费。",
+        ),
         ("冲击成本", f"max impact={_fmt(capacity.get('max_impact_bps'))} bps", "来自执行冲击模型。"),
     ]
     body = "".join(

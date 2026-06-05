@@ -5,6 +5,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime, time
 from typing import Any, Callable, Dict, Optional, Union
 
+from quant.runtime.execution_cost import (
+    bar_close_price,
+    bar_symbol,
+    estimate_cost_protection_limit,
+    infer_market,
+)
+
 
 @dataclass(frozen=True)
 class TargetOrder:
@@ -15,6 +22,8 @@ class TargetOrder:
     strategy_name: Optional[str] = None
     max_cost_bps: Optional[float] = None
     deadline: Optional[datetime] = None
+    signal_bar: Optional[Any] = None
+    market: Optional[str] = None
 
 
 @dataclass
@@ -31,14 +40,21 @@ class LiveExecutionManager:
         self,
         order_manager: Any,
         default_max_cost_bps: float = 30.0,
+        base_slippage_bps: float = 5.0,
+        execution_cost_model: Optional[Dict[str, Any]] = None,
+        default_market: Optional[str] = None,
         default_deadline: Optional[Union[str, time]] = None,
         clock: Optional[Callable[[], datetime]] = None,
     ):
         self.order_manager = order_manager
         self.default_max_cost_bps = float(default_max_cost_bps)
+        self.base_slippage_bps = float(base_slippage_bps or 0.0)
+        self.execution_cost_model = execution_cost_model
+        self.default_market = default_market
         self.default_deadline = self._parse_deadline(default_deadline)
         self._clock = clock or datetime.now
         self._targets: Dict[str, TargetState] = {}
+        self._signal_bars: Dict[str, Any] = {}
         self._lock = threading.RLock()
 
     def submit_target_order(
@@ -59,6 +75,7 @@ class LiveExecutionManager:
 
     def submit_target(self, target: TargetOrder) -> Optional[str]:
         target = self._with_default_deadline(target)
+        target = self._with_signal_context(target)
         self._validate_target(target)
         limit_price = self._cost_limit_price(target)
         order_id = self.order_manager.submit_order(
@@ -79,6 +96,23 @@ class LiveExecutionManager:
                     submitted_at=self._clock(),
                 )
         return order_id
+
+    def set_signal_bars(self, bars: Any, trading_date: Optional[Any] = None) -> None:
+        records = bars if isinstance(bars, list) else list(bars or [])
+        mapped: Dict[str, Any] = {}
+        for bar in records:
+            symbol = bar_symbol(bar)
+            if symbol:
+                mapped[symbol] = bar
+        with self._lock:
+            self._signal_bars = mapped
+
+    def get_signal_reference_price(self, symbol: str) -> Optional[float]:
+        with self._lock:
+            bar = self._signal_bars.get(symbol)
+        if bar is None:
+            return None
+        return bar_close_price(bar)
 
     def drop_expired_targets(self, now: Optional[datetime] = None) -> list:
         current_time = now or self._clock()
@@ -106,13 +140,22 @@ class LiveExecutionManager:
             return self._targets.get(order_id)
 
     def _cost_limit_price(self, target: TargetOrder) -> float:
-        bps = self.default_max_cost_bps if target.max_cost_bps is None else float(target.max_cost_bps)
-        side = target.side.upper()
-        if side == "BUY":
-            return target.reference_price * (1 + bps / 10000.0)
-        if side == "SELL":
-            return target.reference_price * (1 - bps / 10000.0)
-        raise ValueError(f"Unsupported order side: {target.side}")
+        estimate = estimate_cost_protection_limit(
+            symbol=target.symbol,
+            side=target.side,
+            quantity=target.quantity,
+            reference_price=target.reference_price,
+            market=target.market or self.default_market or infer_market(target.symbol),
+            signal_bar=target.signal_bar or {},
+            base_slippage_bps=self.base_slippage_bps,
+            execution_cost_model=self.execution_cost_model,
+            fallback_max_cost_bps=(
+                self.default_max_cost_bps
+                if target.max_cost_bps is None
+                else float(target.max_cost_bps)
+            ),
+        )
+        return estimate.limit_price
 
     def _validate_target(self, target: TargetOrder) -> None:
         if target.quantity <= 0:
@@ -128,6 +171,14 @@ class LiveExecutionManager:
         current_time = self._clock()
         deadline = datetime.combine(current_time.date(), self.default_deadline)
         return replace(target, deadline=deadline)
+
+    def _with_signal_context(self, target: TargetOrder) -> TargetOrder:
+        signal_bar = target.signal_bar
+        if signal_bar is None:
+            with self._lock:
+                signal_bar = self._signal_bars.get(target.symbol)
+        market = target.market or self.default_market or infer_market(target.symbol)
+        return replace(target, signal_bar=signal_bar, market=market)
 
     def _parse_deadline(self, deadline: Optional[Union[str, time]]) -> Optional[time]:
         if deadline is None or isinstance(deadline, time):

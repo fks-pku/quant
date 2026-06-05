@@ -151,6 +151,7 @@ class FillHandler:
                 side=fill.side,
                 qty=fill.quantity,
                 price=fill.price,
+                commission=fill.commission,
             )
         except Exception as e:
             self.logger.error(f"Failed to update strategy tracker: {e}")

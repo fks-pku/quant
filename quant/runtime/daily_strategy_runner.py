@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Iterable, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 
 from quant.runtime.strategy_cycle import after_trading, before_trading, feed_strategy_bars
 
@@ -99,36 +99,99 @@ def run_daily_snapshot(
     *,
     strict: bool = True,
     call_before: bool = False,
+    after_feed: Optional[Callable[[DailySnapshot], None]] = None,
 ) -> DailyRunResult:
     """Run a strategy once on a same-date daily snapshot."""
 
-    symbols = getattr(strategy, "symbols", None) or ()
+    results = run_daily_snapshots(
+        [strategy],
+        trading_date,
+        bars,
+        strict=strict,
+        call_before=call_before,
+        after_feed=after_feed,
+    )
+    return results[0][1]
+
+
+def run_daily_snapshots(
+    strategies: Sequence[Any],
+    trading_date: Union[date, datetime, str],
+    bars: Iterable[Any],
+    *,
+    strict: bool = True,
+    call_before: bool = False,
+    after_feed: Optional[Callable[[DailySnapshot], None]] = None,
+) -> list[tuple[Any, DailyRunResult]]:
+    """Run strategies on one shared same-date daily snapshot."""
+
+    materialized_bars = tuple(bars)
+    normalized_date = _coerce_date(trading_date)
+    if normalized_date is None:
+        raise ValueError(f"Cannot coerce trading_date to date: {trading_date!r}")
+
+    full_snapshot = build_daily_snapshot(materialized_bars, normalized_date)
+    runnable: list[tuple[int, Any, DailySnapshot]] = []
+    results: list[Optional[tuple[Any, DailyRunResult]]] = [None] * len(strategies)
+
+    for index, strategy in enumerate(strategies):
+        snapshot = _build_strategy_snapshot(strategy, normalized_date, materialized_bars)
+        if strict and (snapshot.missing_symbols or snapshot.stale_symbols):
+            results[index] = (
+                strategy,
+                DailyRunResult(
+                    trading_date=snapshot.trading_date,
+                    ran=False,
+                    bar_count=len(snapshot.bars),
+                    missing_symbols=snapshot.missing_symbols,
+                    stale_symbols=snapshot.stale_symbols,
+                    duplicate_symbols=snapshot.duplicate_symbols,
+                ),
+            )
+            continue
+        runnable.append((index, strategy, snapshot))
+
+    for _, strategy, snapshot in runnable:
+        if call_before:
+            before_trading(strategy, snapshot.trading_date)
+        feed_strategy_bars(strategy, _ordered_bars(snapshot))
+
+    if runnable and after_feed is not None:
+        after_feed(full_snapshot)
+
+    for index, strategy, snapshot in runnable:
+        after_trading(strategy, snapshot.trading_date)
+        results[index] = (
+            strategy,
+            DailyRunResult(
+                trading_date=snapshot.trading_date,
+                ran=True,
+                bar_count=len(snapshot.bars),
+                missing_symbols=snapshot.missing_symbols,
+                stale_symbols=snapshot.stale_symbols,
+                duplicate_symbols=snapshot.duplicate_symbols,
+            ),
+        )
+
+    return [result for result in results if result is not None]
+
+
+def _build_strategy_snapshot(
+    strategy: Any,
+    trading_date: Union[date, datetime, str],
+    bars: Iterable[Any],
+) -> DailySnapshot:
+    """Build a daily snapshot using a strategy's declared required symbols."""
+
+    symbols = getattr(strategy, "required_snapshot_symbols", None)
+    if callable(symbols):
+        symbols = symbols()
+    if symbols is None:
+        symbols = getattr(strategy, "symbols", None) or ()
     if isinstance(symbols, str):
         symbols = (symbols,)
     required_symbols = tuple(str(symbol) for symbol in symbols if symbol)
-    snapshot = build_daily_snapshot(bars, trading_date, required_symbols)
-    if strict and (snapshot.missing_symbols or snapshot.stale_symbols):
-        return DailyRunResult(
-            trading_date=snapshot.trading_date,
-            ran=False,
-            bar_count=len(snapshot.bars),
-            missing_symbols=snapshot.missing_symbols,
-            stale_symbols=snapshot.stale_symbols,
-            duplicate_symbols=snapshot.duplicate_symbols,
-        )
-
-    if call_before:
-        before_trading(strategy, snapshot.trading_date)
-    feed_strategy_bars(strategy, _ordered_bars(snapshot))
-    after_trading(strategy, snapshot.trading_date)
-    return DailyRunResult(
-        trading_date=snapshot.trading_date,
-        ran=True,
-        bar_count=len(snapshot.bars),
-        missing_symbols=snapshot.missing_symbols,
-        stale_symbols=snapshot.stale_symbols,
-        duplicate_symbols=snapshot.duplicate_symbols,
-    )
+    return build_daily_snapshot(bars, trading_date, required_symbols)
 
 
 def _ordered_bars(snapshot: DailySnapshot) -> list[Any]:

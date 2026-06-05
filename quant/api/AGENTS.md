@@ -8,7 +8,7 @@ Flask thin routing layer. Exposes features via REST endpoints. Read-only storage
 
 Blueprints:
 - `backtest_bp` — backtest execution and results
-- `strategies_bp` — strategy registry, parameters, live strategy performance, and daily live record reads
+- `strategies_bp` — strategy registry, parameters, live strategy performance (including cash, total NAV, and slippage metrics), and daily live record reads
 - `positions_bp` — position queries
 - `orders_bp` — order management
 - `system_bp` — system status and control
@@ -30,12 +30,14 @@ Blueprints:
 - All state is in `api/state/runtime.py` — not in global variables
 - Blueprints do not contain business logic — they only serialize/deserialize
 - Research validation is injected into `ResearchEngine`; do not import infrastructure from `features/research`
+- The API root (`/`) returns service metadata JSON. The old React/static UI is removed; local strategy management uses `quant/scripts/strategy_dashboard_server.py`.
 
 ## 修改守则
 
 - Add route: add to appropriate `*_bp.py`
 - Change state management: edit `api/state/runtime.py`
 - Change research report access: edit `api/research_bp.py` helpers around the three stage reports.
+- Change local strategy dashboard behavior: edit `quant/scripts/strategy_dashboard_server.py`, not `api_server.py`.
 
 ## Known Pitfalls
 

@@ -23,3 +23,4 @@ class StrategyContext:
     data_provider: Any = None
     broker: Any = None
     execution_reference_resolver: Any = None
+    signal_gate: Any = None

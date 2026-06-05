@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strategy Operations Dashboard</title>
+  <style>
+    :root {
+      --page: #f5f5f7;
+      --panel: rgba(255, 255, 255, 0.84);
+      --panel-solid: #ffffff;
+      --line: rgba(60, 60, 67, 0.14);
+      --soft: rgba(118, 118, 128, 0.11);
+      --text: #1d1d1f;
+      --subtext: #515154;
+      --muted: #86868b;
+      --blue: #0071e3;
+      --green: #34c759;
+      --red: #ff3b30;
+      --amber: #ff9f0a;
+      --shadow: 0 14px 40px rgba(0, 0, 0, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% -8%, rgba(0, 113, 227, 0.13), transparent 28%),
+        radial-gradient(circle at 82% -4%, rgba(52, 199, 89, 0.10), transparent 25%),
+        linear-gradient(180deg, #fff 0%, var(--page) 42%, #ececf1 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: 0;
+    }
+    a { color: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-rows: 64px minmax(0, 1fr); }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.12);
+      background: rgba(245, 245, 247, 0.78);
+      backdrop-filter: blur(22px) saturate(180%);
+      -webkit-backdrop-filter: blur(22px) saturate(180%);
+    }
+    .brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
+    .logo { font-size: 17px; font-weight: 780; white-space: nowrap; }
+    .logo span { color: var(--blue); }
+    .page-title { color: var(--subtext); font-size: 13px; font-weight: 650; }
+    .top-status { display: flex; align-items: center; gap: 8px; color: var(--subtext); font-size: 12px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--subtext);
+      font-size: 11px;
+      font-weight: 740;
+      white-space: nowrap;
+    }
+    .pill.green { background: rgba(52, 199, 89, 0.14); color: #1d7f38; }
+    .pill.amber { background: rgba(255, 159, 10, 0.16); color: #9a5b00; }
+    .pill.red { background: rgba(255, 59, 48, 0.13); color: #b42318; }
+    .layout { display: grid; grid-template-columns: 316px minmax(0, 1fr); min-height: calc(100vh - 64px); }
+    .sidebar {
+      padding: 22px 18px;
+      border-right: 1px solid rgba(60, 60, 67, 0.12);
+      background: rgba(255, 255, 255, 0.54);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+    .sidebar-title { margin: 4px 4px 12px; color: var(--muted); font-size: 12px; font-weight: 720; }
+    .strategy-row {
+      display: block;
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 13px 12px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .strategy-row:hover { background: rgba(118, 118, 128, 0.08); }
+    .strategy-row:focus-visible {
+      outline: 2px solid rgba(0, 113, 227, 0.42);
+      outline-offset: 2px;
+    }
+    .strategy-row.active, .strategy-row[aria-selected="true"] {
+      border-color: rgba(0, 113, 227, 0.24);
+      background: rgba(0, 113, 227, 0.10);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .strategy-name { margin-bottom: 9px; font-size: 14px; font-weight: 760; line-height: 1.34; }
+    .strategy-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .main { padding: 26px 30px 36px; overflow: auto; }
+    .header-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .hero, .panel, .tile {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+    .hero { padding: 18px; }
+    .hero-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+    .hero h1 { margin: 0; font-size: 25px; font-weight: 780; line-height: 1.16; }
+    .report-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid rgba(0, 113, 227, 0.22);
+      border-radius: 8px;
+      background: rgba(0, 113, 227, 0.08);
+      color: #0066cc;
+      text-decoration: none;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 780;
+    }
+    .report-link:hover { background: rgba(0, 113, 227, 0.13); }
+    .hero p { margin: 0; max-width: 820px; color: var(--subtext); font-size: 13px; line-height: 1.52; }
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .tile {
+      min-height: 88px;
+      padding: 12px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.05);
+    }
+    .tile span, .metric span, .plan-cell span {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+    .tile b {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 17px;
+      font-weight: 780;
+      line-height: 1.18;
+    }
+    .tile small { color: var(--subtext); font-size: 11px; line-height: 1.35; }
+    .compare {
+      margin-bottom: 18px;
+    }
+    .panel { overflow: hidden; }
+    .panel-header {
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 15px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+      background: rgba(248, 248, 250, 0.92);
+      color: var(--subtext);
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .panel-body { padding: 15px; }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fbfbfd;
+      font-size: 12px;
+    }
+    th {
+      padding: 10px 9px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+      background: rgba(242, 242, 247, 0.92);
+      color: var(--muted);
+      text-align: left;
+      font-size: 11px;
+      font-weight: 760;
+    }
+    td {
+      padding: 10px 9px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.08);
+      color: var(--subtext);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .right { text-align: right; }
+    .green { color: #1d7f38; }
+    .red { color: #b42318; }
+    .amber { color: #9a5b00; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+    }
+    .left-stack, .right-stack { display: contents; }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .metric {
+      min-height: 70px;
+      padding: 10px 11px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fbfbfd;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    }
+    .metric b { font-size: 20px; font-weight: 780; }
+    .chart {
+      height: 310px;
+      padding: 12px;
+      border: 1px solid rgba(60, 60, 67, 0.12);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #fff, #fbfbfd);
+    }
+    svg { display: block; width: 100%; height: 100%; }
+    .axis { stroke: rgba(60, 60, 67, 0.15); }
+    .tick { stroke: rgba(60, 60, 67, 0.22); stroke-width: 1; }
+    .tick-label {
+      fill: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .axis-title {
+      fill: var(--subtext);
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .paper-line { fill: none; stroke: var(--blue); stroke-width: 3; }
+    .live-line { fill: none; stroke: var(--red); stroke-width: 3; }
+    .benchmark-line { fill: none; stroke: var(--green); stroke-width: 3; }
+    .shade { fill: rgba(0, 113, 227, 0.07); }
+    .legend { display: flex; gap: 14px; margin-top: 10px; color: var(--subtext); font-size: 12px; }
+    .legend i { display: inline-block; width: 18px; height: 3px; margin-right: 6px; vertical-align: middle; border-radius: 999px; }
+    .legend .paper { background: var(--blue); }
+    .legend .live { background: var(--red); }
+    .legend .benchmark { background: var(--green); }
+    .status-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid rgba(60, 60, 67, 0.11);
+      border-radius: 8px;
+      background: #fbfbfd;
+    }
+    .status-card b { display: block; margin-bottom: 4px; font-size: 14px; }
+    .status-card p { margin: 0; color: var(--subtext); font-size: 12px; line-height: 1.42; }
+    .action-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+    .button {
+      min-height: 36px;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: rgba(0, 113, 227, 0.10);
+      color: #0066cc;
+      font-size: 12px;
+      font-weight: 780;
+      cursor: pointer;
+    }
+    .button.secondary { background: rgba(118, 118, 128, 0.12); color: var(--text); }
+    .button.danger { background: var(--red); color: #fff; box-shadow: 0 8px 18px rgba(255, 59, 48, 0.20); }
+    .button:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+    .state-flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+    .state-step {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: rgba(118, 118, 128, 0.10);
+      color: var(--muted);
+      text-align: center;
+      font-size: 11px;
+      font-weight: 720;
+    }
+    .state-step.active { background: rgba(255, 159, 10, 0.16); color: #9a5b00; }
+    .state-step.active[data-state="stopped"] { background: rgba(255, 59, 48, 0.13); color: #b42318; }
+    .state-step.active[data-state="running"] { background: rgba(52, 199, 89, 0.14); color: #1d7f38; }
+    .plan-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px 8px 0 0;
+      background: rgba(60, 60, 67, 0.10);
+    }
+    .plan-cell { padding: 10px; background: #fbfbfd; }
+    .plan-cell b { font-size: 15px; font-weight: 780; }
+    .buy { color: #1d7f38; font-weight: 760; }
+    .sell { color: #b42318; font-weight: 760; }
+    @media (max-width: 1160px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid rgba(60, 60, 67, 0.12);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .sidebar-title { grid-column: 1 / -1; margin-bottom: 0; }
+      .strategy-row { margin-bottom: 0; }
+      .header-grid, .workspace { grid-template-columns: 1fr; }
+      .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      .topbar { height: auto; align-items: flex-start; gap: 12px; padding: 14px 16px; flex-direction: column; }
+      .main { padding: 16px; }
+      .hero-head { flex-direction: column; align-items: flex-start; }
+      .sidebar, .overview, .metric-grid, .action-row, .state-flow, .plan-summary { grid-template-columns: 1fr; }
+      .chart { height: 250px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">QUANT<span>SYSTEM</span></div>
+        <div class="page-title">Strategy Operations</div>
+      </div>
+      <div class="top-status">
+        <span>DuckDB D-close pipeline</span>
+        <span class="pill green">API online</span>
+        <span class="pill amber">Manual controls</span>
+      </div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Strategies: select one to inspect operations</div>
+        <button class="strategy-row active" type="button" data-strategy="xueqiu" aria-selected="true">
+          <div class="strategy-name">Xueqiu Small Cap Financial Filter</div>
+          <div class="strategy-meta"><span>Paper active</span><span class="pill amber">Live paused</span></div>
+        </button>
+        <button class="strategy-row" type="button" data-strategy="barbell" aria-selected="false">
+          <div class="strategy-name">A-share Gold Equity Barbell Timing</div>
+          <div class="strategy-meta"><span>Paper active</span><span class="pill red">Stopped</span></div>
+        </button>
+      </aside>
+      <main class="main">
+        <section class="header-grid">
+          <div class="hero">
+            <div class="hero-head">
+              <h1 data-field="strategyTitle">Xueqiu Small Cap Financial Filter</h1>
+              <a class="report-link" data-field="reportLink" href="http://127.0.0.1:8766/quant/features/strategies/xueqiu_small_cap_financial_filter/full_research_report.html" target="_blank" rel="noopener">Full Report</a>
+            </div>
+            <p data-field="strategyCopy">This page is for daily operation: signal intake, mode metrics, live controls, holdings sellability, order flow, and liquidation queue. Research detail lives in the full report.</p>
+          </div>
+        </section>
+
+        <section class="overview">
+          <div class="tile"><span>Live State</span><b data-field="overviewLiveState">Paused</b><small data-field="overviewLiveStateHint">enabled, signals blocked</small></div>
+          <div class="tile"><span>Latest Signal</span><b data-field="overviewLatestSignal">2026-06-02 D-close</b><small data-field="overviewLatestSignalHint">blocked while paused</small></div>
+          <div class="tile"><span>Latest Snapshot</span><b data-field="overviewLatestSnapshot">2026-06-02 15:05</b><small data-field="overviewLatestSnapshotHint">NAV and metrics fresh</small></div>
+          <div class="tile"><span>Open Orders</span><b data-field="overviewOpenOrders">2 paper / 0 live</b><small data-field="overviewOpenOrdersHint">no stuck live orders</small></div>
+          <div class="tile"><span>Live Exposure</span><b data-field="overviewLiveExposure">68.4%</b><small data-field="overviewLiveExposureHint">CNY 46,800 T+1 locked</small></div>
+        </section>
+
+        <section class="panel compare">
+          <div class="panel-header">
+            <span>Live Controls</span>
+            <span>strategy scoped</span>
+          </div>
+          <div class="panel-body">
+            <div class="status-card">
+              <div>
+                <b data-field="controlTitle">Paused: signals blocked</b>
+                <p data-field="controlCopy">Current holdings stay untouched. Metrics, curve, snapshots, and fills continue to update.</p>
+              </div>
+              <span class="pill amber" data-field="controlPill">Paused</span>
+            </div>
+            <div class="action-row">
+              <button class="button" data-action="start" disabled>Start</button>
+              <button class="button secondary" data-action="pause" disabled>Pause</button>
+              <button class="button" data-action="resume">Resume</button>
+              <button class="button danger" data-action="liquidate">Liquidate & Stop</button>
+            </div>
+            <div class="state-flow">
+              <div class="state-step" data-state="stopped">Stopped</div>
+              <div class="state-step" data-state="running">Running</div>
+              <div class="state-step active" data-state="paused">Paused</div>
+              <div class="state-step" data-state="liquidating">Liquidating</div>
+              <div class="state-step" data-state="flat">Flat</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel compare">
+          <div class="panel-header">
+            <span>Mode Metrics</span>
+            <span>same analytics schema, daily update</span>
+          </div>
+          <div class="panel-body">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mode</th>
+                  <th>State</th>
+                  <th class="right">Latest NAV</th>
+                  <th class="right">Total Return</th>
+                  <th class="right">Sharpe</th>
+                  <th class="right">MaxDD</th>
+                  <th class="right">Trades</th>
+                  <th>Last Update</th>
+                </tr>
+              </thead>
+              <tbody data-field="metricsRows">
+                <tr><td>Paper</td><td><span class="pill green">Recording</span></td><td class="right">103,840.00</td><td class="right green">+3.84%</td><td class="right">1.41</td><td class="right red">-1.18%</td><td class="right">14</td><td>2026-06-02 15:05</td></tr>
+                <tr><td>Live</td><td><span class="pill amber">Paused</span></td><td class="right">101,020.40</td><td class="right green">+1.02%</td><td class="right">0.84</td><td class="right red">-0.92%</td><td class="right">6</td><td>2026-06-02 15:05</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="workspace">
+          <div class="left-stack">
+            <div class="panel">
+              <div class="panel-header">
+                <span>Equity Curves</span>
+                <span>paper and live continue during pause/liquidation</span>
+              </div>
+              <div class="panel-body">
+                <div class="chart">
+                  <svg viewBox="0 0 760 280" role="img" aria-label="paper live and CSI 300 benchmark equity curves">
+                    <line class="axis" x1="42" y1="34" x2="42" y2="236"></line>
+                    <line class="axis" x1="42" y1="236" x2="730" y2="236"></line>
+                    <line class="axis" x1="42" y1="34" x2="730" y2="34"></line>
+                    <line class="axis" x1="42" y1="185" x2="730" y2="185"></line>
+                    <line class="axis" x1="42" y1="134" x2="730" y2="134"></line>
+                    <line class="axis" x1="42" y1="83" x2="730" y2="83"></line>
+                    <g aria-hidden="true">
+                      <line class="tick" x1="36" y1="34" x2="42" y2="34"></line>
+                      <line class="tick" x1="36" y1="83" x2="42" y2="83"></line>
+                      <line class="tick" x1="36" y1="134" x2="42" y2="134"></line>
+                      <line class="tick" x1="36" y1="185" x2="42" y2="185"></line>
+                      <line class="tick" x1="36" y1="236" x2="42" y2="236"></line>
+                      <text class="tick-label" x="31" y="38" text-anchor="end">+4%</text>
+                      <text class="tick-label" x="31" y="87" text-anchor="end">+3%</text>
+                      <text class="tick-label" x="31" y="138" text-anchor="end">+2%</text>
+                      <text class="tick-label" x="31" y="189" text-anchor="end">+1%</text>
+                      <text class="tick-label" x="31" y="240" text-anchor="end">0%</text>
+                      <line class="tick" x1="42" y1="236" x2="42" y2="242"></line>
+                      <line class="tick" x1="214" y1="236" x2="214" y2="242"></line>
+                      <line class="tick" x1="386" y1="236" x2="386" y2="242"></line>
+                      <line class="tick" x1="558" y1="236" x2="558" y2="242"></line>
+                      <line class="tick" x1="730" y1="236" x2="730" y2="242"></line>
+                      <text class="tick-label" x="42" y="258" text-anchor="middle">05/20</text>
+                      <text class="tick-label" x="214" y="258" text-anchor="middle">05/26</text>
+                      <text class="tick-label" x="386" y="258" text-anchor="middle">05/29</text>
+                      <text class="tick-label" x="558" y="258" text-anchor="middle">06/01</text>
+                      <text class="tick-label" x="730" y="258" text-anchor="middle">06/02</text>
+                      <text class="axis-title" x="42" y="20" text-anchor="start">Cumulative return</text>
+                      <text class="axis-title" x="386" y="276" text-anchor="middle">Trading date</text>
+                    </g>
+                    <path class="shade" data-field="curveShade" d="M42,220 C90,210 116,214 160,196 C210,174 235,192 286,168 C330,150 350,154 398,134 C444,113 474,126 522,102 C572,78 604,98 642,71 C684,42 704,58 730,48 L730,236 L42,236 Z"></path>
+                    <path class="paper-line" data-field="paperCurve" d="M42,220 C90,210 116,214 160,196 C210,174 235,192 286,168 C330,150 350,154 398,134 C444,113 474,126 522,102 C572,78 604,98 642,71 C684,42 704,58 730,48"></path>
+                    <path class="live-line" data-field="liveCurve" d="M42,218 C94,217 132,211 162,202 C205,189 238,196 286,181 C336,165 362,164 405,152 C450,139 486,145 526,132 C571,116 606,124 646,108 C684,91 704,95 730,88"></path>
+                    <path class="benchmark-line" data-field="benchmarkCurve" d="M42,224 C92,219 124,221 164,210 C212,198 242,205 286,190 C330,177 365,183 402,169 C448,154 486,162 526,150 C570,137 610,144 646,132 C686,119 706,122 730,114"></path>
+                  </svg>
+                </div>
+                <div class="legend"><span><i class="paper"></i>Paper</span><span><i class="live"></i>Live</span><span><i class="benchmark"></i>CSI 300</span></div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <span>Signal And Order Timeline</span>
+                <span>chronological, mode aware</span>
+              </div>
+              <div class="panel-body">
+                <table>
+                  <thead>
+                    <tr><th>Time</th><th>Mode</th><th>Event</th><th>Symbol</th><th class="right">Qty</th><th>Status</th></tr>
+                  </thead>
+                  <tbody data-field="timelineRows">
+                    <tr><td>2026-06-02 08:58</td><td>Live</td><td>signal intake</td><td>-</td><td class="right">-</td><td><span class="pill amber">blocked</span></td></tr>
+                    <tr><td>2026-06-02 09:31</td><td>Paper</td><td class="buy">BUY</td><td>600519</td><td class="right">100</td><td>filled</td></tr>
+                    <tr><td>2026-06-02 09:33</td><td>Paper</td><td class="sell">SELL</td><td>300750</td><td class="right">200</td><td>filled</td></tr>
+                    <tr><td>2026-06-02 09:40</td><td>Paper</td><td class="sell">SELL</td><td>000333</td><td class="right">200</td><td>rejected</td></tr>
+                    <tr><td>2026-06-02 15:05</td><td>Live</td><td>NAV snapshot</td><td>-</td><td class="right">-</td><td>recorded</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="right-stack">
+            <div class="panel">
+              <div class="panel-header">
+                <span>Live Holdings</span>
+                <span>sellability check</span>
+              </div>
+              <div class="panel-body">
+                <div class="metric-grid">
+                  <div class="metric"><span>Market Value</span><b data-field="holdingMarketValue">229,230</b></div>
+                  <div class="metric"><span>Cash</span><b data-field="holdingCash">31,420</b></div>
+                  <div class="metric"><span>Unrealized PnL</span><b class="green" data-field="holdingPnl">+1,020</b></div>
+                  <div class="metric"><span>T+1 Locked</span><b class="amber" data-field="holdingLocked">46,800</b></div>
+                </div>
+                <table>
+                  <thead><tr><th>Symbol</th><th class="right">Qty</th><th class="right">Current Price</th><th class="right">Avg Cost</th><th class="right">Return</th><th class="right">Weight</th><th>Sell State</th></tr></thead>
+                  <tbody data-field="holdingRows">
+                    <tr><td>600519</td><td class="right">100</td><td class="right">1,692.40</td><td class="right">1,654.20</td><td class="right green">+2.31%</td><td class="right">38.2%</td><td>sellable</td></tr>
+                    <tr><td>600036</td><td class="right">300</td><td class="right">39.28</td><td class="right">38.10</td><td class="right green">+3.10%</td><td class="right">30.2%</td><td>sellable</td></tr>
+                    <tr><td>601318</td><td class="right">100</td><td class="right">46.80</td><td class="right">47.35</td><td class="right red">-1.16%</td><td class="right">18.0%</td><td>T+1 locked</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <span>Liquidation Plan</span>
+                <span>only after explicit command</span>
+              </div>
+              <div class="panel-body">
+                <div class="plan-summary">
+                  <div class="plan-cell"><span>Eligible Today</span><b data-field="planEligible">182,430</b></div>
+                  <div class="plan-cell"><span>Carry Next Day</span><b data-field="planCarry">46,800</b></div>
+                  <div class="plan-cell"><span>Metric Policy</span><b data-field="planPolicy">Continue</b></div>
+                </div>
+                <table style="border-radius: 0 0 8px 8px; border-top: 0;">
+                  <thead><tr><th>Holding</th><th class="right">Qty</th><th>Today</th><th>Next</th></tr></thead>
+                  <tbody data-field="planRows">
+                    <tr><td>600519</td><td class="right">100</td><td>sell order</td><td>-</td></tr>
+                    <tr><td>600036</td><td class="right">300</td><td>sell order</td><td>-</td></tr>
+                    <tr><td>601318</td><td class="right">100</td><td>T+1 locked</td><td>queued</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script>
+    const strategyViews = {
+      xueqiu: {
+        title: 'Xueqiu Small Cap Financial Filter',
+        reportHref: 'http://127.0.0.1:8766/quant/features/strategies/xueqiu_small_cap_financial_filter/full_research_report.html',
+        copy: 'This page is for daily operation: signal intake, mode metrics, live controls, holdings sellability, order flow, and liquidation queue. Research detail lives in the full report.',
+        overview: {
+          liveState: 'Paused',
+          liveStateHint: 'enabled, signals blocked',
+          latestSignal: '2026-06-02 D-close',
+          latestSignalHint: 'blocked while paused',
+          latestSnapshot: '2026-06-02 15:05',
+          latestSnapshotHint: 'NAV and metrics fresh',
+          openOrders: '2 paper / 0 live',
+          openOrdersHint: 'no stuck live orders',
+          liveExposure: '68.4%',
+          liveExposureHint: 'CNY 46,800 T+1 locked'
+        },
+        metricsRows: `
+          <tr><td>Paper</td><td><span class="pill green">Recording</span></td><td class="right">103,840.00</td><td class="right green">+3.84%</td><td class="right">1.41</td><td class="right red">-1.18%</td><td class="right">14</td><td>2026-06-02 15:05</td></tr>
+          <tr><td>Live</td><td><span class="pill amber">Paused</span></td><td class="right">101,020.40</td><td class="right green">+1.02%</td><td class="right">0.84</td><td class="right red">-0.92%</td><td class="right">6</td><td>2026-06-02 15:05</td></tr>
+        `,
+        curves: {
+          shade: 'M42,220 C90,210 116,214 160,196 C210,174 235,192 286,168 C330,150 350,154 398,134 C444,113 474,126 522,102 C572,78 604,98 642,71 C684,42 704,58 730,48 L730,236 L42,236 Z',
+          paper: 'M42,220 C90,210 116,214 160,196 C210,174 235,192 286,168 C330,150 350,154 398,134 C444,113 474,126 522,102 C572,78 604,98 642,71 C684,42 704,58 730,48',
+          live: 'M42,218 C94,217 132,211 162,202 C205,189 238,196 286,181 C336,165 362,164 405,152 C450,139 486,145 526,132 C571,116 606,124 646,108 C684,91 704,95 730,88',
+          benchmark: 'M42,224 C92,219 124,221 164,210 C212,198 242,205 286,190 C330,177 365,183 402,169 C448,154 486,162 526,150 C570,137 610,144 646,132 C686,119 706,122 730,114'
+        },
+        timelineRows: `
+          <tr><td>2026-06-02 08:58</td><td>Live</td><td>signal intake</td><td>-</td><td class="right">-</td><td><span class="pill amber">blocked</span></td></tr>
+          <tr><td>2026-06-02 09:31</td><td>Paper</td><td class="buy">BUY</td><td>600519</td><td class="right">100</td><td>filled</td></tr>
+          <tr><td>2026-06-02 09:33</td><td>Paper</td><td class="sell">SELL</td><td>300750</td><td class="right">200</td><td>filled</td></tr>
+          <tr><td>2026-06-02 09:40</td><td>Paper</td><td class="sell">SELL</td><td>000333</td><td class="right">200</td><td>rejected</td></tr>
+          <tr><td>2026-06-02 15:05</td><td>Live</td><td>NAV snapshot</td><td>-</td><td class="right">-</td><td>recorded</td></tr>
+        `,
+        controls: {
+          title: 'Paused: signals blocked',
+          copy: 'Current holdings stay untouched. Metrics, curve, snapshots, and fills continue to update.',
+          pill: 'Paused',
+          pillTone: 'amber',
+          state: 'paused',
+          startDisabled: true,
+          pauseDisabled: true,
+          resumeDisabled: false,
+          liquidateDisabled: false
+        },
+        holdings: {
+          marketValue: '229,230',
+          cash: '31,420',
+          pnl: '+1,020',
+          pnlTone: 'green',
+          locked: '46,800',
+          lockedTone: 'amber',
+          rows: `
+            <tr><td>600519</td><td class="right">100</td><td class="right">1,692.40</td><td class="right">1,654.20</td><td class="right green">+2.31%</td><td class="right">38.2%</td><td>sellable</td></tr>
+            <tr><td>600036</td><td class="right">300</td><td class="right">39.28</td><td class="right">38.10</td><td class="right green">+3.10%</td><td class="right">30.2%</td><td>sellable</td></tr>
+            <tr><td>601318</td><td class="right">100</td><td class="right">46.80</td><td class="right">47.35</td><td class="right red">-1.16%</td><td class="right">18.0%</td><td>T+1 locked</td></tr>
+          `
+        },
+        plan: {
+          eligible: '182,430',
+          carry: '46,800',
+          policy: 'Continue',
+          rows: `
+            <tr><td>600519</td><td class="right">100</td><td>sell order</td><td>-</td></tr>
+            <tr><td>600036</td><td class="right">300</td><td>sell order</td><td>-</td></tr>
+            <tr><td>601318</td><td class="right">100</td><td>T+1 locked</td><td>queued</td></tr>
+          `
+        }
+      },
+      barbell: {
+        title: 'A-share Gold Equity Barbell Timing',
+        reportHref: 'http://127.0.0.1:8766/quant/features/strategies/ashare_gold_equity_barbell_timing/full_research_report.html',
+        copy: 'Operations view for the selected strategy. Paper mode is recording; live trading is stopped until you press Start in Live Controls.',
+        overview: {
+          liveState: 'Stopped',
+          liveStateHint: 'press Start to run live',
+          latestSignal: '2026-06-02 D-close',
+          latestSignalHint: 'paper orders accepted',
+          latestSnapshot: '2026-06-02 15:05',
+          latestSnapshotHint: 'paper metrics fresh',
+          openOrders: '1 paper / 0 live',
+          openOrdersHint: 'live trading stopped',
+          liveExposure: '0.0%',
+          liveExposureHint: 'no live positions'
+        },
+        metricsRows: `
+          <tr><td>Paper</td><td><span class="pill green">Recording</span></td><td class="right">100,930.00</td><td class="right green">+0.93%</td><td class="right">0.71</td><td class="right red">-0.64%</td><td class="right">8</td><td>2026-06-02 15:05</td></tr>
+          <tr><td>Live</td><td><span class="pill red">Stopped</span></td><td class="right">-</td><td class="right">-</td><td class="right">-</td><td class="right">-</td><td class="right">0</td><td>not started</td></tr>
+        `,
+        curves: {
+          shade: 'M42,220 C92,218 125,214 165,202 C212,188 238,199 286,186 C334,172 365,178 402,162 C447,146 486,155 526,142 C572,128 612,134 648,118 C686,101 706,105 730,96 L730,236 L42,236 Z',
+          paper: 'M42,220 C92,218 125,214 165,202 C212,188 238,199 286,186 C334,172 365,178 402,162 C447,146 486,155 526,142 C572,128 612,134 648,118 C686,101 706,105 730,96',
+          live: 'M42,226 C120,226 180,226 250,226 C330,226 390,226 470,226 C550,226 650,226 730,226',
+          benchmark: 'M42,224 C92,219 124,221 164,210 C212,198 242,205 286,190 C330,177 365,183 402,169 C448,154 486,162 526,150 C570,137 610,144 646,132 C686,119 706,122 730,114'
+        },
+        timelineRows: `
+          <tr><td>2026-06-02 08:58</td><td>Live</td><td>signal intake</td><td>-</td><td class="right">-</td><td><span class="pill red">disabled</span></td></tr>
+          <tr><td>2026-06-02 09:30</td><td>Paper</td><td class="buy">BUY</td><td>518880</td><td class="right">2,000</td><td>filled</td></tr>
+          <tr><td>2026-06-02 09:35</td><td>Paper</td><td class="sell">SELL</td><td>510300</td><td class="right">1,000</td><td>filled</td></tr>
+          <tr><td>2026-06-02 15:05</td><td>Paper</td><td>NAV snapshot</td><td>-</td><td class="right">-</td><td>recorded</td></tr>
+        `,
+        controls: {
+          title: 'Stopped: live trading idle',
+          copy: 'Press Start to begin accepting live strategy signals. Paper signals, curve, metrics, and snapshots keep updating while stopped.',
+          pill: 'Stopped',
+          pillTone: 'red',
+          state: 'stopped',
+          startDisabled: false,
+          pauseDisabled: true,
+          resumeDisabled: true,
+          liquidateDisabled: true
+        },
+        holdings: {
+          marketValue: '0',
+          cash: '-',
+          pnl: '0',
+          pnlTone: '',
+          locked: '0',
+          lockedTone: '',
+          rows: '<tr><td colspan="7">No live holdings for this strategy.</td></tr>'
+        },
+        plan: {
+          eligible: '0',
+          carry: '0',
+          policy: 'Continue',
+          rows: '<tr><td colspan="4">No live positions to liquidate.</td></tr>'
+        }
+      }
+    };
+
+    const byField = (name) => document.querySelector(`[data-field="${name}"]`);
+    const setText = (name, value) => {
+      const node = byField(name);
+      if (node) node.textContent = value;
+    };
+    const setRows = (name, value) => {
+      const node = byField(name);
+      if (node) node.innerHTML = value;
+    };
+
+    function selectStrategy(strategyId) {
+      const view = strategyViews[strategyId];
+      if (!view) return;
+
+      document.querySelectorAll('[data-strategy]').forEach((button) => {
+        const selected = button.dataset.strategy === strategyId;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+
+      setText('strategyTitle', view.title);
+      setText('strategyCopy', view.copy);
+      byField('reportLink').href = view.reportHref;
+
+      setText('overviewLiveState', view.overview.liveState);
+      setText('overviewLiveStateHint', view.overview.liveStateHint);
+      setText('overviewLatestSignal', view.overview.latestSignal);
+      setText('overviewLatestSignalHint', view.overview.latestSignalHint);
+      setText('overviewLatestSnapshot', view.overview.latestSnapshot);
+      setText('overviewLatestSnapshotHint', view.overview.latestSnapshotHint);
+      setText('overviewOpenOrders', view.overview.openOrders);
+      setText('overviewOpenOrdersHint', view.overview.openOrdersHint);
+      setText('overviewLiveExposure', view.overview.liveExposure);
+      setText('overviewLiveExposureHint', view.overview.liveExposureHint);
+
+      setRows('metricsRows', view.metricsRows);
+      byField('curveShade').setAttribute('d', view.curves.shade);
+      byField('paperCurve').setAttribute('d', view.curves.paper);
+      byField('liveCurve').setAttribute('d', view.curves.live);
+      byField('benchmarkCurve').setAttribute('d', view.curves.benchmark);
+      setRows('timelineRows', view.timelineRows);
+
+      setText('controlTitle', view.controls.title);
+      setText('controlCopy', view.controls.copy);
+      const controlPill = byField('controlPill');
+      controlPill.textContent = view.controls.pill;
+      controlPill.className = `pill ${view.controls.pillTone}`.trim();
+      document.querySelector('[data-action="start"]').disabled = view.controls.startDisabled;
+      document.querySelector('[data-action="pause"]').disabled = view.controls.pauseDisabled;
+      document.querySelector('[data-action="resume"]').disabled = view.controls.resumeDisabled;
+      document.querySelector('[data-action="liquidate"]').disabled = view.controls.liquidateDisabled;
+      document.querySelectorAll('[data-state]').forEach((step) => {
+        step.classList.toggle('active', step.dataset.state === view.controls.state);
+      });
+
+      setText('holdingMarketValue', view.holdings.marketValue);
+      setText('holdingCash', view.holdings.cash);
+      setText('holdingPnl', view.holdings.pnl);
+      byField('holdingPnl').className = view.holdings.pnlTone;
+      setText('holdingLocked', view.holdings.locked);
+      byField('holdingLocked').className = view.holdings.lockedTone;
+      setRows('holdingRows', view.holdings.rows);
+
+      setText('planEligible', view.plan.eligible);
+      setText('planCarry', view.plan.carry);
+      setText('planPolicy', view.plan.policy);
+      setRows('planRows', view.plan.rows);
+    }
+
+    document.querySelectorAll('[data-strategy]').forEach((button) => {
+      button.addEventListener('click', () => selectStrategy(button.dataset.strategy));
+    });
+
+    selectStrategy('xueqiu');
+  </script>
+</body>
+</html>

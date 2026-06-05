@@ -62,6 +62,23 @@ def test_report_id_ignores_none_run_id():
     assert report_id_for_result(data, []) == "research_pipeline"
 
 
+def test_execution_cost_bps_diagnostics_weighted_and_median():
+    from quant.api.research_bp import _execution_cost_bps_diagnostics
+
+    result = _execution_cost_bps_diagnostics(
+        [
+            {"notional": 100, "slippage_bps": 10, "impact_bps": 5},
+            {"notional": 300, "slippage_bps": 20, "impact_bps": 1},
+        ]
+    )
+
+    assert result["observations"] == 2
+    assert result["weighted_effective_bps"] == 19.5
+    assert result["median_effective_bps"] == 18.0
+    assert result["weighted_slippage_bps"] == 17.5
+    assert result["median_impact_bps"] == 3.0
+
+
 def test_full_report_combines_all_stage_reports_with_metric_checklist():
     result = {
         "run_id": "full_contract",
@@ -118,6 +135,10 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
                         "cn_lot_size": 100,
                     },
                     "capacity": {"max_adv_participation": 0.04},
+                    "execution_cost_bps": {
+                        "weighted_effective_bps": 27.43756599176068,
+                        "median_effective_bps": 32.195233221989454,
+                    },
                 },
                 "walkforward": {
                     "verdict": "fail",
@@ -175,6 +196,7 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
     assert "Backtest Configuration" in html
     assert "A 股示例默认 500000 CNY" not in html
     assert "研究默认由 config/research.yaml 的 default_initial_cash 控制" in html
+    assert "<td>有效成本 BPS</td><td>weighted=27.4376 bps; median=32.1952 bps</td>" in html
     assert "Data Quality Audit" in html
     assert "Drawdown Episodes" in html
     assert "Cost Decomposition" in html

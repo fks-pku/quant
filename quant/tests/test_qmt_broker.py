@@ -8,6 +8,7 @@ from quant.domain.models.order import Order, OrderSide, OrderType
 from quant.infrastructure.execution.brokers.qmt import (
     QMTBroker,
     _cn_symbol_to_qmt,
+    _normalize_qmt_limit_price,
     _qmt_trade_callback,
     _qmt_symbol_to_cn,
 )
@@ -37,6 +38,18 @@ class FakePosition:
     avg_price = 101.5
     market_value = 21_000.0
     position_profit = 700.0
+
+
+class FakeTrade:
+    order_id = 9001
+    trade_id = "T-9001-1"
+    stock_code = "600519.SH"
+    traded_price = 101.5
+    traded_volume = 100
+    order_type = 23
+    commission = 1.25
+    traded_time = "2026-06-03 09:35:00"
+    strategy_name = "DemoStrategy"
 
 
 class FakeTrader:
@@ -85,6 +98,10 @@ class FakeTrader:
     def query_stock_positions(self, account):
         self.positions_account = account
         return [FakePosition()]
+
+    def query_stock_trades(self, account):
+        self.trades_account = account
+        return [FakeTrade()]
 
 
 @pytest.fixture(autouse=True)
@@ -139,6 +156,14 @@ def test_qmt_symbol_conversion_accepts_internal_and_qmt_formats():
     assert _qmt_symbol_to_cn("000001.SZ") == "000001"
 
 
+def test_qmt_limit_price_rounds_to_exchange_tick_preserving_side_bound():
+    assert _normalize_qmt_limit_price("518880.SH", OrderSide.BUY, 9.307839999999999) == pytest.approx(9.307)
+    assert _normalize_qmt_limit_price("518880.SH", OrderSide.SELL, 9.307839999999999) == pytest.approx(9.308)
+    assert _normalize_qmt_limit_price("159949.SZ", OrderSide.BUY, 2.000985) == pytest.approx(2.000)
+    assert _normalize_qmt_limit_price("600519.SH", OrderSide.BUY, 101.239) == pytest.approx(101.23)
+    assert _normalize_qmt_limit_price("600519.SH", OrderSide.SELL, 101.231) == pytest.approx(101.24)
+
+
 def test_connect_registers_callback_and_subscribes_stock_account():
     broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456", account_type="STOCK")
 
@@ -154,7 +179,7 @@ def test_connect_registers_callback_and_subscribes_stock_account():
 
 
 def test_submit_order_uses_stock_account_and_xtconstant_values():
-    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456", trade_mode="REAL")
     broker.connect()
 
     order_id = broker.submit_order(
@@ -181,6 +206,53 @@ def test_submit_order_uses_stock_account_and_xtconstant_values():
     assert remark == ""
 
 
+def test_submit_order_normalizes_limit_price_before_qmt_call():
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456", trade_mode="REAL")
+    broker.connect()
+
+    broker.submit_order(
+        Order(
+            symbol="518880.SH",
+            quantity=1000,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            price=9.307839999999999,
+            strategy_name="barbell",
+        )
+    )
+
+    trader = FakeTrader.instances[-1]
+    account, stock_code, order_type, volume, price_type, price, strategy_name, remark = trader.orders[-1]
+    assert isinstance(account, FakeStockAccount)
+    assert stock_code == "518880.SH"
+    assert order_type == 23
+    assert volume == 1000
+    assert price_type == 11
+    assert price == pytest.approx(9.307)
+    assert strategy_name == "barbell"
+    assert remark == ""
+
+
+def test_qmt_simulate_trade_mode_refuses_order_submission():
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456", trade_mode="SIMULATE")
+    broker.connect()
+
+    with pytest.raises(RuntimeError, match="not a verified sandbox"):
+        broker.submit_order(
+            Order(
+                symbol="600519.SH",
+                quantity=200,
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                price=101.23,
+                strategy_name="demo",
+            )
+        )
+
+    trader = FakeTrader.instances[-1]
+    assert trader.orders == []
+
+
 def test_queries_map_xtquant_asset_and_position_objects():
     broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
     broker.connect()
@@ -203,6 +275,27 @@ def test_queries_map_xtquant_asset_and_position_objects():
     assert positions[0].unrealized_pnl == pytest.approx(700.0)
 
 
+def test_qmt_trade_history_maps_xtquant_trade_records():
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
+    broker.connect()
+
+    trades = broker.get_trade_history()
+
+    trader = FakeTrader.instances[-1]
+    assert isinstance(trader.trades_account, FakeStockAccount)
+    assert trades == [{
+        "order_id": "9001",
+        "trade_id": "T-9001-1",
+        "timestamp": "2026-06-03T09:35:00",
+        "strategy_name": "DemoStrategy",
+        "symbol": "600519",
+        "side": "BUY",
+        "quantity": 100.0,
+        "price": 101.5,
+        "commission": 1.25,
+    }]
+
+
 def test_qmt_quote_reference_price_prefers_open_price():
     broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
     broker.connect()
@@ -216,7 +309,7 @@ def test_qmt_quote_reference_price_prefers_open_price():
 
 
 def test_qmt_trade_callback_notifies_registered_fill_callback():
-    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456", trade_mode="REAL")
     broker.connect()
     seen = []
     broker.register_trade_callback(lambda **kwargs: seen.append(kwargs))
@@ -248,3 +341,51 @@ def test_qmt_trade_callback_notifies_registered_fill_callback():
     assert seen[-1]["side"] == "BUY"
     assert seen[-1]["quantity"] == pytest.approx(100)
     assert seen[-1]["price"] == pytest.approx(101.5)
+
+
+def test_qmt_trade_callback_estimates_cn_etf_minimum_commission():
+    broker = QMTBroker(
+        userdata_mini_path="D:/QMT/userdata_mini",
+        account="123456",
+        trade_mode="REAL",
+        commission_config={"CN": {"type": "cn_realistic"}},
+    )
+    broker.connect()
+    seen = []
+    broker.register_trade_callback(lambda **kwargs: seen.append(kwargs))
+
+    broker.submit_order(
+        Order(
+            symbol="518880",
+            quantity=1000,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            price=9.307,
+            strategy_name="DemoStrategy",
+        )
+    )
+
+    _qmt_trade_callback(
+        broker,
+        SimpleNamespace(
+            order_id=9001,
+            traded_price=9.302,
+            traded_volume=1000,
+            stock_code="518880.SH",
+        ),
+    )
+
+    assert seen[-1]["symbol"] == "518880"
+    assert seen[-1]["commission"] == pytest.approx(5.0)
+
+
+def test_qmt_commission_keeps_broker_minimum_when_config_has_zero_fund_min():
+    broker = QMTBroker(
+        userdata_mini_path="D:/QMT/userdata_mini",
+        account="123456",
+        commission_config={"CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0}},
+    )
+
+    commission = broker.estimate_commission("518880", "BUY", 1000, 9.302)
+
+    assert commission == pytest.approx(5.0)

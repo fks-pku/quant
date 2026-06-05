@@ -30,7 +30,8 @@ from quant.features.backtest.dividend_processor import (
 )
 from quant.features.backtest.portfolio_factory import create_portfolio_contexts, create_context
 from quant.features.backtest.nav_calculator import calculate_daily_nav, extract_open_positions
-from quant.runtime.strategy_cycle import after_trading, before_trading, feed_strategy_bars, start_strategy, stop_strategy
+from quant.runtime.daily_strategy_runner import run_daily_snapshots
+from quant.runtime.strategy_cycle import before_trading, start_strategy, stop_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,15 @@ class Backtester:
         self.slippage_bps = config.get("backtest", {}).get("slippage_bps", 5)
         self.risk_price_deviation_limit = config.get("backtest", {}).get("risk_price_deviation_limit", 0.15)
         self.market_impact_factor = config.get("backtest", {}).get("market_impact_factor", 0.0)
-        self.execution_cost_model = config.get("backtest", {}).get("execution_cost_model")
+        self.execution_cost_model = (
+            config.get("backtest", {}).get("execution_cost_model")
+            or config.get("execution", {}).get("cost_model")
+        )
         self.force_close_on_stop = config.get("backtest", {}).get("force_close_on_stop", True)
+        self.strict_daily_snapshot = bool(config.get("backtest", {}).get(
+            "strict_daily_snapshot",
+            config.get("live_trading", {}).get("strict_daily_snapshot", True),
+        ))
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
         self.benchmark_provider = benchmark_provider
@@ -129,7 +137,15 @@ class Backtester:
             sname = _strategy_name(strategy)
             pf = portfolio_map[sname]
             re = risk_map[sname]
-            strategy.context = create_context(pf, re, self.event_bus, data_provider)
+            strategy.context = create_context(
+                pf,
+                re,
+                self.event_bus,
+                data_provider,
+                base_slippage_bps=self.slippage_bps,
+                execution_cost_model=self.execution_cost_model,
+                market_impact_factor=self.market_impact_factor,
+            )
             start_strategy(strategy)
 
         trading_dates_set = None
@@ -233,21 +249,18 @@ class Backtester:
                 tradable_today[sym] = not suspended
             for strategy in strategies:
                 if hasattr(strategy, "context") and hasattr(strategy.context, "prepare_for_trading_day"):
-                    strategy.context.prepare_for_trading_day(current_date.date(), last_prices, tradable_today)
+                    strategy.context.prepare_for_trading_day(
+                        current_date.date(),
+                        last_prices,
+                        tradable_today,
+                        current_bars=today_bars,
+                    )
 
-            # --- Step 5: Feed bar data to strategies ---
-            self._feed_strategy_data(strategies, today_bars)
-
-            # --- Step 6: Update portfolio prices ---
-            if use_subs:
-                for pf in portfolio_map.values():
-                    self._update_portfolio_prices(pf, last_prices)
-            else:
-                self._update_portfolio_prices(primary_portfolio, last_prices)
-
-            # --- Step 7: Strategy signal generation ---
-            for strategy in strategies:
-                after_trading(strategy, current_date.date())
+            # --- Step 5-7: Shared daily snapshot signal generation ---
+            self._run_strategy_daily_snapshots(
+                strategies, current_date.date(), today_bars, last_prices,
+                portfolio_map, primary_portfolio, use_subs,
+            )
 
             # --- Step 8: Collect pending orders ---
             for strategy in strategies:
@@ -426,13 +439,44 @@ class Backtester:
                     for t in trades:
                         s.on_fill(s.context, t)
 
-    @staticmethod
-    def _feed_strategy_data(strategies: list, today_bars: dict) -> None:
+    def _run_strategy_daily_snapshots(
+        self,
+        strategies: list,
+        trading_date,
+        today_bars: dict,
+        last_prices: Dict[str, float],
+        portfolio_map: dict,
+        primary_portfolio,
+        use_subs: bool,
+    ) -> None:
         if not today_bars:
             return
-        bar_batch = tuple(today_bars.values())
-        for strategy in strategies:
-            feed_strategy_bars(strategy, bar_batch)
+
+        def mark_portfolios(_snapshot) -> None:
+            if use_subs:
+                for pf in portfolio_map.values():
+                    self._update_portfolio_prices(pf, last_prices)
+            else:
+                self._update_portfolio_prices(primary_portfolio, last_prices)
+
+        results = run_daily_snapshots(
+            strategies,
+            trading_date,
+            tuple(today_bars.values()),
+            strict=self.strict_daily_snapshot,
+            after_feed=mark_portfolios,
+        )
+        if results and not any(result.ran for _, result in results):
+            mark_portfolios(None)
+        for strategy, result in results:
+            if not result.ran:
+                logger.warning(
+                    "Skipped daily snapshot for %s on %s: missing=%s stale=%s",
+                    _strategy_name(strategy),
+                    trading_date,
+                    result.missing_symbols,
+                    result.stale_symbols,
+                )
 
     def _record_exposure_snapshot(
         self,

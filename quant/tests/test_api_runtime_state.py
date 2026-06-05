@@ -50,6 +50,8 @@ def test_strategy_performance_includes_live_recorder_data(monkeypatch):
         def get_strategy_performance(self, strategy_name):
             return {
                 "strategy_name": strategy_name,
+                "total_nav": 100012.5,
+                "cash": 25000.0,
                 "total_pnl": 12.5,
                 "realized_pnl": 10.0,
                 "unrealized_pnl": 2.5,
@@ -58,6 +60,9 @@ def test_strategy_performance_includes_live_recorder_data(monkeypatch):
                 "profit_factor": 2.0,
                 "max_drawdown": 0.01,
                 "sharpe_ratio": 1.4,
+                "median_slippage_bps": 4.5,
+                "weighted_avg_slippage_bps": 3.25,
+                "slippage_sample_count": 2,
                 "pnl_curve": [{"date": "2026-06-01", "nav": 100012.5}],
                 "recent_trades": [{"symbol": "600519", "pnl": 12.5}],
                 "latest_snapshot": {"date": "2026-06-01", "nav": 100012.5},
@@ -89,8 +94,40 @@ def test_strategy_performance_includes_live_recorder_data(monkeypatch):
 
     assert response.status_code == 200
     assert data["performance"]["total_pnl"] == 12.5
+    assert data["performance"]["total_nav"] == 100012.5
+    assert data["performance"]["cash"] == 25000.0
+    assert data["performance"]["median_slippage_bps"] == 4.5
+    assert data["performance"]["weighted_avg_slippage_bps"] == 3.25
+    assert data["performance"]["slippage_sample_count"] == 2
     assert data["performance"]["sharpe_ratio"] == 1.4
     assert data["pnl_curve"] == [{"date": "2026-06-01", "nav": 100012.5}]
+
+
+def test_strategy_live_summary_endpoint_includes_dashboard_metrics(monkeypatch):
+    from quant.api import strategies_bp as strategies_module
+
+    class Recorder:
+        def get_live_summary(self):
+            return {
+                "total_nav": 120000.0,
+                "cash": 30000.0,
+                "median_slippage_bps": 5.5,
+                "weighted_avg_slippage_bps": 4.25,
+                "slippage_sample_count": 3,
+                "strategy_count": 2,
+            }
+
+    monkeypatch.setattr(strategies_module, "get_live_recorder", lambda: Recorder())
+
+    response = _client_for(strategies_module.strategies_bp).get("/api/strategies/live-summary")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["total_nav"] == 120000.0
+    assert data["cash"] == 30000.0
+    assert data["median_slippage_bps"] == 5.5
+    assert data["weighted_avg_slippage_bps"] == 4.25
+    assert data["slippage_sample_count"] == 3
 
 
 def test_live_records_endpoint_validates_record_kind(monkeypatch):
@@ -118,6 +155,17 @@ def test_status_endpoint_reads_current_runtime_state(monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["status"] == "running"
     assert response.get_json()["selected_strategy"] == "registry_alpha"
+
+
+def test_api_server_root_no_longer_serves_react_frontend():
+    from quant.api_server import app
+
+    response = app.test_client().get("/")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["service"] == "quant-api"
+    assert data["ui"] == "strategy_dashboard_server"
 
 
 def test_futu_status_reads_current_runtime_broker(monkeypatch):

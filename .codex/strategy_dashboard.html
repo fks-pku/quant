@@ -1,0 +1,1157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VK Quant 实盘管理看板</title>
+  <style>
+    :root {
+      --page: #f5f5f7;
+      --panel: rgba(255, 255, 255, 0.88);
+      --line: rgba(60, 60, 67, 0.14);
+      --soft: rgba(118, 118, 128, 0.11);
+      --text: #1d1d1f;
+      --subtext: #515154;
+      --muted: #86868b;
+      --blue: #0071e3;
+      --green: #34c759;
+      --red: #ff3b30;
+      --amber: #ff9f0a;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -10%, rgba(0, 113, 227, 0.11), transparent 26%),
+        radial-gradient(circle at 86% -8%, rgba(52, 199, 89, 0.10), transparent 24%),
+        linear-gradient(180deg, #ffffff 0%, var(--page) 46%, #ececf1 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: 0;
+    }
+    a { color: inherit; }
+    button { font: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-rows: 64px minmax(0, 1fr); }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 28px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.12);
+      background: rgba(245, 245, 247, 0.78);
+      backdrop-filter: blur(22px) saturate(180%);
+    }
+    .brand { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+    .logo { font-size: 17px; font-weight: 780; white-space: nowrap; }
+    .logo span { color: var(--blue); }
+    .page-title { color: var(--subtext); font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .top-status { display: flex; align-items: center; gap: 8px; color: var(--subtext); font-size: 12px; white-space: nowrap; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--subtext);
+      font-size: 11px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+    .pill.green { background: rgba(52, 199, 89, 0.14); color: #1d7f38; }
+    .pill.amber { background: rgba(255, 159, 10, 0.16); color: #9a5b00; }
+    .pill.red { background: rgba(255, 59, 48, 0.13); color: #b42318; }
+    .pill.blue { background: rgba(0, 113, 227, 0.12); color: #0057b8; }
+    .layout { display: grid; grid-template-columns: 316px minmax(0, 1fr); min-height: calc(100vh - 64px); }
+    .sidebar {
+      padding: 22px 18px;
+      border-right: 1px solid rgba(60, 60, 67, 0.12);
+      background: rgba(255, 255, 255, 0.54);
+      backdrop-filter: blur(18px);
+    }
+    .sidebar-title { margin: 4px 4px 12px; color: var(--muted); font-size: 12px; font-weight: 760; }
+    .strategy-row {
+      display: block;
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 13px 12px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .strategy-row:hover { background: rgba(118, 118, 128, 0.08); }
+    .strategy-row.active {
+      border-color: rgba(0, 113, 227, 0.24);
+      background: rgba(0, 113, 227, 0.10);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .strategy-name { margin-bottom: 9px; font-size: 14px; font-weight: 760; line-height: 1.35; }
+    .strategy-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .main { padding: 26px 30px 40px; overflow: auto; }
+    .hero, .panel, .tile {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+    .hero { padding: 18px; margin-bottom: 18px; }
+    .hero-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .hero h1 { margin: 0; font-size: 25px; font-weight: 780; line-height: 1.16; }
+    .hero p { margin: 8px 0 0; color: var(--subtext); font-size: 13px; line-height: 1.52; }
+    .mode-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .mode-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid rgba(60, 60, 67, 0.14);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--subtext);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 780;
+    }
+    .mode-tab.active {
+      border-color: rgba(0, 113, 227, 0.28);
+      background: rgba(0, 113, 227, 0.12);
+      color: #0057b8;
+    }
+    .report-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid rgba(0, 113, 227, 0.22);
+      border-radius: 8px;
+      background: rgba(0, 113, 227, 0.08);
+      color: #0066cc;
+      text-decoration: none;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 780;
+    }
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      margin: 0;
+    }
+    .tile {
+      min-height: 88px;
+      padding: 12px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.05);
+    }
+    .tile span, .metric span {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+    .tile b { display: block; margin-bottom: 5px; font-size: 17px; font-weight: 780; line-height: 1.18; }
+    .tile small { color: var(--subtext); font-size: 11px; line-height: 1.35; }
+    .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+    .panel { overflow: hidden; }
+    .panel-header {
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 15px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+      background: rgba(248, 248, 250, 0.92);
+      color: var(--subtext);
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .panel-body { padding: 15px; }
+    .control-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+    }
+    .control-state { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .action-btn {
+      min-height: 34px;
+      padding: 0 13px;
+      border: 1px solid rgba(60, 60, 67, 0.14);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .action-btn.primary { border-color: rgba(0, 113, 227, 0.26); background: rgba(0, 113, 227, 0.10); color: #0057b8; }
+    .action-btn.danger { border-color: rgba(255, 59, 48, 0.24); background: rgba(255, 59, 48, 0.10); color: #b42318; }
+    .action-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+    .metric-compare.table-scroll {
+      max-height: none;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fbfbfd;
+    }
+    .metric-table th:not(:first-child),
+    .metric-table td:not(:first-child) {
+      width: 34%;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-table td:first-child {
+      color: var(--text);
+      font-weight: 720;
+    }
+    .curve-wrap { min-height: 340px; }
+    canvas { display: block; width: 100%; height: 320px; }
+    .legend { display: flex; align-items: center; gap: 14px; color: var(--subtext); font-size: 12px; }
+    .legend i { display: inline-block; width: 22px; height: 3px; margin-right: 6px; border-radius: 999px; vertical-align: middle; }
+    .split-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    .mode-card {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: rgba(251, 251, 253, 0.92);
+    }
+    .mode-card-head {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+      color: var(--subtext);
+      font-size: 12px;
+      font-weight: 780;
+    }
+    .mode-card-head small {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 680;
+      white-space: nowrap;
+    }
+    .table-scroll {
+      max-height: 340px;
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+    .table-scroll.holdings-scroll { max-height: 300px; }
+    .table-scroll.orders-scroll { max-height: 430px; }
+    table {
+      width: 100%;
+      min-width: 620px;
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      border: 0;
+      border-radius: 0;
+      background: #fbfbfd;
+      font-size: 12px;
+    }
+    .orders-table { min-width: 920px; }
+    .pending-orders-table { min-width: 900px; }
+    .holdings-table { min-width: 760px; }
+    .metric-table { min-width: 560px; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 10px 9px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+      background: rgba(242, 242, 247, 0.92);
+      color: var(--muted);
+      text-align: left;
+      font-size: 11px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+    td {
+      padding: 10px 9px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.08);
+      color: var(--subtext);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 240px;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .empty-cell {
+      padding: 24px 10px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .pos { color: #1d7f38; }
+    .neg { color: #b42318; }
+    .empty { padding: 28px 12px; color: var(--muted); text-align: center; font-size: 12px; }
+    .health-list {
+      display: grid;
+      gap: 8px;
+      color: var(--subtext);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .health-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: rgba(251, 251, 253, 0.86);
+    }
+    .health-row strong { color: var(--text); }
+    .ledger-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+      gap: 8px;
+    }
+    .ledger-item {
+      min-height: 54px;
+      padding: 9px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fbfbfd;
+    }
+    .ledger-item span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 780; }
+    .ledger-item b { display: block; font-size: 12px; color: var(--text); font-weight: 780; }
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      display: none;
+      max-width: 420px;
+      padding: 12px 14px;
+      border: 1px solid rgba(60, 60, 67, 0.14);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: var(--shadow);
+      color: var(--subtext);
+      font-size: 12px;
+      backdrop-filter: blur(18px);
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { border-right: 0; border-bottom: 1px solid rgba(60, 60, 67, 0.12); }
+      .overview, .split-grid { grid-template-columns: 1fr; }
+      .control-grid { grid-template-columns: 1fr; }
+      .actions { justify-content: flex-start; }
+    }
+    @media (max-width: 620px) {
+      .topbar { padding: 0 16px; }
+      .top-status { display: none; }
+      .main { padding: 18px 16px 32px; }
+      .overview, .split-grid { grid-template-columns: 1fr; }
+      .hero-head { display: block; }
+      .hero-actions { justify-content: flex-start; margin-top: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">VK <span>Quant</span></div>
+        <div class="page-title" id="pageTitle">实盘管理看板</div>
+      </div>
+      <div class="top-status" id="topStatus"></div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Strategies</div>
+        <div id="strategyList"></div>
+      </aside>
+      <main class="main" id="main"></main>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = { assetVersion: '', data: null, selected: null, mode: initialMode() };
+    const colors = { benchmark: '#34c759', paper: '#0071e3', live: '#ff3b30' };
+
+    function initialMode() {
+      const hash = String(window.location.hash || '').replace('#', '').toLowerCase();
+      const query = new URLSearchParams(window.location.search).get('mode');
+      const pathMode = String(window.location.pathname || '').split('/').filter(Boolean).pop();
+      const value = (query || pathMode || hash || 'live').toLowerCase();
+      return value === 'paper' ? 'paper' : 'live';
+    }
+
+    window.addEventListener('hashchange', () => {
+      state.mode = initialMode();
+      render();
+    });
+
+    window.addEventListener('popstate', () => {
+      state.mode = initialMode();
+      render();
+    });
+
+    async function loadDashboard(keepSelection = true) {
+      const res = await fetch('/api/dashboard', { cache: 'no-store' });
+      state.data = await res.json();
+      if (state.assetVersion && state.data.dashboard_asset_version && state.assetVersion !== state.data.dashboard_asset_version) {
+        window.location.reload();
+        return;
+      }
+      if (!state.assetVersion) {
+        state.assetVersion = state.data.dashboard_asset_version || '';
+      }
+      if (!keepSelection || !state.selected || !findStrategy(state.selected)) {
+        state.selected = state.data.strategies[0]?.name || null;
+      }
+      render();
+    }
+
+    function findStrategy(name) {
+      return state.data?.strategies?.find(item => item.name === name);
+    }
+
+    function render() {
+      const selected = findStrategy(state.selected);
+      renderTopStatus();
+      renderStrategyList();
+      renderMain(selected);
+      requestAnimationFrame(() => selected && drawCurve(selected, state.mode));
+    }
+
+    function renderTopStatus() {
+      const el = document.getElementById('topStatus');
+      const liveDate = state.data?.latest_record_date?.live || 'no live records';
+      const paperDate = state.data?.latest_record_date?.paper || 'no paper records';
+      const health = state.data?.operations_health || {};
+      const healthClass = health.status === 'blocked' ? 'red' : health.status === 'warning' ? 'amber' : 'green';
+      el.innerHTML = `
+        <span class="pill ${healthClass}">Ops ${escapeHtml(health.status || 'ok')}</span>
+        <span class="pill green">Live ${escapeHtml(liveDate)}</span>
+        <span class="pill blue">Paper ${escapeHtml(paperDate)}</span>
+        <span>${fmtTime(state.data?.generated_at)}</span>
+      `;
+    }
+
+    function renderStrategyList() {
+      const el = document.getElementById('strategyList');
+      el.innerHTML = (state.data?.strategies || []).map(strategy => {
+        const active = strategy.name === state.selected ? 'active' : '';
+        const liveControl = strategy.live.control || {};
+        const paperControl = strategy.paper.control || {};
+        const liveStateClass = pillClass(liveControl.live_state);
+        const paperStateClass = pillClass(paperControl.live_state);
+        const paper = strategy.paper.configured ? (paperControl.live_state || 'running') : 'no paper';
+        const live = strategy.live.configured ? (liveControl.live_state || 'running') : 'no live';
+        return `
+          <button class="strategy-row ${active}" data-name="${escapeHtml(strategy.name)}">
+            <div class="strategy-name">${escapeHtml(strategy.display_name)}</div>
+            <div class="strategy-meta">
+              <span class="pill ${paperStateClass}">P ${escapeHtml(paper)}</span>
+              <span class="pill ${liveStateClass}">L ${escapeHtml(live)}</span>
+            </div>
+          </button>
+        `;
+      }).join('');
+      el.querySelectorAll('.strategy-row').forEach(button => {
+        button.addEventListener('click', () => {
+          state.selected = button.dataset.name;
+          render();
+        });
+      });
+    }
+
+    function renderMain(strategy) {
+      const el = document.getElementById('main');
+      if (!strategy) {
+        el.innerHTML = `<div class="empty">No strategies found</div>`;
+        return;
+      }
+      document.getElementById('pageTitle').textContent = strategy.display_name;
+      const mode = state.mode === 'paper' ? 'paper' : 'live';
+      el.innerHTML = `
+        <section class="stack">
+          <section class="hero">
+            <div class="hero-head">
+              <div>
+                <h1>${escapeHtml(strategy.display_name)}</h1>
+                <p>${escapeHtml(modeLabel(mode))} strategy operations page. Controls, ledger, records, and performance use the same component contract in both modes.</p>
+              </div>
+              <div class="hero-actions">
+                <span class="pill blue">Initial Cash ${initialCashText(modeInitialCash(strategy, mode))}</span>
+                ${reportAction(strategy)}
+              </div>
+            </div>
+            ${renderModeNavigation(strategy, mode)}
+          </section>
+          ${renderModePage(strategy, mode)}
+        </section>
+      `;
+      bindModeTabs();
+      bindActionButtons(strategy);
+    }
+
+    function renderModeNavigation(strategy, activeMode) {
+      return `
+        <div class="mode-tabs">
+          ${['live', 'paper'].map(mode => {
+            const data = strategy[mode] || {};
+            const control = data.control || {};
+            const active = mode === activeMode ? 'active' : '';
+            const configured = data.configured ? 'configured' : 'not configured';
+            const status = data.configured ? (control.live_state || 'running') : 'off';
+            const initialCash = initialCashText(modeInitialCash(strategy, mode));
+            return `
+              <button class="mode-tab ${active}" data-mode-tab="${mode}" type="button">
+                <span>${escapeHtml(modeLabel(mode))}</span>
+                <span class="pill ${pillClass(status)}">${escapeHtml(status)}</span>
+                <span class="pill">${escapeHtml(configured)}</span>
+                <span class="pill blue">Initial ${initialCash}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function renderModePage(strategy, mode) {
+      const data = strategy[mode] || {};
+      const records = data.records || {};
+      const holdings = data.holdings || {};
+      const orders = records.orders || [];
+      const pendingOrders = records.pending_orders || [];
+      const signals = records.signals || [];
+      const label = modeLabel(mode);
+      return `
+        ${renderModeOverview(strategy, mode)}
+        ${panel('Operations Health', renderOperationsHealth(strategy, mode))}
+        ${panel('Data Freshness', renderDataFreshness(strategy, mode))}
+        ${panel(`${label} Control`, renderModeControl(strategy, mode))}
+        ${panel('Performance Metrics', renderMetricsTable(strategy, mode))}
+        ${panel(`Pending Orders (${pendingOrders.length})`, renderPendingOrdersTable(pendingOrders))}
+        ${panel('Equity Curve', renderCurveShell(mode))}
+        ${panel('Holdings', renderHoldingsTable(holdings.items || [], label), `<span class="pill">${holdings.items?.length || 0} holdings · priced ${escapeHtml(holdings.price_date || '-')}</span>`)}
+        ${panel('Orders', renderOrdersTable(orders, label), `<span class="pill">${todayRows(orders).length} today · ${orders.length} total</span>`)}
+        ${panel('Signals', renderSignalsTable(signals))}
+      `;
+    }
+
+    function bindModeTabs() {
+      document.querySelectorAll('[data-mode-tab]').forEach(button => {
+        button.addEventListener('click', () => {
+          state.mode = button.dataset.modeTab === 'paper' ? 'paper' : 'live';
+          window.history.pushState(null, '', `/${state.mode}${window.location.search}`);
+          render();
+        });
+      });
+    }
+
+    function renderOperationsHealth(strategy, mode) {
+      const health = state.data?.operations_health || {};
+      const rows = [];
+      const globalClass = health.status === 'blocked' ? 'red' : health.status === 'warning' ? 'amber' : 'green';
+      rows.push(`
+        <div class="health-row">
+          <span class="pill ${globalClass}">${escapeHtml(health.status || 'ok')}</span>
+          <strong>System</strong>
+          <span>${Number(health.issue_count || 0)} issue(s)</span>
+          <span>market data ${escapeHtml(state.data?.latest_market_data_date || '-')}</span>
+        </div>
+      `);
+      const ledger = strategy[mode]?.ledger || {};
+      const cls = ledger.health_status === 'blocked' ? 'red' : ledger.health_status === 'warning' ? 'amber' : 'green';
+      const missing = ledger.missing_signal_dates || [];
+      rows.push(`
+        <div class="health-row">
+          <span class="pill ${cls}">${escapeHtml(modeLabel(mode))} ${escapeHtml(ledger.health_status || 'ok')}</span>
+          <strong>${escapeHtml(strategy.display_name)}</strong>
+          <span>signal ${escapeHtml(ledger.latest_signal_date || '-')}</span>
+          <span>fill ${escapeHtml(ledger.latest_fill_date || '-')}</span>
+          <span>pending ${Number(ledger.pending_action_count || 0)}</span>
+          <span>missing ${missing.length ? escapeHtml(missing.join(', ')) : '-'}</span>
+        </div>
+      `);
+      return `<div class="health-list">${rows.join('')}</div>`;
+    }
+
+    function renderDataFreshness(strategy, mode) {
+      const freshness = state.data?.freshness || {};
+      const jobs = state.data?.scheduled_jobs || {};
+      const modeData = strategy[mode] || {};
+      const ledger = modeData.ledger || {};
+      const rows = [];
+      const priceClass = freshness.market_data_stale ? 'amber' : 'green';
+      const recordClass = freshness[`${mode}_record_stale`] ? 'amber' : 'green';
+      rows.push(`
+        <div class="health-row">
+          <span class="pill ${priceClass}">prices ${escapeHtml(freshness.latest_market_data_date || '-')}</span>
+          <strong>Expected ${escapeHtml(freshness.expected_market_data_date || '-')}</strong>
+          <span>${freshness.market_data_stale ? 'market data is stale' : 'market data ok'}</span>
+          <span>holdings ${escapeHtml(modeData.holdings?.price_date || '-')}</span>
+        </div>
+      `);
+      rows.push(`
+        <div class="health-row">
+          <span class="pill ${recordClass}">${escapeHtml(modeLabel(mode))} records ${escapeHtml(ledger.latest_record_date || '-')}</span>
+          <strong>Signals ${escapeHtml(ledger.latest_signal_date || '-')}</strong>
+          <span>next ${escapeHtml(ledger.next_execution_date || '-')}</span>
+          <span>pending ${Number(ledger.pending_action_count || 0)}</span>
+        </div>
+      `);
+      const jobKeys = mode === 'paper' ? ['data_update', 'paper_replay'] : ['data_update', 'live_pending'];
+      jobKeys.forEach(key => {
+        const job = jobs[key] || {};
+        if (!job.name) return;
+        const ok = Number(job.exit_code) === 0;
+        rows.push(`
+          <div class="health-row">
+            <span class="pill ${ok ? 'green' : 'red'}">${escapeHtml(job.name)}</span>
+            <strong>${escapeHtml(job.finished_at || '-')}</strong>
+            <span>exit ${escapeHtml(String(job.exit_code ?? '-'))}</span>
+            <span>${escapeHtml(job.error || job.status || '')}</span>
+          </div>
+        `);
+      });
+      return `<div class="health-list">${rows.join('')}</div>`;
+    }
+
+    function renderModeOverview(strategy, mode) {
+      const data = strategy[mode] || {};
+      const perf = data.performance || {};
+      const control = data.control || {};
+      const samples = Number(perf.slippage_sample_count || 0);
+      const pendingCount = (data.records?.pending_orders || []).length;
+      const initialCash = modeInitialCash(strategy, mode);
+      return `
+        <div class="overview">
+          ${tile('Mode', modeLabel(mode), data.configured ? (control.live_state || 'running') : 'not configured')}
+          ${tile('Initial Cash', initialCashText(initialCash), 'strategy allocation')}
+          ${tile('Total NAV', money(perf.total_nav), `latest ${modeLabel(mode)} snapshot`)}
+          ${tile('Cash', money(perf.cash), `available ${modeLabel(mode)} cash`)}
+          ${tile('Total PnL %', pnlPct(perf.total_pnl_pct), pnlText(perf))}
+          ${tile('Total Return', pnlPct(perf.total_return), pnlText(perf))}
+          ${tile('Commission', money(perf.total_commission), 'separate from slippage')}
+          ${tile('Median Slippage', bps(perf.median_slippage_bps), `${samples} fills`)}
+          ${tile('Weighted Slippage', bps(perf.weighted_avg_slippage_bps), 'notional weighted')}
+          ${tile('Pending Orders', String(pendingCount), 'current submit window')}
+        </div>
+      `;
+    }
+
+    function tile(label, value, sub) {
+      return `<div class="tile"><span>${escapeHtml(label)}</span><b>${value}</b><small>${escapeHtml(sub || '')}</small></div>`;
+    }
+
+    function panel(title, body, action = '') {
+      return `<section class="panel"><div class="panel-header"><span>${escapeHtml(title)}</span>${action}</div><div class="panel-body">${body}</div></section>`;
+    }
+
+    function reportAction(strategy) {
+      if (!strategy.report_url) return `<span class="pill">No report</span>`;
+      return `<a class="report-link" href="${strategy.report_url}" target="_blank" rel="noreferrer">Full Report</a>`;
+    }
+
+    function renderModeControl(strategy, mode) {
+      const data = strategy[mode] || {};
+      const control = data.control || {};
+      const configured = data.configured;
+      const cls = configured ? pillClass(control.live_state) : '';
+      const acceptsSignals = Boolean(data.accepts_signals);
+      const controlState = control.live_state || 'stopped';
+      return `
+        <div>
+          <div class="control-grid">
+            <div class="control-state">
+              <span class="pill ${configured ? cls : 'amber'}">${configured ? escapeHtml(controlState) : 'not configured'}</span>
+              <span class="pill ${acceptsSignals ? 'green' : 'red'}">${acceptsSignals ? 'signals on' : 'signals off'}</span>
+              <span class="pill">${control.liquidation_requested ? 'liquidation requested' : 'no liquidation'}</span>
+              <span>${escapeHtml(control.updated_at ? fmtTime(control.updated_at) : '')}</span>
+            </div>
+            <div class="actions">
+              ${renderModeActions(configured, controlState, mode)}
+            </div>
+          </div>
+          ${renderModeLedger(data, mode)}
+          ${renderLiquidationPlan(data.liquidation_plan)}
+        </div>
+      `;
+    }
+
+    function renderModeActions(configured, controlState, mode) {
+      if (!configured) {
+        return `<span class="pill amber">not configured in ${escapeHtml(modeLabel(mode))}</span>`;
+      }
+      const actions = [];
+      if (controlState === 'stopped' || controlState === 'liquidating') {
+        actions.push(actionButton('start', 'Start', 'primary', false, mode));
+      }
+      if (controlState === 'running') {
+        actions.push(`<span class="pill green">already started</span>`);
+        actions.push(actionButton('pause', 'Pause', '', false, mode));
+      }
+      if (controlState === 'paused') {
+        actions.push(`<span class="pill amber">paused</span>`);
+        actions.push(actionButton('resume', 'Resume', 'primary', false, mode));
+      }
+      actions.push(actionButton('liquidate_stop', 'Liquidate Stop', 'danger', false, mode));
+      return actions.join('');
+    }
+
+    function renderModeLedger(data, mode) {
+      const ledger = data.ledger || {};
+      const recovery = data.recovery || {};
+      const missing = ledger.missing_signal_dates || [];
+      return `
+        <div class="ledger-grid">
+          ${ledgerItem('Mode', mode.toUpperCase())}
+          ${ledgerItem('Last Signal', ledger.latest_signal_date || '-')}
+          ${ledgerItem('Next Exec', ledger.next_execution_date || '-')}
+          ${ledgerItem('Pending', String(ledger.pending_action_count || 0))}
+          ${ledgerItem('Open Orders', String(ledger.open_order_count || 0))}
+          ${ledgerItem('Holdings', String(ledger.holding_count || 0))}
+          ${ledgerItem('Catchup', recovery.needs_catchup ? missing.join(', ') : 'clear')}
+          ${ledgerItem('Last Audit', ledger.last_audit_at ? fmtTime(ledger.last_audit_at) : '-')}
+        </div>
+      `;
+    }
+
+    function renderLiquidationPlan(plan) {
+      if (!plan) return '';
+      const count = plan.orders?.length || 0;
+      return `
+        <div class="health-list" style="margin-top:12px">
+          <div class="health-row">
+            <span class="pill red">LIQUIDATION</span>
+            <strong>${escapeHtml(plan.status || 'planned')}</strong>
+            <span>${count} sell order(s) planned</span>
+            <span>${escapeHtml(plan.updated_at || plan.created_at || '')}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function ledgerItem(label, value) {
+      return `<div class="ledger-item"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value || '-'))}</b></div>`;
+    }
+
+    function actionButton(action, label, extraClass, disabled, mode) {
+      return `<button class="action-btn ${extraClass || ''}" data-action="${action}" data-mode="${mode || 'live'}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+    }
+
+    function bindActionButtons(strategy) {
+      document.querySelectorAll('[data-action]').forEach(button => {
+        button.addEventListener('click', async () => {
+          const action = button.dataset.action;
+          const mode = button.dataset.mode || 'live';
+          if (action === 'liquidate_stop') {
+            const ok = window.confirm(`确认记录 ${mode.toUpperCase()} 清盘（停止）指令？页面不会直接向券商发单。`);
+            if (!ok) return;
+          }
+          await postControl(strategy.name, action, mode);
+        });
+      });
+    }
+
+    async function postControl(strategyName, action, mode) {
+      const res = await fetch(`/api/strategies/${encodeURIComponent(strategyName)}/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, mode })
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        showToast(payload.error || 'control failed');
+        return;
+      }
+      showToast('control updated');
+      await loadDashboard(true);
+    }
+
+    function renderCurveShell(mode) {
+      return `
+        <div class="legend">
+          <span><i style="background:${colors.benchmark}"></i>沪深300</span>
+          <span><i style="background:${colors[mode]}"></i>${escapeHtml(modeLabel(mode))}</span>
+        </div>
+        <div class="curve-wrap"><canvas id="curveCanvas"></canvas></div>
+      `;
+    }
+
+    function drawCurve(strategy, mode = state.mode) {
+      const canvas = document.getElementById('curveCanvas');
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(rect.width * scale));
+      canvas.height = Math.max(1, Math.floor(rect.height * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      const pad = { left: 54, right: 20, top: 20, bottom: 42 };
+      const width = rect.width - pad.left - pad.right;
+      const height = rect.height - pad.top - pad.bottom;
+      const strategyPoints = curvePoints(strategy[mode]?.performance);
+      const strategyInitialCash = modeInitialCash(strategy, mode);
+      const benchmarkPoints = filterCurveByStart(
+        (state.data.benchmark?.points || []).map(p => ({ date: p.date, value: Number(p.value) })),
+        strategyPoints[0]?.date || ''
+      );
+      const series = [
+        { name: '沪深300', color: colors.benchmark, points: benchmarkPoints },
+        { name: modeLabel(mode), color: colors[mode], points: strategyPoints, baseValue: strategyInitialCash },
+      ].map(normalizeSeries).filter(s => s.points.length);
+      drawAxes(ctx, pad, width, height);
+      if (!series.length) {
+        ctx.fillStyle = '#86868b';
+        ctx.font = '12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+        ctx.fillText('No curve data', pad.left + 8, pad.top + 24);
+        return;
+      }
+      const values = series.flatMap(s => s.points.map(p => p.value));
+      let min = Math.min(...values, 100);
+      let max = Math.max(...values, 100);
+      if (Math.abs(max - min) < 0.01) { max += 1; min -= 1; }
+      const domain = curveDateDomain(series);
+      series.forEach(s => drawSeries(ctx, s, pad, width, height, min, max, domain));
+      drawAxisLabels(ctx, pad, width, height, min, max, domain);
+    }
+
+    function curvePoints(perf) {
+      return (perf?.pnl_curve || []).map(item => ({
+        date: item.date || String(item.timestamp || '').slice(0, 10),
+        value: Number(item.nav || item.value || 0)
+      })).filter(item => item.date && item.value > 0);
+    }
+
+    function normalizeSeries(series) {
+      const points = series.points.filter(point => Number.isFinite(point.value) && point.value > 0);
+      if (!points.length) return { ...series, points: [] };
+      const explicitBase = Number(series.baseValue || 0);
+      const base = explicitBase > 0 ? explicitBase : points[0].value;
+      return { ...series, points: points.map(point => ({ ...point, value: point.value / base * 100 })) };
+    }
+
+    function filterCurveByStart(points, startDate) {
+      if (!startDate) return points;
+      return points.filter(point => String(point.date || '') >= startDate);
+    }
+
+    function curveDateDomain(series) {
+      const times = series
+        .flatMap(item => item.points || [])
+        .map(point => curveTime(point.date))
+        .filter(value => Number.isFinite(value));
+      if (!times.length) return { min: 0, max: 0 };
+      return { min: Math.min(...times), max: Math.max(...times) };
+    }
+
+    function curveTime(dateText) {
+      const text = String(dateText || '').slice(0, 10);
+      if (!text) return NaN;
+      return Date.parse(`${text}T00:00:00Z`);
+    }
+
+    function curveX(dateText, domain, pad, width) {
+      const value = curveTime(dateText);
+      if (!Number.isFinite(value)) return pad.left + width;
+      if (!Number.isFinite(domain.min) || !Number.isFinite(domain.max) || domain.max <= domain.min) {
+        return pad.left + width;
+      }
+      return pad.left + ((value - domain.min) / (domain.max - domain.min)) * width;
+    }
+
+    function drawAxes(ctx, pad, width, height) {
+      ctx.strokeStyle = 'rgba(60, 60, 67, 0.18)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, pad.top);
+      ctx.lineTo(pad.left, pad.top + height);
+      ctx.lineTo(pad.left + width, pad.top + height);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(60, 60, 67, 0.08)';
+      for (let i = 1; i < 4; i++) {
+        const y = pad.top + height * i / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(pad.left + width, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawSeries(ctx, series, pad, width, height, min, max, domain) {
+      const points = series.points;
+      ctx.strokeStyle = series.color;
+      ctx.fillStyle = series.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        const x = curveX(point.date, domain, pad, width);
+        const y = pad.top + height - ((point.value - min) / (max - min)) * height;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      points.forEach((point, index) => {
+        if (index !== points.length - 1 && points.length > 1) return;
+        const x = curveX(point.date, domain, pad, width);
+        const y = pad.top + height - ((point.value - min) / (max - min)) * height;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawAxisLabels(ctx, pad, width, height, min, max, domain) {
+      ctx.fillStyle = '#86868b';
+      ctx.font = '11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${max.toFixed(1)}%`, pad.left - 8, pad.top + 4);
+      ctx.fillText(`${min.toFixed(1)}%`, pad.left - 8, pad.top + height);
+      ctx.textAlign = 'left';
+      ctx.fillText(domainDate(domain.min), pad.left, pad.top + height + 28);
+      ctx.textAlign = 'right';
+      ctx.fillText(domainDate(domain.max), pad.left + width, pad.top + height + 28);
+    }
+
+    function domainDate(value) {
+      if (!Number.isFinite(value) || value <= 0) return '';
+      return new Date(value).toISOString().slice(0, 10);
+    }
+
+    function renderMetricsTable(strategy, mode) {
+      const perf = strategy[mode]?.performance || {};
+      const rows = [
+        ['Total NAV', money(perf.total_nav)],
+        ['Cash', money(perf.cash)],
+        ['Total Commission', money(perf.total_commission)],
+        ['Median Slippage', bps(perf.median_slippage_bps)],
+        ['Weighted Avg Slippage', bps(perf.weighted_avg_slippage_bps)],
+        ['Total PnL', pnlMoney(perf.total_pnl)],
+        ['Total PnL %', pnlPct(perf.total_pnl_pct)],
+        ['Realized PnL', pnlMoney(perf.realized_pnl)],
+        ['Unrealized PnL', pnlMoney(perf.unrealized_pnl)],
+        ['Total Return', pnlPct(perf.total_return)],
+        ['Sharpe Ratio', num(perf.sharpe_ratio, 2)],
+        ['Max Drawdown', pnlPct(perf.max_drawdown)],
+        ['Win Rate', pct(perf.win_rate)],
+        ['Total Trades', String(perf.total_trades || 0)],
+      ];
+      return `<div class="metric-compare table-scroll">${table(['Metric', modeLabel(mode)], rows, 'metric-table')}</div>`;
+    }
+
+    function renderHoldingsTable(rows, mode) {
+      if (!rows.length) return `<div class="empty">No ${escapeHtml(mode)} holdings</div>`;
+      return `<div class="table-scroll holdings-scroll">${table(['Symbol', 'Qty', 'Current', 'Avg Cost', 'Return', 'Market Value', 'PnL'], rows.map(row => [
+        escapeHtml(row.symbol),
+        num(row.qty, 0),
+        num(row.current_price, 3),
+        num(row.avg_cost, 3),
+        pnlPct(row.return_pct),
+        money(row.market_value),
+        pnlMoney(row.unrealized_pnl),
+      ]), 'holdings-table')}</div>`;
+    }
+
+    function renderOrdersTable(rows, mode) {
+      if (!rows.length) return `<div class="empty">No ${escapeHtml(mode)} orders</div>`;
+      return `<div class="table-scroll orders-scroll">${table(['Time', 'Symbol', 'Side', 'Qty', 'Open', 'Limit', 'Filled', 'Fill Price', 'Commission', 'Slippage', 'Status', 'Order ID'], rows.slice().reverse().map(row => [
+        fmtTime(row.timestamp),
+        escapeHtml(row.symbol),
+        escapeHtml(row.side),
+        num(row.quantity, 0),
+        row.open_price ? num(row.open_price, 3) : '-',
+        num(row.limit_price ?? row.price, 3),
+        num(row.filled_qty, 0),
+        row.fill_price ? num(row.fill_price, 3) : '-',
+        money(row.commission),
+        bps(row.slippage_bps),
+        statusPill(row.display_status || row.status),
+        escapeHtml(row.order_id),
+      ]), 'orders-table')}</div>`;
+    }
+
+    function renderPendingOrdersTable(rows) {
+      const headers = ['Signal Date', 'Submit Date', 'Symbol', 'Side', 'Qty', 'Type', 'Limit', 'Status', 'Order ID', 'Reason'];
+      const body = rows.length
+        ? rows.slice().reverse().map(row => `<tr>${[
+          escapeHtml(row.signal_date || String(row.timestamp || '').slice(0, 10)),
+          escapeHtml(row.submit_date || ''),
+          escapeHtml(row.symbol),
+          escapeHtml(row.side),
+          num(row.quantity, 0),
+          escapeHtml(row.order_type),
+          num(row.price, 3),
+          statusPill(row.display_status || row.status),
+          escapeHtml(row.order_id),
+          escapeHtml(row.reason || ''),
+        ].map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')
+        : `<tr><td class="empty-cell" colspan="${headers.length}">暂无待提交订单：当前没有 D 日策略信号等待次日提交。</td></tr>`;
+      return `<div class="table-scroll orders-scroll">
+        <table class="pending-orders-table">
+          <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+    }
+
+    function renderSignalsTable(rows) {
+      if (!rows.length) return `<div class="empty">No signals</div>`;
+      return table(['Time', 'Symbol', 'Side', 'Qty', 'Type', 'Price', 'Status', 'Order ID'], rows.slice().reverse().map(row => [
+        fmtTime(row.timestamp),
+        escapeHtml(row.symbol),
+        escapeHtml(row.side),
+        num(row.quantity, 0),
+        escapeHtml(row.order_type),
+        num(row.price, 3),
+        statusPill(row.status),
+        escapeHtml(row.order_id),
+      ]));
+    }
+
+    function table(headers, rows, className = '') {
+      return `
+        <table class="${escapeHtml(className)}">
+          <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      `;
+    }
+
+    function todayRows(rows) {
+      const today = state.data?.today;
+      return (rows || []).filter(row => (row.timestamp || '').slice(0, 10) === today || row.record_date === today);
+    }
+
+    function liveStateLabel(strategy) {
+      if (!strategy.live.configured) return 'Not Configured';
+      return strategy.live.control?.live_state || 'stopped';
+    }
+
+    function modeLabel(mode) {
+      return mode === 'paper' ? 'Paper' : 'Live';
+    }
+
+    function pnlText(perf) {
+      return `realized ${money(perf.realized_pnl)} / unrealized ${money(perf.unrealized_pnl)}`;
+    }
+
+    function pillClass(value) {
+      if (value === 'running' || value === 'filled') return 'green';
+      if (value === 'paused' || value === 'partial' || value === 'no_fill' || value === 'pending_submit') return 'amber';
+      if (value === 'liquidating' || value === 'stopped') return 'red';
+      return '';
+    }
+
+    function statusPill(value) {
+      return `<span class="pill ${pillClass(value)}">${escapeHtml(value || '')}</span>`;
+    }
+
+    function money(value) {
+      const n = Number(value || 0);
+      return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+
+    function pnlMoney(value) {
+      const n = Number(value || 0);
+      return `<span class="${n >= 0 ? 'pos' : 'neg'}">${money(n)}</span>`;
+    }
+
+    function pct(value) {
+      const n = Number(value || 0) * 100;
+      return `${n.toFixed(2)}%`;
+    }
+
+    function pnlPct(value) {
+      const n = Number(value || 0);
+      return `<span class="${n >= 0 ? 'pos' : 'neg'}">${pct(n)}</span>`;
+    }
+
+    function bps(value) {
+      if (value === null || value === undefined || value === '') return '-';
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '-';
+      const sign = n > 0 ? '+' : '';
+      return `<span class="${n <= 0 ? 'pos' : 'neg'}">${sign}${n.toFixed(1)} bps</span>`;
+    }
+
+    function initialCashText(value) {
+      const amount = Number(value);
+      return Number.isFinite(amount) && amount > 0 ? money(amount) : '-';
+    }
+
+    function modeInitialCash(strategy, mode) {
+      const data = strategy?.[mode] || {};
+      const explicit = Number(data.initial_cash);
+      if (Number.isFinite(explicit) && explicit > 0) return explicit;
+      const byMode = Number(strategy?.initial_cash?.[mode]);
+      if (Number.isFinite(byMode) && byMode > 0) return byMode;
+      const fallback = Number(strategy?.initial_cash?.default);
+      return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+    }
+
+    function num(value, digits = 2) {
+      const n = Number(value || 0);
+      return n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    }
+
+    function fmtTime(value) {
+      if (!value) return '';
+      return String(value).replace('T', ' ').slice(0, 19);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
+
+    function showToast(message) {
+      const el = document.getElementById('toast');
+      el.textContent = message;
+      el.style.display = 'block';
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => { el.style.display = 'none'; }, 2600);
+    }
+
+    window.addEventListener('resize', () => {
+      const selected = findStrategy(state.selected);
+      if (selected) drawCurve(selected, state.mode);
+    });
+
+    loadDashboard(false).catch(err => {
+      document.getElementById('main').innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    });
+    setInterval(() => loadDashboard(true).catch(() => {}), 30000);
+  </script>
+</body>
+</html>
