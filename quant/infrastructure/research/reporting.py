@@ -340,123 +340,79 @@ def build_research_full_report_html(
     title = f"{_report_subject(rows)} End-to-End Research Report"
     body = [
         '<section class="hero">',
-        "<p class=\"eyebrow\">Final Decision + Audit Appendix</p>",
+        "<p class=\"eyebrow\">Final Decision + Clean Report</p>",
         f"<h1>{escape(title)}</h1>",
-        f"<p>Generated at {escape(str(generated))}. The main report focuses on the final decision, the current Metric Checklist, plain-language strategy and risk-exit logic, key risks, appendices, and the remaining TODOs before going live.</p>",
+        f"<p>Generated at {escape(str(generated))}. The main report keeps only the final decision, strategy logic, performance evidence, important metrics, and risk.</p>",
         _report_metric_grid(rows, str(generated)),
         "</section>",
-        '<section class="panel">',
-        "<h2>1. Final Decision</h2>",
-        _conclusion_paragraph(data, rows),
-        _executive_snapshot_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>2. Metric Checklist</h2>",
-        _end_to_end_checklist_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>3. Strategy Logic And Core Evidence</h2>",
-        "<h3>策略逻辑</h3>",
-        _strategy_logic_plain_paragraph(data, rows),
-        _strategy_logic_summary_table(data, rows),
-        "<h3>止盈止损逻辑</h3>",
-        _risk_exit_logic_plain_paragraph(data, rows),
-        _risk_exit_package_contract_table(data, rows),
-        "<h3>核心证据</h3>",
-        "<h3>策略参数列表及解释</h3>",
-        _strategy_parameter_contract_table(data, rows),
-        "<h3>Equity Curve</h3>",
-        _equity_curve_chart(data, rows),
-        "<h3>Core Performance</h3>",
-        _core_performance_contract_table(data, rows),
-        "<h3>Cost And Capacity</h3>",
-        _cost_capacity_summary_table(data, rows),
-        "</section>",
-        '<section class="panel">',
-        "<h2>4. Key Risks</h2>",
-        _key_risk_table(data, rows),
-        "</section>",
-        '<section class="panel appendix-panel">',
-        "<h2>5. Appendix</h2>",
-        _details_block(
-            "A. Fast research input and signal diagnostics",
-            "\n".join(
-                [
-                    "<h3>Idea Source</h3>",
-                    _idea_source_overview_table(rows),
-                    "<h3>Admission And Signal Contract</h3>",
-                    _source_quality_score_table(data, rows),
-                    _strategy_spec_contract_table(rows),
-                    _formula_block(rows),
-                    "<h3>Signal Validation</h3>",
-                    _signal_validation_contract_table(data, rows),
-                    "<h3>Portfolio Diagnostics</h3>",
-                    _portfolio_diagnostics_contract_table(data, rows),
-                    "<h3>PnL Attribution Bridge</h3>",
-                    _pnl_attribution_bridge_contract_table(data, rows),
-                ]
-            ),
+        _report_card(
+            "1. Final Decision",
+            _conclusion_paragraph(data, rows),
+            "<h3>Go / No-Go Checklist</h3>",
+            _end_to_end_checklist_table(data, rows),
+            "<h3>Executive Snapshot</h3>",
+            _executive_snapshot_table(data, rows),
         ),
-        _details_block(
-            "B. Strict backtest full diagnostics",
-            "\n".join(
-                [
-                    "<h3>Strategy Execution Logic</h3>",
-                    _strategy_execution_logic_contract(data, rows),
-                    "<h3>Yearly / Monthly Return Calendar</h3>",
-                    _yearly_return_calendar(data, rows),
-                    "<h3>Backtest Configuration</h3>",
-                    _backtest_config_contract_table(data, rows),
-                    "<h3>Data Quality Audit</h3>",
-                    _data_quality_contract_table(data, rows),
-                    "<h3>Trade And Cost Diagnostics</h3>",
-                    _trade_cost_contract_table(data, rows),
-                    "<h3>Turnover And Exposure</h3>",
-                    _turnover_exposure_contract_table(data, rows),
-                    "<h3>Capacity And Liquidity</h3>",
-                    _capacity_contract_table(data, rows),
-                    "<h3>Guard Attribution</h3>",
-                    _guard_attribution_contract_table(data, rows),
-                    "<h3>Drawdown Episodes</h3>",
-                    _drawdown_episode_contract_table(data, rows),
-                    "<h3>Trade Distribution</h3>",
-                    _trade_distribution_contract_table(data, rows),
-                    "<h3>Rolling Stability And Regime</h3>",
-                    _rolling_regime_contract_table(data, rows),
-                    "<h3>Cost Decomposition</h3>",
-                    _cost_decomposition_contract_table(data, rows),
-                ]
-            ),
+        _report_card(
+            "2. 策略逻辑",
+            "<h3>策略白话逻辑</h3>",
+            _strategy_logic_plain_paragraph(data, rows),
+            _strategy_logic_summary_table(data, rows),
+            "<h3>参数：策略参数列表及解释</h3>",
+            _strategy_parameter_contract_table(data, rows),
+            "<h3>止盈止损逻辑</h3>",
+            _risk_exit_logic_plain_paragraph(data, rows),
+            _risk_exit_package_contract_table(data, rows),
         ),
-        _details_block(
-            "C. Walk-forward audit evidence",
-            "\n".join(
-                [
-                    "<h3>Methodology</h3>",
-                    _walkforward_methodology_contract_table(rows),
-                    "<h3>Summary</h3>",
-                    _walkforward_summary_contract_table(data, rows),
-                    "<h3>Split Details</h3>",
-                    _walkforward_split_contract_table(data, rows),
-                ]
-            ),
+        _report_card(
+            "3. 策略表现",
+            "<h3>Equity Curve</h3>",
+            _equity_curve_chart(data, rows),
+            "<h3>日历图</h3>",
+            _yearly_return_calendar(data, rows),
+            "<h3>Core Performance</h3>",
+            _core_performance_contract_table(data, rows),
         ),
-        _details_block(
-            "D. Report navigation and artifact links",
-            "\n".join(
-                [
-                    _full_report_link_table(data, rows),
-                    _artifact_links(rows),
-                ]
-            ),
+        _report_card(
+            "4. 重要 Metric",
+            "<h3>Cost</h3>",
+            _cost_capacity_summary_table(data, rows),
+            "<h3>Data Quality</h3>",
+            _data_quality_contract_table(data, rows),
+            "<h3>Turnover And Exposure</h3>",
+            _turnover_exposure_contract_table(data, rows),
+            "<h3>Capacity</h3>",
+            _capacity_contract_table(data, rows),
         ),
-        "</section>",
-        '<section class="panel">',
-        "<h2>6. TODO：上线前还需要做什么</h2>",
-        _next_steps_contract_table(rows),
-        "</section>",
+        _report_card(
+            "5. Walk-forward",
+            "<h3>Methodology</h3>",
+            _walkforward_methodology_contract_table(rows),
+            "<h3>Summary</h3>",
+            _walkforward_summary_contract_table(data, rows),
+            "<h3>Split Details</h3>",
+            _walkforward_split_contract_table(data, rows),
+        ),
+        _report_card(
+            "6. Stability",
+            _parameter_sensitivity_contract_table(data, rows),
+        ),
+        _report_card(
+            "7. Risk",
+            _key_risk_table(data, rows),
+        ),
     ]
     return _html_document(title, "\n".join(body))
+
+
+def _report_card(title: str, *content: str) -> str:
+    body = "\n".join(part for part in content if part)
+    return (
+        '<details class="panel report-card" open>'
+        f'<summary class="report-card-summary"><h2>{escape(title)}</h2></summary>'
+        f'<div class="report-card-body">{body}</div>'
+        "</details>"
+    )
 
 
 def _report_subject(rows: List[Dict[str, Any]]) -> str:
@@ -3282,6 +3238,8 @@ def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[st
     row = _primary_row(rows)
     scores, reason, _ = _walkforward_scores(row)
     thresholds = _walkforward_thresholds(scores)
+    if not scores:
+        return _walkforward_not_run_summary_contract_table(thresholds, reason)
     min_worst = _threshold_float(thresholds, "min_worst_oos_sharpe")
     min_profitable = _threshold_float(thresholds, "min_profitable_splits_pct")
     min_dsr = _threshold_float(thresholds, "min_deflated_sharpe_ratio")
@@ -3362,12 +3320,38 @@ def _walkforward_summary_contract_table(data: Dict[str, Any], rows: List[Dict[st
     return _table(["Metric", "数值", "通过阈值", "当前判定", "解释"], body)
 
 
+def _walkforward_not_run_summary_contract_table(thresholds: Dict[str, Any], reason: str = "") -> str:
+    min_worst = _threshold_float(thresholds, "min_worst_oos_sharpe")
+    min_profitable = _threshold_float(thresholds, "min_profitable_splits_pct")
+    min_dsr = _threshold_float(thresholds, "min_deflated_sharpe_ratio")
+    max_adv = _threshold_float(thresholds, "max_adv_pct")
+    note = reason or "missing walkforward_result.json / metrics.walkforward payload; run the default full-report follow-up audit to populate this card"
+    rows_data = [
+        ("total_splits", "not_run", ">0", "not_run", note),
+        ("evaluated_splits", "not_run", ">0", "not_run", note),
+        ("no_trade_splits", "not_run", "excluded from OOS stats", "not_run", note),
+        ("aggregate_oos_sharpe", "not_run", ">0 reference", "not_run", note),
+        ("worst_oos_sharpe", "not_run", f">={_fmt(min_worst)}", "not_run", note),
+        ("pct_profitable_splits", "not_run", f">={_pct(min_profitable)}", "not_run", note),
+        ("deflated_sharpe_ratio", "not_run", f">={_fmt(min_dsr)} warning threshold", "not_run", note),
+        ("regime_breakdown", "not_run", "bear regime Sharpe >= -0.5000", "not_run", note),
+        ("capacity_viability", "not_run", f"single-trade participation <= {_pct(max_adv)} ADV", "not_run", note),
+    ]
+    body = "".join(
+        f"<tr><td>{escape(metric)}</td><td>{escape(value)}</td><td>{escape(threshold)}</td>"
+        + f"<td>{_threshold_badge(verdict)}</td><td>{escape(row_note)}</td></tr>"
+        for metric, value, threshold, verdict, row_note in rows_data
+    )
+    return _table(["Metric", "Value", "Threshold", "Verdict", "Note"], body)
+
+
 def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     detail, reason, verdict = _walkforward_scores(row)
     include_maxdd = False
     include_turnover = False
     include_trade_count = False
+    include_return = False
     split_rows = []
     if isinstance(detail, dict):
         raw_splits = detail.get("splits") or detail.get("split_results") or []
@@ -3381,6 +3365,8 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                 include_turnover = include_turnover or _safe_float(turnover_value) is not None
                 trade_count = split.get("trade_count")
                 include_trade_count = include_trade_count or trade_count is not None
+                return_value = _first_present(split, "return", "total_return", "oos_return", "test_return")
+                include_return = include_return or _safe_float(return_value) is not None
                 split_rows.append(
                     (
                         str(split.get("split") or idx),
@@ -3388,6 +3374,7 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                         _range_text(split, "test_start", "test_end"),
                         _cell(split.get("params") or split.get("parameters") or "frozen parameters"),
                         _split_oos_sharpe_cell(split),
+                        _pct(return_value),
                         _pct(maxdd_value),
                         _pct(turnover_value),
                         _int_cell(trade_count),
@@ -3406,12 +3393,15 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                 "missing",
                 "missing",
                 "missing",
+                "missing",
                 verdict or ("fail" if _walkforward_badge_class(scores) == "fail" else "pass"),
             )
         ]
         if reason:
-            split_rows.append(("原因", "missing", "missing", reason, _fmt(scores.get("worst_oos_sharpe")), "missing", "missing", "missing", "fail"))
+            split_rows.append(("原因", "missing", "missing", reason, _fmt(scores.get("worst_oos_sharpe")), "missing", "missing", "missing", "missing", "fail"))
     headers = ["Split", "Train", "Test", "参数", "OOS Sharpe"]
+    if include_return:
+        headers.append("Return")
     if include_maxdd:
         headers.append("MaxDD")
     if include_turnover:
@@ -3420,7 +3410,7 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
         headers.append("Trades")
     headers.append("结论")
     body_rows = []
-    for split, train, test, params, sharpe, maxdd, turnover, trade_count, result in split_rows:
+    for split, train, test, params, sharpe, return_value, maxdd, turnover, trade_count, result in split_rows:
         cells = [
             escape(split),
             escape(train),
@@ -3428,6 +3418,8 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
             escape(params),
             escape(sharpe),
         ]
+        if include_return:
+            cells.append(escape(return_value))
         if include_maxdd:
             cells.append(escape(maxdd))
         if include_turnover:
@@ -3490,7 +3482,7 @@ def _next_steps_contract_table(rows: List[Dict[str, Any]]) -> str:
 def _template_style() -> str:
     base_style = (
         ":root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}"
-        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.logic-plain{margin:10px 0 14px;padding:14px 16px;background:#f8fafc;border:1px solid var(--line);color:#334155}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.hypothesis-list{margin:0;padding-left:20px}.hypothesis-list li{margin:0 0 6px}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}.audit-details{margin:12px 0;border:1px solid var(--line);background:#fff}.audit-details>summary{cursor:pointer;padding:12px 14px;font-weight:800;background:var(--soft)}.audit-details[open]>summary{border-bottom:1px solid var(--line)}.audit-body{padding:14px}.appendix-panel h3{margin-top:18px}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.report-card{padding:0;overflow:hidden}.report-card-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;cursor:pointer;list-style:none;background:#fff}.report-card-summary::-webkit-details-marker{display:none}.report-card-summary h2{margin:0;font-size:20px;line-height:1.25}.report-card-summary::after{content:'+';display:grid;place-items:center;flex:0 0 auto;width:28px;height:28px;border:1px solid var(--line);color:var(--muted);font:800 18px/1 'Cascadia Mono',Consolas,monospace;background:var(--panel)}.report-card[open]>.report-card-summary{border-bottom:1px solid var(--line);background:var(--soft)}.report-card[open]>.report-card-summary::after{content:'-'}.report-card-body{padding:22px 24px 24px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.logic-plain{margin:10px 0 14px;padding:14px 16px;background:#f8fafc;border:1px solid var(--line);color:#334155}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.hypothesis-list{margin:0;padding-left:20px}.hypothesis-list li{margin:0 0 6px}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}.audit-details{margin:12px 0;border:1px solid var(--line);background:#fff}.audit-details>summary{cursor:pointer;padding:12px 14px;font-weight:800;background:var(--soft)}.audit-details[open]>summary{border-bottom:1px solid var(--line)}.audit-body{padding:14px}.appendix-panel h3{margin-top:18px}"
     )
     return base_style + "\n" + _REQUIRED_CHART_STYLE
 

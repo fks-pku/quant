@@ -532,7 +532,7 @@ class TestCase6TopLevelStrategyPromotionGate:
             if bundled_text != source_text:
                 violations.append((item.name, "bundled full_research_report.html is not synchronized with research report"))
                 continue
-            if item.name not in bundled_text or "Metric Checklist" not in bundled_text:
+            if item.name not in bundled_text or "End-to-End Research Report" not in bundled_text:
                 violations.append((item.name, "bundled report is not the strategy full report"))
 
         assert violations == []

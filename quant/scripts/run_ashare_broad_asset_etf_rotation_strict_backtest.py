@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,7 +79,8 @@ SCENARIOS: List[Dict[str, Any]] = [
 ]
 
 
-def main() -> None:
+def main(argv: List[str] | None = None) -> None:
+    args = _parse_args(argv)
     universe = build_broad_asset_etf_pit_universe(
         universe_as_of=UNIVERSE_AS_OF,
         min_history_days_as_of=UNIVERSE_MIN_HISTORY_DAYS_AS_OF,
@@ -125,6 +128,12 @@ def main() -> None:
 
     best = _select_best(rows)
     report_path, result_path = _write_outputs(rows, strict_reports, best, universe)
+    followups = {}
+    if args.run_followups:
+        followups = _run_default_followup_audits(
+            walkforward_workers=args.walkforward_workers,
+            stability_workers=args.stability_workers,
+        )
     print(
         json.dumps(
             {
@@ -132,12 +141,65 @@ def main() -> None:
                 "best": _compact_row(best),
                 "report_path": str(report_path),
                 "result_path": str(result_path),
+                "followups": _compact_followup_summary(followups),
             },
             ensure_ascii=False,
             indent=2,
         ),
         flush=True,
     )
+
+
+def _parse_args(argv: List[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--skip-followups",
+        dest="run_followups",
+        action="store_false",
+        help="Only generate strict backtest and report skeleton; do not run default walk-forward/stability audits.",
+    )
+    parser.add_argument("--walkforward-workers", type=int, default=min(4, os.cpu_count() or 1))
+    parser.add_argument("--stability-workers", type=int, default=min(4, os.cpu_count() or 1))
+    parser.set_defaults(run_followups=True)
+    return parser.parse_args(argv)
+
+
+def _run_default_followup_audits(walkforward_workers: int = 4, stability_workers: int = 4) -> Dict[str, Dict[str, Any]]:
+    from quant.scripts import run_ashare_broad_asset_etf_rotation_stability as stability_runner
+    from quant.scripts import run_ashare_broad_asset_etf_rotation_walkforward as walkforward_runner
+
+    print(f"Running default walk-forward audit with {max(1, walkforward_workers)} workers", flush=True)
+    walkforward_payload, walkforward_report_path = walkforward_runner.run_walkforward(
+        max_workers=max(1, walkforward_workers)
+    )
+    print(f"Running default stability audit with {max(1, stability_workers)} workers", flush=True)
+    stability_payload, stability_report_path = stability_runner.run_stability(max_workers=max(1, stability_workers))
+    return {
+        "walkforward": {"payload": walkforward_payload, "report_path": walkforward_report_path},
+        "stability": {"payload": stability_payload, "report_path": stability_report_path},
+    }
+
+
+def _compact_followup_summary(followups: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    summary: Dict[str, Dict[str, Any]] = {}
+    for key, item in followups.items():
+        payload = item.get("payload") or {}
+        if key == "walkforward":
+            walkforward = payload.get("walkforward") or {}
+            summary[key] = {
+                "verdict": walkforward.get("verdict"),
+                "total_splits": walkforward.get("total_splits"),
+                "evaluated_splits": walkforward.get("evaluated_splits"),
+                "report_path": str(item.get("report_path")),
+            }
+        elif key == "stability":
+            sensitivity = payload.get("parameter_sensitivity") or {}
+            summary[key] = {
+                "status": sensitivity.get("status"),
+                "tested_count": sensitivity.get("tested_count"),
+                "report_path": str(item.get("report_path")),
+            }
+    return summary
 
 
 def _with_pit_universe(scenario: Dict[str, Any], universe: Dict[str, Any]) -> Dict[str, Any]:
@@ -189,6 +251,8 @@ def _run_one(
     benchmark_provider: BenchmarkProvider,
     benchmark_meta: Dict[str, Any],
     survivorship_audit: Dict[str, Any],
+    start: datetime = START,
+    end: datetime = END,
 ) -> Dict[str, Any]:
     symbols = list(scenario["symbols"])
     execution_cost_model = _strict_execution_cost_model(
@@ -202,8 +266,8 @@ def _run_one(
     )
     data_provider = _DuckDBDailyDateProvider(
         symbols,
-        START,
-        END,
+        start,
+        end,
         include_daily_basic=False,
         include_execution_liquidity_features=True,
     )
@@ -240,8 +304,8 @@ def _run_one(
     )
     try:
         bt_result = backtester.run(
-            start=START,
-            end=END,
+            start=start,
+            end=end,
             strategies=[strategy],
             initial_cash=INITIAL_CASH,
             data_provider=data_provider,
@@ -249,11 +313,11 @@ def _run_one(
         )
     finally:
         data_provider.close()
-    benchmark_equity_curve = benchmark_provider.get_benchmark_equity(START, END, INITIAL_CASH) if benchmark_provider else None
+    benchmark_equity_curve = benchmark_provider.get_benchmark_equity(start, end, INITIAL_CASH) if benchmark_provider else None
     return _strict_backtest_report(
         bt_result,
-        START,
-        END,
+        start,
+        end,
         INITIAL_CASH,
         symbols,
         benchmark_meta,
@@ -420,6 +484,7 @@ def _write_outputs(
     (runs_dir / f"{run_ts}_result.json").write_text(last_text, encoding="utf-8")
 
     row = _hypothesis_row(best, strict_reports[str(best["scenario"])])
+    _attach_followup_metrics(row, strategy_dir)
     result = {"run_id": f"{STRATEGY_ID}_full_report", "backtested": len(rows), "rejected": 0, "errors": []}
     generated = datetime.now(timezone.utc).isoformat()
     strict_html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=generated)
@@ -441,6 +506,39 @@ def _write_outputs(
     (latest_dir / "fast_research_report.html").write_text(fast_html, encoding="utf-8")
     (latest_dir / "walkforward_audit_report.html").write_text(walk_html, encoding="utf-8")
     return full_report_path, result_path
+
+
+def _attach_followup_metrics(row: Dict[str, Any], strategy_dir: Path) -> None:
+    metrics = row.setdefault("metrics", {})
+    stability_path = strategy_dir / "stability_result.json"
+    if stability_path.exists():
+        try:
+            stability = json.loads(stability_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            stability = {}
+        parameter_sensitivity = stability.get("parameter_sensitivity") if isinstance(stability, dict) else None
+        if isinstance(parameter_sensitivity, dict):
+            metrics["parameter_sensitivity"] = parameter_sensitivity
+    walkforward_path = strategy_dir / "walkforward_result.json"
+    if walkforward_path.exists():
+        try:
+            walkforward = json.loads(walkforward_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            walkforward = {}
+        payload = walkforward.get("walkforward") if isinstance(walkforward, dict) else None
+        if isinstance(payload, dict):
+            metrics["walkforward"] = payload
+            stages = metrics.setdefault("research_stage_conclusions", {})
+            stages["walkforward_strict_audit"] = {
+                "label": "Walk-forward strict audit",
+                "verdict": str(payload.get("verdict") or ("pass" if payload.get("is_viable") else "fail")),
+                "conclusion": (
+                    f"WF aggregate={payload.get('aggregate_oos_sharpe', 'n/a')}; "
+                    f"worst={payload.get('worst_oos_sharpe', 'n/a')}; "
+                    f"profitable={payload.get('pct_profitable_splits', 'n/a')}."
+                ),
+                "method": "Persisted purged walk-forward strict audit loaded from walkforward_result.json.",
+            }
 
 
 def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any]) -> Dict[str, Any]:

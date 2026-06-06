@@ -1390,7 +1390,11 @@ def test_research_engine_persists_candidates_and_markdown_artifacts():
         assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.md").exists()
         assert (tmp_path / "research" / "reports" / "latest" / "metadata.json").exists()
         assert "End-to-End Research Report" in full_report
-        assert "Metric Checklist" in full_report
+        assert "2. 策略逻辑" in full_report
+        assert "4. 重要 Metric" in full_report
+        assert "5. Walk-forward" in full_report
+        assert "6. Stability" in full_report
+        assert "Metric Checklist" not in full_report
         assert "信号公式" in fast_report
         assert "full_research_report.html" not in fast_report
         assert 'class="formula"' in fast_report
@@ -2842,6 +2846,243 @@ def test_broad_asset_etf_rotation_report_script_keeps_registered_missing_data_bu
     assert scenario["category_symbols"]["bond_rate"] == ["511010"]
     assert "511010" in scenario["symbols"]
     assert scenario["missing_pit_categories"] == ["bond_rate"]
+
+
+def test_broad_asset_etf_rotation_stability_runner_uses_one_factor_variants():
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_stability import PARAMETER_KEYS, _stability_variants
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_strict_backtest import SCENARIOS
+
+    base = dict(SCENARIOS[0])
+    base["symbols"] = ["510300", "518880"]
+    variants = _stability_variants(base)
+
+    assert len(variants) >= 10
+    assert variants[0]["stability_variant"] == "base_locked"
+    base_params = {key: variants[0].get(key) for key in PARAMETER_KEYS}
+    for variant in variants[1:]:
+        changed = [key for key in PARAMETER_KEYS if variant.get(key) != base_params.get(key)]
+        assert len(changed) == 1
+
+
+def test_broad_asset_etf_rotation_stability_payload_keeps_best_as_audit_only():
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_stability import _build_parameter_sensitivity_payload
+
+    base_scenario = {
+        "momentum_lookback": 126,
+        "trend_window": 120,
+        "volatility_window": 60,
+        "max_positions": 3,
+        "max_positions_per_category": 1,
+        "holding_days": 20,
+        "min_avg_turnover": 20_000_000,
+        "target_exposure": 0.98,
+    }
+    rows = [
+        {
+            "variant": "base_locked",
+            "parameters": {"momentum_lookback": 126},
+            "cagr": 0.10,
+            "max_drawdown_pct": -0.20,
+            "sharpe": 0.8,
+            "total_trades": 100,
+            "max_adv_participation": 0.01,
+        },
+        {
+            "variant": "lookback_84",
+            "parameters": {"momentum_lookback": 84},
+            "cagr": 0.095,
+            "max_drawdown_pct": -0.21,
+            "sharpe": 0.75,
+            "total_trades": 96,
+            "max_adv_participation": 0.01,
+        },
+        {
+            "variant": "top2",
+            "parameters": {"max_positions": 2},
+            "cagr": 0.02,
+            "max_drawdown_pct": -0.25,
+            "sharpe": 0.2,
+            "total_trades": 70,
+            "max_adv_participation": 0.01,
+        },
+    ]
+
+    payload = _build_parameter_sensitivity_payload(base_scenario, rows)
+
+    assert payload["tested_count"] == 3
+    assert payload["pass_count"] == 2
+    assert payload["best_params"] == {"momentum_lookback": 126}
+    assert "audit evidence only" in payload["stability_note"]
+    assert payload["rows"][2]["verdict"] == "warn"
+
+
+def test_broad_asset_etf_rotation_strict_runner_defaults_to_followup_audits(monkeypatch):
+    from quant.scripts import run_ashare_broad_asset_etf_rotation_strict_backtest as strict_runner
+    from quant.scripts import run_ashare_broad_asset_etf_rotation_stability as stability_runner
+    from quant.scripts import run_ashare_broad_asset_etf_rotation_walkforward as walkforward_runner
+
+    calls = []
+
+    def fake_walkforward(max_workers=4):
+        calls.append(("walkforward", max_workers))
+        return {"walkforward": {"total_splits": 1}}, Path("walkforward.html")
+
+    def fake_stability(max_workers=4):
+        calls.append(("stability", max_workers))
+        return {"parameter_sensitivity": {"tested_count": 1}}, Path("stability.html")
+
+    monkeypatch.setattr(walkforward_runner, "run_walkforward", fake_walkforward)
+    monkeypatch.setattr(stability_runner, "run_stability", fake_stability)
+
+    args = strict_runner._parse_args([])
+    skipped = strict_runner._parse_args(["--skip-followups"])
+    summary = strict_runner._run_default_followup_audits(walkforward_workers=2, stability_workers=3)
+
+    assert args.run_followups is True
+    assert skipped.run_followups is False
+    assert calls == [("walkforward", 2), ("stability", 3)]
+    assert summary["walkforward"]["payload"]["walkforward"]["total_splits"] == 1
+    assert summary["stability"]["payload"]["parameter_sensitivity"]["tested_count"] == 1
+
+
+def test_broad_asset_etf_rotation_walkforward_payload_matches_full_report_contract():
+    from quant.features.research.models import PurgedWalkForwardResult
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_walkforward import _build_walkforward_payload
+
+    result = PurgedWalkForwardResult(
+        splits=[
+            {
+                "train_start_date": "2020-01-01",
+                "train_end_date": "2020-12-31",
+                "test_start_date": "2021-01-01",
+                "test_end_date": "2021-03-31",
+                "test_sharpe": 0.4,
+                "trade_count": 6,
+                "has_trades": True,
+                "response": {"metrics": {"total_return": 0.025}},
+            },
+            {
+                "train_start_date": "2020-04-01",
+                "train_end_date": "2021-03-31",
+                "test_start_date": "2021-04-01",
+                "test_end_date": "2021-06-30",
+                "test_sharpe": 0.0,
+                "trade_count": 0,
+                "has_trades": False,
+            },
+        ],
+        aggregate_oos_sharpe=0.4,
+        worst_oos_sharpe=0.4,
+        deflated_sharpe_ratio=None,
+        sharpe_degradation=0.0,
+        pct_profitable_splits=1.0,
+        is_viable=True,
+        capacity_ok=True,
+        evaluated_splits=1,
+        no_trade_splits=1,
+        total_splits=2,
+    )
+
+    payload = _build_walkforward_payload(result, max_workers=4)
+    walkforward = payload["walkforward"]
+
+    assert walkforward["verdict"] == "pass"
+    assert walkforward["total_splits"] == 2
+    assert walkforward["evaluated_splits"] == 1
+    assert walkforward["no_trade_splits"] == 1
+    assert walkforward["thresholds"]["test_window_days"] == 63
+    assert walkforward["splits"][0]["oos_sharpe"] == pytest.approx(0.4)
+    assert walkforward["splits"][0]["return"] == pytest.approx(0.025)
+
+
+def test_broad_asset_etf_rotation_walkforward_split_replay_uses_train_window_warmup(monkeypatch):
+    from quant.scripts import run_ashare_broad_asset_etf_rotation_walkforward as walkforward_runner
+
+    captured = {}
+
+    def fake_run_one(scenario, lot_sizes, benchmark_provider, benchmark_meta, survivorship_audit, start, end):
+        captured["start"] = start.date().isoformat()
+        captured["end"] = end.date().isoformat()
+        return {
+            "metrics": {"sharpe": 99.0, "cagr": 9.9, "max_drawdown_pct": 0.0, "total_trades": 99},
+            "capacity": {"max_adv_participation": 0.01},
+            "equity_curve": {
+                "strategy": [
+                    {"date": "2020-01-01", "value": 100.0},
+                    {"date": "2020-12-31", "value": 100.0},
+                    {"date": "2021-01-04", "value": 101.0},
+                    {"date": "2021-01-05", "value": 102.0},
+                    {"date": "2021-01-06", "value": 102.5},
+                ]
+            },
+        }
+
+    monkeypatch.setattr(walkforward_runner.strict_runner, "_run_one", fake_run_one)
+    response = walkforward_runner._run_split_replay(
+        {
+            "name": "base",
+            "symbols": ["510300"],
+            "category_symbols": {"csi300": ["510300"]},
+            "pit_size_fields": [],
+        },
+        {
+            "start": "2021-01-04",
+            "end": "2021-01-06",
+            "train_start_date": "2020-01-01",
+        },
+        {"510300": 100},
+        None,
+        {},
+        {},
+    )
+
+    assert captured == {"start": "2020-01-01", "end": "2021-01-06"}
+    assert response["metrics"]["sharpe"] != 99.0
+    assert response["metrics"]["total_return"] == pytest.approx(0.025)
+    assert response["metrics"]["total_trades"] == 3
+    assert response["returns"].index.min().date().isoformat() == "2021-01-04"
+
+
+def test_broad_asset_full_report_attaches_persisted_stability_payload(tmp_path):
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_strict_backtest import _attach_followup_metrics
+
+    payload = {
+        "parameter_sensitivity": {
+            "status": "pass",
+            "tested_count": 4,
+            "pass_count": 3,
+            "max_degradation_pct": 12.5,
+        }
+    }
+    (tmp_path / "stability_result.json").write_text(json.dumps(payload), encoding="utf-8")
+    row = {"metrics": {}}
+
+    _attach_followup_metrics(row, tmp_path)
+
+    assert row["metrics"]["parameter_sensitivity"]["tested_count"] == 4
+
+
+def test_broad_asset_full_report_attaches_persisted_walkforward_payload(tmp_path):
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_strict_backtest import _attach_followup_metrics
+
+    payload = {
+        "walkforward": {
+            "verdict": "warn",
+            "aggregate_oos_sharpe": 0.21,
+            "worst_oos_sharpe": -0.10,
+            "pct_profitable_splits": 0.55,
+            "total_splits": 4,
+            "evaluated_splits": 3,
+            "no_trade_splits": 1,
+        }
+    }
+    (tmp_path / "walkforward_result.json").write_text(json.dumps(payload), encoding="utf-8")
+    row = {"metrics": {}}
+
+    _attach_followup_metrics(row, tmp_path)
+
+    assert row["metrics"]["walkforward"]["total_splits"] == 4
+    assert row["metrics"]["research_stage_conclusions"]["walkforward_strict_audit"]["verdict"] == "warn"
 
 
 def test_api_yearly_returns_from_equity_uses_calendar_years():

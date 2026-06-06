@@ -53,5 +53,5 @@ python quant/scripts/ingest_tushare.py --symbol 600519 --start 2023-01-01 --end 
 - Frozen dataclasses for immutable value objects
 - `threading.RLock()` for shared state
 - DuckDB readers: `read_only=True`
-- 策略研究模板契约：用户说“研究策略/策略研究/full report”时，必须使用 `quant-research-fks`，并严格按 `quant/features/strategies/xueqiu_small_cap_financial_filter/full_research_report.html` 当前 6 段 HTML 报告契约生成；活跃模板是 `quant/infrastructure/var/research/report_templates/full_research_report_template.html`。默认报告不展示参数敏感性分析或止盈止损开关对照，除非用户明确要求增量审计。
+- 策略研究模板契约：用户说“研究策略/策略研究/full report”时，必须使用 `quant-research-fks`，并严格按当前 7 张可展开卡片 HTML 报告契约生成：`1. Final Decision`、`2. 策略逻辑`、`3. 策略表现`、`4. 重要 Metric`、`5. Walk-forward`、`6. Stability`、`7. Risk`；`Final Decision` 段就是 active Go / No-Go checklist 加 executive snapshot，不另设顶层 `Metric Checklist`。活跃模板是 `quant/infrastructure/var/research/report_templates/full_research_report_template.html`。默认 full report 入口必须跑并持久化 Walk-forward 与 Stability 审计 payload；单阶段/快速调试才允许显式跳过。默认报告不展示止盈止损开关对照、Appendix 或 TODO，除非用户明确要求增量审计。
 - Text files: UTF-8; run `python scripts/check_text_encoding.py` after doc rewrites

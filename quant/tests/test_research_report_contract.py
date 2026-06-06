@@ -79,7 +79,7 @@ def test_execution_cost_bps_diagnostics_weighted_and_median():
     assert result["median_impact_bps"] == 3.0
 
 
-def test_full_report_combines_all_stage_reports_with_metric_checklist():
+def test_full_report_uses_clean_seven_card_layout():
     result = {
         "run_id": "full_contract",
         "backtested": 1,
@@ -164,48 +164,60 @@ def test_full_report_combines_all_stage_reports_with_metric_checklist():
     assert "End-to-End Research Report" in html
     assert _headings(html, "h2") == [
         "1. Final Decision",
-        "2. Metric Checklist",
-        "3. Strategy Logic And Core Evidence",
-        "4. Key Risks",
-        "5. Appendix",
-        "6. TODO：上线前还需要做什么",
+        "2. 策略逻辑",
+        "3. 策略表现",
+        "4. 重要 Metric",
+        "5. Walk-forward",
+        "6. Stability",
+        "7. Risk",
     ]
-    assert "Metric Checklist" in html
-    assert "Strategy Logic And Core Evidence" in html
+    assert html.count('<details class="panel report-card" open>') == 7
+    assert '<summary class="report-card-summary"><h2>1. Final Decision</h2></summary>' in html
+    assert '<summary class="report-card-summary"><h2>5. Walk-forward</h2></summary>' in html
+    assert '<summary class="report-card-summary"><h2>6. Stability</h2></summary>' in html
+    assert '<summary class="report-card-summary"><h2>7. Risk</h2></summary>' in html
+    assert "Metric Checklist" not in html
+    assert "Strategy Logic And Core Evidence" not in html
     assert "策略逻辑" in html
     assert "止盈止损逻辑" in html
-    assert "Key Risks" in html
-    assert "Appendix" in html
-    assert "上线前还需要做什么" in html
+    assert "策略参数列表及解释" in html
+    assert "Key Risks" not in html
+    assert "Appendix" not in html
+    assert "上线前还需要做什么" not in html
     assert "Parameter Sensitivity" not in html
-    assert "参数敏感性" not in html
-    assert "A. Fast research input and signal diagnostics" in html
-    assert "B. Strict backtest full diagnostics" in html
-    assert "C. Walk-forward audit evidence" in html
+    assert "参数敏感性" in html
+    assert "<td>tested_count</td><td>0</td><td>&gt;=3 local/scenario variants</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "A. Fast research input and signal diagnostics" not in html
+    assert "B. Strict backtest full diagnostics" not in html
+    assert "C. Walk-forward audit evidence" not in html
     assert "Evidence Map" not in html
-    assert 'class="audit-details"' in html
-    assert "full_research_report.html" in html
-    assert "fast_research_report.html" in html
-    assert "strict_backtest_report.html" in html
-    assert "walkforward_audit_report.html" in html
+    assert 'class="audit-details"' not in html
+    assert "full_research_report.html" not in html
+    assert "fast_research_report.html" not in html
+    assert "strict_backtest_report.html" not in html
+    assert "walkforward_audit_report.html" not in html
     assert '<figure class="equity-chart">' in html
     assert '<path class="strategy-line"' in html
     assert '<path class="benchmark-line"' in html
     assert '<figure class="return-calendar-chart">' in html
     assert '<details class="return-cell positive">' in html
-    assert "Backtest Configuration" in html
+    assert "Backtest Configuration" not in html
     assert "A 股示例默认 500000 CNY" not in html
-    assert "研究默认由 config/research.yaml 的 default_initial_cash 控制" in html
-    assert "<td>有效成本 BPS</td><td>weighted=27.4376 bps; median=32.1952 bps</td>" in html
-    assert "Data Quality Audit" in html
-    assert "Drawdown Episodes" in html
-    assert "Cost Decomposition" in html
+    assert "Go / No-Go Checklist" in html
     assert "<td>max_adv_participation</td><td>4.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>total_trades</td><td>64</td><td>&gt;50</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>cagr_drawdown_tier</td><td>CAGR=7.00%; MaxDD=24.00%</td><td>CAGR 5.00%-10.00% requires MaxDD &lt;=15.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "<td>有效成本 BPS</td><td>weighted=27.4376 bps; median=32.1952 bps</td>" in html
+    assert "Data Quality" in html
+    assert "Turnover And Exposure" in html
+    assert "Capacity" in html
+    assert "Drawdown Episodes" not in html
+    assert "Cost Decomposition" not in html
+    assert "<td>Total Trades</td><td>64</td>" in html
+    assert "<td>max_adv_participation</td><td>4.00%</td><td>单笔最大 ADV 金额参与率</td>" in html
 
 
-def test_reports_do_not_render_parameter_sensitivity_by_default():
+def test_full_report_renders_parameter_sensitivity_in_stability_card():
     result = {"run_id": "sensitivity_contract", "backtested": 1, "walkforward_passed": 0}
     rows = [
         {
@@ -261,13 +273,44 @@ def test_reports_do_not_render_parameter_sensitivity_by_default():
     full_html = build_research_full_report_html(result, rows)
     strict_html = build_research_stage_report_html("strict_backtest", result, rows)
 
-    assert "Parameter Sensitivity" not in full_html
-    assert "参数敏感性" not in full_html
+    assert "6. Stability" in full_html
+    assert "参数敏感性" in full_html
     assert "参数敏感性" not in strict_html
-    assert "稳健性审计，不作为全样本参数寻优通过证据" not in full_html
-    assert "tested_count</td><td>3" not in full_html
-    assert "wider_stop" not in full_html
-    assert "risk_stop_pct" not in full_html
+    assert "稳健性审计，不作为全样本参数寻优通过证据" in full_html
+    assert "<td>tested_count</td><td>3</td><td>&gt;=3 local/scenario variants</td><td><span class=\"badge pass\">pass</span></td>" in full_html
+    assert "wider_stop" in full_html
+    assert "risk_stop_pct" in full_html
+
+
+def test_full_report_marks_missing_walkforward_payload_as_not_run():
+    result = {"run_id": "missing_walkforward_contract", "backtested": 1, "walkforward_passed": 0}
+    rows = [
+        {
+            "title": "Missing Walkforward Contract",
+            "strategy_id": "missing_walkforward_contract_strategy",
+            "status": "needs_walkforward_validation",
+            "metrics": {
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 0.82,
+                        "cagr": 0.09,
+                        "max_drawdown_pct": -0.12,
+                        "total_trades": 64,
+                    },
+                    "capacity": {"max_adv_participation": 0.02},
+                }
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "missing_walkforward_contract_strategy", "universe": ["510300"]}},
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    assert "<td>total_splits</td><td>not_run</td>" in html
+    assert "<td>evaluated_splits</td><td>not_run</td>" in html
+    assert "<td>no_trade_splits</td><td>not_run</td>" in html
+    assert '<span class="badge warn">not_run</span>' in html
+    assert "<td>total_splits</td><td>0</td>" not in html
 
 
 def test_full_report_renders_strategy_parameter_list_with_explanations():
@@ -472,14 +515,13 @@ def test_full_report_marks_missing_fast_research_metrics_as_failures():
     assert "not_recorded" not in html
     assert "<td>max_adv_participation</td><td>missing</td><td>&lt;=5.00% ADV</td><td><span class=\"badge fail\">fail</span></td>" in html
     assert "<td>cagr_drawdown_tier</td><td>CAGR=-30.64%; MaxDD=98.19%</td><td>CAGR &gt;=5.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
-    assert "fast research admission</td><td>missing" in html
-    assert "HFQ signal validation</td><td>missing" in html
-    assert "vectorized portfolio diagnostics</td><td>missing" in html
-    assert "PnL attribution bridge</td><td>missing" in html
-    assert (
-        "<td>1</td><td>2024-01-01 - 2024-06-30</td><td>2024-07-01 - 2024-07-31</td>"
-        "<td>frozen parameters</td><td>-0.9000</td><td>fail</td>"
-    ) in html
+    assert "<td>Total Trades</td><td>1235</td>" in html
+    assert "<td>Max Drawdown</td><td>-98.19%</td>" in html
+    assert "fast research admission</td><td>missing" not in html
+    assert "HFQ signal validation</td><td>missing" not in html
+    assert "vectorized portfolio diagnostics</td><td>missing" not in html
+    assert "PnL attribution bridge</td><td>missing" not in html
+    assert "2024-01-01 - 2024-06-30" in html
 
 
 def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
@@ -564,9 +606,9 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
     assert "ETF timing/rotation" in html
     assert "需要重跑 fast/full research" not in html
     assert "<td>rank_ic</td>" not in html
-    assert "HFQ signal validation</td><td>n/a" in html
-    assert "vectorized portfolio diagnostics</td><td>n/a" in html
-    assert "PnL attribution bridge</td><td>n/a" in html
+    assert "HFQ signal validation</td><td>n/a" not in html
+    assert "vectorized portfolio diagnostics</td><td>n/a" not in html
+    assert "PnL attribution bridge</td><td>n/a" not in html
     assert "已审计稳定 ETF 注册池" in html
     assert "新增类别必须人工审计注册" in html
     assert "注册池 active=6/registered=6/missing_data=0" in html
@@ -580,8 +622,9 @@ def test_full_report_marks_etf_timing_fast_research_scope_as_not_applicable():
     assert "这套策略先把仓位思路分成两部分" in html
     assert "顺风期组合同时拿权益 ETF 和黄金 ETF" in html
     assert "<td>max_adv_participation</td><td>2.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>cagr_drawdown_tier</td><td>CAGR=14.24%; MaxDD=15.75%</td><td>CAGR 10.00%-15.00% requires MaxDD &lt;=25.00%</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>worst_oos_sharpe</td><td>-3.3100</td><td>&gt;=0.3000</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "<td>max_adv_participation</td><td>2.00%</td><td>单笔最大 ADV 金额参与率</td>" in html
+    assert "<td>CAGR</td><td>14.24%</td>" in html
+    assert "worst=-3.3100" in html
 
 
 def test_full_report_preserves_strict_evidence_when_walkforward_stage_rerenders():
@@ -625,8 +668,9 @@ def test_full_report_preserves_strict_evidence_when_walkforward_stage_rerenders(
     html = build_research_full_report_html(result, rows)
 
     assert "<td>max_adv_participation</td><td>2.00%</td><td>&lt;=5.00% ADV</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>total_trades</td><td>204</td><td>&gt;50</td><td><span class=\"badge pass\">pass</span></td>" in html
-    assert "<td>cagr_drawdown_tier</td><td>CAGR=14.20%; MaxDD=15.80%</td><td>CAGR 10.00%-15.00% requires MaxDD &lt;=25.00%</td><td><span class=\"badge pass\">pass</span></td>" in html
+    assert "<td>max_adv_participation</td><td>2.00%</td><td>单笔最大 ADV 金额参与率</td>" in html
+    assert "<td>Total Trades</td><td>204</td>" in html
+    assert "<td>CAGR</td><td>14.20%</td>" in html
     assert "strict_sharpe</td><td>not_recorded" not in html
     assert "Sharpe=1.18" in html
 
@@ -663,6 +707,7 @@ def test_walkforward_report_shows_effective_split_denominator_and_no_trade_exclu
                             "test_start": "2024-07-01",
                             "test_end": "2024-07-31",
                             "oos_sharpe": -9.0,
+                            "return": -0.02,
                             "trade_count": 0,
                             "has_trades": False,
                         },
@@ -673,6 +718,7 @@ def test_walkforward_report_shows_effective_split_denominator_and_no_trade_exclu
                             "test_start": "2024-08-01",
                             "test_end": "2024-08-31",
                             "oos_sharpe": 0.7,
+                            "return": 0.03,
                             "trade_count": 3,
                             "has_trades": True,
                         },
@@ -689,8 +735,10 @@ def test_walkforward_report_shows_effective_split_denominator_and_no_trade_exclu
     assert "<td>evaluated_splits</td><td>2</td><td>&gt;0</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>no_trade_splits</td><td>1</td><td>excluded from OOS stats</td><td><span class=\"badge warn\">excluded</span></td>" in html
     assert "aggregate/worst/profitable/DSR 只统计这些区间" in html
-    assert "<td>1</td><td>2024-01-01 - 2024-06-30</td><td>2024-07-01 - 2024-07-31</td><td>frozen parameters</td><td>n/a (no trades)</td><td>0</td><td>excluded_no_trade</td>" in html
-    assert "-9.0000</td><td>0</td><td>excluded_no_trade" not in html
+    assert "<th>Return</th>" in html
+    assert "<td>1</td><td>2024-01-01 - 2024-06-30</td><td>2024-07-01 - 2024-07-31</td><td>frozen parameters</td><td>n/a (no trades)</td><td>-2.00%</td><td>0</td><td>excluded_no_trade</td>" in html
+    assert "<td>2</td><td>2024-02-01 - 2024-07-31</td><td>2024-08-01 - 2024-08-31</td><td>frozen parameters</td><td>0.7000</td><td>3.00%</td><td>3</td><td>pass</td>" in html
+    assert "-9.0000</td><td>-2.00%</td><td>0</td><td>excluded_no_trade" not in html
 
 
 def test_small_cap_strict_grid_best_respects_drawdown_constraint_before_return():
