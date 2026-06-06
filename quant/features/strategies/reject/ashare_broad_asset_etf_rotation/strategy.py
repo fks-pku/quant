@@ -39,7 +39,7 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
         volatility_window: int = 60,
         liquidity_window: int = 20,
         min_avg_turnover: float = 20_000_000.0,
-        max_positions: int = 3,
+        max_positions: int = 2,
         max_positions_per_category: int = 1,
         target_exposure: float = 0.98,
         holding_days: int = 20,

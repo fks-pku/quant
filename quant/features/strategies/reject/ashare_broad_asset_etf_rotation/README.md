@@ -12,7 +12,7 @@ Every 20 trading days, rank visible ETFs by skipped 126-day momentum divided by 
 
 ## Portfolio
 
-Hold at most 3 ETFs, with at most 1 ETF per category. Selected ETFs are equal weighted up to the configured target exposure. If no ETF qualifies, the strategy holds actual cash rather than buying a hidden defensive proxy.
+Hold at most 2 ETFs, with at most 1 ETF per category. Selected ETFs are equal weighted up to the configured target exposure. If no ETF qualifies, the strategy holds actual cash rather than buying a hidden defensive proxy.
 
 ## Research Status
 

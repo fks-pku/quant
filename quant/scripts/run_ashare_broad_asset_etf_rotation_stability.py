@@ -92,7 +92,7 @@ def _stability_variants(base_scenario: Dict[str, Any]) -> List[Dict[str, Any]]:
             _variant(base_scenario, "trend_160", trend_window=160),
             _variant(base_scenario, "vol_40", volatility_window=40),
             _variant(base_scenario, "vol_90", volatility_window=90),
-            _variant(base_scenario, "top2", max_positions=2),
+            _variant(base_scenario, "top3", max_positions=3),
             _variant(base_scenario, "top4", max_positions=4),
             _variant(base_scenario, "rebalance_10", holding_days=10),
             _variant(base_scenario, "rebalance_40", holding_days=40),

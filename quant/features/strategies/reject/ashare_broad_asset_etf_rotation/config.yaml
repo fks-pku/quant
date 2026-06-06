@@ -19,7 +19,7 @@ parameters:
   volatility_floor: 0.01
   liquidity_window: 20
   min_avg_turnover: 20000000.0
-  max_positions: 3
+  max_positions: 2
   max_positions_per_category: 1
   target_exposure: 0.98
   holding_days: 20

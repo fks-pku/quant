@@ -2814,8 +2814,11 @@ def test_broad_asset_etf_rotation_report_script_uses_domestic_default_universe()
     assert namespace["START"].date().isoformat() == "2016-01-01"
     assert namespace["END"].date().isoformat() == "2026-05-31"
     scenario = namespace["SCENARIOS"][0]
+    assert scenario["name"] == "monthly_126d_vol60_top2_domestic"
+    assert scenario["max_positions"] == 2
     assert "csi1000" in namespace["DEFAULT_CATEGORY_SYMBOLS"]
     assert scenario["category_symbols"]["csi1000"] == ["512100"]
+    assert any(item["max_positions"] == 3 for item in namespace["SCENARIOS"][1:])
     blocked = {"nasdaq", "hsi", "hshares", "china_internet", "cross_border"}
     assert blocked.isdisjoint(set(scenario["category_symbols"]))
 
@@ -2858,6 +2861,7 @@ def test_broad_asset_etf_rotation_stability_runner_uses_one_factor_variants():
 
     assert len(variants) >= 10
     assert variants[0]["stability_variant"] == "base_locked"
+    assert any(variant["stability_variant"] == "top3" for variant in variants)
     base_params = {key: variants[0].get(key) for key in PARAMETER_KEYS}
     for variant in variants[1:]:
         changed = [key for key in PARAMETER_KEYS if variant.get(key) != base_params.get(key)]

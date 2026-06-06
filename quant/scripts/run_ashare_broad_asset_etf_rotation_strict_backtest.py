@@ -58,7 +58,26 @@ COMMISSION_CFG = {
 
 SCENARIOS: List[Dict[str, Any]] = [
     {
-        "name": "monthly_126d_vol60_top3_domestic",
+        "name": "monthly_126d_vol60_top2_domestic",
+        "category_symbols": {key: list(value) for key, value in DEFAULT_CATEGORY_SYMBOLS.items()},
+        "momentum_lookback": 126,
+        "momentum_skip": 1,
+        "trend_window": 120,
+        "volatility_window": 60,
+        "volatility_floor": 0.01,
+        "liquidity_window": 20,
+        "min_avg_turnover": 20_000_000.0,
+        "max_positions": 2,
+        "max_positions_per_category": 1,
+        "target_exposure": 0.98,
+        "holding_days": 20,
+        "require_pit_size": True,
+        "pit_size_fields": list(DEFAULT_PIT_SIZE_FIELDS),
+        "enable_risk_exit": True,
+        "risk_exit": {"enabled": True, "exit_type": "rebalance_signal_invalidation_and_actual_cash_fallback"},
+    },
+    {
+        "name": "monthly_126d_vol60_top3_domestic_baseline",
         "category_symbols": {key: list(value) for key, value in DEFAULT_CATEGORY_SYMBOLS.items()},
         "momentum_lookback": 126,
         "momentum_skip": 1,
@@ -75,7 +94,26 @@ SCENARIOS: List[Dict[str, Any]] = [
         "pit_size_fields": list(DEFAULT_PIT_SIZE_FIELDS),
         "enable_risk_exit": True,
         "risk_exit": {"enabled": True, "exit_type": "rebalance_signal_invalidation_and_actual_cash_fallback"},
-    }
+    },
+    {
+        "name": "monthly_126d_trend160_vol60_top2_domestic",
+        "category_symbols": {key: list(value) for key, value in DEFAULT_CATEGORY_SYMBOLS.items()},
+        "momentum_lookback": 126,
+        "momentum_skip": 1,
+        "trend_window": 160,
+        "volatility_window": 60,
+        "volatility_floor": 0.01,
+        "liquidity_window": 20,
+        "min_avg_turnover": 20_000_000.0,
+        "max_positions": 2,
+        "max_positions_per_category": 1,
+        "target_exposure": 0.98,
+        "holding_days": 20,
+        "require_pit_size": True,
+        "pit_size_fields": list(DEFAULT_PIT_SIZE_FIELDS),
+        "enable_risk_exit": True,
+        "risk_exit": {"enabled": True, "exit_type": "rebalance_signal_invalidation_and_actual_cash_fallback"},
+    },
 ]
 
 
