@@ -1,0 +1,36 @@
+strategy:
+  name: ashare_csi1000_strict_index_enhanced
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  benchmark_symbol: "000852"
+  holding_days: 20
+  max_positions: 120
+  target_exposure: 0.98
+  active_tilt: 3.40
+  min_weight_multiplier: 0.0
+  max_weight_multiplier: 8.00
+  max_single_weight: 0.055
+  min_price: 2.0
+  min_turnover: 30000.0
+  max_volatility: 1.50
+  min_drawdown: -0.70
+  min_recent_momentum: -0.45
+  min_long_momentum: -0.55
+  enable_risk_exit: true
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.45
+    take_profit_pct: 1.20
+    trailing_stop_pct: 0.35
+
+research:
+  benchmark: "000852"
+  universe: "Tushare index_weight historical CSI1000 constituents only"
+  source: "Tushare index_weight 000852.SH"
+  notes:
+    - "Strict index enhancement: no non-CSI1000 constituent can be bought."
+    - "Target weights start from point-in-time index weights and apply bounded active multifactor tilt."
+    - "This is a high active-share CSI1000 internal enhancement candidate, not a low-deviation optimizer."

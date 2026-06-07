@@ -18,6 +18,9 @@ from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy 
 from quant.features.strategies.reject.ashare_davis_double_click.strategy import (
     AShareDavisDoubleClickStrategy,
 )
+from quant.features.strategies.reject.ashare_csi1000_strict_index_enhanced.strategy import (
+    AShareCsi1000StrictIndexEnhancedStrategy,
+)
 from quant.features.strategies.reject.joinquant_value_rsrs_timing.strategy import JoinquantValueRsrsTimingStrategy
 from quant.features.strategies.registry import StrategyRegistry, strategy
 from quant.features.strategies.ashare_gold_equity_barbell_timing.strategy import (
@@ -473,6 +476,13 @@ class TestCase9RetailPermissionStockUniverse:
         strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001", "002475", "600099"])
 
         assert strategy.symbols == ["000001", "002475", "600099"]
+        assert strategy.required_snapshot_symbols() == []
+
+        strategy = AShareCsi1000StrictIndexEnhancedStrategy(
+            symbols=["600001", "600002", "000852"],
+            index_weights=[{"trade_date": "2026-05-31", "symbol": "600001", "weight": 100.0}],
+        )
+
         assert strategy.required_snapshot_symbols() == []
 
         strategy = XueqiuSmallCapFinancialFilterStrategy(

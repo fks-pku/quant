@@ -217,6 +217,97 @@ def test_full_report_uses_clean_seven_card_layout():
     assert "<td>max_adv_participation</td><td>4.00%</td><td>单笔最大 ADV 金额参与率</td>" in html
 
 
+def test_full_report_uses_strict_benchmark_symbol_from_payload():
+    result = {
+        "run_id": "benchmark_symbol_contract",
+        "saved_at": "2026-06-07T00:00:00+00:00",
+    }
+    rows = [
+        {
+            "title": "CSI1000 Contract",
+            "strategy_id": "csi1000_contract_strategy",
+            "status": "needs_more_research",
+            "metrics": {
+                "strict_backtest": {
+                    "initial_cash": 1000000,
+                    "benchmark": {
+                        "symbol": "000852",
+                        "benchmark_cagr": 0.01,
+                        "benchmark_total_return": 0.02,
+                        "benchmark_sharpe": 0.3,
+                        "benchmark_sortino": 0.4,
+                        "benchmark_max_drawdown_pct": -0.1,
+                        "benchmark_calmar_ratio": 0.1,
+                        "information_ratio": 0.2,
+                        "up_capture": 0.7,
+                        "down_capture": 0.5,
+                        "beta": 0.8,
+                        "alpha": 0.02,
+                        "benchmark_yearly_returns": {"2026": 0.02},
+                    },
+                    "metrics": {
+                        "cagr": 0.03,
+                        "total_return": 0.05,
+                        "sharpe": 0.5,
+                        "sortino": 0.6,
+                        "max_drawdown_pct": -0.08,
+                        "calmar_ratio": 0.37,
+                        "win_rate": 0.55,
+                        "profit_factor": 1.2,
+                        "payoff_ratio": 1.1,
+                        "expectancy": 100.0,
+                        "gain_to_pain_ratio": 1.2,
+                        "tail_ratio": 1.3,
+                        "ulcer_index": 2.0,
+                        "recovery_factor": 1.4,
+                        "avg_trade_duration_days": 12,
+                        "total_trades": 60,
+                    },
+                    "equity_curve": {
+                        "strategy": [
+                            {"date": "2026-01-01", "value": 1000000},
+                            {"date": "2026-02-01", "value": 1050000},
+                        ],
+                        "benchmark": [
+                            {"date": "2026-01-01", "value": 1000000},
+                            {"date": "2026-02-01", "value": 1020000},
+                        ],
+                    },
+                    "yearly_returns": {"2026": 0.05},
+                    "capacity": {"max_adv_participation": 0.01},
+                    "execution_cost_bps": {},
+                },
+                "walkforward": {
+                    "verdict": "warn",
+                    "aggregate_oos_sharpe": 0.2,
+                    "worst_oos_sharpe": -0.1,
+                    "pct_profitable_splits": 0.5,
+                    "capacity_ok": True,
+                },
+                "parameter_sensitivity": {"status": "warn", "tested_count": 1, "pass_count": 0, "rows": []},
+            },
+            "evidence": {
+                "strategy_spec": {
+                    "strategy_id": "csi1000_contract_strategy",
+                    "universe": ["000852"],
+                    "strategy_logic": {
+                        "core_idea": "CSI1000 internal enhancement",
+                        "universe": "000852 constituent weights",
+                    },
+                }
+            },
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    assert "000852 CAGR=1.00%" in html
+    assert "<th>000852</th>" in html
+    assert "相对 000852" in html
+    assert "持有 000852" in html
+    assert "000300" not in html
+
+
 def test_full_report_renders_parameter_sensitivity_in_stability_card():
     result = {"run_id": "sensitivity_contract", "backtested": 1, "walkforward_passed": 0}
     rows = [
@@ -280,6 +371,63 @@ def test_full_report_renders_parameter_sensitivity_in_stability_card():
     assert "<td>tested_count</td><td>3</td><td>&gt;=3 local/scenario variants</td><td><span class=\"badge pass\">pass</span></td>" in full_html
     assert "wider_stop" in full_html
     assert "risk_stop_pct" in full_html
+
+
+def test_full_report_renders_barra_like_factor_decomposition_in_metric_card():
+    result = {"run_id": "barra_like_contract", "backtested": 1, "walkforward_passed": 0}
+    rows = [
+        {
+            "title": "Barra Like Contract",
+            "strategy_id": "barra_like_contract_strategy",
+            "status": "needs_walkforward_validation",
+            "metrics": {
+                "factor_decomposition": {
+                    "model": "barra_like_cn_style",
+                    "status": "computed",
+                    "observations": 252,
+                    "factor_set": ["MKT", "SIZE", "VALUE", "MOM", "REV", "VOL", "LIQ"],
+                    "alpha_annualized": 0.084,
+                    "alpha_tstat": 2.14,
+                    "r2": 0.37,
+                    "residual_vol_annualized": 0.118,
+                    "residual_sharpe_annualized": 0.71,
+                    "factors": {
+                        "MKT": {
+                            "beta": 0.72,
+                            "tstat": 4.8,
+                            "annualized_contribution": 0.036,
+                            "mean_return": 0.0002,
+                        },
+                        "SIZE": {
+                            "beta": 0.41,
+                            "tstat": 3.1,
+                            "annualized_contribution": 0.029,
+                            "mean_return": 0.00028,
+                        },
+                    },
+                },
+                "strict_backtest": {
+                    "metrics": {
+                        "sharpe": 0.88,
+                        "cagr": 0.11,
+                        "max_drawdown_pct": -0.17,
+                        "total_trades": 72,
+                    },
+                    "capacity": {"max_adv_participation": 0.021},
+                },
+            },
+            "evidence": {"strategy_spec": {"strategy_id": "barra_like_contract_strategy", "universe": ["000300"]}},
+        }
+    ]
+
+    html = build_research_full_report_html(result, rows)
+
+    assert "Barra-like Factor Decomposition" in html
+    assert "<td>model</td><td>barra_like_cn_style</td>" in html
+    assert "<td>alpha_annualized</td><td>8.40%</td>" in html
+    assert "<td>residual_vol_annualized</td><td>11.80%</td>" in html
+    assert "<td>MKT</td><td>0.7200</td><td>4.8000</td><td>3.60%</td><td>0.0002</td>" in html
+    assert "<td>SIZE</td><td>0.4100</td><td>3.1000</td><td>2.90%</td><td>0.0003</td>" in html
 
 
 def test_full_report_marks_missing_walkforward_payload_as_not_run():
@@ -817,6 +965,71 @@ def test_gold_equity_barbell_report_uses_specific_strategy_logic():
     assert "risk-on" in html
     assert "gold ETF" in html
     assert "risk_leg_weight" in html
+
+
+def test_all_weather_report_strategy_logic_uses_chinese_explanations():
+    from quant.scripts.run_ashare_all_weather_risk_parity_full_report import _hypothesis_row
+
+    best = {
+        "scenario": "monthly_63d_vol60_trend_guard",
+        "symbols": ["510050", "510300", "510880", "511990", "518880"],
+        "parameters": {
+            "category_symbols": {
+                "equity": ["510050", "510300", "510880"],
+                "gold": ["518880"],
+                "bond_rate": [],
+                "cash": ["511990"],
+            },
+            "risk_budgets": {"equity": 0.35, "gold": 0.25, "bond_rate": 0.25, "cash": 0.15},
+            "momentum_lookback": 63,
+            "momentum_skip": 5,
+            "trend_window": 200,
+            "volatility_window": 60,
+            "volatility_floor": 0.02,
+            "liquidity_window": 20,
+            "min_avg_turnover": 20_000_000.0,
+            "target_exposure": 0.98,
+            "max_asset_weight": 0.55,
+            "holding_days": 20,
+            "require_pit_size": True,
+            "trend_guard_enabled": True,
+            "risk_exit": {"enabled": True, "stop_loss_pct": 0.08},
+        },
+        "category_symbols": {
+            "equity": ["510050", "510300", "510880"],
+            "gold": ["518880"],
+            "bond_rate": [],
+            "cash": ["511990"],
+        },
+        "risk_budgets": {"equity": 0.35, "gold": 0.25, "bond_rate": 0.25, "cash": 0.15},
+        "missing_pit_categories": ["bond_rate"],
+        "registered_universe_counts": {"registered_symbol_count": 5, "active_symbol_count": 5, "missing_data_count": 0},
+        "universe_registry_version": "audited_stable_etf_registry_v1",
+        "strict_meets_metric_gate": True,
+    }
+    strict_report = {
+        "period": "2016-01-01 to 2026-05-31",
+        "metrics": {"cagr": 0.065, "max_drawdown_pct": -0.10, "sharpe": 0.80, "total_trades": 196},
+        "constraints": {"t_plus_1": True, "cn_lot_size": 100},
+        "capacity": {"max_adv_participation": 0.0007},
+        "diagnostics": {},
+    }
+
+    row = _hypothesis_row(best, strict_report)
+    html = build_research_full_report_html({"run_id": "all_weather_logic"}, [row])
+
+    for phrase in (
+        "Build a Bridgewater-style",
+        "Audited stable domestic ETF registry only",
+        "Inside each bucket",
+        "Risk budgets",
+        "Daily risk-exit checks",
+        "Skipped medium-term momentum window",
+    ):
+        assert phrase not in html
+
+    for phrase in ("全天候", "风险预算", "逆波动", "每个资产桶", "止损"):
+        assert phrase in html
 
 
 def test_strict_report_includes_strategy_execution_logic_and_signal_explanation():

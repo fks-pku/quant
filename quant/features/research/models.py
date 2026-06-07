@@ -216,6 +216,7 @@ class ValidationReport:
     universe_source: str = ""
     data_rows: int = 0
     data_symbol_count: int = 0
+    factor_decomposition: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

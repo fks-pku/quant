@@ -721,6 +721,7 @@ class ResearchEngine:
             metrics["data_end"] = getattr(validation_report, "data_end", "")
             metrics["universe_sample"] = list(getattr(validation_report, "universe_sample", []) or [])
             metrics["portfolio_diagnostics"] = dict(getattr(validation_report, "portfolio_diagnostics", {}) or {})
+            metrics["factor_decomposition"] = dict(getattr(validation_report, "factor_decomposition", {}) or {})
         return metrics
 
     def _write_promotion_dossier(

@@ -383,6 +383,8 @@ def build_research_full_report_html(
             _turnover_exposure_contract_table(data, rows),
             "<h3>Capacity</h3>",
             _capacity_contract_table(data, rows),
+            "<h3>Barra-like Factor Decomposition</h3>",
+            _factor_decomposition_contract_table(data, rows),
         ),
         _report_card(
             "5. Walk-forward",
@@ -517,6 +519,7 @@ def _executive_snapshot_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) 
     strict = _strict_backtest_for_report(data, row)
     metrics = strict.get("metrics") or {}
     benchmark = strict.get("benchmark") or {}
+    benchmark_symbol = str(benchmark.get("symbol") or _report_benchmark(row))
     capacity = strict.get("capacity") or {}
     wf_scores, wf_reason, _ = _walkforward_scores(row)
     drawdown = _safe_float(metrics.get("max_drawdown_pct"))
@@ -533,7 +536,7 @@ def _executive_snapshot_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) 
         ),
         (
             "Benchmark",
-            f"000300 CAGR={_pct(benchmark.get('benchmark_cagr'))}; MaxDD={_pct(benchmark.get('benchmark_max_drawdown_pct'))}",
+            f"{benchmark_symbol} CAGR={_pct(benchmark.get('benchmark_cagr'))}; MaxDD={_pct(benchmark.get('benchmark_max_drawdown_pct'))}",
             "用于判断收益是否只是市场 beta。",
         ),
         (
@@ -2346,13 +2349,15 @@ def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, 
     row = _primary_row(rows)
     strict = _strict_backtest_for_report(data, row)
     if not strict:
+        benchmark_symbol = _report_benchmark(row)
         return _not_run_table(
-            ["Metric", "策略", "000300", "超额/说明"],
+            ["Metric", "策略", benchmark_symbol, "超额/说明"],
             "本轮未运行严格 Backtester",
             "信号验证失败，未进入可比较的成本后回测阶段。",
         )
     metrics = strict.get("metrics") or {}
     benchmark = strict.get("benchmark") or {}
+    benchmark_symbol = str(benchmark.get("symbol") or _report_benchmark(row))
     rows_data = [
         ("CAGR", _pct(metrics.get("cagr")), _pct(benchmark.get("benchmark_cagr")), _pct(_excess(metrics.get("cagr"), benchmark.get("benchmark_cagr")))),
         (
@@ -2375,7 +2380,7 @@ def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, 
         ("Recovery Factor", _fmt(metrics.get("recovery_factor")), "-", "净收益 / 最大回撤"),
         ("Avg Trade Duration", _fmt(metrics.get("avg_trade_duration_days")), "-", "平均持仓天数"),
         ("Total Trades", str(metrics.get("total_trades") or "n/a"), "-", "含拒单和成交诊断"),
-        ("Information Ratio", _fmt(benchmark.get("information_ratio")), "-", "相对 000300"),
+        ("Information Ratio", _fmt(benchmark.get("information_ratio")), "-", f"相对 {benchmark_symbol}"),
         ("Up / Down Capture", f"{_fmt(benchmark.get('up_capture'))} / {_fmt(benchmark.get('down_capture'))}", "-", "基准上涨/下跌阶段捕获率"),
         ("Beta / Alpha", f"{_fmt(benchmark.get('beta'))} / {_pct(benchmark.get('alpha'))}", "-", "基准归因"),
     ]
@@ -2383,7 +2388,7 @@ def _core_performance_contract_table(data: Dict[str, Any], rows: List[Dict[str, 
         f"<tr><td>{escape(metric)}</td><td>{escape(strategy)}</td><td>{escape(bench)}</td><td>{escape(note)}</td></tr>"
         for metric, strategy, bench, note in rows_data
     )
-    return _table(["Metric", "策略", "000300", "超额/说明"], body)
+    return _table(["Metric", "策略", benchmark_symbol, "超额/说明"], body)
 
 
 def _trade_cost_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -2668,6 +2673,81 @@ def _cost_decomposition_contract_table(data: Dict[str, Any], rows: List[Dict[str
     return _table(["诊断项", "数值", "解释"], body)
 
 
+def _factor_decomposition_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    row = _primary_row(rows)
+    decomposition = _factor_decomposition_for_report(data, row)
+    if not decomposition:
+        return _not_run_table(
+            ["Metric", "Observed", "Interpretation"],
+            "Barra-like Factor Decomposition",
+            "factor_decomposition payload missing; run fast validation with factor data enabled.",
+        )
+    factors = decomposition.get("factors") or {}
+    if not isinstance(factors, dict):
+        factors = {}
+    summary_rows = [
+        ("model", str(decomposition.get("model") or "barra_like_cn_style"), "A-share style-factor return attribution, not licensed MSCI Barra data."),
+        ("status", str(decomposition.get("status") or "computed"), "computed means enough overlapping strategy and factor returns."),
+        ("observations", str(decomposition.get("observations") or 0), "Overlapping daily observations used in the regression."),
+        ("factor_set", ", ".join(str(item) for item in decomposition.get("factor_set") or factors.keys()), "Style factors included in the regression."),
+        ("alpha_annualized", _pct(decomposition.get("alpha_annualized")), "Annualized intercept after common style factors."),
+        ("alpha_tstat", _fmt(decomposition.get("alpha_tstat")), "T-stat of the intercept; >=2 is stronger independent-alpha evidence."),
+        ("r2", _pct(decomposition.get("r2")), "Share of return variance explained by common style factors."),
+        ("residual_vol_annualized", _pct(decomposition.get("residual_vol_annualized")), "Annualized residual risk after stripping style factors."),
+        ("residual_sharpe_annualized", _fmt(decomposition.get("residual_sharpe_annualized")), "Alpha divided by residual volatility."),
+    ]
+    summary_body = "".join(
+        f"<tr><td>{escape(metric)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
+        for metric, value, note in summary_rows
+    )
+    factor_body = "".join(_factor_decomposition_row(name, values) for name, values in _ordered_factor_items(factors))
+    if not factor_body:
+        factor_body = '<tr><td colspan="6">No factor beta rows recorded.</td></tr>'
+    return (
+        _table(["Metric", "Observed", "Interpretation"], summary_body)
+        + _table(["Factor", "Beta", "T-stat", "Annual Contribution", "Mean Return", "Direction"], factor_body)
+    )
+
+
+def _factor_decomposition_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = row.get("metrics") or {}
+    decomposition = metrics.get("factor_decomposition") or metrics.get("barra_like_decomposition")
+    if isinstance(decomposition, dict) and decomposition:
+        return decomposition
+    strict = _strict_backtest_for_report(data, row)
+    decomposition = strict.get("factor_decomposition") or strict.get("barra_like_decomposition")
+    return decomposition if isinstance(decomposition, dict) else {}
+
+
+def _ordered_factor_items(factors: Dict[str, Any]) -> List[tuple[str, Any]]:
+    order = ["MKT", "SIZE", "VALUE", "MOM", "REV", "VOL", "LIQ", "GROWTH", "QUALITY", "LEVERAGE"]
+    seen = set()
+    items: List[tuple[str, Any]] = []
+    for name in order:
+        if name in factors:
+            items.append((name, factors[name]))
+            seen.add(name)
+    for name in sorted(str(key) for key in factors.keys() if str(key) not in seen):
+        items.append((name, factors.get(name)))
+    return items
+
+
+def _factor_decomposition_row(name: str, values: Any) -> str:
+    data = values if isinstance(values, dict) else {}
+    beta = _safe_float(data.get("beta"))
+    direction = "positive" if beta is not None and beta > 0 else ("negative" if beta is not None and beta < 0 else "neutral")
+    return (
+        "<tr>"
+        f"<td>{escape(str(name))}</td>"
+        f"<td>{escape(_fmt(data.get('beta')))}</td>"
+        f"<td>{escape(_fmt(data.get('tstat')))}</td>"
+        f"<td>{escape(_pct(data.get('annualized_contribution')))}</td>"
+        f"<td>{escape(_fmt(data.get('mean_return')))}</td>"
+        f"<td>{escape(direction)}</td>"
+        "</tr>"
+    )
+
+
 def _data_quality_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     strict = _strict_backtest_for_report(data, row)
@@ -2728,6 +2808,7 @@ def _data_quality_contract_table(data: Dict[str, Any], rows: List[Dict[str, Any]
 def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     row = _primary_row(rows)
     strict = _strict_backtest_for_report(data, row)
+    benchmark_symbol = str((strict.get("benchmark") or {}).get("symbol") or _report_benchmark(row))
     curves = strict.get("equity_curve") or {}
     raw_strategy = _curve_points(curves.get("strategy"))
     raw_benchmark = _curve_points(curves.get("benchmark"))
@@ -2808,7 +2889,7 @@ def _equity_curve_chart(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str
         + benchmark_svg
         + f'<path class="strategy-line" fill="none" stroke="#dc2626" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" d="{escape(strategy_path, quote=True)}" />'
         + "</svg>"
-        + "<figcaption>曲线按首日=100 的归一化指数绘制，避免原始金额尺度差压缩线形；期末金额仍来自 strict Backtester 原始账户 NAV，benchmark 按同一初始资金买入并持有 000300。</figcaption>"
+        + f"<figcaption>曲线按首日=100 的归一化指数绘制，避免原始金额尺度差压缩线形；期末金额仍来自 strict Backtester 原始账户 NAV，benchmark 按同一初始资金买入并持有 {escape(benchmark_symbol)}。</figcaption>"
         + "</figure>"
     )
 

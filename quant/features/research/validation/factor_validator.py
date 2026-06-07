@@ -359,6 +359,7 @@ class FactorValidator:
             ),
             portfolio_diagnostics=portfolio_diagnostics,
             errors=factor_errors,
+            factor_decomposition=dict(ff.get("factor_decomposition") or {}),
             **universe_metadata,
         )
 
@@ -1037,7 +1038,7 @@ class FactorValidator:
             return zeros, errors
         try:
             factors = self._factor_data.get_factors(
-                ["MKT", "SMB", "HML", "RMW", "CMA", "Mom", "RF"],
+                ["MKT", "SIZE", "VALUE", "MOM", "REV", "VOL", "LIQ", "RF"],
                 str(strategy_returns.index.min().date()),
                 str(strategy_returns.index.max().date()),
             )

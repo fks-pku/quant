@@ -1,0 +1,44 @@
+strategy:
+  name: ashare_all_weather_risk_parity
+  enabled: false
+  status: candidate
+  priority: 30
+
+parameters:
+  pit_universe_enabled: true
+  universe_selection_policy: audited_stable_etf_registry
+  universe_registry_version: audited_stable_etf_registry_v1
+  universe_start: "2016-01-01"
+  universe_end: "2026-05-31"
+  universe_min_history_days_as_of: 0
+  universe_max_symbols_per_category: 0
+  category_symbols:
+    equity: ["510300", "510050", "510880"]
+    gold: ["518880"]
+    bond_rate: ["511010"]
+    cash: ["511990"]
+  risk_budgets:
+    equity: 0.35
+    gold: 0.20
+    bond_rate: 0.35
+    cash: 0.10
+  momentum_lookback: 63
+  momentum_skip: 1
+  trend_window: 120
+  volatility_window: 60
+  volatility_floor: 0.02
+  liquidity_window: 20
+  min_avg_turnover: 20000000.0
+  target_exposure: 0.98
+  max_asset_weight: 0.45
+  holding_days: 20
+  lot_size: 100
+  require_pit_size: true
+  trend_guard_enabled: false
+  risk_exit:
+    enabled: true
+    stop_loss_pct: 0.10
+    take_profit_pct: 0.18
+    trailing_stop_pct: 0.07
+    max_holding_days: 90
+    min_time_stop_return: -0.02

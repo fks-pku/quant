@@ -101,6 +101,9 @@ class AShareCsi300StrictIndexEnhancedStrategy(DailyBarStrategy):
     def _max_keep_hint(self) -> int:
         return self.momentum_lookback + 10
 
+    def required_snapshot_symbols(self) -> List[str]:
+        return []
+
     @property
     def required_fields(self) -> List[str]:
         return [
