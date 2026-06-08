@@ -159,7 +159,7 @@ class QuantSystem:
         """Setup a broker adapter."""
         self._assert_broker_adapter_allowed(broker_name)
         if broker_name == "paper":
-            initial_cash = self.config.get("system", {}).get("initial_cash", 100000)
+            initial_cash = self.config.get("system", {}).get("initial_cash", 10000)
             slippage_bps = self.config.get("execution", {}).get("slippage_bps", 5)
             broker = PaperBroker(initial_cash, slippage_bps, data_provider=self.engine.data_providers.get("default"))
             broker.connect()

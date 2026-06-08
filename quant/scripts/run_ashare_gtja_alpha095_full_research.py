@@ -18,7 +18,7 @@ from quant.features.strategies.reject.ashare_gtja_alpha095_amount_std.strategy i
 
 STRATEGY_ID = "ashare_gtja_alpha095_amount_std"
 TITLE = "国泰君安 Alpha191 因子095: 20日成交额波动"
-INITIAL_CASH = 1_000_000.0
+INITIAL_CASH = 10_000.0
 SOURCE_URLS = [
     "https://github.com/SelenaMa9812/Guotai-Junan-191-Alpha",
     "https://gist.github.com/kangchihlun/7850f07c11bdea022b2d49f1d4ed9802",

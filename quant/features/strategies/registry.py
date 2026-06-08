@@ -69,6 +69,8 @@ def strategy(name: str):
 class StrategyRegistry:
     @staticmethod
     def register(name: str, cls: Type) -> None:
+        cls._registry_name = name
+        cls._registry_active = True
         _registry[_key(name)] = cls
 
     @staticmethod

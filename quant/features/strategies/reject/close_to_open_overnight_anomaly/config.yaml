@@ -1,0 +1,17 @@
+name: close_to_open_overnight_anomaly
+enabled: false
+status: candidate
+market: CN
+parameters:
+  symbols: []
+  max_positions: 10
+  lookback: 20
+  liquidity_lookback: 20
+  min_avg_turnover: 20000000.0
+  min_price: 1.0
+  target_exposure: 0.95
+  lot_size: 100
+  require_positive_score: true
+execution:
+  entry_timing: SAME_CLOSE
+  exit_timing: NEXT_OPEN

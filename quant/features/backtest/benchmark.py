@@ -75,7 +75,7 @@ class BenchmarkProvider:
             returns = returns[returns.index <= pd.Timestamp(end_d)]
         return returns
 
-    def get_benchmark_equity(self, start: Optional[datetime] = None, end: Optional[datetime] = None, initial_cash: float = 100000.0) -> pd.Series:
+    def get_benchmark_equity(self, start: Optional[datetime] = None, end: Optional[datetime] = None, initial_cash: float = 10000.0) -> pd.Series:
         """Return benchmark equity curve starting from initial_cash."""
         returns = self.get_benchmark_returns(start, end)
         if returns.empty:

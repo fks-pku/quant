@@ -68,7 +68,13 @@ class Context(StrategyContext):
 
     def submit_order(self, symbol: str, quantity: float, side: str,
                      order_type: str = "MARKET", price: Optional[float] = None,
-                     strategy_name: Optional[str] = None) -> Optional[str]:
+                     strategy_name: Optional[str] = None,
+                     execution_timing: Optional[str] = None) -> Optional[str]:
+        timing = str(execution_timing or "").upper()
+        if timing and timing != "NEXT_OPEN":
+            raise ValueError(
+                f"execution_timing={execution_timing!r} is only supported by the backtest context"
+            )
         strategy_name = self._resolve_strategy_name(strategy_name)
         gate = getattr(self, "signal_gate", None)
         if callable(gate) and not gate(strategy_name):
@@ -114,7 +120,7 @@ class Engine:
         self.logger = setup_logger("Engine", config.get("system", {}).get("log_level", "INFO"))
         self.event_bus = event_bus
         self.portfolio = Portfolio(
-            initial_cash=config.get("system", {}).get("initial_cash", 100000),
+            initial_cash=config.get("system", {}).get("initial_cash", 10000),
             currency=config.get("system", {}).get("currency", "USD"),
         )
         self.risk_engine = RiskEngine(config, self.portfolio, self.event_bus)

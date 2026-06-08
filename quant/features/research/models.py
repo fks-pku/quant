@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 DEFAULT_A_SHARE_SYMBOLS = ["000300", "000905", "600519", "000001", "510300"]
-DEFAULT_RESEARCH_INITIAL_CASH = 20_000.0
+DEFAULT_RESEARCH_INITIAL_CASH = 10_000.0
 
 
 @dataclass

@@ -46,7 +46,7 @@ from quant.infrastructure.research.reporting import build_research_full_report_h
 
 START = datetime(2016, 1, 1)
 END = datetime(2026, 5, 31)
-INITIAL_CASH = 20_000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "ashare_all_weather_risk_parity"
 TITLE = "A-share All-Weather Risk Parity"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

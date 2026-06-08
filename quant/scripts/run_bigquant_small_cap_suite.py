@@ -35,7 +35,7 @@ from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 
 START = datetime(2016, 1, 1)
 END = datetime(2026, 5, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "bigquant_small_cap_suite"
 TITLE = "BigQuant-inspired small-cap suite"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

@@ -35,6 +35,7 @@ Pure business logic with zero external dependencies. Contains models, events, an
 ### Context (`quant.domain.context`)
 
 - `StrategyContext.execution_reference_resolver` — 策略上下文中的执行参考价解析器；策略不直接依赖 broker quote，实盘 MARKET 参考价由 trading Context/执行层解析
+- `StrategyScopedOrderManager.submit_order(..., execution_timing=None)` — 策略可传订单级执行时点；非默认时点只会转发给显式支持的回测 order manager
 
 ## 依赖
 

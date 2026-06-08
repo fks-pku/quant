@@ -1763,7 +1763,7 @@ def test_research_engine_walkforward_stage_uses_persistent_rejected_candidate_me
         assert captured["strategy_id"] == "persisted_rejected"
         assert captured["symbols"] == ["600001", "600002"]
         assert captured["strategy_archive_dir"].replace("\\", "/").endswith("rejected_strategy/persisted_rejected")
-        assert captured["initial_cash"] == pytest.approx(20_000)
+        assert captured["initial_cash"] == pytest.approx(10_000)
         assert (tmp_path / "research" / "reports" / "persisted_rejected" / "walkforward_audit_report.html").exists()
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -2814,11 +2814,13 @@ def test_broad_asset_etf_rotation_report_script_uses_domestic_default_universe()
     assert namespace["START"].date().isoformat() == "2016-01-01"
     assert namespace["END"].date().isoformat() == "2026-05-31"
     scenario = namespace["SCENARIOS"][0]
-    assert scenario["name"] == "monthly_126d_vol60_top2_domestic"
-    assert scenario["max_positions"] == 2
+    assert scenario["name"] == "monthly_126d_vol60_continuous_tilt70_domestic"
+    assert scenario["weight_mode"] == "continuous_branch_tilt"
+    assert scenario["tilt_strength"] == pytest.approx(0.70)
+    assert scenario["target_exposure"] == pytest.approx(1.0)
     assert "csi1000" in namespace["DEFAULT_CATEGORY_SYMBOLS"]
     assert scenario["category_symbols"]["csi1000"] == ["512100"]
-    assert any(item["max_positions"] == 3 for item in namespace["SCENARIOS"][1:])
+    assert any(item["tilt_strength"] == pytest.approx(0.50) for item in namespace["SCENARIOS"][1:])
     blocked = {"nasdaq", "hsi", "hshares", "china_internet", "cross_border"}
     assert blocked.isdisjoint(set(scenario["category_symbols"]))
 
@@ -2861,7 +2863,7 @@ def test_broad_asset_etf_rotation_stability_runner_uses_one_factor_variants():
 
     assert len(variants) >= 10
     assert variants[0]["stability_variant"] == "base_locked"
-    assert any(variant["stability_variant"] == "top3" for variant in variants)
+    assert any(variant["stability_variant"] == "tilt_85" for variant in variants)
     base_params = {key: variants[0].get(key) for key in PARAMETER_KEYS}
     for variant in variants[1:]:
         changed = [key for key in PARAMETER_KEYS if variant.get(key) != base_params.get(key)]
@@ -2875,11 +2877,15 @@ def test_broad_asset_etf_rotation_stability_payload_keeps_best_as_audit_only():
         "momentum_lookback": 126,
         "trend_window": 120,
         "volatility_window": 60,
-        "max_positions": 3,
-        "max_positions_per_category": 1,
+        "tilt_strength": 0.70,
+        "temperature": 0.75,
+        "min_branch_weight": 0.02,
+        "max_branch_weight": 0.30,
+        "rebalance_threshold": 0.02,
+        "trend_penalty": 1.0,
         "holding_days": 20,
         "min_avg_turnover": 20_000_000,
-        "target_exposure": 0.98,
+        "target_exposure": 1.0,
     }
     rows = [
         {
@@ -2901,8 +2907,8 @@ def test_broad_asset_etf_rotation_stability_payload_keeps_best_as_audit_only():
             "max_adv_participation": 0.01,
         },
         {
-            "variant": "top2",
-            "parameters": {"max_positions": 2},
+            "variant": "tilt_85",
+            "parameters": {"tilt_strength": 0.85},
             "cagr": 0.02,
             "max_drawdown_pct": -0.25,
             "sharpe": 0.2,
@@ -3336,7 +3342,7 @@ def test_api_standalone_strict_backtest_recovers_persistent_candidate_metadata(m
         assert captured["strategy_symbols"] == ["600001", "600002"]
         assert captured["max_position_pct"] == pytest.approx(0.85)
         assert captured["holding_days"] == 7
-        assert captured["initial_cash"] == pytest.approx(20_000)
+        assert captured["initial_cash"] == pytest.approx(10_000)
         assert hypothesis["metrics"]["strict_backtest"]["metrics"]["sharpe"] == pytest.approx(0.8)
         assert result.backtested == 1
     finally:
@@ -3664,7 +3670,7 @@ def test_walkforward_runner_uses_archived_parameters_and_execution_cost_model(mo
         assert captured["config"]["risk"]["max_position_pct"] == pytest.approx(0.20)
         assert captured["max_position_pct"] == pytest.approx(0.7)
         assert captured["holding_days"] == 5
-        assert captured["initial_cash"] == pytest.approx(20_000)
+        assert captured["initial_cash"] == pytest.approx(10_000)
         assert "adv20_value" in captured["data_columns"]
         assert "volatility20" in captured["data_columns"]
     finally:

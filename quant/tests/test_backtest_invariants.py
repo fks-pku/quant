@@ -3394,3 +3394,138 @@ def test_case40_02_historical_limit_does_not_use_execution_day_cost_fields():
 
     assert len(result.trades) == 0
     assert result.diagnostics.rejection_counts.get("limit_not_marketable", 0) == 1
+
+
+# ============================================================================
+# CASE-41: Order-level SAME_CLOSE execution timing
+# ============================================================================
+
+CASE41_US_CONFIG = {
+    "backtest": {"slippage_bps": 10},
+    "execution": {"commission": {"US": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+CASE41_CN_CONFIG = {
+    "backtest": {"slippage_bps": 0},
+    "execution": {
+        "commission": {
+            "CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0, "fund_percent": 0.0, "fund_min_per_order": 0.0}
+        }
+    },
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+
+class _SameCloseEntryNextOpenExit:
+    def __init__(self, name, symbol, buy_day=0, quantity=10):
+        self.name = name
+        self.symbol = symbol
+        self.buy_day = buy_day
+        self.quantity = quantity
+        self.context = None
+        self._day = -1
+        self._positions = {}
+        self._exit_submitted = False
+
+    @property
+    def symbols(self):
+        return [self.symbol]
+
+    def on_start(self, ctx):
+        self.context = ctx
+
+    def on_before_trading(self, ctx, td):
+        pass
+
+    def on_data(self, ctx, data):
+        pass
+
+    def on_after_trading(self, ctx, td):
+        self._day += 1
+        if self._day == self.buy_day:
+            ctx.order_manager.submit_order(
+                self.symbol,
+                self.quantity,
+                "BUY",
+                "MARKET",
+                None,
+                self.name,
+                execution_timing="SAME_CLOSE",
+            )
+
+    def on_fill(self, ctx, fill):
+        qty = fill.quantity if fill.side == "BUY" else -fill.quantity
+        self._positions[fill.symbol] = self._positions.get(fill.symbol, 0) + qty
+        if fill.side == "BUY" and not self._exit_submitted:
+            self._exit_submitted = True
+            ctx.order_manager.submit_order(
+                fill.symbol,
+                fill.quantity,
+                "SELL",
+                "MARKET",
+                getattr(fill, "fill_price", None),
+                self.name,
+            )
+
+    def on_stop(self, ctx):
+        pass
+
+    def get_position(self, symbol):
+        return self._positions.get(symbol, 0)
+
+
+def test_case41_01_same_close_buy_and_generated_next_open_sell_use_expected_prices():
+    data = _make_bars("AAPL", [
+        (START, 100.0, 110.0, 1_000_000),
+        (START + timedelta(days=1), 120.0, 121.0, 1_000_000),
+    ])
+    bt = make_backtester(CASE41_US_CONFIG)
+    strategy = _SameCloseEntryNextOpenExit("Case41US", "AAPL", buy_day=0, quantity=10)
+
+    result = bt.run(
+        start=data["timestamp"].min(),
+        end=data["timestamp"].max(),
+        strategies=[strategy],
+        initial_cash=10_000,
+        data_provider=DataFrameProvider(data),
+        symbols=["AAPL"],
+    )
+
+    buy, sell = result.trades
+    assert buy.side == "BUY"
+    assert sell.side == "SELL"
+    assert buy.fill_date.date() == START.date()
+    assert sell.fill_date.date() == (START + timedelta(days=1)).date()
+    assert buy.fill_price == pytest.approx(110.0 * 1.001)
+    assert sell.fill_price == pytest.approx(120.0 * 0.999)
+    assert result.equity_curve.iloc[0] == pytest.approx(10_000 - buy.fill_price * 10 + 110.0 * 10)
+    assert result.final_nav == pytest.approx(10_000 - buy.fill_price * 10 + sell.fill_price * 10 - sell.commission)
+    assert [obs["execution_price_field"] for obs in result.diagnostics.execution_observations] == ["close", "open"]
+
+
+def test_case41_02_cn_same_close_buy_can_sell_next_open_under_t1():
+    data = _make_bars("510300", [
+        (START, 10.0, 10.0, 10_000_000),
+        (START + timedelta(days=1), 10.2, 10.0, 10_000_000),
+        (START + timedelta(days=2), 10.5, 10.4, 10_000_000),
+    ])
+    bt = make_backtester(CASE41_CN_CONFIG)
+    strategy = _SameCloseEntryNextOpenExit("Case41CN", "510300", buy_day=1, quantity=1000)
+
+    result = bt.run(
+        start=data["timestamp"].min(),
+        end=data["timestamp"].max(),
+        strategies=[strategy],
+        initial_cash=100_000,
+        data_provider=DataFrameProvider(data),
+        symbols=["510300"],
+    )
+
+    assert [trade.side for trade in result.trades] == ["BUY", "SELL"]
+    assert result.trades[0].fill_date.date() == (START + timedelta(days=1)).date()
+    assert result.trades[1].fill_date.date() == (START + timedelta(days=2)).date()
+    assert result.trades[0].fill_price == pytest.approx(10.0)
+    assert result.trades[1].fill_price == pytest.approx(10.5)
+    assert result.diagnostics.t1_rejected_sells == 0
+    assert result.open_positions == []

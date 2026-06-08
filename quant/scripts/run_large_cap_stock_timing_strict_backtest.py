@@ -36,7 +36,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "ashare_large_cap_low_vol_momentum_timing"
 TITLE = "A股大市值低波动量趋势风控"
 TIMING_SYMBOL = "000300"

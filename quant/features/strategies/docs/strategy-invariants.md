@@ -23,6 +23,7 @@ S1-01  @strategy("X") 注册后 StrategyRegistry.is_registered("X") 为 True
 S1-02  StrategyRegistry.create("X", **kwargs) 返回目标策略实例并传入参数
 S1-03  创建未知策略抛出 ValueError("Unknown strategy")
 S1-04  StrategyRegistry.list_strategies() 包含已注册策略
+S1-05  StrategyRegistry.register("X", cls) 必须补齐 cls._registry_name，避免手工注册类破坏 list/create 错误路径
 ```
 
 ## CASE-2: _adj helper priority

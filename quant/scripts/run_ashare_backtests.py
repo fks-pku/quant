@@ -30,7 +30,7 @@ STOCKS_15 = [
 ]
 START = "2016-01-01"
 END = "2026-05-31"
-CASH = 1_000_000
+CASH = 10_000
 
 
 def run_backtest(strategy_name, symbols, extra_kwargs=None):

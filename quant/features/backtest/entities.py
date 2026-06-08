@@ -10,7 +10,11 @@ from quant.domain.models.trade import Trade
 from quant.domain.context import StrategyScopedOrderManager
 from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
 from quant.features.backtest.market_rules import get_market
-from quant.features.backtest.schemas import DeferredOrder
+from quant.features.backtest.schemas import (
+    DeferredOrder,
+    EXECUTION_TIMING_NEXT_OPEN,
+    VALID_EXECUTION_TIMINGS,
+)
 from quant.runtime.execution_cost import (
     bar_close_price,
     estimate_cost_protection_limit,
@@ -123,6 +127,8 @@ class BacktestResultExporter:
 
 
 class _BacktestOrderManager:
+    supports_backtest_execution_timing = True
+
     def __init__(
         self,
         risk_engine: Any,
@@ -222,9 +228,25 @@ class _BacktestOrderManager:
         )
         return "LIMIT", estimate.limit_price
 
-    def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
+    def submit_order(
+        self,
+        symbol: str,
+        quantity: float,
+        side: str,
+        order_type: str,
+        price: Optional[float],
+        strategy_name: str,
+        execution_timing: Optional[str] = None,
+    ) -> None:
         try:
             order_type_text = (order_type or "MARKET").upper()
+            timing = str(execution_timing or EXECUTION_TIMING_NEXT_OPEN).upper()
+            if timing not in VALID_EXECUTION_TIMINGS:
+                raise OrderRejectedError(
+                    OrderRejectionReason.PRICE_INVALID,
+                    symbol,
+                    f"unsupported execution_timing={execution_timing!r}",
+                )
             if order_type_text == "LIMIT" and (
                 not isinstance(price, (int, float)) or price <= 0
             ):
@@ -248,6 +270,7 @@ class _BacktestOrderManager:
             "price": submitted_price,
             "strategy": strategy_name,
             "_risk_check_price": effective,
+            "execution_timing": timing,
         }
         self._buffer.append(order)
         if side == 'BUY':
@@ -265,6 +288,7 @@ class _BacktestOrderManager:
                 strategy=item["strategy"],
                 signal_date=signal_date,
                 risk_check_price=item.get("_risk_check_price", 0.0),
+                execution_timing=item.get("execution_timing", EXECUTION_TIMING_NEXT_OPEN),
             )
             for item in self._buffer
         ]
@@ -304,8 +328,25 @@ class _BacktestContext:
         )
         self.order_manager = StrategyScopedOrderManager(self._order_manager, self.strategy_name)
 
-    def submit_order(self, symbol: str, quantity: float, side: str, order_type: str, price: Optional[float], strategy_name: str) -> None:
-        return self.order_manager.submit_order(symbol, quantity, side, order_type, price, strategy_name)
+    def submit_order(
+        self,
+        symbol: str,
+        quantity: float,
+        side: str,
+        order_type: str,
+        price: Optional[float],
+        strategy_name: str,
+        execution_timing: Optional[str] = None,
+    ) -> None:
+        return self.order_manager.submit_order(
+            symbol,
+            quantity,
+            side,
+            order_type,
+            price,
+            strategy_name,
+            execution_timing=execution_timing,
+        )
 
     def prepare_for_trading_day(
         self,

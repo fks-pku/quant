@@ -1,4 +1,4 @@
-"""Run parallel stability audit for the A-share broad asset ETF rotation candidate."""
+"""Run parallel stability audit for the A-share broad asset ETF rotation strategy."""
 
 from __future__ import annotations
 
@@ -24,8 +24,12 @@ PARAMETER_KEYS = [
     "momentum_lookback",
     "trend_window",
     "volatility_window",
-    "max_positions",
-    "max_positions_per_category",
+    "tilt_strength",
+    "temperature",
+    "min_branch_weight",
+    "max_branch_weight",
+    "rebalance_threshold",
+    "trend_penalty",
     "holding_days",
     "min_avg_turnover",
     "target_exposure",
@@ -92,8 +96,11 @@ def _stability_variants(base_scenario: Dict[str, Any]) -> List[Dict[str, Any]]:
             _variant(base_scenario, "trend_160", trend_window=160),
             _variant(base_scenario, "vol_40", volatility_window=40),
             _variant(base_scenario, "vol_90", volatility_window=90),
-            _variant(base_scenario, "top3", max_positions=3),
-            _variant(base_scenario, "top4", max_positions=4),
+            _variant(base_scenario, "tilt_50", tilt_strength=0.50),
+            _variant(base_scenario, "tilt_85", tilt_strength=0.85),
+            _variant(base_scenario, "temperature_50", temperature=0.50),
+            _variant(base_scenario, "max_branch_25", max_branch_weight=0.25),
+            _variant(base_scenario, "rebalance_threshold_03", rebalance_threshold=0.03),
             _variant(base_scenario, "rebalance_10", holding_days=10),
             _variant(base_scenario, "rebalance_40", holding_days=40),
         ]
@@ -238,7 +245,7 @@ def _build_parameter_sensitivity_payload(
         "status": status,
         "method": (
             "Parallel one-factor stability sweep around the locked strict scenario; "
-            "it perturbs lookback, trend window, volatility window, top_k, and rebalance interval without selecting a new production parameter set."
+            "it perturbs lookback, trend window, volatility window, continuous weighting parameters, and rebalance interval without selecting a new production parameter set."
         ),
         "base_params": _stability_parameters(base_scenario),
         "selected_params": _stability_parameters(base_scenario),

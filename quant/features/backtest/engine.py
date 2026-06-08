@@ -16,7 +16,7 @@ from quant.features.backtest.entities import (
     BacktestResult,
     CommissionConfig,
 )
-from quant.features.backtest.schemas import DeferredOrder
+from quant.features.backtest.schemas import DeferredOrder, EXECUTION_TIMING_SAME_CLOSE
 from quant.features.backtest.exceptions import OrderRejectedError
 from quant.features.backtest.analytics import calculate_performance_metrics
 from quant.features.backtest.market_rules import (
@@ -86,7 +86,7 @@ class Backtester:
         start: datetime,
         end: datetime,
         strategies: List[Any],
-        initial_cash: float = 100000,
+        initial_cash: float = 10000,
         data_provider: Any = None,
         symbols: Optional[List[str]] = None,
         strategy_allocations: Optional[Dict[str, float]] = None,
@@ -274,7 +274,43 @@ class Backtester:
                                        _strategy_name(strategy),
                                        current_date, e)
 
-            for order in pending_orders:
+            same_close_orders = [
+                order for order in pending_orders
+                if order.execution_timing == EXECUTION_TIMING_SAME_CLOSE
+            ]
+            next_open_orders = [
+                order for order in pending_orders
+                if order.execution_timing != EXECUTION_TIMING_SAME_CLOSE
+            ]
+            if same_close_orders:
+                self._execute_deferred_orders(
+                    same_close_orders, today_bars, prev_close_bars, last_prices,
+                    current_date, portfolio_map, primary_portfolio, use_subs,
+                    strategies, all_trades, diag, self.lot_sizes, self.commission,
+                    self.slippage_bps, self.market_impact_factor,
+                    self.execution_cost_model,
+                    self.risk_price_deviation_limit,
+                    entry_times, entry_prices,
+                )
+                if use_subs:
+                    for pf in portfolio_map.values():
+                        self._update_portfolio_prices(pf, last_prices)
+                else:
+                    self._update_portfolio_prices(primary_portfolio, last_prices)
+                for strategy in strategies:
+                    if hasattr(strategy, "context") and hasattr(strategy.context, "drain_orders"):
+                        try:
+                            for order in strategy.context.drain_orders(signal_date=current_date):
+                                if order.execution_timing == EXECUTION_TIMING_SAME_CLOSE:
+                                    diag.discarded_orders += 1
+                                else:
+                                    next_open_orders.append(order)
+                        except (OrderRejectedError, ValueError) as e:
+                            logger.warning("Invalid order from strategy %s on %s: %s",
+                                           _strategy_name(strategy),
+                                           current_date, e)
+
+            for order in next_open_orders:
                 deferred_orders.append(order)
             pending_orders = []
 

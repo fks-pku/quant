@@ -35,7 +35,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "joinquant_value_rsrs_timing"
 TITLE = "JoinQuant 价值选股 + RSRS 择时"
 TIMING_SYMBOL = "000300"

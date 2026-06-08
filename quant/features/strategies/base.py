@@ -65,20 +65,54 @@ class Strategy(ABC):
         """Called when strategy stops."""
         self._positions.clear()
 
-    def buy(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
+    def buy(
+        self,
+        symbol: str,
+        quantity: float,
+        order_type: str = "MARKET",
+        price: Optional[float] = None,
+        execution_timing: Optional[str] = None,
+    ) -> Optional[str]:
         """Submit a buy order. Returns None if rejected."""
         if self.context and hasattr(self.context, "submit_order"):
             try:
-                return self.context.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
+                if execution_timing is None:
+                    return self.context.submit_order(symbol, quantity, "BUY", order_type, price, self.name)
+                return self.context.submit_order(
+                    symbol,
+                    quantity,
+                    "BUY",
+                    order_type,
+                    price,
+                    self.name,
+                    execution_timing=execution_timing,
+                )
             except OrderRejectedError:
                 return None
         return None
 
-    def sell(self, symbol: str, quantity: float, order_type: str = "MARKET", price: Optional[float] = None) -> Optional[str]:
+    def sell(
+        self,
+        symbol: str,
+        quantity: float,
+        order_type: str = "MARKET",
+        price: Optional[float] = None,
+        execution_timing: Optional[str] = None,
+    ) -> Optional[str]:
         """Submit a sell order. Returns None if rejected."""
         if self.context and hasattr(self.context, "submit_order"):
             try:
-                return self.context.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
+                if execution_timing is None:
+                    return self.context.submit_order(symbol, quantity, "SELL", order_type, price, self.name)
+                return self.context.submit_order(
+                    symbol,
+                    quantity,
+                    "SELL",
+                    order_type,
+                    price,
+                    self.name,
+                    execution_timing=execution_timing,
+                )
             except OrderRejectedError:
                 return None
         return None

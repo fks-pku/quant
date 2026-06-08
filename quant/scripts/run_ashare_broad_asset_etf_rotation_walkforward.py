@@ -1,4 +1,4 @@
-"""Run parallel walk-forward audit for the A-share broad asset ETF rotation candidate."""
+"""Run parallel walk-forward audit for the A-share broad asset ETF rotation strategy."""
 
 from __future__ import annotations
 

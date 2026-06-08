@@ -157,7 +157,7 @@ def run_backtest(df):
         position_pct=0.95,
     )
 
-    initial_cash = 1000000.0
+    initial_cash = 10000.0
 
     config = {
         "backtest": {"slippage_bps": 10},

@@ -36,7 +36,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")
 COMMISSION_CFG = {
     "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},

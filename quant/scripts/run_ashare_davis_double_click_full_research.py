@@ -44,7 +44,7 @@ from quant.infrastructure.research.reporting import (  # noqa: E402
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "ashare_davis_double_click"
 TITLE = "A股戴维斯双击"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

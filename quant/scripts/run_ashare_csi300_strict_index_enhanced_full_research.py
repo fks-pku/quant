@@ -22,7 +22,7 @@ from quant.features.strategies.reject.ashare_csi300_strict_index_enhanced.strate
 
 STRATEGY_ID = "ashare_csi300_strict_index_enhanced"
 TITLE = "沪深300严格指数增强"
-INITIAL_CASH = 10_000_000.0
+INITIAL_CASH = 10_000.0
 INDEX_CODE = "000300.SH"
 BENCHMARK_SYMBOL = "000300"
 WEIGHT_DB = Path("quant/infrastructure/var/duckdb/live/cn_index_weight.duckdb")

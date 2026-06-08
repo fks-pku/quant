@@ -22,6 +22,7 @@ from quant.features.backtest.market_rules import (
     get_settled_quantity,
     fifo_lot_slices,
 )
+from quant.features.backtest.schemas import EXECUTION_TIMING_SAME_CLOSE
 from quant.runtime.execution_cost import (
     cost_model_enabled as _shared_cost_model_enabled,
     execution_adv_quantity as _shared_execution_adv_quantity,
@@ -189,6 +190,10 @@ def apply_market_impact(fill_price: float, side: str, impact_bps: float) -> floa
     return fill_price - adjustment
 
 
+def execution_price_field(order: "DeferredOrder") -> str:
+    return "close" if order.execution_timing == EXECUTION_TIMING_SAME_CLOSE else "open"
+
+
 def execute_order(
     order: "DeferredOrder",
     portfolio: Any,
@@ -209,7 +214,8 @@ def execute_order(
 ) -> List[Trade]:
     if bar is None:
         raise OrderRejectedError(OrderRejectionReason.BAR_UNAVAILABLE, symbol)
-    raw_open = _positive_finite_float(bar.get('open'), symbol, "open")
+    price_field = execution_price_field(order)
+    raw_execution_price = _positive_finite_float(bar.get(price_field), symbol, price_field)
 
     signal_date = order.signal_date
     fill_ts = bar.get('timestamp', datetime.now())
@@ -223,7 +229,7 @@ def execute_order(
         fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
         limit_direction = get_price_limit_direction(
             symbol,
-            raw_open,
+            raw_execution_price,
             prev_close,
             fill_date_val,
             ipo_dates,
@@ -239,8 +245,8 @@ def execute_order(
             raise OrderRejectedError(OrderRejectionReason.PRICE_AT_LIMIT, symbol)
 
     order_type = (order.order_type or "MARKET").upper()
-    effective_slippage_bps = _model_slippage_bps(raw_open, slippage_bps, market, execution_cost_model)
-    fill_price = resolve_base_fill_price(order, raw_open, order_type, effective_slippage_bps)
+    effective_slippage_bps = _model_slippage_bps(raw_execution_price, slippage_bps, market, execution_cost_model)
+    fill_price = resolve_base_fill_price(order, raw_execution_price, order_type, effective_slippage_bps, price_field)
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
 
     risk_price = order.risk_check_price
@@ -329,6 +335,8 @@ def execute_order(
         "participation_limit": float(participation_limit or 0.0),
         "impact_bps": float(impact_bps or 0.0),
         "slippage_bps": float(effective_slippage_bps or 0.0),
+        "execution_timing": order.execution_timing,
+        "execution_price_field": price_field,
     }
 
     if order.side == 'BUY':
@@ -359,18 +367,24 @@ def apply_slippage(price: float, side: str, bps: float) -> float:
     return price - slippage
 
 
-def resolve_base_fill_price(order: "DeferredOrder", raw_open: float, order_type: str, slippage_bps: float) -> float:
+def resolve_base_fill_price(
+    order: "DeferredOrder",
+    raw_price: float,
+    order_type: str,
+    slippage_bps: float,
+    price_field: str = "open",
+) -> float:
     if order_type != "LIMIT":
-        return apply_slippage(raw_open, order.side, slippage_bps)
+        return apply_slippage(raw_price, order.side, slippage_bps)
     limit_price = order.price
     limit_price = _positive_finite_float(limit_price, order.symbol, "limit price")
-    if order.side == "BUY" and raw_open > limit_price:
+    if order.side == "BUY" and raw_price > limit_price:
         raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
-                                 f"open={raw_open} > limit={limit_price}")
-    if order.side == "SELL" and raw_open < limit_price:
+                                 f"{price_field}={raw_price} > limit={limit_price}")
+    if order.side == "SELL" and raw_price < limit_price:
         raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
-                                 f"open={raw_open} < limit={limit_price}")
-    return float(raw_open)
+                                 f"{price_field}={raw_price} < limit={limit_price}")
+    return float(raw_price)
 
 
 def enforce_limit_after_impact(order: "DeferredOrder", fill_price: float, order_type: str) -> None:

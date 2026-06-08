@@ -37,7 +37,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "ashare_small_cap_pure_baseline"
 TITLE = "A-share small-cap guarded baseline"
 FORMULA_KEY = "ashare_small_cap_guarded_size_factor"

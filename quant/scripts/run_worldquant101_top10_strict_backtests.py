@@ -35,7 +35,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 DEFAULT_START = datetime(2016, 1, 1)
 DEFAULT_END = datetime(2025, 12, 31)
-DEFAULT_INITIAL_CASH = 20000.0
+DEFAULT_INITIAL_CASH = 10_000.0
 DEFAULT_HOLDING_DAYS = 5
 DEFAULT_MAX_POSITIONS = 20
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

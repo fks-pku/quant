@@ -12,7 +12,7 @@ research:
   auto_backtest: true
   default_backtest_start: "2016-01-01"
   default_backtest_end: "2026-05-31"
-  default_initial_cash: 20000
+  default_initial_cash: 10000
   default_symbols:
     - "000300"
     - "000905"

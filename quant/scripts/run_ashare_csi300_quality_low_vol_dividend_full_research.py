@@ -24,7 +24,7 @@ from quant.features.strategies.xueqiu_small_cap_financial_filter.strategy import
 
 STRATEGY_ID = "ashare_csi300_quality_low_vol_dividend_enhanced"
 TITLE = "沪深300质量低波红利增强"
-INITIAL_CASH = 1_000_000.0
+INITIAL_CASH = 10_000.0
 CORE_ALLOCATION = 0.97
 SATELLITE_ALLOCATION = 0.03
 SATELLITE_RISK_INDEX_SYMBOL = "399001"

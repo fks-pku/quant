@@ -3,10 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from quant.features.strategies.reject.ashare_broad_asset_etf_rotation.strategy import (
+from quant.features.strategies.ashare_broad_asset_etf_rotation.strategy import (
     AShareBroadAssetEtfRotationStrategy,
     DEFAULT_CATEGORY_SYMBOLS,
+    STRATEGY_NAME,
 )
+from quant.features.strategies.registry import StrategyRegistry
 
 
 class _Portfolio:
@@ -71,13 +73,18 @@ def test_default_universe_includes_csi1000_and_excludes_cross_border_etfs():
     assert not {"513100", "513050", "159920", "510900"}.intersection(symbols)
 
 
+def test_top_level_strategy_is_active_registered():
+    assert AShareBroadAssetEtfRotationStrategy._registry_active is True
+    assert StrategyRegistry.get(STRATEGY_NAME) is AShareBroadAssetEtfRotationStrategy
+
+
 def test_dynamic_universe_does_not_require_every_candidate_in_daily_snapshot():
     strategy = AShareBroadAssetEtfRotationStrategy()
 
     assert strategy.required_snapshot_symbols() == []
 
 
-def test_gold_cash_and_bond_are_ranked_candidates_not_forced_fallbacks():
+def test_gold_cash_and_bond_get_continuous_weights_not_hard_top_one():
     strategy = AShareBroadAssetEtfRotationStrategy(
         category_symbols={"gold": ["518880"], "cash": ["511990"], "bond_rate": ["511010"]},
         momentum_lookback=6,
@@ -86,11 +93,12 @@ def test_gold_cash_and_bond_are_ranked_candidates_not_forced_fallbacks():
         volatility_window=5,
         liquidity_window=3,
         min_avg_turnover=1000.0,
-        max_positions=1,
-        target_exposure=0.90,
+        target_exposure=1.0,
         holding_days=1,
         require_pit_size=True,
         volatility_floor=0.01,
+        min_branch_weight=0.05,
+        max_branch_weight=0.60,
     )
     context = _Context()
     strategy.on_start(context)
@@ -101,11 +109,16 @@ def test_gold_cash_and_bond_are_ranked_candidates_not_forced_fallbacks():
 
     strategy.on_after_trading(context, date(2026, 5, 20))
 
-    assert [order["symbol"] for order in context.orders] == ["511010"]
-    assert strategy.get_guard_diagnostics()["last_selected"] == ["511010"]
+    diagnostics = strategy.get_guard_diagnostics()
+    weights = diagnostics["last_target_weights"]
+    assert set(weights) == {"518880", "511990", "511010"}
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert weights["511010"] > weights["518880"] > weights["511990"]
+    assert all(0.05 <= weight <= 0.60 for weight in weights.values())
+    assert {order["symbol"] for order in context.orders} == {"518880", "511990", "511010"}
 
 
-def test_no_candidate_sells_existing_position_and_keeps_actual_cash():
+def test_no_tradable_branch_sells_existing_position_and_keeps_actual_cash():
     strategy = AShareBroadAssetEtfRotationStrategy(
         category_symbols={"csi300": ["510300"], "gold": ["518880"]},
         momentum_lookback=6,
@@ -114,15 +127,14 @@ def test_no_candidate_sells_existing_position_and_keeps_actual_cash():
         volatility_window=5,
         liquidity_window=3,
         min_avg_turnover=1000.0,
-        max_positions=2,
         holding_days=1,
     )
     context = _Context()
     strategy.on_start(context)
     strategy.on_fill(context, SimpleNamespace(symbol="510300", quantity=1000, side="BUY"))
 
-    _feed(strategy, "510300", [10.0, 9.95, 9.9, 9.85, 9.8, 9.75, 9.7, 9.65])
-    _feed(strategy, "518880", [5.0, 4.99, 4.98, 4.97, 4.96, 4.95, 4.94, 4.93])
+    _feed(strategy, "510300", [10.0, 9.95, 9.9, 9.85, 9.8, 9.75, 9.7, 9.65], turnover=0.0, volume=0)
+    _feed(strategy, "518880", [5.0, 4.99, 4.98, 4.97, 4.96, 4.95, 4.94, 4.93], turnover=0.0, volume=0)
 
     strategy.on_after_trading(context, date(2026, 5, 20))
 
@@ -137,6 +149,7 @@ def test_no_candidate_sells_existing_position_and_keeps_actual_cash():
         }
     ]
     assert strategy.get_guard_diagnostics()["last_selected"] == []
+    assert strategy.get_guard_diagnostics()["last_actual_cash_weight"] == pytest.approx(1.0)
 
 
 def test_stale_symbol_is_not_visible_even_when_score_is_best():
@@ -148,7 +161,6 @@ def test_stale_symbol_is_not_visible_even_when_score_is_best():
         volatility_window=5,
         liquidity_window=3,
         min_avg_turnover=1000.0,
-        max_positions=1,
         holding_days=1,
         require_pit_size=True,
     )
@@ -164,7 +176,7 @@ def test_stale_symbol_is_not_visible_even_when_score_is_best():
     assert "515300" not in strategy.get_guard_diagnostics()["last_visible_by_category"]["csi300"]
 
 
-def test_category_cap_keeps_one_representative_per_bucket():
+def test_branch_uses_best_representative_without_hard_top_k_limit():
     strategy = AShareBroadAssetEtfRotationStrategy(
         category_symbols={"csi300": ["510300", "159919"], "gold": ["518880"]},
         momentum_lookback=6,
@@ -173,11 +185,10 @@ def test_category_cap_keeps_one_representative_per_bucket():
         volatility_window=5,
         liquidity_window=3,
         min_avg_turnover=1000.0,
-        max_positions=2,
-        max_positions_per_category=1,
         target_exposure=0.90,
         holding_days=1,
         require_pit_size=True,
+        max_branch_weight=0.70,
     )
     context = _Context()
     strategy.on_start(context)
@@ -188,6 +199,36 @@ def test_category_cap_keeps_one_representative_per_bucket():
 
     strategy.on_after_trading(context, date(2026, 5, 20))
 
-    symbols = [order["symbol"] for order in context.orders]
-    assert len([symbol for symbol in symbols if symbol in {"510300", "159919"}]) == 1
-    assert "518880" in symbols
+    weights = strategy.get_guard_diagnostics()["last_target_weights"]
+    assert len({"510300", "159919"} & set(weights)) == 1
+    assert "518880" in weights
+    assert sum(weights.values()) == pytest.approx(0.90)
+
+
+def test_branch_weight_bounds_are_enforced_before_order_generation():
+    strategy = AShareBroadAssetEtfRotationStrategy(
+        category_symbols={"strong": ["510300"], "middle": ["518880"], "weak": ["511990"]},
+        momentum_lookback=6,
+        momentum_skip=1,
+        trend_window=5,
+        volatility_window=5,
+        liquidity_window=3,
+        min_avg_turnover=1000.0,
+        target_exposure=1.0,
+        holding_days=1,
+        require_pit_size=True,
+        min_branch_weight=0.10,
+        max_branch_weight=0.50,
+        temperature=0.40,
+    )
+    strategy.on_start(_Context())
+
+    _feed(strategy, "510300", [10.0, 10.4, 10.8, 11.2, 11.6, 12.0, 12.4, 12.8])
+    _feed(strategy, "518880", [5.0, 5.04, 5.08, 5.12, 5.16, 5.2, 5.24, 5.28])
+    _feed(strategy, "511990", [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+
+    weights = strategy._target_symbol_weights(date(2026, 5, 20))
+
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert all(0.10 <= weight <= 0.50 for weight in weights.values())
+    assert weights["510300"] == pytest.approx(0.50)

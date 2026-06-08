@@ -30,7 +30,7 @@ class PortfolioSnapshot:
 class Portfolio(PortfolioLike):
     """Tracks positions, NAV, and P&L in-memory per session."""
 
-    def __init__(self, initial_cash: float = 100000.0, currency: str = "USD"):
+    def __init__(self, initial_cash: float = 10000.0, currency: str = "USD"):
         self.initial_cash = initial_cash
         self.cash = initial_cash
         self.currency = currency

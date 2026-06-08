@@ -17,7 +17,7 @@ class PaperBroker(BrokerAdapter):
 
     def __init__(
         self,
-        initial_cash: float = 100000.0,
+        initial_cash: float = 10000.0,
         slippage_bps: float = 5,
         data_provider: Any = None,
     ):

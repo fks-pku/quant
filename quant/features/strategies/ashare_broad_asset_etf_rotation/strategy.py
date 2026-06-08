@@ -1,10 +1,10 @@
-"""A-share broad asset ETF rotation candidate."""
+"""A-share broad asset ETF rotation strategy."""
 
 from __future__ import annotations
 
 from datetime import date
 import math
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
@@ -39,14 +39,21 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
         volatility_window: int = 60,
         liquidity_window: int = 20,
         min_avg_turnover: float = 20_000_000.0,
-        max_positions: int = 2,
-        max_positions_per_category: int = 1,
-        target_exposure: float = 0.98,
+        max_positions: Optional[int] = None,
+        max_positions_per_category: Optional[int] = None,
+        target_exposure: float = 1.0,
         holding_days: int = 20,
         lot_size: int = 100,
         require_pit_size: bool = True,
         volatility_floor: float = 0.01,
         pit_size_fields: Optional[List[str]] = None,
+        weight_mode: str = "continuous_branch_tilt",
+        tilt_strength: float = 0.70,
+        temperature: float = 0.75,
+        min_branch_weight: float = 0.02,
+        max_branch_weight: float = 0.30,
+        rebalance_threshold: float = 0.02,
+        trend_penalty: float = 1.0,
     ):
         self.category_symbols = self._normalize_category_symbols(category_symbols or DEFAULT_CATEGORY_SYMBOLS)
         symbols = self._flatten_category_symbols(self.category_symbols)
@@ -57,19 +64,36 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
         self.volatility_window = max(2, int(volatility_window))
         self.liquidity_window = max(1, int(liquidity_window))
         self.min_avg_turnover = float(min_avg_turnover)
-        self.max_positions = max(1, int(max_positions))
-        self.max_positions_per_category = max(1, int(max_positions_per_category))
+        self.max_positions = None if max_positions is None else max(1, int(max_positions))
+        self.max_positions_per_category = (
+            None if max_positions_per_category is None else max(1, int(max_positions_per_category))
+        )
         self.target_exposure = min(max(float(target_exposure), 0.0), 1.0)
         self.lot_size = max(1, int(lot_size))
         self.require_pit_size = bool(require_pit_size)
         self.volatility_floor = max(0.0, float(volatility_floor))
         self.pit_size_fields = tuple(str(field) for field in (pit_size_fields or DEFAULT_PIT_SIZE_FIELDS))
+        self.weight_mode = str(weight_mode)
+        self.tilt_strength = min(max(float(tilt_strength), 0.0), 1.0)
+        self.temperature = max(float(temperature), 1e-6)
+        self.min_branch_weight = max(0.0, float(min_branch_weight))
+        self.max_branch_weight = min(max(float(max_branch_weight), 0.0), 1.0)
+        self.rebalance_threshold = max(0.0, float(rebalance_threshold))
+        self.trend_penalty = max(0.0, float(trend_penalty))
         self._last_scores: Dict[str, float] = {}
+        self._last_branch_scores: Dict[str, float] = {}
+        self._last_target_weights: Dict[str, float] = {}
+        self._last_branch_weights: Dict[str, float] = {}
         self._last_visible_by_category: Dict[str, List[str]] = {}
+        self._last_actual_cash_weight = 1.0
         self._diagnostics: Dict[str, Any] = {
             "rebalance_count": 0,
             "last_candidate_count": 0,
             "last_selected": [],
+            "last_target_weights": {},
+            "last_branch_weights": {},
+            "last_actual_cash_weight": 1.0,
+            "last_weight_sum": 1.0,
             "last_visible_by_category": {},
             "entry_rejections": {},
         }
@@ -94,67 +118,82 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
             self._days_since_rebalance = 0
 
     def _execute_rebalance(self, context: "Context", trading_date: date) -> bool:
-        selected = self._select_targets(trading_date)
-        selected_set = set(selected)
+        target_weights = self._target_symbol_weights(trading_date)
+        selected_set = set(target_weights)
         self._diagnostics["rebalance_count"] = int(self._diagnostics.get("rebalance_count") or 0) + 1
-        self._diagnostics["last_selected"] = list(selected)
+        self._diagnostics["last_selected"] = list(target_weights)
 
-        for symbol, quantity in list(self._positions.items()):
-            if quantity > 0 and symbol not in selected_set:
-                price = self._get_last_price(symbol)
-                sell_quantity = int(quantity)
-                if sell_quantity > 0:
-                    self.sell(symbol, sell_quantity, "MARKET", price if price > 0 else None)
-
-        if not selected:
-            return False
         nav = float(getattr(getattr(context, "portfolio", None), "nav", 0.0) or 0.0)
         if nav <= 0:
             return False
-        target_value = nav * self.target_exposure / float(len(selected))
         submitted = False
-        for symbol in selected:
+
+        target_quantities: Dict[str, int] = {}
+        for symbol, weight in target_weights.items():
             price = self._get_last_price(symbol)
             if price <= 0:
                 continue
-            target_quantity = self._round_lot(target_value / price)
+            target_quantities[symbol] = self._round_lot(nav * weight / price)
+
+        for symbol, quantity in list(self._positions.items()):
+            if quantity <= 0:
+                continue
+            price = self._get_last_price(symbol)
+            if price <= 0:
+                continue
+            target_quantity = target_quantities.get(symbol, 0)
             current_quantity = int(self._positions.get(symbol, 0) or 0)
             delta = target_quantity - current_quantity
-            if delta > 0:
-                self.buy(symbol, delta, "MARKET", price)
-                submitted = True
-            elif delta < 0:
+            current_weight = current_quantity * price / nav
+            target_weight = target_weights.get(symbol, 0.0)
+            if delta < 0 and (target_quantity == 0 or abs(target_weight - current_weight) >= self.rebalance_threshold):
                 self.sell(symbol, abs(delta), "MARKET", price)
                 submitted = True
-        return submitted or bool(selected)
 
-    def _select_targets(self, trading_date: date) -> List[str]:
-        selected = []
-        category_counts: Dict[str, int] = {}
-        scored: List[Tuple[float, str, str]] = []
+        for symbol, target_quantity in target_quantities.items():
+            price = self._get_last_price(symbol)
+            if price <= 0:
+                continue
+            current_quantity = int(self._positions.get(symbol, 0) or 0)
+            delta = target_quantity - current_quantity
+            current_weight = current_quantity * price / nav
+            target_weight = target_weights.get(symbol, 0.0)
+            if delta > 0 and abs(target_weight - current_weight) >= self.rebalance_threshold:
+                self.buy(symbol, delta, "MARKET", price)
+                submitted = True
+        return submitted or bool(target_weights)
+
+    def _target_symbol_weights(self, trading_date: date) -> Dict[str, float]:
+        scored: List[Dict[str, Any]] = []
         visible = self._visible_symbols_by_category(trading_date)
         for category, symbols in visible.items():
+            category_candidates = []
             for symbol in symbols:
                 reason = self._candidate_rejection(symbol, trading_date)
                 if reason:
                     self._count("entry_rejections", reason)
                     continue
-                score = self._risk_adjusted_momentum(symbol)
-                if score is None or score <= 0:
-                    self._count("entry_rejections", "non_positive_score")
+                score = self._branch_score(symbol)
+                if score is None:
+                    self._count("entry_rejections", "missing_score")
                     continue
-                scored.append((score, category, symbol))
-        self._last_scores = {symbol: score for score, _, symbol in scored}
+                category_candidates.append({"category": category, "symbol": symbol, "score": score})
+            if category_candidates:
+                scored.append(max(category_candidates, key=lambda item: (item["score"], item["symbol"])))
+        self._last_scores = {str(item["symbol"]): float(item["score"]) for item in scored}
+        self._last_branch_scores = {str(item["category"]): float(item["score"]) for item in scored}
         self._diagnostics["last_candidate_count"] = len(scored)
-        for _, category, symbol in sorted(scored, key=lambda item: (-item[0], item[2])):
-            if len(selected) >= self.max_positions:
-                break
-            if category_counts.get(category, 0) >= self.max_positions_per_category:
-                self._count("entry_rejections", "category_cap")
-                continue
-            selected.append(symbol)
-            category_counts[category] = category_counts.get(category, 0) + 1
-        return selected
+        if not scored:
+            self._remember_target_weights({}, {})
+            return {}
+        branch_weights = self._branch_weights(scored)
+        symbol_weights = {
+            str(item["symbol"]): branch_weights[str(item["category"])] * self.target_exposure
+            for item in scored
+            if branch_weights.get(str(item["category"]), 0.0) > 0
+        }
+        self._remember_target_weights(symbol_weights, branch_weights)
+        return symbol_weights
 
     def _visible_symbols_by_category(self, trading_date: date) -> Dict[str, List[str]]:
         visible_by_category: Dict[str, List[str]] = {}
@@ -186,13 +225,94 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
         momentum = self._momentum(symbol)
         if momentum is None:
             return "missing_momentum"
-        if momentum <= 0.0:
-            return "weak_momentum"
-        if not self._above_trend(symbol):
-            return "below_trend"
         if self.require_pit_size and self._pit_size(symbol, trading_date) is None:
             return "missing_pit_size"
         return ""
+
+    def _branch_score(self, symbol: str) -> Optional[float]:
+        score = self._risk_adjusted_momentum(symbol)
+        if score is None:
+            return None
+        if not self._above_trend(symbol):
+            score -= self.trend_penalty
+        return score if math.isfinite(score) else None
+
+    def _branch_weights(self, scored: List[Dict[str, Any]]) -> Dict[str, float]:
+        categories = [str(item["category"]) for item in scored]
+        scores = [float(item["score"]) for item in scored]
+        if not scores:
+            return {}
+        mean = sum(scores) / float(len(scores))
+        variance = sum((score - mean) ** 2 for score in scores) / float(len(scores))
+        std = math.sqrt(max(variance, 0.0))
+        if std <= 1e-12:
+            raw = {category: 1.0 / float(len(categories)) for category in categories}
+        else:
+            exps = []
+            for score in scores:
+                z_score = min(max((score - mean) / std, -2.0), 2.0)
+                exps.append(math.exp(z_score / self.temperature))
+            total_exp = sum(exps)
+            tilted = {
+                category: exps[index] / total_exp
+                for index, category in enumerate(categories)
+            }
+            base = 1.0 / float(len(categories))
+            raw = {
+                category: (1.0 - self.tilt_strength) * base + self.tilt_strength * tilted[category]
+                for category in categories
+            }
+        return self._normalize_with_bounds(raw)
+
+    def _normalize_with_bounds(self, raw_weights: Dict[str, float]) -> Dict[str, float]:
+        keys = list(raw_weights)
+        if not keys:
+            return {}
+        count = len(keys)
+        min_weight = min(self.min_branch_weight, 1.0 / float(count))
+        max_weight = max(self.max_branch_weight, 1.0 / float(count), min_weight)
+        weights = {key: max(0.0, float(raw_weights.get(key) or 0.0)) for key in keys}
+        fixed: Dict[str, float] = {}
+        free = set(keys)
+        remaining = 1.0
+        for _ in range(count + 1):
+            if not free:
+                break
+            total = sum(weights[key] for key in free)
+            if total <= 0:
+                scaled = {key: remaining / float(len(free)) for key in free}
+            else:
+                scaled = {key: weights[key] / total * remaining for key in free}
+            lows = {key for key, value in scaled.items() if value < min_weight}
+            highs = {key for key, value in scaled.items() if value > max_weight}
+            if not lows and not highs:
+                fixed.update(scaled)
+                free.clear()
+                break
+            for key in sorted(lows):
+                fixed[key] = min_weight
+                free.remove(key)
+            for key in sorted(highs):
+                if key in free:
+                    fixed[key] = max_weight
+                    free.remove(key)
+            remaining = max(0.0, 1.0 - sum(fixed.values()))
+        if free:
+            equal = remaining / float(len(free)) if free else 0.0
+            fixed.update({key: equal for key in free})
+        total_weight = sum(fixed.values())
+        if total_weight <= 0:
+            return {key: 1.0 / float(count) for key in keys}
+        return {key: fixed.get(key, 0.0) / total_weight for key in keys}
+
+    def _remember_target_weights(self, symbol_weights: Dict[str, float], branch_weights: Dict[str, float]) -> None:
+        self._last_target_weights = {key: float(value) for key, value in symbol_weights.items() if value > 0}
+        self._last_branch_weights = {key: float(value) for key, value in branch_weights.items() if value > 0}
+        self._last_actual_cash_weight = max(0.0, 1.0 - sum(self._last_target_weights.values()))
+        self._diagnostics["last_target_weights"] = dict(self._last_target_weights)
+        self._diagnostics["last_branch_weights"] = dict(self._last_branch_weights)
+        self._diagnostics["last_actual_cash_weight"] = self._last_actual_cash_weight
+        self._diagnostics["last_weight_sum"] = sum(self._last_target_weights.values()) + self._last_actual_cash_weight
 
     def _risk_adjusted_momentum(self, symbol: str) -> Optional[float]:
         momentum = self._momentum(symbol)
@@ -289,6 +409,10 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
             },
             "entry_rejections": dict(self._diagnostics.get("entry_rejections") or {}),
             "last_scores": dict(self._last_scores),
+            "last_branch_scores": dict(self._last_branch_scores),
+            "last_target_weights": dict(self._last_target_weights),
+            "last_branch_weights": dict(self._last_branch_weights),
+            "last_actual_cash_weight": self._last_actual_cash_weight,
             "parameters": self._get_parameters(),
         }
 
@@ -309,6 +433,13 @@ class AShareBroadAssetEtfRotationStrategy(DailyBarStrategy):
             "require_pit_size": self.require_pit_size,
             "volatility_floor": self.volatility_floor,
             "pit_size_fields": list(self.pit_size_fields),
+            "weight_mode": self.weight_mode,
+            "tilt_strength": self.tilt_strength,
+            "temperature": self.temperature,
+            "min_branch_weight": self.min_branch_weight,
+            "max_branch_weight": self.max_branch_weight,
+            "rebalance_threshold": self.rebalance_threshold,
+            "trend_penalty": self.trend_penalty,
         }
 
     def _count(self, bucket: str, key: str) -> None:

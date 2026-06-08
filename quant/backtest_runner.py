@@ -25,7 +25,7 @@ def parse_args(argv=None):
     parser.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
     parser.add_argument("--end", required=True, help="End date YYYY-MM-DD")
     parser.add_argument("--symbols", required=True, help="Comma-separated symbols (e.g. AAPL,HK.00700)")
-    parser.add_argument("--initial-cash", type=float, default=100000)
+    parser.add_argument("--initial-cash", type=float, default=10000)
     parser.add_argument("--slippage-bps", type=float, default=5)
     parser.add_argument("--output-dir", default="./backtest_output")
     parser.add_argument("--db", default=_DEFAULT_DB)

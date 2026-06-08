@@ -33,6 +33,7 @@
 - 只有实际完成候选选择/调仓的 rebalance 才能刷新 `_last_rebalance_date`；空候选池、字段缺失或无有效 NAV 不得让策略等待下一个 holding window
 - 候选入场过滤与持仓退出过滤必须分离；入场 diagnostics 不得混入 `stop_loss`、`take_profit`、`trailing_stop` 等只对已有持仓有意义的退出原因
 - 覆盖 `on_fill()` 的策略必须兼容回测引擎的 synthetic fill：送股/转增可能以 `BUY`、`fill_price=0` 回调同步策略内部仓位，ETF/基金 `adj_factor` 份额折算可能以 `BUY` 或 `SELL`、`fill_price=0` 同步内部仓位，内部成本/峰值价状态要随之按数量比例调整
+- `Strategy.buy()` / `Strategy.sell()` 支持可选 `execution_timing`；默认不传仍是回测 `NEXT_OPEN`，`SAME_CLOSE` 仅用于显式 close-auction / pre-close 回测语义，实盘上下文不支持该参数
 - 顶层 promoted/candidate 策略默认必须暴露并启用 `risk_exit.enabled` 或等价风险退出包；正式研究报告默认只展示启用后的止盈止损/风险退出逻辑，关闭版本只作为专项敏感性/消融研究
 - 面向普通账户的 A 股个股策略默认必须排除需要额外权限的创业板 `300/301` 与科创板 `688/689` 股票；ETF 策略不适用该股票权限过滤
 
@@ -43,7 +44,7 @@
 - 新增未验证策略或当前生产 checklist 未全部通过、但尚未完成最终 No-Go 的策略：放入 `strategies/reject/<name>/`，不得进入顶层自动发现区；通过严格回测 checklist 后再 promote，并同步复制对应 `full_research_report.html` 到策略目录；完整研究最终 rejected 的生成策略应迁出 `strategies/` 并归档到 `features/rejected_strategy/<name>/`
 - Large-cap forum strategies should reuse `_large_cap_forum_common.py` for shared daily-bar factor/risk mechanics, while preserving separate candidate directories, configs, and README files for each thesis.
 - 非小市值 ETF 轮动策略应通过资产类别与流动性定义 universe；除非用户明确要求，不要把中证1000或其它小盘 proxy ETF 混入默认池。
-- `ashare_broad_asset_etf_rotation` 是用户批准的本土宽资产 ETF 研究候选，可在默认池中包含中证1000，但默认仍不得包含纳指、恒生、H 股、中国互联网等跨境 ETF。
+- `ashare_broad_asset_etf_rotation` 是用户批准进入顶层策略区的本土宽资产 ETF 策略，使用连续分支权重调节而非硬选前 N 名持仓；默认池可包含中证1000，但默认仍不得包含纳指、恒生、H 股、中国互联网等跨境 ETF。
 - 黄金-权益 ETF 杠铃类策略可以使用黄金 ETF 作为防守资产，但权益腿只能来自已审计稳定 ETF 注册池，不能从当前全市场 ETF taxonomy 自动扩候选，也不能退化为单只股票或小盘 proxy；新增 ETF 类别必须先经用户审计同意并注册到 `audited_stable_etf_registry_v1`。每个调仓点仍必须满足当前 bar、NAV/规模、流动性和 lookback 约束。
 - 只有当策略有额外本地约束或复杂审计要求时才新增策略目录级 `AGENTS.md`
 - 新增或修复策略框架/日线策略状态机语义时，必须在 `quant/tests/test_strategies_invariants.py` 增加对应 CASE，并同步 `quant/features/strategies/docs/strategy-invariants.md`；单策略测试只能作为补充

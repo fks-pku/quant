@@ -46,7 +46,7 @@ class RigorHub:
         symbols: List[str],
         start: str,
         end: str,
-        initial_cash: float = 100000,
+        initial_cash: float = 10000,
         benchmark_data: Any = None,
         strategy_archive_dir: str = "",
     ) -> PurgedWalkForwardResult:

@@ -35,7 +35,7 @@ from quant.infrastructure.research.reporting import build_research_stage_report_
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 STRATEGY_ID = "ashare_broad_etf_momentum_rotation"
 TITLE = "宽基 ETF 风险调整动量轮动"
 REPORT_ROOT = Path("quant/infrastructure/var/research/reports")

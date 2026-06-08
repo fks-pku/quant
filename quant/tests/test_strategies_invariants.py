@@ -61,6 +61,15 @@ class TestCase1RegistryCRUD:
             pass
         assert "TestInvS1c" in StrategyRegistry.list_strategies()
 
+    def test_s1_05_manual_register_sets_registry_metadata(self):
+        class ManualRegistered:
+            pass
+
+        StrategyRegistry.register("TestInvS1d", ManualRegistered)
+
+        assert ManualRegistered._registry_name == "TestInvS1d"
+        assert "TestInvS1d" in StrategyRegistry.list_strategies()
+
 
 # ---------------------------------------------------------------------------
 # CASE-2: _adj helper priority

@@ -75,7 +75,7 @@ while current_date ≤ end:
 
     ⑦ 策略生成信号 → strategy.on_after_trading()
 
-    ⑧ 收集新订单 → deferred_orders
+    ⑧ 收集新订单 → SAME_CLOSE 订单当日 close 执行；其余进入 deferred_orders
 
     ⑨ 记录 NAV → nav_calculator.calculate_daily_nav()
        reset_daily → portfolio.reset_daily() + risk_engine.reset_daily()
@@ -143,6 +143,7 @@ while current_date ≤ end:
 - 严格回测报告使用的日线 provider 若底层存在 `corp_actions.cn_dividends`，必须暴露 `get_dividend_for_date()`；否则 cash dividend、CN 红利税和送股 synthetic fill 都不会进入回测
 - A 股严格回测若启用冲击成本模型，provider 必须提供模型字段（如 `adv20_value`、`volatility20`），并在报告 constraints 中写清 `execution_cost_model`
 - CN 日线启用 `execution_cost_model` 的 MARKET 信号必须在 D 日提交阶段冻结为成本保护 LIMIT；其他市场需显式 `market_orders_as_limits: true`；限价只使用 D 日可知 reference/ADV/volatility，D+1 数据只能决定可成交性和成交结果
+- 订单默认执行时点仍为 `NEXT_OPEN`；只有显式 `execution_timing="SAME_CLOSE"` 的订单在 Step 8 后按当日 `close` 执行，执行后必须重新以当日 close 标记持仓市值
 - 交易级统计的 round-trip PnL 必须包含按 FIFO 分摊的 BUY 佣金；SELL trade 的 `pnl` 只覆盖卖出侧佣金
 - `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询
 - Walk-forward `test_sharpe_std` 使用 `ddof=1`（样本标准差）

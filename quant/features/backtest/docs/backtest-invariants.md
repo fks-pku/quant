@@ -9,6 +9,7 @@
 | 参数     | 值                                                                                                                                                            |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 信号执行   | **T+1**：当日 Step7 `on_after_trading` 信号，次日 Step4 以 **open** 价执行                                                                                               |
+| 订单级例外 | 显式 `execution_timing="SAME_CLOSE"` 的订单在当日 Step8 后以 **close** 价执行；默认仍为 `NEXT_OPEN`                                                                            |
 | NAV 记录 | Step 9（Step6 持仓市价更新之后，用当日 **close** 计市值）                                                                                                                     |
 | 日循环    | (1) on_before_trading (2) load bars (3) dividends (4) exec deferred (5) on_data (6) update prices (7) on_after_trading (8) pending->deferred (9) NAV + reset |
 
@@ -1668,6 +1669,38 @@ in `test_backtest_invariants.py`.
 
 ---
 
+## CASE-41: Order-level SAME_CLOSE execution timing
+
+显式设置 `execution_timing="SAME_CLOSE"` 的订单用于 close-auction / pre-close 回测语义。它不改变默认 T+1 next-open 语义。
+
+### Rules
+
+```text
+默认订单仍为 NEXT_OPEN：D close 信号 -> D+1 Step4 open 撮合。
+SAME_CLOSE 订单：D close 信号 -> D Step8 后按 D close 撮合。
+BUY 滑点仍向上，SELL 滑点仍向下。
+SAME_CLOSE 成交后必须重新用 D close 标记持仓市值，NAV 不得把买入滑点当作收盘市值。
+SAME_CLOSE BUY 的 on_fill 可以提交默认 NEXT_OPEN SELL；该 SELL 必须进入 D+1 open 队列。
+CN SAME_CLOSE BUY 在 D 日成交后，D+1 open SELL 满足 T+1，不应被当日卖出规则拒绝。
+```
+
+### Assertions
+
+```text
+C41-01  SAME_CLOSE BUY 使用当日 close 加 BUY 滑点成交，fill_date == signal_date
+C41-02  由 SAME_CLOSE BUY fill 派生的默认 SELL 使用次日 open 减 SELL 滑点成交
+C41-03  SAME_CLOSE BUY 当日 NAV 用 close 市值而非滑点后买入价计市值
+C41-04  CN SAME_CLOSE BUY 后 D+1 open SELL 不触发 T1_SETTLEMENT
+```
+
+### Tests
+
+`test_case41_01_same_close_buy_and_generated_next_open_sell_use_expected_prices`,
+`test_case41_02_cn_same_close_buy_can_sell_next_open_under_t1`
+in `test_backtest_invariants.py`.
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -1707,6 +1740,7 @@ in `test_backtest_invariants.py`.
 |38|CN|ETF adj_factor 大幅跳变按份额折算同步组合与策略仓位|
 |39|N/A|Backtest/paper/live use one D-close daily snapshot signal runner before mode-specific D+1 execution|
 |40|CN|Enabled execution_cost_model freezes D-close MARKET signals as D-known cost-protection LIMIT orders|
+|41|US/CN|Order-level SAME_CLOSE uses D close fill price while generated exits keep D+1 open semantics|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
 |R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

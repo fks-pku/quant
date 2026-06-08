@@ -19,9 +19,14 @@ parameters:
   volatility_floor: 0.01
   liquidity_window: 20
   min_avg_turnover: 20000000.0
-  max_positions: 2
-  max_positions_per_category: 1
-  target_exposure: 0.98
+  weight_mode: continuous_branch_tilt
+  tilt_strength: 0.70
+  temperature: 0.75
+  min_branch_weight: 0.02
+  max_branch_weight: 0.30
+  rebalance_threshold: 0.02
+  trend_penalty: 1.0
+  target_exposure: 1.0
   holding_days: 20
   lot_size: 100
   require_pit_size: true

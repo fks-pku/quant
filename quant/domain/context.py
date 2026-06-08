@@ -25,8 +25,34 @@ class StrategyScopedOrderManager:
         order_type: str = "MARKET",
         price: Optional[float] = None,
         strategy_name: Optional[str] = None,
+        execution_timing: Optional[str] = None,
     ) -> Any:
         scoped_name = self._resolve_strategy_name(strategy_name)
+        timing = str(execution_timing or "").upper()
+        if timing and timing != "NEXT_OPEN":
+            if getattr(self._delegate, "supports_backtest_execution_timing", False):
+                return self._delegate.submit_order(
+                    symbol,
+                    quantity,
+                    side,
+                    order_type,
+                    price,
+                    scoped_name,
+                    execution_timing=timing,
+                )
+            raise ValueError(
+                f"execution_timing={execution_timing!r} is not supported by this order manager"
+            )
+        if timing == "NEXT_OPEN" and getattr(self._delegate, "supports_backtest_execution_timing", False):
+            return self._delegate.submit_order(
+                symbol,
+                quantity,
+                side,
+                order_type,
+                price,
+                scoped_name,
+                execution_timing=timing,
+            )
         return self._delegate.submit_order(
             symbol,
             quantity,

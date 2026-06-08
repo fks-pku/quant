@@ -18,7 +18,7 @@ from quant.features.strategies.reject.ashare_csi300_index_enhanced_multifactor.s
 
 STRATEGY_ID = "ashare_csi300_index_enhanced_multifactor"
 TITLE = "A股沪深300指数增强多因子"
-INITIAL_CASH = 1_000_000.0
+INITIAL_CASH = 10_000.0
 SOURCE_URLS = [
     "https://www.fxbaogao.com/detail/5056710",
     "https://mf.bigquant.com/square/paper/d45e2e4b-153e-4405-a527-a12f1cd7db2b",

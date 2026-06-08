@@ -116,7 +116,7 @@ class WalkForwardEngine:
         strategy_factory: Callable[[Dict], Any],
         data: pd.DataFrame,
         param_grid: Dict[str, List[Any]],
-        initial_cash: float = 100000,
+        initial_cash: float = 10000,
         config: Optional[Dict[str, Any]] = None
     ) -> WFResult:
         """

@@ -19,7 +19,7 @@ from quant.features.strategies.reject.ashare_dividend_low_vol_monthly_enhanced.s
 
 STRATEGY_ID = "ashare_dividend_low_vol_monthly_enhanced"
 TITLE = "A股红利低波月调增强"
-INITIAL_CASH = 1_000_000.0
+INITIAL_CASH = 10_000.0
 HISTORICAL_RANK_LIMIT = 3000
 SOURCE_URLS = [
     "https://bigquant.com/square/paper/61e49855-4fa1-4d7f-bc01-88ecd2e483b7",

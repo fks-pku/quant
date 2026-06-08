@@ -31,7 +31,7 @@ result = bt.run(
     start=data["timestamp"].min(),
     end=data["timestamp"].max(),
     strategies=[strategy],
-    initial_cash=500000,
+    initial_cash=10000,
     data_provider=provider,
     symbols=symbols,
 )
@@ -40,7 +40,7 @@ print("=" * 60)
 print("DualMACrossover on 000001 (Ping An Bank)")
 print("=" * 60)
 print(f"Period: {data['timestamp'].min().date()} ~ {data['timestamp'].max().date()}")
-print(f"Initial Cash: 500,000 CNY")
+print(f"Initial Cash: 10,000 CNY")
 print("---")
 print(f"Final NAV:    {result.final_nav:>12,.2f}")
 print(f"Total Return: {result.total_return*100:>11.2f}%")

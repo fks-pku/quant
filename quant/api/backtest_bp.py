@@ -15,7 +15,7 @@ def run_backtest():
     start_date = data.get('start_date', '2020-01-01')
     end_date = data.get('end_date', '2026-05-31')
     symbols = data.get('symbols', ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY'])
-    initial_cash = data.get('initial_cash', 100000)
+    initial_cash = data.get('initial_cash', 10000)
     slippage_bps = data.get('slippage_bps', 5)
     strategy_params = data.get('strategy_params', {})
     risk_config = data.get('risk_config', {})

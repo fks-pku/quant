@@ -41,7 +41,7 @@ from quant.infrastructure.research.reporting import (  # noqa: E402
 
 START = datetime(2016, 1, 1)
 END = datetime(2025, 12, 31)
-INITIAL_CASH = 20000.0
+INITIAL_CASH = 10_000.0
 TIMING_SYMBOL = "000300"
 STRATEGY_ID = "ashare_dividend_low_vol_quality_enhanced"
 TITLE = "A股红利低波质量增强"

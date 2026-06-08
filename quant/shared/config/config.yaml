@@ -4,7 +4,7 @@ system:
   data_dir: ./data
   start_date: "2025-01-01"
   end_date: "2026-05-31"
-  initial_cash: 100000
+  initial_cash: 10000
   currency: USD
 
 markets:
@@ -69,7 +69,7 @@ portfolio:
   kelly_fraction: 0.25
 
 live_trading:
-  strategy_initial_cash: 20000
+  strategy_initial_cash: 10000
   execution:
     max_cost_bps: 30
     deadline: "14:50"

@@ -1032,6 +1032,90 @@ def test_all_weather_report_strategy_logic_uses_chinese_explanations():
         assert phrase in html
 
 
+def test_broad_asset_etf_rotation_report_strategy_logic_uses_chinese_explanations():
+    from quant.scripts.run_ashare_broad_asset_etf_rotation_strict_backtest import _hypothesis_row
+
+    best = {
+        "scenario": "monthly_126d_vol60_continuous_tilt70_domestic",
+        "symbols": ["159915", "159949", "510050", "510300", "510880", "511010", "511990", "512100", "518880"],
+        "parameters": {
+            "category_symbols": {
+                "sse50": ["510050"],
+                "csi300": ["510300"],
+                "csi1000": ["512100"],
+                "chinext": ["159915"],
+                "chinext50": ["159949"],
+                "dividend": ["510880"],
+                "gold": ["518880"],
+                "cash": ["511990"],
+                "bond_rate": ["511010"],
+            },
+            "momentum_lookback": 126,
+            "momentum_skip": 1,
+            "trend_window": 120,
+            "volatility_window": 60,
+            "volatility_floor": 0.01,
+            "liquidity_window": 20,
+            "min_avg_turnover": 20_000_000.0,
+            "weight_mode": "continuous_branch_tilt",
+            "tilt_strength": 0.70,
+            "temperature": 0.75,
+            "min_branch_weight": 0.02,
+            "max_branch_weight": 0.30,
+            "rebalance_threshold": 0.02,
+            "trend_penalty": 1.0,
+            "target_exposure": 1.0,
+            "holding_days": 20,
+            "require_pit_size": True,
+            "enable_risk_exit": True,
+            "risk_exit": {
+                "enabled": True,
+                "exit_type": "continuous_weight_rebalance_and_actual_cash_fallback",
+            },
+        },
+        "category_symbols": {
+            "sse50": ["510050"],
+            "csi300": ["510300"],
+            "csi1000": ["512100"],
+            "chinext": ["159915"],
+            "chinext50": ["159949"],
+            "dividend": ["510880"],
+            "gold": ["518880"],
+            "cash": ["511990"],
+            "bond_rate": ["511010"],
+        },
+        "missing_pit_categories": ["bond_rate"],
+        "registered_universe_counts": {"registered_symbol_count": 9, "active_symbol_count": 8, "missing_data_count": 1},
+        "universe_registry_version": "audited_stable_etf_registry_v1",
+        "universe_selection_policy": "audited_stable_etf_registry",
+    }
+    strict_report = {
+        "period": "2016-01-01 to 2026-05-31",
+        "metrics": {"cagr": 0.1223, "max_drawdown_pct": -0.1989, "sharpe": 0.80, "total_trades": 171},
+        "constraints": {"t_plus_1": True, "cn_lot_size": 100},
+        "capacity": {"max_adv_participation": 0.00086},
+        "diagnostics": {},
+    }
+
+    row = _hypothesis_row(best, strict_report)
+    html = build_research_full_report_html({"run_id": "broad_asset_logic"}, [row])
+
+    for phrase in (
+        "Rotate among a wider domestic ETF pool",
+        "Audited stable domestic ETF registry only",
+        "Default pool excludes Nasdaq",
+        "Rank every visible candidate",
+        "Equal-weight selected ETFs",
+        "At each rebalance",
+        "Minimum average turnover threshold",
+        "Report contract flag",
+    ):
+        assert phrase not in html
+
+    for phrase in ("连续权重", "境内 ETF 类别池", "人工审计", "真实现金", "点时 NAV", "中证1000", "风险退出"):
+        assert phrase in html
+
+
 def test_strict_report_includes_strategy_execution_logic_and_signal_explanation():
     result = {
         "run_id": "qixing_execution_logic",

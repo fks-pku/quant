@@ -14,6 +14,11 @@ from typing_extensions import NotRequired
 from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
 
 
+EXECUTION_TIMING_NEXT_OPEN = "NEXT_OPEN"
+EXECUTION_TIMING_SAME_CLOSE = "SAME_CLOSE"
+VALID_EXECUTION_TIMINGS = {EXECUTION_TIMING_NEXT_OPEN, EXECUTION_TIMING_SAME_CLOSE}
+
+
 @dataclass(frozen=True)
 class DeferredOrder:
     symbol: str
@@ -24,6 +29,7 @@ class DeferredOrder:
     strategy: str
     signal_date: datetime
     risk_check_price: float = 0.0
+    execution_timing: str = EXECUTION_TIMING_NEXT_OPEN
 
     def __post_init__(self) -> None:
         if self.side not in ("BUY", "SELL"):
@@ -32,6 +38,11 @@ class DeferredOrder:
         if not isinstance(self.quantity, (int, float)) or self.quantity <= 0:
             raise OrderRejectedError(OrderRejectionReason.INVALID_QUANTITY, self.symbol,
                                      f"quantity must be > 0, got {self.quantity!r}")
+        timing = str(self.execution_timing or EXECUTION_TIMING_NEXT_OPEN).upper()
+        if timing not in VALID_EXECUTION_TIMINGS:
+            raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, self.symbol,
+                                     f"unsupported execution_timing={self.execution_timing!r}")
+        object.__setattr__(self, "execution_timing", timing)
 
 
 class BacktestBar(TypedDict, total=False):
