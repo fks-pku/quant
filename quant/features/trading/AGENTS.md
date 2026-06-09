@@ -31,10 +31,11 @@
 - Live/Paper strategy-mode BUY orders must pass an `available_cash` hard risk check against that strategy's shadow portfolio cash, including pending order value; a strategy may reuse returned/earned cash but must not borrow from the shared real account.
 - Strategy-mode BUY fills must debit cost plus commission from that strategy's shadow portfolio cash; the master account cash must not be used again after initial allocation.
 - Strategy `Context` must expose only a scoped order surface: no raw broker/execution manager, no global order list, and submitted orders must be attributed to the owning strategy.
+- Current daily `MARKET` execution-cost contract: D-day strategy price or D-day signal-bar close only determines `execution_cost_bps`; actual live/paper `LIMIT` price is anchored to the execution-day open/reference price when the order is submitted. Pending-only D-close generation records the bps budget and must not persist a D-close-derived limit price.
 - 带 `strategy_name` 的实盘成交只能派发给所属策略，不能广播到其他策略
 - Live/Paper `MARKET + D-known price` 信号单经成本保护执行器转为 LIMIT；显式 LIMIT 保持原限价；到期目标单撤单并丢弃
 - 默认 `live_trading.daily_snapshot_mode=True`：BAR 事件只进入日线快照缓存；`MARKET_CLOSE` 标记快照完成；下一次 `MARKET_OPEN` 用最新完整交易日快照批量触发所有策略，顺序为 feed all → mark portfolios by D close → after_trading all；缺失 required symbol 时跳过对应策略
-- Live/Paper 日线 `MARKET` 目标单的限价参考价优先使用策略传入的 D 日价格或 D 日 signal bar close；`ExecutionReferencePriceResolver` 只在信号参考价缺失时兜底，不得用 D+1 quote 放宽 D 日成本保护限价
+- Live/Paper daily `MARKET` target cost bps must prefer strategy D-day price or D-day signal-bar close; `ExecutionReferencePriceResolver` supplies the execution-day open/reference anchor for actual LIMIT submission, and orders without that anchor are dropped unless `record_pending_only=True`.
 - QMT 实盘成交必须把券商佣金传入 FillHandler；缺少费用字段时，A股/ETF 按成交额费率与 5 元起点估算，并摊入策略持仓 `avg_cost`
 
 ## 修改守则
@@ -54,7 +55,7 @@
 - Live/Paper strategy control (`strategy_controls.json`) gates new mode-specific strategy signals only; it must not block portfolio marks, curve updates, metrics, or record reads.
 - Paper mode must write recorder and strategy-position state under `quant/infrastructure/var/paper_trading/`, separate from live records and live positions.
 - Paper mode may install the same cost-protection target-order executor, but it must still route only to local `PaperBroker`; it must never connect QMT/Futu external broker adapters in paper mode.
-- Strategy dashboard pending orders are read-only diagnostics: derive them from accepted D-day signals that have no matching submitted order/fill inside the current submit window, default missing submit dates to the next business day, expire older submit dates instead of carrying them forward, and tolerate broker IDs that differ from client signal IDs.
+- Strategy dashboard pending orders are read-only diagnostics: derive them from accepted D-day signals that have no matching submitted order/fill inside the current submit window, default missing submit dates to the next business day, display the D-day `execution_cost_bps` budget as `Submit +bps` instead of a limit price, infer `Submit +bps` from legacy D-close limit records when metadata is absent, expire older submit dates instead of carrying them forward, and tolerate broker IDs that differ from client signal IDs.
 - Strategy dashboard order rows must come from the server-side display contract: include order-date open price, paper fill price displays as limit price, live fill price displays as broker fill price, commission is separate, and slippage satisfies `fill_price = open_price * (1 + slippage_bps / 10000)`.
 - Strategy dashboard holdings and metrics must reuse the same display contract: avg_cost includes the contract fill price plus commission, cash starts from per-strategy initial cash, and total NAV equals cash plus market value.
 - Strategy dashboard initial allocation cash is immutable after strategy configuration; the dashboard may display it but must not edit `allocation_cash` or submit broker orders.
@@ -82,7 +83,7 @@
 - Backtest order-rate limiting is disabled by default; set `risk.max_orders_per_day` or explicit `risk.max_orders_minute` when a daily order cap is intended.
 - `RiskEngine._check_position_size()` 累计 `_pending_order_values[symbol]` 防止同日多次下单绕过仓位限制，`record_order()` 负责更新此字典
 - `Portfolio.update_position()` 的 `realized_pnl` 参数仅对 SELL（quantity < 0）路径生效，BUY 路径忽略该参数
-- `Context.submit_order()` 把 `MARKET` 订单交给 execution_manager；日线信号参考价优先来自策略 price 或 D 日 signal bar close，resolver 只兜底；显式 LIMIT 单必须直接传给 OrderManager
+- `Context.submit_order()` 把 `MARKET` 订单交给 execution_manager；日线成本参考价优先来自策略 price 或 D 日 signal bar close，resolver 只提供执行日 open/reference anchor；显式 LIMIT 单必须直接传给 OrderManager
 - 日线策略需要逐 BAR 实时回调时必须显式设置 `live_trading.feed_intraday_bars=True`；否则默认只在次日开盘处理上一交易日完整快照
 - 实盘中断恢复时，日线快照模式只消费最新完成快照，不补发更早交易日的过期信号
-- `live_trading.execution_reference.allow_strategy_price_fallback=True` 只影响 resolver 兜底路径；日线成本保护限价仍应优先使用 D 日信号参考价
+- `live_trading.execution_reference.allow_strategy_price_fallback=True` 只影响 resolver 自身取不到 quote 时是否允许策略价作为执行 anchor；日线成本 bps 仍应优先使用 D 日信号参考价

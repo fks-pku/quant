@@ -40,6 +40,8 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 ```bash
 python quant/api_server.py                                     # API 服务
 python quant/scripts/strategy_dashboard_server.py              # 策略管理看板
+python quant/scripts/run_low_frequency_idea_scout.py --source config --max 5  # 低频策略 idea scout
+python quant/scripts/run_research.py --mode scout_formal --source config --max 10 --max-ideas 5  # scout + formal pre-full gate
 python -m pytest quant/tests/ -q                               # 测试
 python quant/backtest_runner.py --strategy <RegisteredStrategy> ...  # CLI 回测
 python quant/quant_system.py --mode paper                      # 实盘/模拟

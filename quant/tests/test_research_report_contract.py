@@ -208,6 +208,9 @@ def test_full_report_uses_clean_seven_card_layout():
     assert "<td>total_trades</td><td>64</td><td>&gt;50</td><td><span class=\"badge pass\">pass</span></td>" in html
     assert "<td>cagr_drawdown_tier</td><td>CAGR=7.00%; MaxDD=24.00%</td><td>CAGR 5.00%-10.00% requires MaxDD &lt;=15.00%</td><td><span class=\"badge fail\">fail</span></td>" in html
     assert "<td>有效成本 BPS</td><td>weighted=27.4376 bps; median=32.1952 bps</td>" in html
+    assert "D 日冻结 slippage_bps + impact_bps" in html
+    assert "D+1 用 open/reference 派生 BUY/SELL 限价" in html
+    assert "执行日不重算成本 bps" in html
     assert "Data Quality" in html
     assert "Turnover And Exposure" in html
     assert "Capacity" in html
@@ -1192,6 +1195,9 @@ def test_strict_report_includes_strategy_execution_logic_and_signal_explanation(
     assert "策略执行逻辑" in html
     assert "每日运行步骤" in html
     assert "执行约束摘要" in html
+    assert "滑点/限价保护" in html
+    assert "D 日只冻结成本保护 bps" in html
+    assert "t+1 用 open/reference 派生 BUY/SELL 限价" in html
     assert "on_after_trading" in html
     assert "T+1" in html
     assert "24 日加权对数回归年化收益乘以 R²" in html
@@ -1718,6 +1724,42 @@ def test_generated_stage_reports_match_contract():
         assert placeholder not in fast_html
         assert placeholder not in strict_html
         assert placeholder not in wf_html
+
+
+def test_fast_stage_report_marks_prefull_validation_failure_as_fail():
+    html = build_research_stage_report_html(
+        "fast_research",
+        {"run_id": "prefull_gate", "full_report_allowed": False},
+        [
+            {
+                "title": "IC Positive But Untradable",
+                "source": "fixture",
+                "source_url": "https://example.test",
+                "status": "validation_failed",
+                "stage": "stage2_validation",
+                "decision_reason": "Validation failed: top_bucket_after_cost_sharpe=-2.52 < 0.50",
+                "metrics": {
+                    "rank_ic": 0.0304,
+                    "rank_ic_ir": 0.2299,
+                    "fdr_adjusted_p": 0.0,
+                    "hit_rate": 0.5867,
+                    "portfolio_diagnostics": {
+                        "top_bucket_after_cost_sharpe": -2.52,
+                        "top_bucket_after_cost_annualized_return": -0.5548,
+                        "top_bucket_after_cost_max_drawdown": -0.9998,
+                        "benchmark_excess_after_cost_sharpe": -3.23,
+                        "benchmark_excess_after_cost_annualized_return": -0.5805,
+                        "rolling_oos": [{"annualized_return": -0.1}, {"annualized_return": -0.2}, {"annualized_return": -0.3}],
+                    },
+                },
+                "evidence": {"strategy_spec": {"strategy_type": "mean_reversion"}},
+            }
+        ],
+    )
+
+    assert "<td>结论</td><td><span class=\"badge fail\">fail</span></td>" in html
+    assert "Validation failed: top_bucket_after_cost_sharpe=-2.52 &lt; 0.50" in html
+    assert "<td>快研究（当前）</td><td><span class=\"badge fail\">fail</span>" in html
 
 
 def test_signal_oos_validation_uses_structured_walkforward_verdict():

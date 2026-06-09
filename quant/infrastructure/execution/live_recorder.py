@@ -52,8 +52,9 @@ class LiveTradingRecorder:
         status: str,
         order_id: Optional[str] = None,
         reason: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._append("signals", timestamp, {
+        payload = {
             "timestamp": timestamp,
             "strategy_name": strategy_name or "default",
             "symbol": symbol,
@@ -64,7 +65,10 @@ class LiveTradingRecorder:
             "status": status,
             "order_id": order_id,
             "reason": reason,
-        })
+        }
+        if metadata:
+            payload.update(metadata)
+        self._append("signals", timestamp, payload)
 
     def record_order(
         self,

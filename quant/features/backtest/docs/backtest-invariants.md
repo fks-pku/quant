@@ -1650,21 +1650,32 @@ Backtest inputs and fill-time prices must fail closed before mutating portfolio 
 
 ---
 
-## CASE-40: Historical cost-protection limit at signal time
+## CASE-40: Historical cost-protection bps with execution-day limit anchor
 
-For CN daily execution, when `execution_cost_model` is enabled, a daily MARKET signal is frozen as a D+1 LIMIT order during the D close signal step. Other markets opt in with `market_orders_as_limits: true`. The limit price must use only D-or-earlier reference price and D signal bar liquidity fields; D+1 open/ADV/volatility may decide marketability and fill outcome, but must not widen the submitted limit.
+For CN daily execution, when `execution_cost_model` is enabled, a daily MARKET signal is converted into a deferred cost-protection LIMIT instruction during the D close signal step. Other markets opt in with `market_orders_as_limits: true`. D close freezes only the acceptable `execution_cost_bps` budget and its slippage/impact components from D-or-earlier reference price and D signal-bar liquidity fields; it must not persist a D-close-derived executable limit price.
+
+At D+1 execution, the concrete submitted limit is derived from the execution price field (`open` for `NEXT_OPEN`, `close` for `SAME_CLOSE`):
+
+```text
+BUY  limit = execution_reference * (1 + execution_cost_bps / 10000)
+SELL limit = execution_reference * (1 - execution_cost_bps / 10000)
+```
+
+D+1 ADV/volatility fields must not recompute or widen the frozen cost budget.
 
 ### Assertions
 
     C40-01  D close MARKET BUY becomes DeferredOrder(order_type="LIMIT").
-    C40-02  limit_price == D reference_price adjusted by the historical cost model.
+    C40-02  DeferredOrder.price is None and execution_cost_bps/slippage/impact are frozen from D data.
     C40-03  risk_check_price remains the D reference price, not the cost-protection limit.
-    C40-04  D+1 execution-day cost fields cannot widen the submitted LIMIT.
+    C40-04  D+1 execution reference anchors the concrete LIMIT as open/reference ± frozen bps.
+    C40-05  SELL cost-protection LIMIT uses execution_reference * (1 - bps / 10000).
 
 ### Tests
 
-`test_case40_01_market_signal_becomes_historical_limit_order`,
-`test_case40_02_historical_limit_does_not_use_execution_day_cost_fields`
+`test_case40_01_market_signal_freezes_historical_cost_bps_not_limit_price`,
+`test_case40_02_execution_day_open_anchors_cost_protection_limit`,
+`test_case40_03_execution_day_open_anchors_sell_cost_protection_limit`
 in `test_backtest_invariants.py`.
 
 ---
@@ -1739,7 +1750,7 @@ in `test_backtest_invariants.py`.
 |37|CN|小市值低价策略退市风险护栏：价格/流动性/status 买入过滤 + 每日风险退出|
 |38|CN|ETF adj_factor 大幅跳变按份额折算同步组合与策略仓位|
 |39|N/A|Backtest/paper/live use one D-close daily snapshot signal runner before mode-specific D+1 execution|
-|40|CN|Enabled execution_cost_model freezes D-close MARKET signals as D-known cost-protection LIMIT orders|
+|40|CN|Enabled execution_cost_model freezes D-close cost bps, then anchors LIMIT to D+1 execution reference|
 |41|US/CN|Order-level SAME_CLOSE uses D close fill price while generated exits keep D+1 open semantics|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|

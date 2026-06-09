@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A-share Sector ETF Momentum Rotation - monthly_60d_trend60_vol20_top3_95pct End-to-End Research Report</title>
+<style>
+:root{color-scheme:light;--bg:#f6f3ec;--panel:#fffdfa;--ink:#18222b;--muted:#66727e;--line:#d8dee3;--soft:#f0ece3;--accent:#0f766e;--good:#166534;--warn:#b45309;--bad:#991b1b}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','Segoe UI',system-ui,sans-serif;line-height:1.62;letter-spacing:0}main{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}.panel{margin:18px 0;padding:24px;background:var(--panel);border:1px solid var(--line)}.report-card{padding:0;overflow:hidden}.report-card-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;cursor:pointer;list-style:none;background:#fff}.report-card-summary::-webkit-details-marker{display:none}.report-card-summary h2{margin:0;font-size:20px;line-height:1.25}.report-card-summary::after{content:'+';display:grid;place-items:center;flex:0 0 auto;width:28px;height:28px;border:1px solid var(--line);color:var(--muted);font:800 18px/1 'Cascadia Mono',Consolas,monospace;background:var(--panel)}.report-card[open]>.report-card-summary{border-bottom:1px solid var(--line);background:var(--soft)}.report-card[open]>.report-card-summary::after{content:'-'}.report-card-body{padding:22px 24px 24px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.decision-mark{padding:14px;border:1px solid var(--line);background:#fff}.logic-plain{margin:10px 0 14px;padding:14px 16px;background:#f8fafc;border:1px solid var(--line);color:#334155}.table-wrap{overflow-x:auto;margin:12px 0 16px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}.hypothesis-list{margin:0;padding-left:20px}.hypothesis-list li{margin:0 0 6px}.badge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:800}.pass{color:var(--good);background:#ecfdf5;border-color:#86efac}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.fail{color:var(--bad);background:#fef2f2;border-color:#fecaca}.formula{padding:16px;margin:10px 0 16px;background:#fbf7ef;border:1px solid var(--line);font-family:'Cascadia Mono',Consolas,monospace;white-space:pre-wrap}.decision{display:grid;grid-template-columns:180px 1fr;gap:16px}.audit-details{margin:12px 0;border:1px solid var(--line);background:#fff}.audit-details>summary{cursor:pointer;padding:12px 14px;font-weight:800;background:var(--soft)}.audit-details[open]>summary{border-bottom:1px solid var(--line)}.audit-body{padding:14px}.appendix-panel h3{margin-top:18px}
+.equity-chart {
+  margin: 12px 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.equity-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 280px;
+}
+.equity-chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.equity-chart-meta b { color: var(--ink); }
+.equity-chart i {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.legend-strategy { background: #dc2626; }
+.legend-benchmark { background: #16a34a; }
+.strategy-line {
+  fill: none;
+  stroke: #dc2626;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.benchmark-line {
+  fill: none;
+  stroke: #16a34a;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chart-grid { stroke: #e8ddd0; stroke-width: 1; }
+.chart-axis { stroke: #9ca3af; stroke-width: 1.2; }
+.chart-label {
+  fill: #66727e;
+  font-size: 12px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+.return-calendar-chart {
+  margin: 12px 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.return-calendar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.return-cell {
+  min-height: 112px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: #fff;
+  overflow: hidden;
+}
+details.return-cell {
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+details.return-cell:hover {
+  border-color: rgba(15, 23, 42, 0.26);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+details.return-cell[open] {
+  grid-column: 1 / -1;
+  cursor: default;
+}
+.return-year-summary {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) 1fr 24px;
+  grid-template-areas:
+    "year toggle toggle"
+    "value value value"
+    "caption meta meta";
+  gap: 4px 10px;
+  min-height: 112px;
+  padding: 12px;
+  align-items: center;
+  list-style: none;
+  cursor: pointer;
+}
+.return-year-summary::-webkit-details-marker {
+  display: none;
+}
+details.return-cell[open] .return-year-summary {
+  grid-template-columns: auto auto 1fr auto 24px;
+  grid-template-areas: "year value caption meta toggle";
+  min-height: 0;
+  border-bottom: 1px solid rgba(102, 114, 126, 0.22);
+}
+.return-year-summary::after {
+  content: "+";
+  grid-area: toggle;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(102, 114, 126, 0.32);
+  color: var(--muted);
+  font: 700 15px/1 "Cascadia Mono", Consolas, monospace;
+  background: rgba(255, 255, 255, 0.65);
+}
+details.return-cell[open] > .return-year-summary::after {
+  content: "-";
+}
+.return-year-label,
+.return-year-summary > b {
+  grid-area: year;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.return-year-value,
+.return-year-summary > strong {
+  grid-area: value;
+  display: block;
+  font-size: 22px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.return-year-caption,
+.return-year-summary > span {
+  grid-area: caption;
+  color: var(--muted);
+  font-size: 12px;
+}
+.return-year-meta,
+.return-year-summary > small {
+  grid-area: meta;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.return-cell.positive { background: #fff1f2; border-color: #fecdd3; }
+.return-cell.negative { background: #f0fdf4; border-color: #bbf7d0; }
+.return-cell.neutral { background: #f8fafc; }
+.return-month-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  background: rgba(248, 250, 252, 0.7);
+}
+@media (min-width: 1180px) {
+  details.return-cell[open] .return-month-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  details.return-cell[open] .return-year-summary {
+    grid-template-columns: minmax(48px, auto) 1fr 24px;
+    grid-template-areas:
+      "year toggle toggle"
+      "value value value"
+      "caption meta meta";
+  }
+}
+.return-month {
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid rgba(102, 114, 126, 0.24);
+  border-left: 4px solid rgba(102, 114, 126, 0.34);
+  background: rgba(255, 255, 255, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.return-month-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.return-month-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.return-month > span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.return-month-head em {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.2;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(102, 114, 126, 0.2);
+}
+.return-month strong {
+  font-size: 18px;
+  line-height: 1.1;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.return-month > small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.return-month dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.return-month dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.return-month dt,
+.return-month dd {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.return-month dt {
+  color: var(--muted);
+}
+.return-month dd {
+  overflow: hidden;
+  color: #334155;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+}
+.return-month.positive { background: #fff7f7; border-color: #fecdd3; border-left-color: #e11d48; }
+.return-month.negative { background: #f4fdf7; border-color: #bbf7d0; border-left-color: #16a34a; }
+.return-month.neutral { background: #f8fafc; }
+</style>
+</head>
+<body>
+<main>
+<section class="hero">
+<p class="eyebrow">Final Decision + Clean Report</p>
+<h1>A-share Sector ETF Momentum Rotation - monthly_60d_trend60_vol20_top3_95pct End-to-End Research Report</h1>
+<p>Generated at 2026-06-08T12:37:42.073863+00:00. The main report keeps only the final decision, strategy logic, performance evidence, important metrics, and risk.</p>
+<div class="grid"><div class="metric"><span>最终状态</span><b>needs_more_validation</b></div><div class="metric"><span>研究对象</span><b>ashare_sector_etf_momentum_rotation</b></div><div class="metric"><span>Benchmark</span><b>000300</b></div><div class="metric"><span>报告日期</span><b>2026-06-08</b></div></div>
+</section>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>1. Final Decision</h2></summary><div class="report-card-body"><p>ashare_sector_etf_momentum_rotation 当前状态为 needs_more_validation，尚不足以进入 paper trading。需要补齐最弱环节：blocked_insufficient_sector_etf_history。</p>
+<h3>Go / No-Go Checklist</h3>
+<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Observed</th><th>Threshold</th><th>Result</th></tr></thead><tbody><tr><td>max_adv_participation</td><td>0.02%</td><td>&lt;=5.00% ADV</td><td><span class="badge pass">pass</span></td></tr><tr><td>total_trades</td><td>8</td><td>&gt;50</td><td><span class="badge fail">fail</span></td></tr><tr><td>cagr_drawdown_tier</td><td>CAGR=-29.00%; MaxDD=19.46%</td><td>CAGR &gt;=5.00%</td><td><span class="badge fail">fail</span></td></tr></tbody></table></div>
+<h3>Executive Snapshot</h3>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>当前值</th><th>阅读结论</th></tr></thead><tbody><tr><td>当前结论</td><td>needs_more_validation</td><td>正式 Go / No-Go 只看当前 checklist；walk-forward 保留为审计证据。</td></tr><tr><td>收益 / 回撤</td><td>CAGR=-29.00%; MaxDD=19.46%</td><td>按 CAGR 所在区间匹配最大回撤门槛。</td></tr><tr><td>Benchmark</td><td>000300 CAGR=5.16%; MaxDD=-7.78%</td><td>用于判断收益是否只是市场 beta。</td></tr><tr><td>容量</td><td>max ADV=0.02%; 5% ADV 资金容量=3,125,000.00</td><td>以当前回测交易形态线性放大估算，实盘前仍需盘口复核。</td></tr><tr><td>Walk-forward 审计</td><td>aggregate OOS Sharpe=0.0000，worst OOS Sharpe=0.0000，盈利 split 占比=0.00%；blocked_insufficient_sector_etf_history</td><td>当前不纳入 checklist；若后续恢复为门槛，应重新评估 candidate 状态。</td></tr></tbody></table></div></div></details>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>2. 策略逻辑</h2></summary><div class="report-card-body"><h3>策略白话逻辑</h3>
+<p class="logic-plain"><b>白话版：</b>这套策略的核心想法是：Sector leadership often persists over intermediate horizons; hold the strongest liquid sector ETFs while avoiding stale, weak, or below-trend candidates. 它先限定交易范围为 30 CN-listed sector ETFs from predeclared categories; cross-border ETFs excluded.，再按 For each category choose the highest momentum/volatility representative, then hold the top scored categories. 决定买什么。组合层面，Top 3 categories, capped at 35% each, total target exposure 95%. 调仓方式是：Signals are generated after the close; project execution submits orders for next-step execution in strict backtest. 如果条件不满足或触发风险，处理方式是：Held ETFs are checked daily and sold when stale, below trend, or non-positive risk-adjusted momentum.</p>
+<div class="table-wrap"><table><thead><tr><th>策略逻辑</th><th>摘要</th></tr></thead><tbody><tr><td>核心假设</td><td>Sector leadership often persists over intermediate horizons; hold the strongest liquid sector ETFs while avoiding stale, weak, or below-trend candidates.</td></tr><tr><td>交易范围</td><td>30 CN-listed sector ETFs from predeclared categories; cross-border ETFs excluded.</td></tr><tr><td>信号与排序</td><td>For each category choose the highest momentum/volatility representative, then hold the top scored categories.</td></tr><tr><td>调仓与执行</td><td>Signals are generated after the close; project execution submits orders for next-step execution in strict backtest.</td></tr><tr><td>组合构建</td><td>Top 3 categories, capped at 35% each, total target exposure 95%.</td></tr><tr><td>风控/防御</td><td>Held ETFs are checked daily and sold when stale, below trend, or non-positive risk-adjusted momentum.</td></tr></tbody></table></div>
+<h3>参数：策略参数列表及解释</h3>
+<div class="table-wrap"><table><thead><tr><th>参数</th><th>当前值</th><th>解释</th><th>来源</th></tr></thead><tbody><tr><td>momentum_lookback</td><td>60</td><td>Historical adjusted-close return window used for intermediate sector momentum.</td><td>StrategySpec.parameters</td></tr><tr><td>momentum_skip</td><td>1</td><td>Recent bars skipped in momentum to reduce same-day close noise.</td><td>StrategySpec.parameters</td></tr><tr><td>trend_window</td><td>60</td><td>Adjusted-close moving average filter; candidates below trend are excluded.</td><td>StrategySpec.parameters</td></tr><tr><td>volatility_window</td><td>20</td><td>Annualized volatility denominator for risk-adjusted momentum.</td><td>StrategySpec.parameters</td></tr><tr><td>liquidity_window</td><td>20</td><td>Average turnover lookback.</td><td>StrategySpec.parameters</td></tr><tr><td>min_avg_turnover</td><td>20000000.0</td><td>Minimum cash turnover filter.</td><td>StrategySpec.parameters</td></tr><tr><td>min_momentum</td><td>0.02</td><td>Minimum raw momentum required before ranking.</td><td>StrategySpec.parameters</td></tr><tr><td>max_positions</td><td>3</td><td>Maximum number of sector categories held.</td><td>StrategySpec.parameters</td></tr><tr><td>max_category_weight</td><td>0.35</td><td>Per-sector ETF weight cap.</td><td>StrategySpec.parameters</td></tr><tr><td>target_exposure</td><td>0.95</td><td>Total target ETF exposure before lot rounding.</td><td>StrategySpec.parameters</td></tr><tr><td>holding_days</td><td>20</td><td>Rebalance gate in trading days.</td><td>StrategySpec.parameters</td></tr><tr><td>volatility_floor</td><td>0.01</td><td>策略自定义参数；请在 StrategySpec.parameter_explanations 中补充业务解释。</td><td>StrategySpec.parameters</td></tr><tr><td>lookback_days</td><td>60</td><td>历史观察窗口；用于计算信号、动量、均线、回归或过滤条件。</td><td>StrategySpec field</td></tr><tr><td>horizon_days</td><td>20</td><td>研究验证使用的预期持有/预测周期。</td><td>StrategySpec field</td></tr><tr><td>execution_lag_days</td><td>1</td><td>信号到执行之间的滞后天数；日线 A 股通常至少为 1，防止同日未来信息。</td><td>StrategySpec field</td></tr><tr><td>rebalance_frequency</td><td>Every 20 trading days</td><td>调仓频率；决定信号刷新节奏、换手率和成本暴露。</td><td>StrategySpec field</td></tr></tbody></table></div>
+<h3>止盈止损逻辑</h3>
+<p class="logic-plain"><b>白话版：</b>本报告没有记录默认启用的止盈止损/风险退出包；上线前必须补齐当前启用口径下的退出规则说明和 strict backtest 证据。</p>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>内容</th><th>说明</th></tr></thead><tbody><tr><td>止盈止损/风险退出策略</td><td>missing</td><td colspan="1">StrategySpec 未记录 risk_exit 或 enable_risk_exit；full report 不能形成完整止盈止损审计。</td></tr></tbody></table></div></div></details>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>3. 策略表现</h2></summary><div class="report-card-body"><h3>Equity Curve</h3>
+<figure class="equity-chart"><div class="equity-chart-meta"><span><i class="legend-strategy"></i>策略</span><span><i class="legend-benchmark"></i>Benchmark</span><b>策略期末 8,679.80（指数 86.8）</b><b>Benchmark 期末 10,210.22（指数 101）</b></div><svg viewBox="0 0 940 360" role="img" aria-label="Strict backtest equity curve"><line class="chart-grid" x1="70.0" y1="308.0" x2="918.0" y2="308.0" /><line class="chart-grid" x1="70.0" y1="237.5" x2="918.0" y2="237.5" /><line class="chart-grid" x1="70.0" y1="167.0" x2="918.0" y2="167.0" /><line class="chart-grid" x1="70.0" y1="96.5" x2="918.0" y2="96.5" /><line class="chart-grid" x1="70.0" y1="26.0" x2="918.0" y2="26.0" /><text class="chart-label" x="60.0" y="312.0" text-anchor="end">84.7</text><text class="chart-label" x="60.0" y="241.5" text-anchor="end">90.5</text><text class="chart-label" x="60.0" y="171.0" text-anchor="end">96.3</text><text class="chart-label" x="60.0" y="100.5" text-anchor="end">102</text><text class="chart-label" x="60.0" y="30.0" text-anchor="end">108</text><text class="chart-label" x="70.0" y="344.0" text-anchor="start">2026-01-05</text><text class="chart-label" x="918.0" y="344.0" text-anchor="end">2026-06-05</text><line class="chart-axis" x1="70.0" y1="26.0" x2="70.0" y2="308.0" /><line class="chart-axis" x1="70.0" y1="308.0" x2="918.0" y2="308.0" /><path class="benchmark-line" fill="none" stroke="#16a34a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M78.57,122.66 L87.13,126.21 L95.70,136.08 L104.26,130.70 L112.83,122.86 L121.39,130.16 L129.96,135.00 L138.53,132.59 L147.09,137.54 L155.66,136.89 L164.22,140.83 L172.79,139.77 L181.35,139.61 L189.92,144.97 L198.48,143.84 L207.05,144.17 L215.62,141.05 L224.18,131.98 L232.75,144.00 L241.31,169.39 L249.88,155.70 L258.44,145.94 L267.01,153.09 L275.58,159.88 L284.14,140.78 L292.71,139.46 L301.27,142.11 L309.84,140.65 L318.40,155.62 L326.97,143.70 L335.54,136.53 L344.10,138.81 L352.67,142.91 L361.23,138.35 L369.80,156.76 L378.36,170.24 L386.93,158.84 L395.49,155.61 L404.06,166.99 L412.63,151.99 L421.19,144.47 L429.76,148.75 L438.32,153.41 L446.89,152.80 L455.45,161.43 L464.02,156.15 L472.59,175.14 L481.15,179.25 L489.72,216.95 L498.28,202.60 L506.85,186.73 L515.41,201.89 L523.98,195.55 L532.55,198.24 L541.11,208.84 L549.68,189.61 L558.24,201.54 L566.81,211.18 L575.37,211.23 L583.94,172.03 L592.51,179.45 L601.07,161.65 L609.64,159.23 L618.20,145.28 L626.77,149.34 L635.33,136.34 L643.90,138.35 L652.46,131.07 L661.03,128.40 L669.60,120.40 L678.16,123.76 L686.73,128.06 L695.29,127.66 L703.86,130.88 L712.42,117.69 L720.99,118.46 L729.56,100.80 L738.12,94.88 L746.69,102.11 L755.25,81.89 L763.82,82.85 L772.38,70.13 L780.95,91.31 L789.52,105.23 L798.08,111.82 L806.65,106.93 L815.21,107.48 L823.78,124.58 L832.34,108.90 L840.91,89.54 L849.47,82.90 L858.04,92.94 L866.61,91.41 L875.17,97.00 L883.74,109.11 L892.30,91.32 L900.87,85.19 L909.43,93.81 L918.00,116.02" /><path class="strategy-line" fill="none" stroke="#dc2626" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" d="M70.00,122.66 L78.57,122.66 L87.13,122.66 L95.70,122.66 L104.26,122.66 L112.83,122.66 L121.39,122.66 L129.96,122.66 L138.53,122.66 L147.09,122.66 L155.66,122.66 L164.22,122.66 L172.79,122.66 L181.35,122.66 L189.92,122.66 L198.48,122.66 L207.05,122.66 L215.62,122.66 L224.18,122.66 L232.75,122.66 L241.31,122.66 L249.88,122.66 L258.44,122.66 L267.01,122.66 L275.58,122.66 L284.14,122.66 L292.71,122.66 L301.27,122.66 L309.84,122.66 L318.40,122.66 L326.97,122.66 L335.54,122.66 L344.10,122.66 L352.67,122.66 L361.23,122.66 L369.80,122.66 L378.36,122.66 L386.93,122.66 L395.49,122.66 L404.06,122.66 L412.63,122.66 L421.19,122.66 L429.76,122.66 L438.32,122.66 L446.89,122.66 L455.45,122.66 L464.02,122.66 L472.59,122.66 L481.15,122.66 L489.72,122.66 L498.28,122.66 L506.85,122.66 L515.41,122.66 L523.98,122.66 L532.55,122.66 L541.11,122.66 L549.68,122.66 L558.24,122.66 L566.81,122.66 L575.37,122.66 L583.94,122.66 L592.51,122.66 L601.07,119.30 L609.64,115.56 L618.20,119.98 L626.77,119.30 L635.33,118.28 L643.90,124.74 L652.46,124.78 L661.03,124.78 L669.60,124.78 L678.16,124.78 L686.73,124.78 L695.29,124.78 L703.86,124.78 L712.42,124.78 L720.99,124.78 L729.56,124.78 L738.12,124.78 L746.69,124.78 L755.25,124.78 L763.82,124.78 L772.38,89.17 L780.95,104.50 L789.52,115.94 L798.08,108.74 L806.65,89.95 L815.21,71.92 L823.78,102.00 L832.34,82.82 L840.91,41.11 L849.47,48.02 L858.04,64.69 L866.61,53.18 L875.17,89.88 L883.74,292.89 L892.30,279.54 L900.87,265.95 L909.43,269.05 L918.00,282.67" /></svg><figcaption>曲线按首日=100 的归一化指数绘制，避免原始金额尺度差压缩线形；期末金额仍来自 strict Backtester 原始账户 NAV，benchmark 按同一初始资金买入并持有 000300。</figcaption></figure>
+<h3>日历图</h3>
+<figure class="return-calendar-chart"><div class="return-calendar"><details class="return-cell negative"><summary class="return-year-summary"><b class="return-year-label">2026</b><strong class="return-year-value">-13.20%</strong><span class="return-year-caption">策略</span><small class="return-year-meta">000300 2.10% · 超额 -15.30%</small></summary><div class="return-month-grid"><div class="return-month neutral"><div class="return-month-head"><span>01月</span><em>策略</em></div><strong>0.00%</strong><dl><div><dt>000300</dt><dd>-0.24%</dd></div><div><dt>超额</dt><dd>0.24%</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>02月</span><em>策略</em></div><strong>0.00%</strong><dl><div><dt>000300</dt><dd>0.09%</dd></div><div><dt>超额</dt><dd>-0.09%</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>03月</span><em>策略</em></div><strong>0.00%</strong><dl><div><dt>000300</dt><dd>-5.53%</dd></div><div><dt>超额</dt><dd>5.53%</dd></div></dl></div><div class="return-month negative"><div class="return-month-head"><span>04月</span><em>策略</em></div><strong>-0.18%</strong><dl><div><dt>000300</dt><dd>8.03%</dd></div><div><dt>超额</dt><dd>-8.20%</dd></div></dl></div><div class="return-month positive"><div class="return-month-head"><span>05月</span><em>策略</em></div><strong>2.89%</strong><dl><div><dt>000300</dt><dd>1.76%</dd></div><div><dt>超额</dt><dd>1.12%</dd></div></dl></div><div class="return-month negative"><div class="return-month-head"><span>06月</span><em>策略</em></div><strong>-15.49%</strong><dl><div><dt>000300</dt><dd>-1.54%</dd></div><div><dt>超额</dt><dd>-13.95%</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>07月</span><em>策略</em></div><strong>n/a</strong><dl><div><dt>000300</dt><dd>n/a</dd></div><div><dt>超额</dt><dd>n/a</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>08月</span><em>策略</em></div><strong>n/a</strong><dl><div><dt>000300</dt><dd>n/a</dd></div><div><dt>超额</dt><dd>n/a</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>09月</span><em>策略</em></div><strong>n/a</strong><dl><div><dt>000300</dt><dd>n/a</dd></div><div><dt>超额</dt><dd>n/a</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>10月</span><em>策略</em></div><strong>n/a</strong><dl><div><dt>000300</dt><dd>n/a</dd></div><div><dt>超额</dt><dd>n/a</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>11月</span><em>策略</em></div><strong>n/a</strong><dl><div><dt>000300</dt><dd>n/a</dd></div><div><dt>超额</dt><dd>n/a</dd></div></dl></div><div class="return-month neutral"><div class="return-month-head"><span>12月</span><em>策略</em></div><strong>n/a</strong><dl><div><dt>000300</dt><dd>n/a</dd></div><div><dt>超额</dt><dd>n/a</dd></div></dl></div></div></details></div><figcaption>年度收益按 strict Backtester 的策略账户 NAV 计算；benchmark 使用同一初始资金的 000300 equity curve。</figcaption></figure>
+<h3>Core Performance</h3>
+<div class="table-wrap"><table><thead><tr><th>Metric</th><th>策略</th><th>000300</th><th>超额/说明</th></tr></thead><tbody><tr><td>CAGR</td><td>-29.00%</td><td>5.16%</td><td>-34.16%</td></tr><tr><td>Total Return</td><td>-13.20%</td><td>2.10%</td><td>-15.30%</td></tr><tr><td>Sharpe</td><td>-1.1077</td><td>0.1670</td><td>必须成本后</td></tr><tr><td>Sortino</td><td>-1.1698</td><td>0.2426</td><td>下行风险调整</td></tr><tr><td>Max Drawdown</td><td>-19.46%</td><td>-7.78%</td><td>风险底线</td></tr><tr><td>Calmar Ratio</td><td>-1.4899</td><td>0.6634</td><td>CAGR / |Max Drawdown|</td></tr><tr><td>Win Rate</td><td>25.00%</td><td>-</td><td>按交易统计</td></tr><tr><td>Profit Factor</td><td>0.0243</td><td>-</td><td>总盈利 / 总亏损</td></tr><tr><td>Payoff Ratio</td><td>0.0729</td><td>-</td><td>平均盈利 / 平均亏损</td></tr><tr><td>Expectancy</td><td>-330.0511</td><td>-</td><td>单笔交易期望</td></tr><tr><td>Gain/Pain</td><td>0.0243</td><td>-</td><td>收益痛苦比</td></tr><tr><td>Tail Ratio</td><td>1.0558</td><td>-</td><td>右尾 / 左尾</td></tr><tr><td>Ulcer Index</td><td>11.0358</td><td>-</td><td>回撤深度与持续性的复合惩罚</td></tr><tr><td>Recovery Factor</td><td>-0.6355</td><td>-</td><td>净收益 / 最大回撤</td></tr><tr><td>Avg Trade Duration</td><td>13.7500</td><td>-</td><td>平均持仓天数</td></tr><tr><td>Total Trades</td><td>8</td><td>-</td><td>含拒单和成交诊断</td></tr><tr><td>Information Ratio</td><td>-1.3024</td><td>-</td><td>相对 000300</td></tr><tr><td>Up / Down Capture</td><td>0.3215 / 0.6827</td><td>-</td><td>基准上涨/下跌阶段捕获率</td></tr><tr><td>Beta / Alpha</td><td>0.4123 / -38.13%</td><td>-</td><td>基准归因</td></tr></tbody></table></div></div></details>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>4. 重要 Metric</h2></summary><div class="report-card-body"><h3>Cost</h3>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>当前值</th><th>说明</th></tr></thead><tbody><tr><td>显式佣金税费</td><td>2.28</td><td>只含佣金/税费；滑点和冲击体现在成交价。</td></tr><tr><td>成本拖累</td><td>17.33%</td><td>显式成本相对交易毛 PnL 的拖累。</td></tr><tr><td>ADV 参与率</td><td>p95=0.01%; max=0.02%</td><td>当前 checklist 使用单笔 max ADV &lt;= 5%。</td></tr><tr><td>估算资金容量</td><td>3,125,000.00</td><td>按最大 ADV 参与率反推，超过后单笔订单会触及 5% ADV。</td></tr><tr><td>有效成本 BPS</td><td>weighted=19.7969 bps; median=18.1468 bps</td><td>来自执行观测的 slippage_bps + impact_bps，不含显式佣金/税费。</td></tr><tr><td>冲击成本</td><td>max impact=0.2846 bps</td><td>来自执行冲击模型。</td></tr></tbody></table></div>
+<h3>Data Quality</h3>
+<div class="table-wrap"><table><thead><tr><th>审计项</th><th>数值</th><th>解释</th></tr></thead><tbody><tr><td>material</td><td>否</td><td>No missing Shanghai/Shenzhen daily_basic symbols fell below the current Top20 small-cap threshold.</td></tr><tr><td>daily_basic_symbols</td><td>5532</td><td>daily_basic 中的历史 symbol 数</td></tr><tr><td>ohlc_symbols</td><td>5186</td><td>OHLC 可回测 symbol 数</td></tr><tr><td>daily_basic_not_ohlc_symbols</td><td>346</td><td>daily_basic 有但 OHLC 缺失的 symbol 数</td></tr><tr><td>missing_low_price_symbols_excluding_920</td><td>1</td><td>缺失且曾满足低价条件的非 920 symbol</td></tr><tr><td>missing_symbols_below_top20_excluding_920</td><td>0</td><td>缺失且市值可能进入当前 Top20 小市值阈值的非 920 symbol</td></tr><tr><td>dates_with_missing_below_top20_excluding_920</td><td>0</td><td>受影响交易日数</td></tr><tr><td>sample_missing_symbols</td><td>688811</td><td>样例缺失 symbol</td></tr></tbody></table></div>
+<h3>Turnover And Exposure</h3>
+<div class="table-wrap"><table><thead><tr><th>诊断项</th><th>数值</th><th>解释</th></tr></thead><tbody><tr><td>gross_traded_value</td><td>22,835.87</td><td>双边总成交额</td></tr><tr><td>one_way_traded_value</td><td>10,758.98</td><td>按买卖较小侧估算的一边成交额</td></tr><tr><td>annual_gross_turnover</td><td>553.54%</td><td>双边年化换手</td></tr><tr><td>annual_one_way_turnover</td><td>260.79%</td><td>单边年化换手</td></tr><tr><td>avg_daily_traded_value</td><td>3,805.98</td><td>有交易日平均成交额</td></tr><tr><td>max_daily_traded_value</td><td>8,752.30</td><td>单日最高成交额</td></tr><tr><td>avg_position_count</td><td>0.4000</td><td>日均持仓只数</td></tr><tr><td>position_count_range</td><td>0.0000 - 3.0000</td><td>最少/最多持仓只数</td></tr><tr><td>avg_gross_exposure_pct</td><td>12.28%</td><td>日均总持仓市值 / NAV</td></tr><tr><td>avg_cash_pct</td><td>87.72%</td><td>日均现金 / NAV</td></tr><tr><td>max_position_weight</td><td>36.98%</td><td>单票最大权重</td></tr><tr><td>p95_max_position_weight</td><td>33.74%</td><td>单票权重 95 分位</td></tr></tbody></table></div>
+<h3>Capacity</h3>
+<div class="table-wrap"><table><thead><tr><th>诊断项</th><th>数值</th><th>解释</th></tr></thead><tbody><tr><td>executed_orders</td><td>8</td><td>实际成交订单数</td></tr><tr><td>avg_adv_participation</td><td>0.00%</td><td>平均 ADV 金额参与率</td></tr><tr><td>p95_adv_participation</td><td>0.01%</td><td>ADV 金额参与率 95 分位</td></tr><tr><td>max_adv_participation</td><td>0.02%</td><td>单笔最大 ADV 金额参与率</td></tr><tr><td>p95_volume_participation</td><td>0.01%</td><td>成交量参与率 95 分位</td></tr><tr><td>max_volume_participation</td><td>0.02%</td><td>单笔最大成交量参与率</td></tr><tr><td>p95_trade_notional</td><td>3,318.69</td><td>单笔成交额 95 分位</td></tr><tr><td>max_trade_notional</td><td>3,324.60</td><td>单笔最大成交额</td></tr><tr><td>estimated_capacity_at_1pct_adv_p95</td><td>947,124.17</td><td>以 p95 ADV 参与率不超过 1% 反推资金容量</td></tr><tr><td>estimated_capacity_at_1pct_adv_max</td><td>625,000.00</td><td>以最大 ADV 参与率不超过 1% 反推资金容量</td></tr><tr><td>max_impact_bps</td><td>0.2846</td><td>执行冲击模型记录的最大 bps；禁用模型时应接近 0</td></tr></tbody></table></div>
+<h3>Barra-like Factor Decomposition</h3>
+<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Observed</th><th>Interpretation</th></tr></thead><tbody><tr><td>Barra-like Factor Decomposition</td><td>not_run</td><td>factor_decomposition payload missing; run fast validation with factor data enabled.</td></tr></tbody></table></div></div></details>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>5. Walk-forward</h2></summary><div class="report-card-body"><h3>Methodology</h3>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>取值</th><th>解释</th></tr></thead><tbody><tr><td>train_window</td><td>252 trading days</td><td>用于参数/阈值确认</td></tr><tr><td>test_window</td><td>63 trading days</td><td>样本外测试区间</td></tr><tr><td>step</td><td>63 trading days</td><td>滚动步长</td></tr><tr><td>purge_gap</td><td>5 trading days</td><td>训练和测试之间剔除重叠信息</td></tr><tr><td>embargo</td><td>21 trading days</td><td>测试开始前的禁用间隔</td></tr><tr><td>min_train_observations</td><td>126 trading days</td><td>低于该训练样本数不生成 split</td></tr><tr><td>parameter_grid</td><td>lookback=60; horizon=20; frozen parameters</td><td>若无参数优化，写明 frozen parameters</td></tr></tbody></table></div>
+<h3>Summary</h3>
+<div class="table-wrap"><table><thead><tr><th>Metric</th><th>数值</th><th>通过阈值</th><th>当前判定</th><th>解释</th></tr></thead><tbody><tr><td>total_splits</td><td>0</td><td>&gt;0</td><td><span class="badge fail">fail</span></td><td>实际生成的样本外 split 总数</td></tr><tr><td>evaluated_splits</td><td>0</td><td>&gt;0</td><td><span class="badge fail">fail</span></td><td>有交易的 OOS split；aggregate/worst/profitable/DSR 只统计这些区间</td></tr><tr><td>no_trade_splits</td><td>0</td><td>excluded from OOS stats</td><td><span class="badge pass">pass</span></td><td>无交易 OOS split 保留明细，但不进入样本外统计分母</td></tr><tr><td>aggregate_oos_sharpe</td><td>0.0000</td><td>&gt;0 作为均值表现参考；不单独决定 pass</td><td><span class="badge warn">参考-弱</span></td><td>有交易 OOS split 的聚合表现</td></tr><tr><td>worst_oos_sharpe</td><td>0.0000</td><td>&gt;=0.3000</td><td><span class="badge fail">fail</span></td><td>有交易 OOS split 中的最差样本外窗口；当前仅作 walk-forward 审计，不进入 Go / No-Go checklist</td></tr><tr><td>pct_profitable_splits</td><td>0.00%</td><td>&gt;=50.00%</td><td><span class="badge fail">fail</span></td><td>有交易 OOS split 的赚钱占比；当前仅作 walk-forward 审计，不进入 Go / No-Go checklist</td></tr><tr><td>deflated_sharpe_ratio</td><td>n/a</td><td>&gt;=0.9500；缺失时不触发 DSR 警告</td><td><span class="badge warn">missing</span></td><td>调整多重试验后的 Sharpe 可靠性；低于阈值为 warn</td></tr><tr><td>regime_breakdown</td><td>blocked_insufficient_sector_etf_history</td><td>bear regime Sharpe &gt;= -0.5000 可避免牛市单一依赖警告</td><td><span class="badge warn">missing</span></td><td>分市场状态稳定性；当前不单独决定 pass</td></tr><tr><td>capacity_viability</td><td>未记录</td><td>所有交易可估算成交量且单笔参与率 &lt;=5.00% ADV</td><td><span class="badge warn">missing</span></td><td>walk-forward 容量审计；当前 checklist 使用 strict 回测的 max_adv_participation</td></tr></tbody></table></div>
+<h3>Split Details</h3>
+<div class="table-wrap"><table><thead><tr><th>Split</th><th>Train</th><th>Test</th><th>参数</th><th>OOS Sharpe</th><th>结论</th></tr></thead><tbody><tr><td>汇总</td><td>rolling train windows</td><td>rolling OOS windows</td><td>frozen parameters</td><td>0.0000</td><td>fail</td></tr><tr><td>原因</td><td>missing</td><td>missing</td><td>blocked_insufficient_sector_etf_history</td><td>0.0000</td><td>fail</td></tr></tbody></table></div></div></details>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>6. Stability</h2></summary><div class="report-card-body"><p>参数敏感性是稳健性审计，不作为全样本参数寻优通过证据。它用于检查选定参数是否落在可解释的表现平台上，而不是孤立最优点。</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Observed</th><th>Threshold</th><th>Verdict</th></tr></thead><tbody><tr><td>status</td><td>warn</td><td>pass/warn/fail from robustness audit</td><td><span class="badge warn">warn</span></td></tr><tr><td>tested_count</td><td>3</td><td>&gt;=3 local/scenario variants</td><td><span class="badge pass">pass</span></td></tr><tr><td>max_degradation_pct</td><td>missing</td><td>&lt;=30.00%</td><td><span class="badge warn">missing</span></td></tr><tr><td>pass_count</td><td>missing</td><td>record surviving variants, not only the winner</td><td><span class="badge warn">warn</span></td></tr></tbody></table></div><div class="table-wrap"><table><thead><tr><th>Item</th><th>Value</th></tr></thead><tbody><tr><td>Method</td><td>local perturbation / scenario sweep around locked parameters</td></tr><tr><td>Selected Params</td><td>missing</td></tr><tr><td>Best Params</td><td>missing</td></tr><tr><td>Stability Note</td><td>Only short-window parameter scenarios were run; this is not promotion-grade stability.</td></tr></tbody></table></div><div class="table-wrap"><table><thead><tr><th>Variant</th><th>Parameters</th><th>CAGR</th><th>MaxDD</th><th>Sharpe</th><th>IC</th><th>Max ADV</th><th>Verdict</th></tr></thead><tbody><tr><td>monthly_60d_trend60_vol20_top3_95pct</td><td>momentum_lookback=60; momentum_skip=1; trend_window=60; volatility_window=20; liquidity_window=20; min_avg_turnover=20000000.0; min_momentum=0.02; max_positions=3; max_category_weight=0.35; target_exposure=0.95; holding_days=20; volatility_...</td><td>-29.00%</td><td>-19.46%</td><td>-1.1077</td><td>n/a</td><td>0.02%</td><td><span class="badge warn">warn</span></td></tr><tr><td>monthly_40d_trend40_vol20_top3_95pct</td><td>momentum_lookback=40; momentum_skip=1; trend_window=40; volatility_window=20; liquidity_window=20; min_avg_turnover=20000000.0; min_momentum=0.02; max_positions=3; max_category_weight=0.35; target_exposure=0.95; holding_days=20; volatility_...</td><td>-59.62%</td><td>-37.11%</td><td>-1.2635</td><td>n/a</td><td>0.01%</td><td><span class="badge warn">warn</span></td></tr><tr><td>biweekly_40d_trend40_vol20_top3_90pct</td><td>momentum_lookback=40; momentum_skip=1; trend_window=40; volatility_window=20; liquidity_window=20; min_avg_turnover=20000000.0; min_momentum=0.02; max_positions=3; max_category_weight=0.35; target_exposure=0.9; holding_days=10; volatility_f...</td><td>-55.87%</td><td>-34.71%</td><td>-1.2233</td><td>n/a</td><td>0.01%</td><td><span class="badge warn">warn</span></td></tr></tbody></table></div></div></details>
+<details class="panel report-card" open><summary class="report-card-summary"><h2>7. Risk</h2></summary><div class="report-card-body"><div class="table-wrap"><table><thead><tr><th>风险点</th><th>观察</th><th>处理建议</th></tr></thead><tbody><tr><td>Walk-forward 稳定性</td><td>aggregate OOS Sharpe=0.0000，worst OOS Sharpe=0.0000，盈利 split 占比=0.00%；blocked_insufficient_sector_etf_history</td><td>当前已降为审计项；若以后恢复上线门槛，这是最大弱点。</td></tr><tr><td>策略规则可解释性</td><td>Sector leadership often persists over intermediate horizons; hold the strongest liquid sector ETFs while avoiding stale, weak, or below-trend candidates.</td><td>StrategySpec.strategy_logic 已记录资产桶、切换条件、组合构建和防守腿；报告可直接审计规则。</td></tr><tr><td>Universe 选择偏差</td><td>30 symbols; sample=159766, 159806, 159819, 159825, 159865, 159869, 159928, 159995</td><td>需要确认 ETF/LOF 池是否按历史可得规则冻结，而不是用当前存续名单回溯。</td></tr><tr><td>执行摩擦</td><td>insufficient_cash_rejections=0; total_trades=8</td><td>拒单和现金约束会影响复现实盘仓位，建议保留在附录审计。</td></tr></tbody></table></div></div></details>
+</main>
+</body>
+</html>

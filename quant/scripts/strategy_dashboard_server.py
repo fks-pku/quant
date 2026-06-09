@@ -1098,6 +1098,7 @@ def _pending_submit_orders(
         (_order_signature(record), _timestamp_text(record))
         for record in orders
     ]
+    close_prices = _signal_close_prices(root, signals)
     pending = []
     for signal in sorted(signals, key=lambda item: item.get("timestamp", "")):
         if str(signal.get("status", "")).lower() not in {"accepted", "pending", "queued", "pending_submit"}:
@@ -1115,9 +1116,86 @@ def _pending_submit_orders(
         )
         if _date_before(row["submit_date"], as_of_date):
             continue
+        cost_bps = _pending_submit_cost_bps(
+            row,
+            close_prices.get(_signal_close_key(row)),
+        )
+        if cost_bps is not None:
+            row["cost_bps"] = cost_bps
+            row["cost_bps_display"] = f"+{cost_bps:.1f} bps"
         row["display_status"] = "pending_submit"
         pending.append(row)
     return pending
+
+
+def _pending_submit_cost_bps(row: Dict[str, Any], signal_close: Optional[float]) -> Optional[float]:
+    cost_bps = _optional_float(row.get("execution_cost_bps"))
+    if cost_bps is None:
+        cost_bps = _optional_float(row.get("cost_bps"))
+    if cost_bps is not None:
+        return cost_bps
+
+    limit_price = _optional_float(row.get("price"))
+    reference_price = _optional_float(row.get("reference_price"))
+    if reference_price is None:
+        reference_price = signal_close
+    if limit_price is None or limit_price <= 0 or reference_price is None or reference_price <= 0:
+        return None
+
+    side = str(row.get("side") or "").upper()
+    if side == "BUY":
+        inferred = (limit_price / reference_price - 1.0) * 10000.0
+    elif side == "SELL":
+        inferred = (1.0 - limit_price / reference_price) * 10000.0
+    else:
+        return None
+    if not math.isfinite(inferred) or inferred < -1e-6:
+        return None
+    return max(0.0, inferred)
+
+
+def _signal_close_prices(root: Path, signals: List[Dict[str, Any]]) -> Dict[tuple[str, str], float]:
+    keys = {_signal_close_key(signal) for signal in signals}
+    keys = {(symbol, trading_date) for symbol, trading_date in keys if symbol and trading_date}
+    if not keys:
+        return {}
+    symbols = sorted({symbol for symbol, _ in keys})
+    dates = sorted({trading_date for _, trading_date in keys})
+    sources = [
+        (root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_ohlcv.duckdb", "daily_cn_ochl"),
+        (root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb", "daily_cn_ochl"),
+        (root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_index_ohlcv.duckdb", "daily_cn_ochl"),
+    ]
+    prices: Dict[tuple[str, str], float] = {}
+    symbol_placeholders = ",".join("?" for _ in symbols)
+    date_placeholders = ",".join("?" for _ in dates)
+    query = f"""
+        select symbol, cast(timestamp as date) as trading_date, close
+        from {{table}}
+        where symbol in ({symbol_placeholders})
+          and cast(timestamp as date) in ({date_placeholders})
+    """
+    for db_path, table in sources:
+        if not db_path.exists():
+            continue
+        try:
+            import duckdb
+
+            with duckdb.connect(str(db_path), read_only=True) as con:
+                rows = con.execute(query.format(table=table), [*symbols, *dates]).fetchall()
+        except Exception:
+            continue
+        for symbol, trading_date, close_price in rows:
+            key = (str(symbol), str(trading_date)[:10])
+            price = _float(close_price)
+            if key in keys and key not in prices and price > 0:
+                prices[key] = price
+    return prices
+
+
+def _signal_close_key(signal: Dict[str, Any]) -> tuple[str, str]:
+    symbol = str(signal.get("symbol") or "").split(".")[0]
+    return (symbol, _record_date(signal))
 
 
 def _submitted_order_ids(
@@ -1768,6 +1846,14 @@ def _float(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return result if math.isfinite(result) else 0.0
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _median(values: List[float]) -> float:

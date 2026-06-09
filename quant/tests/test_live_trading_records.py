@@ -68,7 +68,7 @@ class RecordingOrderManager:
         self.submitted = []
         self.cancelled = []
 
-    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name=None):
+    def submit_order(self, symbol, quantity, side, order_type, price, strategy_name=None, **kwargs):
         self.submitted.append({
             "symbol": symbol,
             "quantity": quantity,
@@ -76,6 +76,7 @@ class RecordingOrderManager:
             "order_type": order_type,
             "price": price,
             "strategy_name": strategy_name,
+            **kwargs,
         })
         return f"ORD-{len(self.submitted)}"
 
@@ -698,13 +699,44 @@ def test_order_manager_record_pending_only_does_not_submit_to_broker(tmp_path):
     assert broker.submitted == []
     assert orders == []
     assert signals[-1]["strategy_name"] == "DemoStrategy"
-    assert signals[-1]["symbol"] == "159949"
-    assert signals[-1]["side"] == "SELL"
+
+
+def test_live_execution_manager_pending_only_records_cost_bps_without_execution_limit(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path)
+    broker = DummyBroker()
+    risk = ApprovingRisk(True)
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=risk,
+        event_bus=EventBus(),
+        config={"execution": {"record_pending_only": True}},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+    manager.set_signal_timestamp(datetime(2026, 6, 3, 15, 0))
+    executor = LiveExecutionManager(manager, default_max_cost_bps=25)
+
+    order_id = executor.submit_target(TargetOrder(
+        symbol="600519",
+        quantity=1000,
+        side="BUY",
+        reference_price=10.0,
+        strategy_name="DemoStrategy",
+    ))
+
+    signals = recorder.read_day("signals", "2026-06-03")
+    assert order_id is not None
+    assert broker.submitted == []
+    assert signals[-1]["order_type"] == "LIMIT"
+    assert signals[-1]["reference_price"] == pytest.approx(10.0)
+    assert signals[-1]["execution_cost_bps"] == pytest.approx(25.0)
+    assert signals[-1]["price"] is None
+    assert signals[-1]["symbol"] == "600519"
+    assert signals[-1]["side"] == "BUY"
     assert signals[-1]["status"] == "accepted"
     assert signals[-1]["order_id"] == order_id
     assert manager.get_order_status(order_id) == OrderStatus.PENDING
-    assert risk.last_record["kwargs"]["symbol"] == "159949"
-    assert tracker.get_strategy_for_order(order_id) == "DemoStrategy"
+    assert risk.last_record["kwargs"]["symbol"] == "600519"
 
 
 def test_order_manager_passes_side_and_pending_value_to_risk_engine(tmp_path):
@@ -1569,7 +1601,7 @@ def test_quant_system_order_manager_and_fill_handler_use_strategy_resolvers(monk
     assert quant._fill_handler._portfolio_for("DemoStrategy") is strategy_portfolio
 
 
-def test_live_execution_manager_caps_buy_limit_by_cost_budget():
+def test_live_execution_manager_caps_buy_limit_by_execution_open_plus_cost_budget():
     order_manager = RecordingOrderManager()
     executor = LiveExecutionManager(order_manager, default_max_cost_bps=25)
 
@@ -1578,16 +1610,20 @@ def test_live_execution_manager_caps_buy_limit_by_cost_budget():
         quantity=1000,
         side="BUY",
         reference_price=10.0,
+        execution_reference_price=12.0,
         strategy_name="DemoStrategy",
     ))
 
     assert order_id == "ORD-1"
     assert order_manager.submitted[-1]["order_type"] == "LIMIT"
-    assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
+    assert order_manager.submitted[-1]["price"] == pytest.approx(12.03)
+    assert order_manager.submitted[-1]["signal_metadata"]["reference_price"] == pytest.approx(10.0)
+    assert order_manager.submitted[-1]["signal_metadata"]["execution_reference_price"] == pytest.approx(12.0)
+    assert order_manager.submitted[-1]["signal_metadata"]["execution_cost_bps"] == pytest.approx(25.0)
     assert order_manager.submitted[-1]["strategy_name"] == "DemoStrategy"
 
 
-def test_live_execution_manager_caps_sell_limit_by_cost_budget():
+def test_live_execution_manager_caps_sell_limit_by_execution_open_minus_cost_budget():
     order_manager = RecordingOrderManager()
     executor = LiveExecutionManager(order_manager, default_max_cost_bps=25)
 
@@ -1596,10 +1632,11 @@ def test_live_execution_manager_caps_sell_limit_by_cost_budget():
         quantity=1000,
         side="SELL",
         reference_price=10.0,
+        execution_reference_price=12.0,
         strategy_name="DemoStrategy",
     ))
 
-    assert order_manager.submitted[-1]["price"] == pytest.approx(9.975)
+    assert order_manager.submitted[-1]["price"] == pytest.approx(11.97)
 
 
 def test_live_execution_manager_uses_historical_cost_model_signal_bar():
@@ -1632,10 +1669,12 @@ def test_live_execution_manager_uses_historical_cost_model_signal_bar():
         quantity=1000,
         side="BUY",
         reference_price=10.0,
+        execution_reference_price=12.0,
         strategy_name="DemoStrategy",
     ))
 
-    assert order_manager.submitted[-1]["price"] == pytest.approx(10.011)
+    assert order_manager.submitted[-1]["price"] == pytest.approx(12.0132)
+    assert order_manager.submitted[-1]["signal_metadata"]["execution_cost_bps"] == pytest.approx(11.0)
 
 
 def test_live_execution_manager_drops_expired_targets():
@@ -1648,6 +1687,7 @@ def test_live_execution_manager_drops_expired_targets():
         quantity=1000,
         side="BUY",
         reference_price=10.0,
+        execution_reference_price=10.0,
         strategy_name="DemoStrategy",
         deadline=deadline,
     ))
@@ -1672,6 +1712,7 @@ def test_live_execution_manager_does_not_drop_filled_targets():
         quantity=1000,
         side="BUY",
         reference_price=10.0,
+        execution_reference_price=10.0,
         strategy_name="DemoStrategy",
         deadline=deadline,
     ))
@@ -1697,6 +1738,7 @@ def test_live_execution_manager_applies_default_intraday_deadline():
         quantity=1000,
         side="BUY",
         reference_price=10.0,
+        execution_reference_price=10.0,
         strategy_name="DemoStrategy",
     ))
 
@@ -1718,9 +1760,8 @@ def test_trading_context_routes_priced_orders_through_live_execution_manager():
 
     order_id = context.submit_order("600519", 1000, "BUY", "MARKET", 10.0, "DemoStrategy")
 
-    assert order_id == "ORD-1"
-    assert order_manager.submitted[-1]["order_type"] == "LIMIT"
-    assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
+    assert order_id is None
+    assert order_manager.submitted == []
 
 
 def test_trading_context_uses_strategy_reference_price_for_market_targets():
@@ -1745,10 +1786,13 @@ def test_trading_context_uses_strategy_reference_price_for_market_targets():
     order_id = context.submit_order("600519", 1000, "BUY", "MARKET", 10.0, "DemoStrategy")
 
     assert order_id == "ORD-1"
-    assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
+    assert order_manager.submitted[-1]["price"] == pytest.approx(12.03)
+    assert order_manager.submitted[-1]["signal_metadata"]["reference_price"] == pytest.approx(10.0)
+    assert order_manager.submitted[-1]["signal_metadata"]["execution_reference_price"] == pytest.approx(12.0)
+    assert order_manager.submitted[-1]["signal_metadata"]["execution_cost_bps"] == pytest.approx(25.0)
 
 
-def test_trading_context_uses_broker_reference_when_signal_reference_missing():
+def test_trading_context_does_not_use_execution_reference_as_cost_reference():
     from quant.features.trading.engine import Context
 
     class QuoteBroker:
@@ -1769,8 +1813,8 @@ def test_trading_context_uses_broker_reference_when_signal_reference_missing():
 
     order_id = context.submit_order("600519", 1000, "BUY", "MARKET", None, "DemoStrategy")
 
-    assert order_id == "ORD-1"
-    assert order_manager.submitted[-1]["price"] == pytest.approx(12.03)
+    assert order_id is None
+    assert order_manager.submitted == []
 
 
 def test_trading_context_uses_signal_bar_reference_when_price_missing():
@@ -1789,8 +1833,8 @@ def test_trading_context_uses_signal_bar_reference_when_price_missing():
 
     order_id = context.submit_order("600519", 1000, "BUY", "MARKET", None, "DemoStrategy")
 
-    assert order_id == "ORD-1"
-    assert order_manager.submitted[-1]["price"] == pytest.approx(10.025)
+    assert order_id is None
+    assert order_manager.submitted == []
 
 
 def test_trading_context_drops_market_target_when_reference_price_missing():

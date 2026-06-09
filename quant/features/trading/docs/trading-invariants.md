@@ -4,6 +4,8 @@ Trading 模块管理组合状态、风控检查、SubPortfolio 隔离。
 
 ---
 
+Current daily execution-cost contract: D-day strategy price or D-day signal-bar close is a cost-reference input only. Live/paper target-order execution records the D-known `execution_cost_bps` budget after close, then computes the executable `LIMIT` from execution-day open/reference price at submission time. Pending-only signals display `+x bps` and must not persist a D-close-derived limit price.
+
 ## 通用约定
 
 | 组件 | 职责 |
@@ -24,7 +26,7 @@ Trading 模块管理组合状态、风控检查、SubPortfolio 隔离。
 - T9 带 `strategy_name` 的实盘成交只派发给所属策略，不广播给其他策略
 - T10 live/paper `MARKET + D-known reference price` 信号单必须经限成本执行器转换为 LIMIT 单；到期未完成的目标单必须撤单并标记 dropped
 - T11 默认日线实盘策略必须用完整 EOD 快照触发，D 日 BAR 不即时下单，D+1 `MARKET_OPEN` 才用 D 日完整快照生成信号
-- T12 live/paper MARKET 目标单的限价 reference price 必须优先来自 D 日策略 price 或 signal bar close；broker/data-provider resolver 只在信号参考价缺失时兜底
+- T12 live/paper MARKET 目标单必须分离 D 日成本参考价与执行日 anchor：成本参考优先来自 D 日策略 price 或 signal bar close；broker/data-provider resolver 只提供执行日 open/reference anchor，不得兜底参与 D 日成本估算
 - T13 Strategy dashboard must derive pending orders, order fill display, holdings, cash, NAV, and run freshness from one server-side display contract
 - T14 QMT 实盘成交记录必须携带券商佣金；若 MiniQMT 成交回报缺少费用字段，A股/ETF 默认按成交额费率与 5 元起点估算，并摊入策略持仓成本
 
@@ -289,8 +291,8 @@ T8-06  Strategy Context exposes only a scoped order surface: no raw broker, no r
 ### 断言
 
 ```
-T9-01  未启用 execution_cost_model 时 BUY limit_price == reference_price * (1 + max_cost_bps / 10000)
-T9-02  未启用 execution_cost_model 时 SELL limit_price == reference_price * (1 - max_cost_bps / 10000)
+T9-01  Current BUY contract: D-day reference/signal bar estimates `execution_cost_bps`; executable BUY `LIMIT` is anchored to execution-day open/reference plus that bps budget.
+T9-02  Current SELL contract: D-day reference/signal bar estimates `execution_cost_bps`; executable SELL `LIMIT` is anchored to execution-day open/reference minus that bps budget.
 T9-03  显式 LIMIT 单保持原限价，不再套用执行器成本 bps
 T9-04  未完成目标单到期后调用 cancel_order(order_id)
 T9-05  dropped 状态表示当日未下完的剩余目标被丢弃，不跨日补单
@@ -300,7 +302,7 @@ T9-08  QMT trade_mode=SIMULATE 不是已验证沙盒下单通道，必须拒绝 
 T9-09  paper mode 只能初始化和运行 PaperBroker，不得连接 QMT/Futu 等外部交易 broker
 T9-10  PaperBroker 使用执行日 open 做本地撮合；LIMIT 必须按回测 marketability 规则成交或拒绝，并通过 trade callback 进入统一 FillHandler
 T9-11  live morning 与 post-close paper replay 必须使用同一 signal_date/execution_date；paper 等执行日 open 入库后按 LIMIT marketability 撮合，live/paper 成本限价均来自 D 日可知成本模型，不复制人工补单
-T9-12  启用 execution_cost_model 时，live/paper 目标单限价使用 D 日信号 bar 的 close/ADV/volatility 估算，不得用 D+1 broker quote 放宽限价
+T9-12  启用 execution_cost_model 时，live/paper 目标单 cost bps 使用 D 日信号 bar 的 close/ADV/volatility 估算；D+1 broker/data-provider quote 只能作为 LIMIT anchor，不能参与 D 日 cost bps 计算。
 ```
 
 ### 对应测试: `test_live_execution_manager_*`, `test_trading_context_*`, `test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks`, `test_order_manager_flushes_paper_broker_fills_after_submission`, `test_quant_system_rejects_external_broker_adapter_in_paper_mode` in `test_live_trading_records.py`; `test_qmt_limit_price_rounds_to_exchange_tick_preserving_side_bound`, `test_submit_order_normalizes_limit_price_before_qmt_call`, `test_qmt_simulate_trade_mode_refuses_order_submission` in `test_qmt_broker.py`
@@ -347,7 +349,7 @@ T11-05  gap 恢复时只消费最新完成快照，不按旧日期补下单
 2. 策略传入 D 日可知 `price=10.0`
 3. `Context.submit_order()` 生成 live/paper target order
 4. 策略 price 缺失时优先使用执行器缓存的 D 日 signal bar close
-5. D 日 signal reference 也缺失时，才用 broker/data-provider resolver 兜底
+5. D 日 signal reference 也缺失时，不得用 broker/data-provider resolver 兜底估算成本；resolver 只提供执行日 anchor
 
 ### 断言
 
@@ -358,7 +360,7 @@ T12-03  D 日 reference 缺失且 resolver 取不到价格时不得提交订单
 T12-04  QMT broker quote 将 MiniQMT full_tick 的 openPrice/lastPrice 映射为 open_price/last_price
 ```
 
-### 对应测试: `test_trading_context_uses_strategy_reference_price_for_market_targets`, `test_trading_context_uses_signal_bar_reference_when_price_missing`, `test_trading_context_uses_broker_reference_when_signal_reference_missing`, `test_trading_context_drops_market_target_when_reference_price_missing` in `test_live_trading_records.py`; `test_qmt_quote_reference_price_prefers_open_price` in `test_qmt_broker.py`
+### 对应测试: `test_trading_context_uses_strategy_reference_price_for_market_targets`, `test_trading_context_uses_signal_bar_reference_when_price_missing`, `test_trading_context_does_not_use_execution_reference_as_cost_reference`, `test_trading_context_drops_market_target_when_reference_price_missing` in `test_live_trading_records.py`; `test_qmt_quote_reference_price_prefers_open_price` in `test_qmt_broker.py`
 
 ---
 
@@ -377,7 +379,7 @@ T13-03  Mode control gates signal acceptance only; portfolio marks, curves, metr
 T13-04  Paper mode records and strategy positions must use paper_trading paths, never live_trading or live position state
 T13-05  Dashboard control actions write strategy_controls.json only; they must not directly call broker submit_order
 T13-06  Dashboard holdings and mode metrics must mark open positions with the latest DuckDB close, not stale fill prices or zero-valued snapshots
-T13-07  Dashboard pending order list shows accepted D-day strategy signals that do not yet have a matching submitted order or fill inside the current submit window; matching must tolerate broker order IDs that differ from client signal IDs and near-simultaneous submitted-order timestamps that are marginally earlier than the recorded signal timestamp; signals without explicit submit_date/execution_date default to the next real CN trading day; signals whose submit_date is before today must expire out of pending_orders so the next day is recalculated from strategy state instead of carrying old actions forward
+T13-07  Dashboard pending order list shows accepted D-day strategy signals that do not yet have a matching submitted order or fill inside the current submit window; pending rows display D-known `execution_cost_bps` in the `Submit +bps` column as `+x bps` instead of a D-close-derived limit price; legacy rows that predate `execution_cost_bps` infer `Submit +bps` from D-close and the stored D-close-derived limit; matching must tolerate broker order IDs that differ from client signal IDs and near-simultaneous submitted-order timestamps that are marginally earlier than the recorded signal timestamp; signals without explicit submit_date/execution_date default to the next real CN trading day; signals whose submit_date is before today must expire out of pending_orders so the next day is recalculated from strategy state instead of carrying old actions forward
 T13-08  Dashboard order rows are filled only by the server-side display contract: open_price is the order-date daily open, paper fill_price equals limit_price, live fill_price equals broker fill price, commission is reported separately, and slippage_bps satisfies fill_price = open_price * (1 + slippage_bps / 10000)
 T13-09  Dashboard holdings, cash, total NAV, and total return must be derived from the same order display contract: avg_cost includes contract fill price plus commission, cash starts from per-strategy initial cash, and NAV equals cash plus market value
 T13-10  Live/Paper daily snapshot startup must restore strategy runtime _positions and strategy SubPortfolio lots from StrategyPositionTracker before signal generation

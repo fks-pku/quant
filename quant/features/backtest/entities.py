@@ -197,13 +197,13 @@ class _BacktestOrderManager:
         order_type: str,
         price: Optional[float],
         reference_price: float,
-    ) -> tuple[str, Optional[float]]:
+    ) -> tuple[str, Optional[float], Dict[str, float]]:
         order_type_text = (order_type or "MARKET").upper()
         if order_type_text != "MARKET":
-            return order_type, price
+            return order_type, price, {}
         market = get_market(symbol)
         if not has_historical_cost_model(self._execution_cost_model, symbol, market):
-            return order_type, price
+            return order_type, price, {}
         auto_limit = bool(
             (self._execution_cost_model or {}).get(
                 "market_orders_as_limits",
@@ -211,14 +211,15 @@ class _BacktestOrderManager:
             )
         )
         if not auto_limit:
-            return order_type, price
+            return order_type, price, {}
         signal_bar = self._current_bars.get(symbol) or {}
         bar_reference = bar_close_price(signal_bar)
+        cost_reference_price = bar_reference or reference_price
         estimate = estimate_cost_protection_limit(
             symbol=symbol,
             side=side,
             quantity=quantity,
-            reference_price=bar_reference or reference_price,
+            reference_price=cost_reference_price,
             market=market,
             signal_bar=signal_bar,
             base_slippage_bps=self._base_slippage_bps,
@@ -226,7 +227,12 @@ class _BacktestOrderManager:
             fallback_max_cost_bps=None,
             fallback_impact_factor=self._market_impact_factor,
         )
-        return "LIMIT", estimate.limit_price
+        return "LIMIT", None, {
+            "execution_cost_reference_price": float(cost_reference_price),
+            "execution_cost_bps": float(estimate.cost_bps),
+            "execution_slippage_bps": float(estimate.slippage_bps),
+            "execution_impact_bps": float(estimate.impact_bps),
+        }
 
     def submit_order(
         self,
@@ -256,7 +262,7 @@ class _BacktestOrderManager:
             effective = self._resolve_price(price, symbol)
             self._passes_dedup(symbol, side)
             self._passes_risk(symbol, quantity, effective, side)
-            submitted_order_type, submitted_price = self._as_historical_limit_order(
+            submitted_order_type, submitted_price, cost_metadata = self._as_historical_limit_order(
                 symbol, quantity, side, order_type_text, price, effective,
             )
         except OrderRejectedError:
@@ -272,6 +278,7 @@ class _BacktestOrderManager:
             "_risk_check_price": effective,
             "execution_timing": timing,
         }
+        order.update(cost_metadata)
         self._buffer.append(order)
         if side == 'BUY':
             self._buy_dedup_set.add(symbol)
@@ -289,6 +296,10 @@ class _BacktestOrderManager:
                 signal_date=signal_date,
                 risk_check_price=item.get("_risk_check_price", 0.0),
                 execution_timing=item.get("execution_timing", EXECUTION_TIMING_NEXT_OPEN),
+                execution_cost_reference_price=item.get("execution_cost_reference_price"),
+                execution_cost_bps=item.get("execution_cost_bps"),
+                execution_slippage_bps=item.get("execution_slippage_bps"),
+                execution_impact_bps=item.get("execution_impact_bps"),
             )
             for item in self._buffer
         ]

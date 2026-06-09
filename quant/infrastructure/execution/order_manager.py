@@ -82,21 +82,27 @@ class OrderManager:
         order_type: str = "MARKET",
         price: Optional[float] = None,
         strategy_name: Optional[str] = None,
+        risk_price: Optional[float] = None,
+        signal_metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Submit an order after risk checks.
         Returns order_id if successful, None if rejected.
         """
-        order_value = abs(quantity * (price or 0))
-        if price is None:
-            price = self._get_last_price(symbol)
-            order_value = abs(quantity * price)
+        check_price = price
+        if check_price is None:
+            if risk_price is not None:
+                check_price = risk_price
+            else:
+                check_price = self._get_last_price(symbol)
+                price = check_price
+        order_value = abs(quantity * check_price)
 
         risk_engine = self._risk_engine_for(strategy_name)
         approved, results = risk_engine.check_order(
             symbol=symbol,
             quantity=quantity,
-            price=price,
+            price=check_price,
             order_value=order_value,
             side=side,
         )
@@ -113,6 +119,7 @@ class OrderManager:
                 strategy_name=strategy_name,
                 status="rejected",
                 reason="risk_check_failed",
+                signal_metadata=signal_metadata,
             )
             self.logger.warning(f"Order rejected by risk engine: {symbol} {side} {quantity}")
             self.event_bus.publish_nowait(
@@ -152,6 +159,7 @@ class OrderManager:
             strategy_name=strategy_name,
             status="accepted",
             order_id=order_id,
+            signal_metadata=signal_metadata,
         )
         self._record_strategy(order_id, strategy_name)
         self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value)
@@ -341,6 +349,7 @@ class OrderManager:
         status: str,
         order_id: Optional[str] = None,
         reason: str = "",
+        signal_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         if self._live_recorder is None:
             return
@@ -358,6 +367,7 @@ class OrderManager:
                 status=status,
                 order_id=order_id,
                 reason=reason,
+                metadata=signal_metadata,
             )
         except Exception as e:
             self.logger.error(f"Failed to record strategy signal: {e}")

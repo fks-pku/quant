@@ -12,7 +12,10 @@ _SOURCE_PROFILE = {
     "aqr": ("practitioner_research", 1.45),
     "worldquant101": ("public_factor_library", 1.35),
     "ashare_structural": ("local_structural_research", 1.55),
-    "joinquant": ("practitioner_community", 1.10),
+    "ashare_public_forum": ("practitioner_community", 1.20),
+    "bigquant": ("practitioner_community", 1.20),
+    "joinquant": ("practitioner_community", 1.15),
+    "joinquant_community": ("practitioner_community", 1.15),
     "alpha_architect": ("practitioner_research", 1.35),
     "quantocracy": ("curated_blog", 1.15),
     "blog": ("blog", 0.95),
@@ -40,6 +43,18 @@ _DAILY_TERMS = {
     "trading friction": "cost_aware",
     "price limit": "cost_aware",
     "daily limit": "cost_aware",
+    "日线": "daily_ohlcv",
+    "收盘价": "daily_ohlcv",
+    "开盘价": "daily_ohlcv",
+    "成交量": "daily_ohlcv",
+    "换手率": "cost_aware",
+    "交易成本": "cost_aware",
+    "容量": "liquidity_aware",
+    "流动性": "liquidity_aware",
+    "股票": "liquid_equity",
+    "行业": "liquid_equity",
+    "申万": "liquid_equity",
+    "a股": "liquid_equity",
 }
 
 _STRATEGY_TERMS = {
@@ -62,6 +77,18 @@ _STRATEGY_TERMS = {
     "statistical arbitrage": "stat_arb",
     "pairs trading": "stat_arb",
     "regime": "regime",
+    "动量": "momentum",
+    "趋势": "momentum",
+    "轮动": "momentum",
+    "反转": "mean_reversion",
+    "均值回归": "mean_reversion",
+    "低波": "factor",
+    "红利": "factor",
+    "价值": "factor",
+    "质量": "factor",
+    "小市值": "factor",
+    "指数增强": "factor",
+    "拥挤度": "regime",
 }
 
 _DAILY_PATTERNS = (
@@ -99,6 +126,11 @@ _RISK_TERMS = {
     "market clearing": "non_equity_market",
     "trade credit": "non_equity_market",
     "crypto": "crypto_capacity_risk",
+    "高频": "high_frequency_not_daily",
+    "盘口": "high_frequency_not_daily",
+    "分钟": "intraday_dependency",
+    "舆情": "alternative_data_required",
+    "新闻情绪": "alternative_data_required",
 }
 
 _MONTHS = {

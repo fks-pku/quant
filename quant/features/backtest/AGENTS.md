@@ -129,7 +129,7 @@ while current_date ≤ end:
 - CN 涨跌停价格计算使用 `_round_half_up()`（四舍五入），不使用 Python `round()`（银行家舍入）
 - CN 市场识别按 6 位数字处理，覆盖 A 股股票、ETF/基金、债券与 B 股；如 `510300`、`159915`、`512880` 必须归入 CNY
 - CN 涨跌停拒绝按方向处理：涨停拒绝 BUY、跌停拒绝 SELL；涨停 SELL 和跌停 BUY 不因涨跌停规则拒绝
-- LIMIT 订单必须有正数限价；BUY 仅在 next open <= limit 时成交，SELL 仅在 next open >= limit 时成交，冲击成本后不得穿越限价
+- 手工 LIMIT 订单必须有正数限价；BUY 仅在 next open <= limit 时成交，SELL 仅在 next open >= limit 时成交，冲击成本后不得穿越限价。自动成本保护 LIMIT 是例外：提交阶段可 `price=None`，但必须携带 D 日冻结的 `execution_cost_bps`，执行阶段再用 open/reference 派生限价
 - 一个回测实例不得混合币种；跨 USD/CNY/HKD 标的需要拆成不同回测或引入明确 FX 层
 - 停牌 synthetic bar 不更新 `last_prices`/`prev_bars`，避免用停牌填充值重估 NAV 或污染后续涨跌停基准
 - 最后一个交易日 after-close 产生的 deferred order 没有真实下一交易日，应过期计入 diagnostics，不得用 synthetic bar 成交
@@ -142,7 +142,7 @@ while current_date ≤ end:
 - SubPortfolio 模式下送股 synthetic fill 必须只分发给对应策略，不能广播给所有持有同一 symbol 的策略
 - 严格回测报告使用的日线 provider 若底层存在 `corp_actions.cn_dividends`，必须暴露 `get_dividend_for_date()`；否则 cash dividend、CN 红利税和送股 synthetic fill 都不会进入回测
 - A 股严格回测若启用冲击成本模型，provider 必须提供模型字段（如 `adv20_value`、`volatility20`），并在报告 constraints 中写清 `execution_cost_model`
-- CN 日线启用 `execution_cost_model` 的 MARKET 信号必须在 D 日提交阶段冻结为成本保护 LIMIT；其他市场需显式 `market_orders_as_limits: true`；限价只使用 D 日可知 reference/ADV/volatility，D+1 数据只能决定可成交性和成交结果
+- CN 日线启用 `execution_cost_model` 的 MARKET 信号必须在 D 日提交阶段冻结为成本保护 bps；其他市场需显式 `market_orders_as_limits: true`。D 日只用可知 reference/ADV/volatility 计算 `+x bps`，不持久化 D 收盘派生的限价；D+1 提交时用执行日 open/reference 派生 LIMIT：BUY `reference*(1+x/10000)`，SELL `reference*(1-x/10000)`
 - 订单默认执行时点仍为 `NEXT_OPEN`；只有显式 `execution_timing="SAME_CLOSE"` 的订单在 Step 8 后按当日 `close` 执行，执行后必须重新以当日 close 标记持仓市值
 - 交易级统计的 round-trip PnL 必须包含按 FIFO 分摊的 BUY 佣金；SELL trade 的 `pnl` 只覆盖卖出侧佣金
 - `DataFrameProvider._trading_dates` 存储 `date` 对象，engine 使用 `current_date.date()` 查询

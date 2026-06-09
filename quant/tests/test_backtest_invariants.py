@@ -3319,7 +3319,7 @@ class TestRegressionR2Guardrails:
 
 
 # ============================================================================
-# CASE-40: Historical cost-protection limit at signal time
+# CASE-40: Historical cost-protection bps with execution-day limit anchor
 # ============================================================================
 
 CASE40_MODEL = {
@@ -3333,7 +3333,7 @@ CASE40_MODEL = {
 }
 
 
-def test_case40_01_market_signal_becomes_historical_limit_order():
+def test_case40_01_market_signal_freezes_historical_cost_bps_not_limit_price():
     from quant.features.backtest.entities import _BacktestOrderManager
 
     class DummyRisk:
@@ -3354,6 +3354,7 @@ def test_case40_01_market_signal_becomes_historical_limit_order():
         "600519": {
             "symbol": "600519",
             "close": 10.0,
+            "volume": 1_000_000,
             "adv20_value": 1_000_000.0,
             "volatility20": 0.04,
         }
@@ -3364,17 +3365,21 @@ def test_case40_01_market_signal_becomes_historical_limit_order():
 
     assert order_id is not None
     assert orders[0].order_type == "LIMIT"
-    assert orders[0].price == pytest.approx(10.011)
+    assert orders[0].price is None
+    assert orders[0].execution_cost_reference_price == pytest.approx(10.0)
+    assert orders[0].execution_cost_bps == pytest.approx(5.1897366596)
+    assert orders[0].execution_slippage_bps == pytest.approx(5.0)
+    assert orders[0].execution_impact_bps == pytest.approx(0.1897366596)
     assert orders[0].risk_check_price == pytest.approx(10.0)
 
 
-def test_case40_02_historical_limit_does_not_use_execution_day_cost_fields():
+def test_case40_02_execution_day_open_anchors_cost_protection_limit():
     data = _make_bars("600519", [
         (START, 10.0, 10.0, 1_000_000),
-        (START + timedelta(days=1), 10.02, 10.02, 1_000_000),
+        (START + timedelta(days=1), 10.05, 10.05, 1_000_000),
     ])
-    data["adv20_value"] = [1_000_000.0, 10_000.0]
-    data["volatility20"] = [0.04, 1.00]
+    data["adv20_value"] = [1_000_000.0, 1_000_000.0]
+    data["volatility20"] = [0.04, 0.04]
     config = {
         "backtest": {"slippage_bps": 5, "execution_cost_model": CASE40_MODEL},
         "execution": {"commission": {"CN": {"type": "percent", "percent": 0.0, "min_per_order": 0.0}}},
@@ -3392,8 +3397,74 @@ def test_case40_02_historical_limit_does_not_use_execution_day_cost_fields():
         symbols=["600519"],
     )
 
-    assert len(result.trades) == 0
-    assert result.diagnostics.rejection_counts.get("limit_not_marketable", 0) == 1
+    assert len(result.trades) == 1
+    assert result.trades[0].fill_price == pytest.approx(10.0501906853)
+    assert result.diagnostics.rejection_counts.get("limit_not_marketable", 0) == 0
+    observation = result.diagnostics.execution_observations[0]
+    assert observation["cost_protection_bps"] == pytest.approx(5.1897366596)
+    assert observation["cost_protection_limit"] == pytest.approx(10.0552156853)
+
+
+def test_case40_03_execution_day_open_anchors_sell_cost_protection_limit():
+    from quant.features.backtest.entities import BacktestDiagnostics, CommissionConfig
+    from quant.features.backtest.order_executor import execute_order
+    from quant.features.backtest.schemas import DeferredOrder
+    from quant.features.trading.portfolio import Portfolio
+
+    portfolio = Portfolio(initial_cash=100_000, currency="CNY")
+    portfolio.update_position(
+        "600519",
+        quantity=1000,
+        price=10.0,
+        cost=10_000.0,
+        trade_date=(START - timedelta(days=2)).date(),
+    )
+    order = DeferredOrder(
+        symbol="600519",
+        quantity=1000,
+        side="SELL",
+        order_type="LIMIT",
+        price=None,
+        strategy="Case40",
+        signal_date=START,
+        risk_check_price=10.0,
+        execution_cost_reference_price=10.0,
+        execution_cost_bps=5.0,
+        execution_slippage_bps=5.0,
+        execution_impact_bps=0.0,
+    )
+    bar = {
+        "symbol": "600519",
+        "timestamp": START + timedelta(days=1),
+        "open": 10.05,
+        "high": 10.10,
+        "low": 9.90,
+        "close": 10.0,
+        "volume": 1_000_000,
+    }
+    diag = BacktestDiagnostics()
+
+    trades = execute_order(
+        order,
+        portfolio,
+        "600519",
+        bar,
+        {},
+        {},
+        diag,
+        {},
+        {},
+        5,
+        CommissionConfig(CN={"type": "percent", "percent": 0.0, "min_per_order": 0.0}),
+        prev_bar={"close": 10.0},
+        execution_cost_model=CASE40_MODEL,
+    )
+
+    assert len(trades) == 1
+    assert trades[0].fill_price == pytest.approx(10.05)
+    observation = diag.execution_observations[0]
+    assert observation["cost_protection_limit"] == pytest.approx(10.044975)
+    assert observation["cost_protection_bps"] == pytest.approx(5.0)
 
 
 # ============================================================================

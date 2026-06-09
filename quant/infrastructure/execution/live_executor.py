@@ -20,6 +20,7 @@ class TargetOrder:
     side: str
     reference_price: float
     strategy_name: Optional[str] = None
+    execution_reference_price: Optional[float] = None
     max_cost_bps: Optional[float] = None
     deadline: Optional[datetime] = None
     signal_bar: Optional[Any] = None
@@ -30,7 +31,8 @@ class TargetOrder:
 class TargetState:
     target: TargetOrder
     order_id: Optional[str]
-    limit_price: float
+    limit_price: Optional[float]
+    cost_bps: float
     status: str
     submitted_at: datetime
 
@@ -64,6 +66,7 @@ class LiveExecutionManager:
         side: str,
         reference_price: float,
         strategy_name: Optional[str] = None,
+        execution_reference_price: Optional[float] = None,
     ) -> Optional[str]:
         return self.submit_target(TargetOrder(
             symbol=symbol,
@@ -71,27 +74,51 @@ class LiveExecutionManager:
             side=side,
             reference_price=reference_price,
             strategy_name=strategy_name,
+            execution_reference_price=execution_reference_price,
         ))
 
     def submit_target(self, target: TargetOrder) -> Optional[str]:
         target = self._with_default_deadline(target)
         target = self._with_signal_context(target)
         self._validate_target(target)
-        limit_price = self._cost_limit_price(target)
-        order_id = self.order_manager.submit_order(
-            target.symbol,
-            target.quantity,
-            target.side.upper(),
-            "LIMIT",
-            limit_price,
-            target.strategy_name,
-        )
+        estimate = self._cost_estimate(target)
+        metadata = self._signal_metadata(target, estimate)
+        if target.execution_reference_price is None:
+            if not self._record_pending_only():
+                return None
+            order_id = self.order_manager.submit_order(
+                target.symbol,
+                target.quantity,
+                target.side.upper(),
+                "LIMIT",
+                None,
+                target.strategy_name,
+                risk_price=target.reference_price,
+                signal_metadata=metadata,
+            )
+            limit_price = None
+        else:
+            limit_price = self._execution_limit_price(
+                target.side,
+                float(target.execution_reference_price),
+                estimate.cost_bps,
+            )
+            order_id = self.order_manager.submit_order(
+                target.symbol,
+                target.quantity,
+                target.side.upper(),
+                "LIMIT",
+                limit_price,
+                target.strategy_name,
+                signal_metadata=metadata,
+            )
         if order_id is not None:
             with self._lock:
                 self._targets[order_id] = TargetState(
                     target=target,
                     order_id=order_id,
                     limit_price=limit_price,
+                    cost_bps=estimate.cost_bps,
                     status="submitted",
                     submitted_at=self._clock(),
                 )
@@ -139,8 +166,8 @@ class LiveExecutionManager:
         with self._lock:
             return self._targets.get(order_id)
 
-    def _cost_limit_price(self, target: TargetOrder) -> float:
-        estimate = estimate_cost_protection_limit(
+    def _cost_estimate(self, target: TargetOrder):
+        return estimate_cost_protection_limit(
             symbol=target.symbol,
             side=target.side,
             quantity=target.quantity,
@@ -155,15 +182,39 @@ class LiveExecutionManager:
                 else float(target.max_cost_bps)
             ),
         )
-        return estimate.limit_price
+
+    def _signal_metadata(self, target: TargetOrder, estimate: Any) -> Dict[str, float]:
+        metadata: Dict[str, float] = {
+            "reference_price": float(estimate.reference_price),
+            "execution_cost_bps": float(estimate.cost_bps),
+            "execution_slippage_bps": float(estimate.slippage_bps),
+            "execution_impact_bps": float(estimate.impact_bps),
+        }
+        if target.execution_reference_price is not None:
+            metadata["execution_reference_price"] = float(target.execution_reference_price)
+        return metadata
+
+    @staticmethod
+    def _execution_limit_price(side: str, execution_reference_price: float, cost_bps: float) -> float:
+        side_text = side.upper()
+        if side_text == "BUY":
+            return float(execution_reference_price) * (1 + float(cost_bps) / 10000.0)
+        if side_text == "SELL":
+            return float(execution_reference_price) * (1 - float(cost_bps) / 10000.0)
+        raise ValueError(f"Unsupported order side: {side}")
 
     def _validate_target(self, target: TargetOrder) -> None:
         if target.quantity <= 0:
             raise ValueError("Target quantity must be positive")
         if target.reference_price <= 0:
             raise ValueError("Target reference_price must be positive")
+        if target.execution_reference_price is not None and target.execution_reference_price <= 0:
+            raise ValueError("Target execution_reference_price must be positive")
         if target.side.upper() not in ("BUY", "SELL"):
             raise ValueError(f"Unsupported order side: {target.side}")
+
+    def _record_pending_only(self) -> bool:
+        return bool(getattr(self.order_manager, "_record_pending_only", False))
 
     def _with_default_deadline(self, target: TargetOrder) -> TargetOrder:
         if target.deadline is not None or self.default_deadline is None:

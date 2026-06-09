@@ -1,7 +1,7 @@
 """Standalone research pipeline runner.
 
 Usage:
-    python quant/scripts/run_research.py [--mode discover|formal|full] [--source arxiv] [--max 5] [--threshold 6.0]
+    python quant/scripts/run_research.py [--mode discover|formal|scout_formal|full] [--source config] [--max 5] [--threshold 6.0]
 """
 import argparse
 import logging
@@ -17,8 +17,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger("run_research")
 
 
-_FULL_REPORT_MODES = {"full", "formal"}
-_BACKTEST_RUNNER_MODES = {"full", "formal", "strict", "walkforward"}
+_SCOUT_FORMAL_MODE = "scout_formal"
+_FULL_REPORT_MODES = {"full", "formal", _SCOUT_FORMAL_MODE}
+_BACKTEST_RUNNER_MODES = {"full", "formal", _SCOUT_FORMAL_MODE, "strict", "walkforward"}
 
 
 # =============================================================================
@@ -224,6 +225,47 @@ def _create_keyword_scout():
     return KeywordScout()
 
 
+def _create_configured_scout(config):
+    from quant.features.research.discovery.ashare_structural import AShareStructuralSource
+    from quant.features.research.discovery.source_hub import SourceHub
+    from quant.features.research.scout import StrategyScout
+    from quant.infrastructure.research.sources import (
+        ASharePublicForumSource,
+        ArxivSource,
+        BlogSource,
+        NBERSource,
+        SSRNSource,
+    )
+
+    scout_cfg = getattr(config, "scout_config", {}) or {}
+    source_hub = SourceHub(
+        {
+            "arxiv": ArxivSource(),
+            "ssrn": SSRNSource(),
+            "nber": NBERSource(),
+            "blog": BlogSource(),
+            "ashare_public_forum": ASharePublicForumSource(),
+            "ashare_structural": AShareStructuralSource(),
+        },
+        query_plan=scout_cfg.get("query_plan"),
+        quality_config=scout_cfg,
+    )
+    return StrategyScout.from_source_hub(
+        source_hub,
+        sources=getattr(config, "sources", None),
+        config=scout_cfg,
+    )
+
+
+def _resolve_source_arg(value: str, configured_sources):
+    text = str(value or "config").strip()
+    if text in ("config", "default", ""):
+        return list(configured_sources or [])
+    if text == "all":
+        return list(configured_sources or [])
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
 def _create_research_market_data(config):
     from quant.infrastructure.research.market_data import DuckDBResearchMarketData
 
@@ -295,6 +337,30 @@ def _apply_mode_defaults(config, mode: str, explicit_backtest: bool = False) -> 
         config.auto_backtest = True
 
 
+def _run_scout_stage_to_idea_bank(store, scout, config, status: str = "discovered") -> int:
+    rows = scout.search(sources=config.sources, max_results=config.max_results_per_source)
+    store.write_discoveries(rows)
+    for raw in rows:
+        store.upsert_idea(raw, status=status, reason="Research scout stage")
+    return len(rows)
+
+
+def _select_top_idea_ids_for_formal(store, statuses=None, max_ideas: int | None = None):
+    statuses = statuses or ["discovered"]
+    rows = store.list_ideas(statuses)
+    ranked = sorted(rows, key=lambda row: (-_idea_discovery_score(row), str(row.get("updated_at") or ""), str(row.get("title") or "")))
+    if max_ideas is not None:
+        ranked = ranked[: int(max_ideas)]
+    return [str(row.get("idea_id")) for row in ranked if row.get("idea_id")]
+
+
+def _idea_discovery_score(row) -> float:
+    try:
+        return float(((row.get("metadata") or {}).get("discovery_quality") or {}).get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _load_research_config():
     from quant.features.research.configuration import research_config_kwargs_from_data
     from quant.features.research.models import ResearchConfig
@@ -317,10 +383,10 @@ def main():
     parser.add_argument(
         "--mode",
         default="full",
-        choices=["full", "discover", "formal", "fast", "strict", "walkforward"],
+        choices=["full", "discover", "formal", "fast", "strict", "walkforward", "scout_formal", "scout-formal"],
         help="Pipeline mode",
     )
-    parser.add_argument("--source", default="arxiv", help="Source (arxiv, ssrn, all)")
+    parser.add_argument("--source", default="config", help="Source (config, all, arxiv, ssrn, nber, blog, ashare_public_forum, ashare_structural, or comma list)")
     parser.add_argument("--max", type=int, default=5, dest="max_results", help="Max results per source")
     parser.add_argument("--max-ideas", type=int, default=None, help="Max local ideas to research in formal mode")
     parser.add_argument("--idea-id", action="append", dest="idea_ids", help="Specific idea_bank id to research in formal mode")
@@ -354,7 +420,7 @@ def main():
 
     needs_backtest_runner = _mode_requires_backtest_runner(args.mode, explicit_backtest=args.backtest)
     config = _load_research_config()
-    config.sources = ["arxiv"] if args.source != "all" else ["arxiv"]
+    config.sources = _resolve_source_arg(args.source, config.sources)
     config.max_results_per_source = args.max_results
     config.evaluation_threshold = args.threshold
     config.validation_enabled = not args.no_validation
@@ -373,7 +439,7 @@ def main():
         store = DuckDBResearchStore(db_path=config.tracking_db_path, artifact_root=str(var_root))
     else:
         store = FileResearchStore(str(var_root))
-    scout = _create_keyword_scout()
+    scout = _create_configured_scout(config)
 
     if args.mode == "discover":
         evaluator = HeuristicEvaluator()
@@ -416,23 +482,39 @@ def main():
     print("=" * 70)
     print("  QUANT RESEARCH PIPELINE")
     print(f"  Mode: {args.mode}")
-    print(f"  Source: arXiv (keyword search, 6 queries) | Max/query: {args.max_results}")
+    print(f"  Sources: {', '.join(config.sources)} | Max/query: {args.max_results}")
     print(f"  Threshold: {args.threshold} | Evaluator: {'heuristic' if not args.no_heuristic else 'LLM'}")
     print(f"  Backtest runner: {'ON' if needs_backtest_runner else 'OFF'}")
     if needs_backtest_runner:
         print(f"  Walk-forward workers: {max(1, args.walkforward_workers)}")
     print("=" * 70)
 
-    if args.mode == "discover":
+    mode = _normalize_mode(args.mode)
+    if mode == "discover":
         result = engine.run_discovery_only()
-    elif args.mode == "fast":
+    elif mode == "fast":
         result = engine.run_fast_research_from_idea_bank(statuses=args.idea_statuses, idea_ids=args.idea_ids, max_ideas=args.max_ideas)
-    elif args.mode == "strict":
+    elif mode == "strict":
         result = engine.run_strict_backtest_stage(strategy_ids=args.strategy_ids, statuses=args.idea_statuses, max_strategies=args.max_ideas)
-    elif args.mode == "walkforward":
+    elif mode == "walkforward":
         result = engine.run_walkforward_audit_stage(strategy_ids=args.strategy_ids, statuses=args.idea_statuses, max_strategies=args.max_ideas)
-    elif args.mode == "formal":
+    elif mode == "formal":
         result = engine.run_formal_research_from_idea_bank(statuses=args.idea_statuses, idea_ids=args.idea_ids, max_ideas=args.max_ideas)
+    elif mode == _SCOUT_FORMAL_MODE:
+        scout_count = _run_scout_stage_to_idea_bank(store, scout, config)
+        formal_statuses = args.idea_statuses or ["discovered"]
+        max_gate_ideas = args.max_ideas if args.max_ideas is not None else args.max_results
+        formal_idea_ids = args.idea_ids or _select_top_idea_ids_for_formal(
+            store,
+            statuses=formal_statuses,
+            max_ideas=max_gate_ideas,
+        )
+        print(f"  Scout stage stored/updated: {scout_count}")
+        print(f"  Formal pre-full gate idea ids: {', '.join(formal_idea_ids) if formal_idea_ids else 'none'}")
+        if formal_idea_ids:
+            result = engine.run_formal_research_from_idea_bank(statuses=formal_statuses, idea_ids=formal_idea_ids)
+        else:
+            result = engine.run_formal_research_from_idea_bank(statuses=formal_statuses, max_ideas=0)
     else:
         result = engine.run_full_pipeline()
 

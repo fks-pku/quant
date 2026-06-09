@@ -1039,7 +1039,7 @@
     }
 
     function renderPendingOrdersTable(rows) {
-      const headers = ['Signal Date', 'Submit Date', 'Symbol', 'Side', 'Qty', 'Type', 'Limit', 'Status', 'Order ID', 'Reason'];
+      const headers = ['Signal Date', 'Submit Date', 'Symbol', 'Side', 'Qty', 'Type', 'Submit +bps', 'Status', 'Order ID', 'Reason'];
       const body = rows.length
         ? rows.slice().reverse().map(row => `<tr>${[
           escapeHtml(row.signal_date || String(row.timestamp || '').slice(0, 10)),
@@ -1048,7 +1048,7 @@
           escapeHtml(row.side),
           num(row.quantity, 0),
           escapeHtml(row.order_type),
-          num(row.price, 3),
+          submitBps(row),
           statusPill(row.display_status || row.status),
           escapeHtml(row.order_id),
           escapeHtml(row.reason || ''),
@@ -1140,6 +1140,13 @@
       if (!Number.isFinite(n)) return '-';
       const sign = n > 0 ? '+' : '';
       return `<span class="${n <= 0 ? 'pos' : 'neg'}">${sign}${n.toFixed(1)} bps</span>`;
+    }
+
+    function submitBps(row) {
+      if (row.cost_bps_display) return escapeHtml(row.cost_bps_display);
+      if (row.cost_bps !== null && row.cost_bps !== undefined) return escapeHtml(`+${Number(row.cost_bps).toFixed(1)} bps`);
+      if (row.execution_cost_bps !== null && row.execution_cost_bps !== undefined) return escapeHtml(`+${Number(row.execution_cost_bps).toFixed(1)} bps`);
+      return '-';
     }
 
     function initialCashText(value) {

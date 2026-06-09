@@ -151,6 +151,7 @@ class ResearchResult:
     validated_passed: int = 0
     walkforward_passed: int = 0
     ensemble_built: bool = False
+    full_report_allowed: bool = True
     run_id: Optional[str] = None
     errors: List[str] = field(default_factory=list)
     log: List[ResearchLogEntry] = field(default_factory=list)
@@ -169,6 +170,7 @@ class ResearchResult:
             "validated_passed": self.validated_passed,
             "walkforward_passed": self.walkforward_passed,
             "ensemble_built": self.ensemble_built,
+            "full_report_allowed": self.full_report_allowed,
             "run_id": self.run_id,
             "errors": self.errors,
             "log": [e.to_dict() for e in self.log],

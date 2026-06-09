@@ -3,6 +3,7 @@
 from __future__ import annotations
 import logging
 import math
+from dataclasses import replace
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 
@@ -194,6 +195,42 @@ def execution_price_field(order: "DeferredOrder") -> str:
     return "close" if order.execution_timing == EXECUTION_TIMING_SAME_CLOSE else "open"
 
 
+def _optional_non_negative_float(value: Any, symbol: str, label: str) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
+                                 f"{label}={value!r}")
+    if not math.isfinite(number) or number < 0:
+        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
+                                 f"{label}={value!r}")
+    return number
+
+
+def _execution_day_cost_limit_price(
+    order: "DeferredOrder",
+    reference_price: float,
+    order_type: str,
+) -> Optional[float]:
+    if order_type != "LIMIT" or order.price is not None:
+        return None
+    cost_bps = _optional_non_negative_float(
+        getattr(order, "execution_cost_bps", None),
+        order.symbol,
+        "execution_cost_bps",
+    )
+    if cost_bps is None:
+        return None
+    if order.side == "BUY":
+        return float(reference_price) * (1 + cost_bps / 10000.0)
+    if order.side == "SELL":
+        return float(reference_price) * (1 - cost_bps / 10000.0)
+    raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, order.symbol,
+                             f"side={order.side!r}")
+
+
 def execute_order(
     order: "DeferredOrder",
     portfolio: Any,
@@ -245,8 +282,25 @@ def execute_order(
             raise OrderRejectedError(OrderRejectionReason.PRICE_AT_LIMIT, symbol)
 
     order_type = (order.order_type or "MARKET").upper()
-    effective_slippage_bps = _model_slippage_bps(raw_execution_price, slippage_bps, market, execution_cost_model)
-    fill_price = resolve_base_fill_price(order, raw_execution_price, order_type, effective_slippage_bps, price_field)
+    cost_protection_limit = _execution_day_cost_limit_price(order, raw_execution_price, order_type)
+    execution_order = replace(order, price=cost_protection_limit) if cost_protection_limit is not None else order
+    protected_slippage_bps = _optional_non_negative_float(
+        getattr(order, "execution_slippage_bps", None),
+        symbol,
+        "execution_slippage_bps",
+    )
+    effective_slippage_bps = (
+        protected_slippage_bps
+        if protected_slippage_bps is not None
+        else _model_slippage_bps(raw_execution_price, slippage_bps, market, execution_cost_model)
+    )
+    fill_price = resolve_base_fill_price(
+        execution_order,
+        raw_execution_price,
+        order_type,
+        effective_slippage_bps,
+        price_field,
+    )
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
 
     risk_price = order.risk_check_price
@@ -276,18 +330,27 @@ def execute_order(
         diag.volume_limited_trades += 1
 
     base_fill_price = fill_price
-    impact_bps = compute_execution_impact(
-        quantity,
-        base_fill_price,
-        bar,
-        market,
-        execution_cost_model,
-        bar_volume,
-        market_impact_factor,
+    protected_impact_bps = _optional_non_negative_float(
+        getattr(order, "execution_impact_bps", None),
+        symbol,
+        "execution_impact_bps",
+    )
+    impact_bps = (
+        protected_impact_bps
+        if protected_impact_bps is not None
+        else compute_execution_impact(
+            quantity,
+            base_fill_price,
+            bar,
+            market,
+            execution_cost_model,
+            bar_volume,
+            market_impact_factor,
+        )
     )
     fill_price = apply_market_impact(base_fill_price, order.side, impact_bps)
     fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
-    enforce_limit_after_impact(order, fill_price, order_type)
+    enforce_limit_after_impact(execution_order, fill_price, order_type)
 
     adv_value = _execution_adv_value(bar, fill_price)
     if order.side == "BUY":
@@ -304,18 +367,22 @@ def execute_order(
         if final_adv_qty < quantity:
             quantity = final_adv_qty
             diag.volume_limited_trades += 1
-            impact_bps = compute_execution_impact(
-                quantity,
-                base_fill_price,
-                bar,
-                market,
-                execution_cost_model,
-                bar_volume,
-                market_impact_factor,
+            impact_bps = (
+                protected_impact_bps
+                if protected_impact_bps is not None
+                else compute_execution_impact(
+                    quantity,
+                    base_fill_price,
+                    bar,
+                    market,
+                    execution_cost_model,
+                    bar_volume,
+                    market_impact_factor,
+                )
             )
             fill_price = apply_market_impact(base_fill_price, order.side, impact_bps)
             fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
-            enforce_limit_after_impact(order, fill_price, order_type)
+            enforce_limit_after_impact(execution_order, fill_price, order_type)
             adv_value = _execution_adv_value(bar, fill_price)
 
     adv_quantity = _execution_adv_quantity(bar, fill_price)
@@ -338,6 +405,13 @@ def execute_order(
         "execution_timing": order.execution_timing,
         "execution_price_field": price_field,
     }
+    if cost_protection_limit is not None:
+        observation.update({
+            "cost_protection_bps": float(order.execution_cost_bps or 0.0),
+            "cost_protection_limit": float(cost_protection_limit),
+            "cost_protection_reference_price": float(raw_execution_price),
+            "cost_reference_price": float(order.execution_cost_reference_price or 0.0),
+        })
 
     if order.side == 'BUY':
         trades = _execute_buy(

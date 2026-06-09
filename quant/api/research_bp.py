@@ -3075,9 +3075,10 @@ def _make_rigor_hub(cfg: ResearchConfig, experiment_store=None):
 
 
 def _make_strategy_scout(cfg: ResearchConfig):
+    from quant.features.research.discovery.ashare_structural import AShareStructuralSource
     from quant.features.research.discovery.source_hub import SourceHub
     from quant.features.research.scout import StrategyScout
-    from quant.infrastructure.research.sources import ArxivSource, BlogSource, NBERSource, SSRNSource
+    from quant.infrastructure.research.sources import ASharePublicForumSource, ArxivSource, BlogSource, NBERSource, SSRNSource
 
     scout_cfg = getattr(cfg, "scout_config", {}) or {}
     source_hub = SourceHub({
@@ -3085,6 +3086,8 @@ def _make_strategy_scout(cfg: ResearchConfig):
         "ssrn": SSRNSource(),
         "nber": NBERSource(),
         "blog": BlogSource(),
+        "ashare_public_forum": ASharePublicForumSource(),
+        "ashare_structural": AShareStructuralSource(),
     }, query_plan=scout_cfg.get("query_plan"), quality_config=scout_cfg)
     return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None), config=scout_cfg)
 

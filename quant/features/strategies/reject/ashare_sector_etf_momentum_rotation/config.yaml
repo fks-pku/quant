@@ -1,0 +1,29 @@
+strategy:
+  name: ashare_sector_etf_momentum_rotation
+  enabled: false
+  status: candidate
+  priority: 1
+
+parameters:
+  momentum_lookback: 60
+  momentum_skip: 1
+  trend_window: 60
+  volatility_window: 20
+  liquidity_window: 20
+  min_avg_turnover: 20000000.0
+  min_momentum: 0.02
+  max_positions: 3
+  max_category_weight: 0.35
+  target_exposure: 0.95
+  lot_size: 100
+  holding_days: 20
+  volatility_floor: 0.01
+
+research:
+  thesis: "Rotate among CN-listed sector/theme ETFs using risk-adjusted intermediate momentum with trend and liquidity gates."
+  references:
+    - "https://bigquant.com/wiki/doc/DlXVSO3ZVu"
+    - "https://bigquant.com/square/paper/bb877968-2f1a-438a-bae8-6a89bdc04d08"
+    - "https://bigquant.com/square/paper/4ad7a69b-c6b0-4658-8c7e-5f395659576c"
+    - "https://onlinelibrary.wiley.com/doi/pdf/10.1111/0022-1082.00146"
+  data_risk: "Current local cn_etf_ohlcv sector ETF history is short for many symbols; promotion requires longer PIT ETF coverage."

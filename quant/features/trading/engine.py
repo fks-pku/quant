@@ -86,15 +86,21 @@ class Context(StrategyContext):
             if reference_price is None and callable(signal_reference):
                 reference_price = signal_reference(symbol)
             resolver = getattr(self, "execution_reference_resolver", None)
-            if reference_price is None and resolver is not None:
-                reference = resolver.resolve(symbol, side, strategy_price=price)
-                if reference is None:
-                    return None
-                reference_price = reference.price
+            execution_reference_price = None
+            if resolver is not None:
+                execution_reference = resolver.resolve(symbol, side)
+                if execution_reference is not None:
+                    execution_reference_price = execution_reference.price
             if reference_price is not None:
                 return self._execution_manager.submit_target_order(
-                    symbol, quantity, side, reference_price, strategy_name,
+                    symbol,
+                    quantity,
+                    side,
+                    reference_price,
+                    strategy_name,
+                    execution_reference_price=execution_reference_price,
                 )
+            return None
         if self.order_manager is None:
             return None
         return self.order_manager.submit_order(

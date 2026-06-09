@@ -6,6 +6,8 @@ research:
     - ssrn
     - nber
     - blog
+    - ashare_public_forum
+    - ashare_structural
   max_results_per_source: 10
   evaluation_threshold: 6.0
   backtest_sharpe_threshold: 0.5
@@ -24,6 +26,17 @@ research:
       parallel_workers: 4
       prefetch_data: false
   validation_config:
+    pre_full_gate_enabled: true
+    fast_gate_min_rank_ic: 0.02
+    fast_gate_min_top_bucket_after_cost_sharpe: 0.5
+    fast_gate_min_top_bucket_after_cost_annualized_return: 0.08
+    fast_gate_max_top_bucket_after_cost_drawdown: 0.50
+    fast_gate_min_benchmark_excess_after_cost_sharpe: 0.0
+    fast_gate_min_benchmark_excess_after_cost_annualized_return: 0.0
+    fast_gate_max_top_bucket_turnover: 0.35
+    fast_gate_min_rolling_oos_positive_pct: 0.55
+    fast_gate_min_rolling_oos_periods: 3
+    fast_gate_fail_on_high_ic_decay: false
     sensitivity_enabled: false
     sensitivity_lookback_grid: [10, 15, 20, 25, 30]
     sensitivity_horizon_grid: [1, 3, 5, 10, 21]
@@ -49,6 +62,8 @@ research:
       ssrn: 1.65
       nber: 1.55
       blog: 0.95
+      ashare_public_forum: 1.20
+      ashare_structural: 1.55
     query_plan:
       arxiv:
         - query: "trading strategy"
@@ -71,6 +86,13 @@ research:
       blog:
         - query: "daily momentum factor"
         - query: "mean reversion trading"
+      ashare_public_forum:
+        - query: "行业 轮动"
+        - query: "小市值"
+        - query: "多因子"
+      ashare_structural:
+        - query: "momentum"
+        - query: "mean_reversion"
   evaluation_config:
     min_admission_score: 6.0
     target_market: cn

@@ -352,6 +352,11 @@ class ResearchEngine:
         if self.config.auto_backtest and integrated_items:
             self._run_backtests(integrated_items, result)
 
+        if integrated_items or result.backtested > 0 or result.walkforward_passed > 0:
+            result.full_report_allowed = True
+        elif result.evaluated > 0:
+            result.full_report_allowed = False
+
         if getattr(self.config, "ensemble_enabled", False) and self._ensemble is not None:
             try:
                 candidate_ids = [
@@ -507,16 +512,24 @@ class ResearchEngine:
                     scores=gate_metrics,
                 ))
                 evaluation_rows.append((raw, report, "validation_failed", gate_reason))
+                if self._pre_full_gate_enabled():
+                    result.rejected += 1
+                    result.full_report_allowed = False
+                    record_reason = gate_reason
+                else:
+                    record_reason = f"{gate_reason}; continuing full research for audit"
                 self._record_hypothesis(
                     raw,
                     status="validation_failed",
                     stage="stage2_validation",
-                    reason=f"{gate_reason}; continuing full research for audit",
+                    reason=record_reason,
                     report=report,
                     validation_report=vreport,
                     strategy_spec=strategy_spec,
                 )
-                self._upsert_idea(raw, "validation_failed", f"{gate_reason}; continuing full research for audit")
+                self._upsert_idea(raw, "validation_failed", record_reason)
+                if self._pre_full_gate_enabled():
+                    return None
             else:
                 result.validated_passed += 1
                 result.log.append(ResearchLogEntry(
@@ -581,6 +594,10 @@ class ResearchEngine:
         )
         self._upsert_idea(raw, "error", "Integration failed")
         return None
+
+    def _pre_full_gate_enabled(self) -> bool:
+        cfg = dict(getattr(self.config, "validation_config", {}) or {})
+        return bool(cfg.get("pre_full_gate_enabled", True))
 
     def _admission_rejection_reason(self, report: Any, evaluation_score: float) -> str:
         reason_parts = [

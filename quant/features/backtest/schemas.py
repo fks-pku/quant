@@ -1,6 +1,6 @@
 """Type shapes for backtest engine internal data — zero runtime overhead, IDE auto-complete only.
 
-DeferredOrder is a frozen dataclass (was TypedDict). All fields required except risk_check_price.
+DeferredOrder is a frozen dataclass (was TypedDict). Cost-protection fields are optional.
 """
 
 from __future__ import annotations
@@ -30,6 +30,10 @@ class DeferredOrder:
     signal_date: datetime
     risk_check_price: float = 0.0
     execution_timing: str = EXECUTION_TIMING_NEXT_OPEN
+    execution_cost_reference_price: Optional[float] = None
+    execution_cost_bps: Optional[float] = None
+    execution_slippage_bps: Optional[float] = None
+    execution_impact_bps: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.side not in ("BUY", "SELL"):

@@ -212,6 +212,46 @@ class TestDiscoveryQuality:
         assert "daily_ohlcv" in report.matched_terms
         assert report.score >= 7.0
 
+    def test_chinese_low_frequency_forum_idea_scores_as_daily_a_share_research(self):
+        from datetime import date
+        from quant.features.research.discovery.quality import score_discovery
+
+        raw = _make_raw(
+            title="A股行业轮动策略",
+            description=(
+                "公开论坛策略：使用日线收盘价、成交量和申万行业分类，"
+                "按行业动量、拥挤度和换手率筛选强势行业，20个交易日换仓，"
+                "适合A股股票或ETF低频研究，需要交易成本和容量检验。"
+            ),
+            source="bigquant",
+            source_url="https://bigquant.com/wiki/doc/example",
+            authors="BigQuant Community",
+            published_date="2026-03-28",
+        )
+
+        report = score_discovery(raw, as_of=date(2026, 6, 8))
+
+        assert report.source_type == "practitioner_community"
+        assert "daily_ohlcv" in report.matched_terms
+        assert "momentum" in report.matched_terms
+        assert "cost_aware" in report.matched_terms
+        assert "liquid_equity" in report.matched_terms
+        assert report.score >= 7.0
+
+
+class TestASharePublicForumSource:
+    def test_public_forum_source_returns_bigquant_and_joinquant_seed_ideas(self):
+        from quant.infrastructure.research.sources import ASharePublicForumSource
+
+        source = ASharePublicForumSource(fetch_page_excerpt=False)
+
+        results = source.search({"query": "行业 轮动"}, max_results=10)
+
+        assert any(row["source"] == "bigquant" and "行业轮动" in row["title"] for row in results)
+        assert any(row["source"] == "joinquant" for row in source.search({"query": "小市值"}, max_results=10))
+        assert all(row["metadata"]["source_family"] == "ashare_public_forum" for row in results)
+        assert all(row["metadata"]["requires_manual_replication"] is True for row in results)
+
 
 class TestArxivSourceQuery:
     def test_phrase_query_is_tokenized_and_category_can_be_overridden(self):

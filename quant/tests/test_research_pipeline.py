@@ -1443,6 +1443,22 @@ def test_research_engine_discovery_only_stores_idea_bank_without_evaluation():
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
+def test_idea_scout_does_not_downgrade_researched_idea_status():
+    tmp_path = _test_root()
+    try:
+        research_store = FileResearchStore(tmp_path / "research")
+        raw = _raw_strategy()
+
+        research_store.upsert_idea(raw, status="validation_failed", reason="Rank IC passed but portfolio gate failed")
+        research_store.upsert_idea(raw, status="discovered", reason="Rediscovered by scout")
+        idea = research_store.list_ideas()[0]
+
+        assert idea["status"] == "validation_failed"
+        assert idea["reason"] == "Rank IC passed but portfolio gate failed"
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
 def test_research_engine_formal_research_loads_local_idea_bank_without_scouting():
     tmp_path = _test_root()
 
@@ -2500,21 +2516,22 @@ def test_fast_validation_gate_fails_weak_after_cost_portfolio_diagnostics():
 
         result = engine.run_full_pipeline()
 
-        candidate = research_store.get_candidate("daily_momentum_breakout")
         hypothesis = research_store.list_hypotheses()[0]
-        gate = candidate["research_meta"]["validation_gate"]
-        assert result.integrated == 1
+        idea = research_store.list_ideas()[0]
+        assert research_store.get_candidate("daily_momentum_breakout") is None
+        assert result.integrated == 0
+        assert result.rejected == 1
         assert result.validated_passed == 0
-        assert gate["status"] == "failed"
-        assert "top_bucket_after_cost_sharpe" in gate["reason"]
-        assert gate["metrics"]["top_bucket_after_cost_max_drawdown"] == pytest.approx(-0.75)
-        assert gate["metrics"]["rolling_oos_positive_pct"] == pytest.approx(1 / 3)
-        assert hypothesis["metrics"]["research_stage_conclusions"]["fast_research"]["verdict"] == "fail"
+        assert hypothesis["status"] == "validation_failed"
+        assert hypothesis["stage"] == "stage2_validation"
+        assert "top_bucket_after_cost_sharpe" in hypothesis["decision_reason"]
+        assert hypothesis["metrics"]["portfolio_diagnostics"]["top_bucket_after_cost_max_drawdown"] == pytest.approx(-0.75)
+        assert idea["status"] == "validation_failed"
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
-def test_research_engine_continues_after_negative_rank_ic_direction():
+def test_research_engine_stops_before_integration_after_negative_rank_ic_direction():
     class FixedScout:
         def search(self, sources=None, max_results=10):
             return [_raw_strategy()]
@@ -2579,13 +2596,13 @@ def test_research_engine_continues_after_negative_rank_ic_direction():
 
     result = engine.run_full_pipeline()
 
-    assert result.integrated == 1
-    assert result.rejected == 0
-    assert integrator.called is True
+    assert result.integrated == 0
+    assert result.rejected == 1
+    assert integrator.called is False
     assert any(entry.phase == "stage2_validation" and entry.verdict == "fail" for entry in result.log)
 
 
-def test_validation_failed_strategy_runs_backtest_then_archives_to_rejected_strategy():
+def test_validation_failed_strategy_stops_before_backtest_and_full_report():
     tmp_path = _test_root()
 
     class FixedScout:
@@ -2630,7 +2647,10 @@ def test_validation_failed_strategy_runs_backtest_then_archives_to_rejected_stra
                 n_observations=120,
             )
 
+    backtest_called = {"value": False}
+
     def record_backtest(sid, result, config, integrator, pool):
+        backtest_called["value"] = True
         result.backtested += 1
 
     try:
@@ -2648,29 +2668,26 @@ def test_validation_failed_strategy_runs_backtest_then_archives_to_rejected_stra
 
         result = engine.run_full_pipeline()
 
-        candidate = research_store.get_candidate("daily_momentum_breakout")
         hypothesis = research_store.list_hypotheses()[0]
         idea = research_store.list_ideas()[0]
-        assert result.integrated == 1
-        assert result.backtested == 1
-        assert result.rejected == 1
-        assert candidate["status"] == "rejected"
-        assert candidate["research_meta"]["validation_gate"]["status"] == "failed"
-        assert candidate["research_meta"]["rejected_strategy_dir"].endswith(
-            "rejected_strategy/daily_momentum_breakout"
+        metadata = json.loads(
+            (tmp_path / "research" / "reports" / "latest" / "metadata.json").read_text(encoding="utf-8")
         )
+        assert result.integrated == 0
+        assert result.backtested == 0
+        assert result.rejected == 1
+        assert backtest_called["value"] is False
+        assert research_store.get_candidate("daily_momentum_breakout") is None
         assert not (tmp_path / "strategies" / "daily_momentum_breakout" / "strategy.py").exists()
-        assert (tmp_path / "rejected_strategy" / "daily_momentum_breakout" / "strategy.py").exists()
-        assert hypothesis["status"] == "rejected"
-        assert hypothesis["stage"] == "go_no_go"
+        assert not (tmp_path / "rejected_strategy" / "daily_momentum_breakout" / "strategy.py").exists()
+        assert hypothesis["status"] == "validation_failed"
+        assert hypothesis["stage"] == "stage2_validation"
         assert "Validation failed" in hypothesis["decision_reason"]
-        assert "strict Backtester executed for audit" in hypothesis["decision_reason"]
-        stages = hypothesis["metrics"]["research_stage_conclusions"]
-        assert stages["fast_research"]["verdict"] == "fail"
-        assert stages["strict_backtest"]["verdict"] == "warn"
-        assert stages["walkforward_strict_audit"]["verdict"] == "not_run"
-        assert stages["final_decision"]["verdict"] == "fail"
-        assert idea["status"] == "rejected"
+        assert "strict Backtester executed for audit" not in hypothesis["decision_reason"]
+        assert idea["status"] == "validation_failed"
+        assert (tmp_path / "research" / "reports" / "latest" / "fast_research_report.html").exists()
+        assert not (tmp_path / "research" / "reports" / "latest" / "full_research_report.html").exists()
+        assert metadata["full_report"]["available"] is False
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -3124,7 +3141,7 @@ def test_api_load_research_config_reads_feature_yaml():
 
     cfg = research_module._load_research_config()
 
-    assert cfg.sources == ["arxiv", "ssrn", "nber", "blog"]
+    assert cfg.sources == ["arxiv", "ssrn", "nber", "blog", "ashare_public_forum", "ashare_structural"]
     assert cfg.default_backtest_start == "2016-01-01"
     assert cfg.default_backtest_end == "2026-05-31"
     assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
@@ -3851,10 +3868,94 @@ def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
 
 
+def test_cli_make_strategy_scout_uses_configured_source_hub():
+    from quant.features.research.models import ResearchConfig
+    from quant.scripts import run_research as cli
+
+    cfg = ResearchConfig(
+        sources=["ashare_public_forum"],
+        scout_config={
+            "rank_results": True,
+            "query_plan": {"ashare_public_forum": [{"query": "行业 轮动"}]},
+        },
+    )
+
+    scout = cli._create_configured_scout(cfg)
+
+    assert scout._source_hub is not None
+    assert scout._hub_sources == ["ashare_public_forum"]
+    assert scout._source_hub._sources["ashare_public_forum"].__class__.__name__ == "ASharePublicForumSource"
+
+
+def test_cli_select_top_idea_ids_for_scout_formal_uses_discovery_score(tmp_path):
+    from quant.scripts import run_research as cli
+
+    store = FileResearchStore(tmp_path / "research")
+    low = RawStrategy(
+        title="Low Score",
+        description="Daily OHLCV factor.",
+        source="test",
+        source_url="https://example.test/low",
+        metadata={"discovery_quality": {"score": 5.0}},
+    )
+    high = RawStrategy(
+        title="High Score",
+        description="Daily OHLCV factor.",
+        source="test",
+        source_url="https://example.test/high",
+        metadata={"discovery_quality": {"score": 9.0}},
+    )
+    failed = RawStrategy(
+        title="Failed Score",
+        description="Daily OHLCV factor.",
+        source="test",
+        source_url="https://example.test/failed",
+        metadata={"discovery_quality": {"score": 10.0}},
+    )
+    store.upsert_idea(low, status="discovered", reason="seed")
+    store.upsert_idea(high, status="discovered", reason="seed")
+    store.upsert_idea(failed, status="validation_failed", reason="failed")
+
+    selected = cli._select_top_idea_ids_for_formal(store, statuses=["discovered"], max_ideas=1)
+
+    assert selected == [store.list_ideas("discovered")[1]["idea_id"]]
+
+
+def test_low_frequency_idea_scout_writes_idea_bank_and_summary(tmp_path):
+    from quant.features.research.models import ResearchConfig
+    from quant.scripts.run_low_frequency_idea_scout import run_scout
+
+    cfg = ResearchConfig(
+        sources=["ashare_public_forum"],
+        max_results_per_source=5,
+        scout_config={
+            "rank_results": True,
+            "min_discovery_score": 5.0,
+            "required_match_terms": ["daily_ohlcv"],
+            "query_plan": {"ashare_public_forum": [{"query": "行业 轮动"}]},
+        },
+    )
+
+    summary = run_scout(
+        cfg,
+        research_root=tmp_path,
+        sources=["ashare_public_forum"],
+        status="discovered",
+        max_results=5,
+        summary_name="test_low_frequency_scout",
+    )
+
+    assert summary["stored"] >= 1
+    assert summary["source_counts"]["bigquant"] >= 1
+    assert (tmp_path / "idea_bank" / "idea_bank.json").exists()
+    assert (tmp_path / "idea_bank" / "test_low_frequency_scout.json").exists()
+    assert (tmp_path / "idea_bank" / "test_low_frequency_scout.md").exists()
+
+
 def test_cli_full_and_formal_modes_enable_full_report_execution_defaults():
     from quant.scripts import run_research as cli
 
-    for mode in ("full", "formal"):
+    for mode in ("full", "formal", "scout_formal"):
         cfg = ResearchConfig(auto_backtest=False, rigor_enabled=False)
         cli._apply_mode_defaults(cfg, mode)
 

@@ -914,16 +914,16 @@ def _cost_capacity_summary_table(data: Dict[str, Any], rows: List[Dict[str, Any]
     capacity = strict.get("capacity") or {}
     execution_cost_bps = strict.get("execution_cost_bps") or {}
     values = [
-        ("显式佣金税费", _money(diagnostics.get("total_commission")), "只含佣金/税费；滑点和冲击体现在成交价。"),
+        ("显式佣金税费", _money(diagnostics.get("total_commission")), "只含佣金/税费；滑点/冲击 bps 是 D 日冻结的限价保护预算。"),
         ("成本拖累", _pct(_cost_drag_value(diagnostics)), "显式成本相对交易毛 PnL 的拖累。"),
         ("ADV 参与率", f"p95={_pct(capacity.get('p95_adv_participation'))}; max={_pct(capacity.get('max_adv_participation'))}", "当前 checklist 使用单笔 max ADV <= 5%。"),
         ("估算资金容量", _capacity_at_adv_limit(capacity, strict, 0.05), "按最大 ADV 参与率反推，超过后单笔订单会触及 5% ADV。"),
         (
             "有效成本 BPS",
             f"weighted={_fmt(execution_cost_bps.get('weighted_effective_bps'))} bps; median={_fmt(execution_cost_bps.get('median_effective_bps'))} bps",
-            "来自执行观测的 slippage_bps + impact_bps，不含显式佣金/税费。",
+            "来自执行观测的 D 日冻结 slippage_bps + impact_bps；D+1 用 open/reference 派生 BUY/SELL 限价。",
         ),
-        ("冲击成本", f"max impact={_fmt(capacity.get('max_impact_bps'))} bps", "来自执行冲击模型。"),
+        ("冲击成本", f"max impact={_fmt(capacity.get('max_impact_bps'))} bps", "来自 D 日可见流动性/波动率估算，执行日不重算成本 bps。"),
     ]
     body = "".join(
         f"<tr><td>{escape(label)}</td><td>{escape(value)}</td><td>{escape(note)}</td></tr>"
@@ -1507,12 +1507,12 @@ def _stage_conclusions_for_report(data: Dict[str, Any], row: Dict[str, Any]) -> 
         {
             "label": "快研究",
             "verdict": (
-                _signal_badge_class(metrics)
+                _fast_research_badge_class(metrics, row)
                 if metrics.get("rank_ic") is not None
                 else ("fail" if _uses_cross_sectional_fast_validation(row) else "n/a")
             ),
             "conclusion": (
-                _signal_validation_summary(metrics, row)
+                _fast_research_summary(metrics, row)
                 if metrics.get("rank_ic") is not None
                 else _signal_validation_summary(metrics, row)
             ),
@@ -2259,13 +2259,13 @@ def _strict_execution_constraint_table(data: Dict[str, Any], rows: List[Dict[str
     values = [
         ("成交延迟", "T+1" if constraints.get("t_plus_1", True) else "按配置", "信号在 t 日收盘后生成，t+1 开盘尝试成交。"),
         ("手数约束", f"CN lot size={constraints.get('cn_lot_size', 100)}", "A 股/ETF 买入按整手约束；卖出按引擎可卖数量处理。"),
-        ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "市场单成交价按方向加入固定滑点；若有冲击模型则继续调整。"),
+        ("滑点/限价保护", f"{constraints.get('slippage_bps', 5)} bps", "启用 execution_cost_model 时，D 日只冻结成本保护 bps；t+1 用 open/reference 派生 BUY/SELL 限价。"),
         ("佣金", _join_text(constraints.get("commission") or {}), "股票与 ETF/LOF 费率按品种路由。"),
         ("成交量/涨跌停/停牌", str(constraints.get("volume_limit") or "由 Backtester execution diagnostics 记录"), "无法成交或超约束的订单会进入诊断而不是强制成交。"),
     ]
     model = constraints.get("execution_cost_model")
     if model:
-        values.append(("冲击成本模型", _execution_cost_model_text(model), "小市值或容量敏感策略使用更严格的成交冲击假设。"))
+        values.append(("冲击成本模型", _execution_cost_model_text(model), "用 D 日可见流动性和波动率估算成本保护 bps；执行日只提供 open/reference 锚。"))
     body = [
         "<tr>"
         + f"<td>{escape(label)}</td>"
@@ -2313,8 +2313,8 @@ def _backtest_config_contract_table(data: Dict[str, Any], rows: List[Dict[str, A
         ("默认目标总仓位", target_exposure, "研究生成策略默认满仓；按持仓数等权分配"),
         ("调仓频率", strict.get("rebalance_frequency") or "daily signal with holding horizon gate", "影响换手"),
         ("退市风险护栏", guard_text, "买入过滤低价/低流动性/非上市状态，持仓风险每日尝试退出"),
-        ("滑点", f"{constraints.get('slippage_bps', 5)} bps", "默认配置"),
-        ("执行成本模型", _execution_cost_model_text(constraints.get("execution_cost_model")), "小市值策略不应只依赖固定滑点"),
+        ("滑点/限价保护", f"{constraints.get('slippage_bps', 5)} bps", "D 日冻结成本保护 bps，D+1 用 open/reference 派生限价"),
+        ("执行成本模型", _execution_cost_model_text(constraints.get("execution_cost_model")), "小市值策略不应只依赖固定滑点；成本 bps 不得用执行日 ADV/波动率重算"),
         ("佣金", _commission_text(constraints.get("commission")), "股票按 A 股费率；ETF/LOF 按 fund_percent/fund_min_per_order 且不收股票印花税"),
         ("T+1", "启用" if constraints.get("t_plus_1", True) else "未启用", "当日买入不可卖出"),
         ("100 股手数", "启用" if constraints.get("cn_lot_size", 100) else "未启用", "A 股下单约束"),
@@ -3863,6 +3863,61 @@ def _signal_badge_class(metrics: Dict[str, Any]) -> str:
     if rank_ic > 0:
         return "warn"
     return "fail"
+
+
+def _fast_research_badge_class(metrics: Dict[str, Any], row: Dict[str, Any]) -> str:
+    if str(row.get("status") or "") == "validation_failed":
+        return "fail"
+    if str(row.get("stage") or "") == "stage2_validation" and str(row.get("decision_reason") or "").startswith("Validation failed"):
+        return "fail"
+    portfolio_verdict = _portfolio_prefull_gate_badge(metrics.get("portfolio_diagnostics") or {})
+    if portfolio_verdict == "fail":
+        return "fail"
+    signal_verdict = _signal_badge_class(metrics)
+    if portfolio_verdict == "warn" and signal_verdict == "pass":
+        return "warn"
+    return signal_verdict
+
+
+def _portfolio_prefull_gate_badge(diagnostics: Dict[str, Any]) -> str:
+    if not diagnostics:
+        return "warn"
+    failures = []
+    top_sharpe = _safe_float(diagnostics.get("top_bucket_after_cost_sharpe"))
+    top_return = _safe_float(diagnostics.get("top_bucket_after_cost_annualized_return"))
+    top_drawdown = _safe_float(diagnostics.get("top_bucket_after_cost_max_drawdown"))
+    excess_sharpe = _safe_float(diagnostics.get("benchmark_excess_after_cost_sharpe"))
+    excess_return = _safe_float(diagnostics.get("benchmark_excess_after_cost_annualized_return"))
+    if top_sharpe is not None and top_sharpe < 0.5:
+        failures.append("top_sharpe")
+    if top_return is not None and top_return < 0.08:
+        failures.append("top_return")
+    if top_drawdown is not None and abs(top_drawdown) > 0.5:
+        failures.append("top_drawdown")
+    if excess_sharpe is not None and excess_sharpe < 0.0:
+        failures.append("excess_sharpe")
+    if excess_return is not None and excess_return < 0.0:
+        failures.append("excess_return")
+    rolling_oos = diagnostics.get("rolling_oos") or []
+    if isinstance(rolling_oos, list):
+        returns = [
+            _safe_float(row.get("annualized_return"))
+            for row in rolling_oos
+            if isinstance(row, dict)
+        ]
+        returns = [value for value in returns if value is not None]
+        if len(returns) >= 3 and sum(1 for value in returns if value > 0.0) / len(returns) < 0.55:
+            failures.append("rolling_oos")
+    return "fail" if failures else "pass"
+
+
+def _fast_research_summary(metrics: Dict[str, Any], row: Dict[str, Any]) -> str:
+    reason = str(row.get("decision_reason") or "")
+    if str(row.get("status") or "") == "validation_failed" and reason:
+        return reason
+    if str(row.get("stage") or "") == "stage2_validation" and reason.startswith("Validation failed"):
+        return reason
+    return _signal_validation_summary(metrics, row)
 
 
 def _has_signal_validation_metrics(metrics: Dict[str, Any]) -> bool:

@@ -118,7 +118,9 @@ def test_strategy_dashboard_payload_reads_live_records_positions_and_controls(tm
                 "side": "SELL",
                 "quantity": 200,
                 "order_type": "LIMIT",
-                "price": 12.34,
+                "price": None,
+                "reference_price": 12.34,
+                "execution_cost_bps": 25.0,
                 "status": "accepted",
                 "submit_date": date.today().isoformat(),
             },
@@ -223,6 +225,7 @@ def test_strategy_dashboard_payload_reads_live_records_positions_and_controls(tm
     assert strategy["live"]["records"]["pending_orders"][0]["order_id"] == "CLIENT-2"
     assert strategy["live"]["records"]["pending_orders"][0]["signal_date"] == "2026-06-03"
     assert strategy["live"]["records"]["pending_orders"][0]["submit_date"] == date.today().isoformat()
+    assert strategy["live"]["records"]["pending_orders"][0]["cost_bps_display"] == "+25.0 bps"
     assert strategy["live"]["records"]["pending_orders"][0]["display_status"] == "pending_submit"
     assert strategy["live"]["holdings"]["items"][0]["current_price"] == 11.0
     assert strategy["live"]["holdings"]["items"][0]["price_date"] == "2026-06-03"
@@ -662,12 +665,72 @@ def test_strategy_dashboard_pending_orders_default_to_next_trading_date(tmp_path
     assert pending[0]["submit_date"] == "2026-06-08"
 
 
+def test_strategy_dashboard_pending_orders_display_cost_bps_instead_of_limit(tmp_path):
+    pending = _pending_submit_orders(
+        tmp_path,
+        [{
+            "order_id": "SIGNAL-1",
+            "order_type": "LIMIT",
+            "price": None,
+            "reference_price": 10.0,
+            "execution_cost_bps": 25.0,
+            "quantity": 100,
+            "side": "BUY",
+            "status": "accepted",
+            "strategy_name": "DemoStrategy",
+            "symbol": "600000",
+            "timestamp": "2026-06-05T15:00:00",
+        }],
+        [],
+        [],
+        as_of_date="2026-06-08",
+    )
+
+    assert pending[0]["cost_bps"] == pytest.approx(25.0)
+    assert pending[0]["cost_bps_display"] == "+25.0 bps"
+    assert pending[0]["price"] is None
+
+
+def test_strategy_dashboard_pending_orders_backfill_submit_bps_from_legacy_limit_price(tmp_path):
+    db_path = tmp_path / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_daily_ohlc(db_path, "510300", "2026-06-05", 9.9, 10.0)
+
+    pending = _pending_submit_orders(
+        tmp_path,
+        [{
+            "order_id": "LEGACY-SIGNAL-1",
+            "order_type": "LIMIT",
+            "price": 10.025,
+            "quantity": 100,
+            "side": "BUY",
+            "status": "accepted",
+            "strategy_name": "DemoStrategy",
+            "symbol": "510300",
+            "timestamp": "2026-06-05T15:00:00",
+        }],
+        [],
+        [],
+        as_of_date="2026-06-08",
+    )
+
+    assert pending[0]["cost_bps"] == pytest.approx(25.0)
+    assert pending[0]["cost_bps_display"] == "+25.0 bps"
+
+
 def test_strategy_dashboard_renders_only_state_appropriate_mode_actions():
     html = Path(".codex/strategy_dashboard.html").read_text(encoding="utf-8")
 
     assert "function renderModeActions(configured, controlState, mode)" in html
     assert "controlState === 'stopped' || controlState === 'liquidating'" in html
     assert "controlState === 'running'" in html
+
+
+def test_strategy_dashboard_pending_table_renders_submit_bps_column():
+    html = Path(".codex/strategy_dashboard.html").read_text(encoding="utf-8")
+
+    assert "['Signal Date', 'Submit Date', 'Symbol', 'Side', 'Qty', 'Type', 'Submit +bps', 'Status', 'Order ID', 'Reason']" in html
+    assert "submitBps(row)" in html
     assert "controlState === 'paused'" in html
     assert "not configured in ${escapeHtml(modeLabel(mode))}" in html
     assert "already started" in html
@@ -737,7 +800,7 @@ def test_strategy_dashboard_serves_live_and_paper_subpages(tmp_path):
 
 def test_strategy_dashboard_launcher_opens_current_port_and_restarts_stale_payload():
     script = Path("quant/scripts/open_strategy_dashboard.ps1").read_text(encoding="utf-8")
-    shortcut = Path("打开实盘管理看板.cmd").read_text(encoding="utf-8")
+    shortcut = Path("策略管理看板.cmd").read_text(encoding="utf-8")
 
     assert "[int]$Port = 8791" in script
     assert "-Port 8791" in shortcut

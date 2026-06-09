@@ -314,7 +314,8 @@ class DuckDBResearchStore(ResearchStore):
         self._delete_file(report_root / "full_research_report.md")
         self._delete_file(LATEST_REPORT_DIR / "full_research_report.md")
         full_metadata = {"available": False}
-        if hypotheses:
+        full_report_allowed = bool(data.get("full_report_allowed", True))
+        if hypotheses and full_report_allowed:
             full_report = build_research_full_report_html(data, hypotheses, generated_at=data["saved_at"])
             self._write_text(report_root / FULL_REPORT_HTML, full_report)
             self._write_text(latest_full_report_html_path(), full_report)
@@ -583,7 +584,7 @@ class DuckDBResearchStore(ResearchStore):
 
     @staticmethod
     def _merged_idea_status(existing_status: str, new_status: str) -> str:
-        terminal = {"candidate", "rejected", "stage1_rejected", "needs_manual_spec", "error"}
+        terminal = {"candidate", "validated", "validation_failed", "rejected", "stage1_rejected", "needs_manual_spec", "error"}
         non_terminal = {"discovered", "skipped", "research_queue"}
         if existing_status in terminal and new_status in non_terminal:
             return existing_status
