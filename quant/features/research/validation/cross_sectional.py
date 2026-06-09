@@ -70,7 +70,7 @@ def compute_ic_decay(
 ) -> List[Tuple[int, float]]:
     decay = []
     for horizon in horizons:
-        forward_returns = prices.pct_change(horizon).shift(-horizon - execution_lag)
+        forward_returns = prices.pct_change(horizon, fill_method=None).shift(-horizon - execution_lag)
         daily_ic = compute_cross_sectional_ic(signals, forward_returns, min_stocks=min_stocks)
         valid = daily_ic.dropna()
         decay.append((int(horizon), float(valid.mean()) if not valid.empty else 0.0))

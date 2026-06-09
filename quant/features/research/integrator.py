@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from quant.analytics.signal_kernels import SUPPORTED_FORMULAS, uses_positive_signal_filter
 from quant.domain.ports.research_store import ResearchStore
 from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, RawStrategy, EvaluationReport, StrategySpec
 
@@ -70,6 +71,35 @@ class StrategyIntegrator:
             self.research_store.upsert_candidate(entry)
         return name
 
+    def write_screening_source(
+        self,
+        raw: RawStrategy,
+        report: EvaluationReport,
+        spec: Optional[StrategySpec] = None,
+    ) -> Optional[Path]:
+        if spec is None or getattr(spec, "status", "") != "ready":
+            return None
+        name = self._strategy_id(raw, spec)
+        strategy_dir = self.strategies_dir / "reject" / name
+        try:
+            strategy_dir.mkdir(parents=True, exist_ok=True)
+            code = self._generate_strategy_code(name, raw, report, spec)
+            strategy_file = strategy_dir / "strategy.py"
+            if not strategy_file.exists() or strategy_file.read_text(encoding="utf-8") != code:
+                strategy_file.write_text(code, encoding="utf-8")
+            readme = self._generate_readme(raw, report, spec)
+            readme_file = strategy_dir / "README.md"
+            if not readme_file.exists() or readme_file.read_text(encoding="utf-8") != readme:
+                readme_file.write_text(readme, encoding="utf-8")
+            config = self._generate_config(raw, report, spec)
+            config_file = strategy_dir / "config.yaml"
+            if not config_file.exists() or config_file.read_text(encoding="utf-8") != config:
+                config_file.write_text(config, encoding="utf-8")
+            return strategy_file
+        except Exception as e:
+            logger.warning(f"Failed to write screening strategy source for {name}: {e}")
+            return None
+
     def get_registry_entry(self, strategy_id: str) -> Optional[Dict[str, Any]]:
         """Return the registry entry for strategy_id, or None."""
         for info in self._registry.values():
@@ -125,14 +155,7 @@ class StrategyIntegrator:
         horizon = int(getattr(spec, "horizon_days", 5) or 5)
         formula_key = getattr(spec, "signal_formula_key", "") or ""
         body = self._formula_body(formula_key)
-        rebalance_body = "" if formula_key in {
-            "worldquant_alpha_001",
-            "worldquant_alpha_002",
-            "worldquant_alpha_003",
-            "worldquant_alpha_004",
-            "worldquant_alpha_006",
-            "worldquant_alpha_010",
-        } else self._generic_rebalance_body()
+        rebalance_body = self._generic_rebalance_body(uses_positive_signal_filter(formula_key))
 
         return f'''"""{raw.title}
 
@@ -147,7 +170,9 @@ from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 
+from quant.analytics.signal_kernels import compute_signal
 from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.registry import strategy
 from quant.shared.utils.logger import get_logger
@@ -182,6 +207,8 @@ class {class_name}(DailyBarStrategy):
         self.liquidity_lookback = int(liquidity_lookback)
         self.max_recent_suspended_days = int(max_recent_suspended_days)
         self._risk_exit_symbols = set()
+        self._signal_cache_key = None
+        self._signal_cache_scores: Dict[str, float] = {{}}
         super().__init__("{name}", self._symbols, holding_days=holding_days)
 
     @property
@@ -303,7 +330,39 @@ class {class_name}(DailyBarStrategy):
 '''
 
     @staticmethod
-    def _generic_rebalance_body() -> str:
+    def _generic_rebalance_body(positive_only: bool = True) -> str:
+        if not positive_only:
+            return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
+        candidates = []
+        risk_exits = getattr(self, "_risk_exit_symbols", set())
+        scores = self._signal_scores() if hasattr(self, "_signal_scores") else {}
+        for symbol, signal in scores.items():
+            if symbol in risk_exits:
+                continue
+            price = self._get_last_price(symbol)
+            if signal == signal and price > 0:
+                candidates.append((signal, symbol, price))
+        if not candidates:
+            return
+        candidates.sort(reverse=True)
+        selected = candidates[:max(1, min(self.max_positions, len(candidates)))]
+        selected_symbols = {symbol for _, symbol, _ in selected}
+        slots = len(selected)
+        for _, symbol, price in candidates:
+            current_pos = self._positions.get(symbol, 0)
+            if symbol not in selected_symbols:
+                if current_pos > 0:
+                    self.sell(symbol, int(current_pos), "MARKET", price)
+                continue
+            target_qty = self._target_quantity(context, price, slots)
+            current_pos = self._positions.get(symbol, 0)
+            delta = target_qty - current_pos
+            if delta > 0:
+                self.buy(symbol, int(delta), "MARKET", price)
+            elif delta < 0:
+                self.sell(symbol, int(abs(delta)), "MARKET", price)
+
+'''
         return '''    def _execute_rebalance(self, context: "Context", trading_date: date) -> None:
         candidates = []
         risk_exits = getattr(self, "_risk_exit_symbols", set())
@@ -340,6 +399,8 @@ class {class_name}(DailyBarStrategy):
 '''
 
     def _formula_body(self, formula_key: str) -> str:
+        if formula_key in SUPPORTED_FORMULAS:
+            return self._analytics_formula_body(formula_key)
         if formula_key == "momentum_close_return":
             return '''    def _signal(self, symbol: str) -> float:
         closes = self._get_closes(symbol)
@@ -517,6 +578,84 @@ class {class_name}(DailyBarStrategy):
         returns = closes[-window:] / closes[-window - 1:-1] - 1.0
         volatility = float(np.std(returns, ddof=1)) * np.sqrt(252.0) if returns.size > 1 and np.isfinite(returns).all() else 0.0
         return float(momentum / (1.0 + max(0.0, volatility)))
+'''
+        if formula_key == "ashare_industry_prosperity_trend_crowding_rotation":
+            return '''    def _signal(self, symbol: str) -> float:
+        return float(self._industry_rotation_scores().get(symbol, 0.0))
+
+    def _industry_rotation_scores(self) -> Dict[str, float]:
+        window = max(20, int(self.lookback))
+        short_window = max(10, min(20, window))
+        rows = []
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            if len(bars) < window + 1:
+                continue
+            industry = self._bar_industry(bars[-1])
+            if not industry:
+                continue
+            closes = np.asarray([self._adj(bar, "close") for bar in bars[-window - 1:]], dtype=float)
+            if closes.size < window + 1 or np.any(closes <= 0):
+                continue
+            returns = closes[1:] / closes[:-1] - 1.0
+            if not np.isfinite(returns).all():
+                continue
+            momentum_short = float(closes[-1] / closes[-short_window - 1] - 1.0)
+            momentum_long = float(closes[-1] / closes[0] - 1.0)
+            vol_short = float(np.std(returns[-short_window:], ddof=1)) if short_window > 1 else 0.0
+            trend = momentum_long / max(vol_short, 1e-12)
+            positive_trend = 1.0 if momentum_short > 0.0 else 0.0
+            volumes = np.asarray([self._bar_volume(bar) for bar in bars[-window:]], dtype=float)
+            avg_volume = float(np.mean(volumes)) if volumes.size else 0.0
+            latest_volume = float(volumes[-1]) if volumes.size else 0.0
+            crowding = latest_volume / max(avg_volume, 1e-12) + max(0.0, vol_short * np.sqrt(252.0))
+            stock_tiebreaker = momentum_short
+            rows.append((symbol, industry, momentum_short, positive_trend, trend, crowding, stock_tiebreaker))
+        if not rows:
+            return {}
+        industries = sorted({item[1] for item in rows})
+        by_industry = {}
+        for industry in industries:
+            group = [item for item in rows if item[1] == industry]
+            by_industry[industry] = {
+                "prosperity": float(np.mean([item[2] for item in group])),
+                "breadth": float(np.mean([item[3] for item in group])),
+                "trend": float(np.mean([item[4] for item in group])),
+                "crowding": float(np.mean([item[5] for item in group])),
+            }
+        prosperity_rank = self._rank_dict({k: v["prosperity"] for k, v in by_industry.items()})
+        breadth_rank = self._rank_dict({k: v["breadth"] for k, v in by_industry.items()})
+        trend_rank = self._rank_dict({k: v["trend"] for k, v in by_industry.items()})
+        crowding_rank = self._rank_dict({k: v["crowding"] for k, v in by_industry.items()})
+        stock_rank = self._rank_dict({item[0]: item[6] for item in rows})
+        scores = {}
+        for symbol, industry, *_ in rows:
+            scores[symbol] = (
+                0.30 * prosperity_rank.get(industry, 0.0)
+                + 0.25 * breadth_rank.get(industry, 0.0)
+                + 0.35 * trend_rank.get(industry, 0.0)
+                - 0.20 * crowding_rank.get(industry, 0.0)
+                + 0.01 * stock_rank.get(symbol, 0.0)
+            )
+        return scores
+
+    @staticmethod
+    def _rank_dict(values: Dict[str, float]) -> Dict[str, float]:
+        valid = [(key, float(value)) for key, value in values.items() if value == value]
+        if not valid:
+            return {}
+        ordered = sorted(valid, key=lambda item: item[1])
+        denom = max(1, len(ordered) - 1)
+        return {key: idx / denom for idx, (key, _) in enumerate(ordered)}
+
+    @staticmethod
+    def _bar_industry(bar: Any) -> str:
+        for field in ("l1_code", "l2_code", "industry_code", "l1_name", "industry_name"):
+            value = bar.get(field, "") if isinstance(bar, dict) else getattr(bar, field, "")
+            text = "" if value is None else str(value).strip()
+            if text:
+                return text
+        return ""
 '''
         if formula_key == "ashare_range_contraction_breakout":
             return '''    def _signal(self, symbol: str) -> float:
@@ -1115,6 +1254,75 @@ class {class_name}(DailyBarStrategy):
         return '''    def _signal(self, symbol: str) -> float:
         self.logger.warning("Manual implementation required for unsupported formula: %s", symbol)
         return 0.0
+'''
+
+    @staticmethod
+    def _analytics_formula_body(formula_key: str) -> str:
+        return f'''    def _signal(self, symbol: str) -> float:
+        return float(self._signal_scores().get(symbol, 0.0))
+
+    def _signal_scores(self) -> Dict[str, float]:
+        cache_key = self._current_signal_cache_key()
+        if cache_key == self._signal_cache_key:
+            return dict(self._signal_cache_scores)
+        frame = self._signal_frame()
+        if frame.empty:
+            self._signal_cache_key = cache_key
+            self._signal_cache_scores = {{}}
+            return {{}}
+        signal = compute_signal("{formula_key}", frame, self.lookback)
+        if signal is None or getattr(signal, "empty", True):
+            self._signal_cache_key = cache_key
+            self._signal_cache_scores = {{}}
+            return {{}}
+        latest = signal.iloc[-1].dropna()
+        scores = {{str(symbol): float(value) for symbol, value in latest.items() if value == value}}
+        self._signal_cache_key = cache_key
+        self._signal_cache_scores = scores
+        return dict(scores)
+
+    def _signal_frame(self) -> pd.DataFrame:
+        rows = []
+        for symbol, bars in self._day_data.items():
+            for index, bar in enumerate(bars):
+                row = self._bar_record(bar, symbol)
+                if row.get("date") is None:
+                    row["date"] = index
+                if row.get("date") is not None:
+                    rows.append(row)
+        return pd.DataFrame(rows)
+
+    def _current_signal_cache_key(self) -> tuple:
+        values = []
+        for symbol in self._symbols:
+            bars = self._day_data.get(symbol, [])
+            last = bars[-1] if bars else None
+            values.append((symbol, len(bars), self._bar_date(last) if last is not None else None))
+        return tuple(values)
+
+    def _bar_record(self, bar: Any, symbol: str) -> Dict[str, Any]:
+        fields = (
+            "date", "timestamp", "open", "high", "low", "close",
+            "adj_open", "adj_high", "adj_low", "adj_close", "adj_factor",
+            "volume", "turnover", "turnover_rate", "turnover_rate_f",
+            "total_mv", "circ_mv", "market_cap", "total_market_cap",
+            "float_market_cap", "circulating_market_cap",
+            "l1_code", "l2_code", "industry_code", "l1_name", "industry_name",
+        )
+        row = {{"symbol": symbol}}
+        for field in fields:
+            value = self._bar_value(bar, field)
+            if value is not None:
+                row[field] = value
+        row["date"] = row.get("date") or row.get("timestamp")
+        return row
+
+    @staticmethod
+    def _bar_value(bar: Any, field: str) -> Any:
+        return bar.get(field, None) if isinstance(bar, dict) else getattr(bar, field, None)
+
+    def _bar_date(self, bar: Any) -> Any:
+        return self._bar_value(bar, "date") or self._bar_value(bar, "timestamp")
 '''
 
     def _generate_readme(self, raw: RawStrategy, report: EvaluationReport, spec: Optional[StrategySpec] = None) -> str:

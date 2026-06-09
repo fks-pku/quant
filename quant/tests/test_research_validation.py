@@ -99,6 +99,19 @@ class TestStrategySpecBuilder:
         )
         assert spec.strategy_id == "discovery_of_a_13_sharpe_oos_factor_drift_regimes"
 
+    def test_chinese_public_source_titles_get_stable_unique_strategy_ids(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        builder = StrategySpecBuilder()
+        left = builder.build(_raw("JoinQuant 多因子选股模型研究"), _report("unknown"))
+        right = builder.build(_raw("JoinQuant 小市值低价股社区策略"), _report("unknown"))
+
+        assert left.strategy_id.startswith("joinquant_")
+        assert right.strategy_id.startswith("joinquant_")
+        assert left.strategy_id != right.strategy_id
+
     def test_mean_reversion_maps_to_close_to_ma(self):
         from quant.features.research.validation.strategy_spec_builder import (
             StrategySpecBuilder,
@@ -313,6 +326,100 @@ class TestStrategySpecBuilder:
         assert spec.lookback_days == 1
         assert spec.horizon_days == 5
         assert spec.status == "ready"
+
+    def test_public_joinquant_small_cap_low_price_auto_maps_to_ready_spec(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = RawStrategy(
+            title="JoinQuant 小市值低价股社区策略",
+            description="结合日线收盘价、成交量、换手率和 point-in-time 市值，偏向小市值低价股票。",
+            source="jointquant",
+            source_url="https://www.joinquant.com/community/post/detailMobile?postId=59884",
+        )
+
+        spec = StrategySpecBuilder().build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.status == "ready"
+        assert spec.strategy_type == "factor"
+        assert spec.signal_formula_key == "joinquant_small_cap_low_price_factor"
+        assert spec.required_fields == ["close", "market_cap", "turnover"]
+
+    def test_public_multifactor_auto_maps_to_price_volume_formula(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = RawStrategy(
+            title="JoinQuant 多因子选股模型研究",
+            description="多因子选股模型，可拆分为价值、质量、动量、低波、流动性等低频因子族。",
+            source="jointquant",
+            source_url="https://www.joinquant.com/index.php",
+        )
+
+        spec = StrategySpecBuilder().build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.status == "ready"
+        assert spec.strategy_type == "factor"
+        assert spec.signal_formula_key == "ashare_price_volume_multifactor"
+        assert spec.required_fields == ["close", "volume"]
+
+    def test_public_bigquant_rotation_auto_maps_to_industry_rotation_formula(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = RawStrategy(
+            title="BigQuant 行业轮动策略",
+            description="使用日线 OHLCV、收盘价、成交量和行业动量选择强势行业。",
+            source="bigquant",
+            source_url="https://bigquant.com/wiki/doc/DlXVSO3ZVu",
+        )
+
+        spec = StrategySpecBuilder().build(raw, _report("unknown", symbols=["600519"]))
+
+        assert spec.status == "ready"
+        assert spec.strategy_type == "momentum"
+        assert spec.signal_formula_key == "ashare_industry_prosperity_trend_crowding_rotation"
+        assert spec.required_fields == ["close", "volume", "l1_code"]
+
+    def test_public_unknown_idea_does_not_use_generic_proxy_formula(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = RawStrategy(
+            title="BigQuant 未知另类数据策略",
+            description="需要自行定义复杂非价格信号，公开摘要没有给出可复现日线公式。",
+            source="bigquant",
+            source_url="https://bigquant.com/unknown",
+        )
+
+        spec = StrategySpecBuilder().build(raw, _report("factor", symbols=["600519"]))
+
+        assert spec.status == "missing_formula"
+        assert spec.signal_formula_key == ""
+        assert "faithful signal formula" in spec.reason
+
+    def test_public_bigquant_alpha101_auto_maps_to_supported_worldquant_formula(self):
+        from quant.features.research.validation.strategy_spec_builder import (
+            StrategySpecBuilder,
+        )
+
+        raw = RawStrategy(
+            title="BigQuant WorldQuant Alpha101 因子复现",
+            description="基于 WorldQuant 101 Formulaic Alphas 的日线 OHLCV 和成交量量价表达式。",
+            source="bigquant",
+            source_url="https://bigquant.com/wiki/doc/niKLVYPIRg",
+        )
+
+        spec = StrategySpecBuilder().build(raw, _report("unknown", symbols=["600519"]))
+
+        assert spec.status == "ready"
+        assert spec.strategy_type == "worldquant_factor"
+        assert spec.signal_formula_key == "worldquant_alpha_001"
+        assert spec.required_fields == ["close"]
 
     def test_generated_low_price_strategy_has_delisting_risk_guard(self, tmp_path):
         strategy_cls = _generated_low_price_strategy_class(tmp_path)
@@ -654,6 +761,52 @@ class TestResearchAdjustedPrices:
 
         assert high_signal.iloc[-1] > low_signal.iloc[-1]
 
+    def test_a_share_price_volume_multifactor_produces_panel_signal(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=35, freq="B")
+        rising = np.linspace(100.0, 135.0, len(dates))
+        falling = np.linspace(135.0, 100.0, len(dates))
+        flat = np.linspace(100.0, 101.0, len(dates))
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 3,
+                "symbol": ["600001"] * len(dates) + ["600002"] * len(dates) + ["600003"] * len(dates),
+                "close": list(rising) + list(flat) + list(falling),
+                "adj_close": list(rising) + list(flat) + list(falling),
+                "volume": [2_000_000.0] * len(dates) + [500_000.0] * len(dates) + [300_000.0] * len(dates),
+            }
+        )
+
+        signal = compute_signal("ashare_price_volume_multifactor", frame, lookback=20)
+
+        assert set(signal.columns) == {"600001", "600002", "600003"}
+        assert signal.loc[dates[-1]].notna().all()
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600003"]
+
+    def test_a_share_industry_rotation_uses_industry_prosperity_trend_and_crowding(self):
+        from quant.features.research.validation.signal_library import compute_signal
+
+        dates = pd.date_range("2022-01-03", periods=70, freq="B")
+        strong = np.linspace(100.0, 150.0, len(dates))
+        weak = np.linspace(150.0, 100.0, len(dates))
+        flat = np.linspace(100.0, 101.0, len(dates))
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 4,
+                "symbol": ["600001"] * len(dates) + ["600002"] * len(dates) + ["600003"] * len(dates) + ["600004"] * len(dates),
+                "close": list(strong) + list(strong * 0.98) + list(weak) + list(flat),
+                "adj_close": list(strong) + list(strong * 0.98) + list(weak) + list(flat),
+                "volume": [1_000_000.0] * len(dates) + [900_000.0] * len(dates) + [800_000.0] * len(dates) + [700_000.0] * len(dates),
+                "l1_code": ["801010.SI"] * len(dates) * 2 + ["801020.SI"] * len(dates) + ["801030.SI"] * len(dates),
+            }
+        )
+
+        signal = compute_signal("ashare_industry_prosperity_trend_crowding_rotation", frame, lookback=20)
+
+        assert set(signal.columns) == {"600001", "600002", "600003", "600004"}
+        assert signal.loc[dates[-1], "600001"] > signal.loc[dates[-1], "600003"]
+
     def test_joinquant_small_cap_size_factor_prefers_lower_market_cap(self):
         from quant.features.research.validation.signal_library import compute_signal
 
@@ -709,7 +862,7 @@ class TestResearchAdjustedPrices:
 
         signal = compute_signal("joinquant_small_cap_low_price_factor", frame, lookback=1)
 
-        assert signal.loc[dates[-1], "600001"] == -100.0
+        assert signal.loc[dates[-1], "600001"] == 0.01
         assert pd.isna(signal.loc[dates[-1], "600002"])
         assert pd.isna(signal.loc[dates[-1], "600003"])
 
@@ -1116,6 +1269,37 @@ class TestFactorValidator:
         assert isinstance(report, ValidationReport)
         assert report.status == "validated"
 
+    def test_required_fields_preflight_checks_available_db_fields_with_aliases(self):
+        from quant.features.research.validation.factor_validator import FactorValidator
+
+        class FakeMarketData:
+            def get_universe_symbols(self, market):
+                return ["600001"]
+
+            def available_fields(self, market):
+                return ["close", "total_mv"]
+
+            def get_daily_bars(self, symbols, start, end):
+                raise AssertionError("market data should not be fetched when required fields are missing")
+
+        validator = FactorValidator(FakeMarketData(), config={"min_observations": 50})
+        spec = StrategySpec(
+            strategy_id="db_field_fit",
+            strategy_type="factor",
+            signal_formula_key="momentum_close_return",
+            universe=["600001"],
+            horizon_days=5,
+            lookback_days=20,
+            execution_lag_days=1,
+            required_fields=["close", "market_cap", "open"],
+            status="ready",
+        )
+
+        report = validator.validate(spec)
+
+        assert report.status == "error"
+        assert report.errors == ["DB field mismatch for cn: missing required fields open"]
+
     def test_unsupported_spec_does_not_call_market_data(self):
         from quant.features.research.validation.factor_validator import FactorValidator
 
@@ -1217,15 +1401,12 @@ class TestFactorValidator:
         assert np.isfinite(diagnostics["top1_pct_after_cost_sharpe"])
         assert np.isfinite(diagnostics["top1_pct_turnover"])
 
-    def test_pnl_bridge_does_not_positive_filter_joinquant_low_price_signal(self):
+    def test_pnl_bridge_uses_positive_filter_for_joinquant_low_price_signal(self):
         from quant.features.research.validation.factor_validator import FactorValidator
 
         dates = pd.date_range("2024-01-01", periods=12, freq="D")
         symbols = [f"60000{i}" for i in range(5)]
-        signals = pd.DataFrame(
-            {symbol: [-float(i + 1 + day * 0.01) for day in range(len(dates))] for i, symbol in enumerate(symbols)},
-            index=dates,
-        )
+        signals = pd.DataFrame(-1.0, index=dates, columns=symbols)
         prices = pd.DataFrame(
             {symbol: [10.0 + i + day * 0.1 for day in range(len(dates))] for i, symbol in enumerate(symbols)},
             index=dates,
@@ -1247,8 +1428,8 @@ class TestFactorValidator:
         bridge = validator._pnl_attribution_bridge(spec, signals, prices, volume, cost_bps=10.0)
         selection = next(item for item in bridge if item["key"] == "strategy_selection_rule")
 
-        assert "不使用 signal > 0 过滤" in selection["note"]
-        assert selection["selected_count_mean"] > 0
+        assert "signal > 0" in selection["note"]
+        assert selection["selected_count_mean"] == 0.0
 
     def test_factor_validator_applies_execution_lag_once(self, monkeypatch):
         from quant.features.research.validation import signal_library
@@ -1581,6 +1762,66 @@ class TestFactorValidator:
         bars = market_data.get_daily_bars(["600519", "510300", "000300"], "2024-01-01", "2024-01-31")
 
         assert set(bars["symbol"]) == {"600519", "510300", "000300"}
+
+    def test_duckdb_market_data_reads_industry_membership_sidecar_fields(self, tmp_path):
+        duckdb = pytest.importorskip("duckdb")
+        from quant.infrastructure.research.market_data.duckdb_research_market_data import (
+            DuckDBResearchMarketData,
+        )
+
+        db_path = tmp_path / "research_market.duckdb"
+        industry_path = tmp_path / "cn_industry_membership.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE daily_cn_ochl (symbol VARCHAR, date DATE, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)"
+        )
+        conn.execute("CREATE TABLE daily_hk AS SELECT * FROM daily_cn_ochl WHERE 1 = 0")
+        conn.execute("CREATE TABLE daily_us AS SELECT * FROM daily_cn_ochl WHERE 1 = 0")
+        conn.execute("INSERT INTO daily_cn_ochl VALUES ('600519', '2024-01-02', 1, 1, 1, 1, 100)")
+        conn.close()
+        conn = duckdb.connect(str(industry_path))
+        conn.execute(
+            """
+            CREATE TABLE cn_industry_membership (
+                symbol VARCHAR,
+                ts_code VARCHAR,
+                name VARCHAR,
+                industry_system VARCHAR,
+                classification_version VARCHAR,
+                industry_level VARCHAR,
+                industry_code VARCHAR,
+                industry_name VARCHAR,
+                l1_code VARCHAR,
+                l1_name VARCHAR,
+                l2_code VARCHAR,
+                l2_name VARCHAR,
+                l3_code VARCHAR,
+                l3_name VARCHAR,
+                start_date DATE,
+                end_date DATE,
+                is_current BOOLEAN,
+                source VARCHAR,
+                updated_at TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cn_industry_membership
+            VALUES ('600519', '600519.SH', '贵州茅台', 'SW', 'SW2021', 'L3', '851231.SI', '白酒',
+                    '801120.SI', '食品饮料', '801123.SI', '饮料乳品', '851231.SI', '白酒',
+                    '2001-08-27', NULL, TRUE, 'test', '2024-01-01')
+            """
+        )
+        conn.close()
+
+        market_data = DuckDBResearchMarketData(str(db_path), industry_membership_db_path=str(industry_path))
+
+        assert "l1_code" in set(market_data.available_fields("cn"))
+        bars = market_data.get_daily_bars(["600519"], "2024-01-01", "2024-01-31", fields=["close", "l1_code", "l1_name"])
+
+        assert bars["l1_code"].iloc[0] == "801120.SI"
+        assert bars["l1_name"].iloc[0] == "食品饮料"
 
     def test_duckdb_market_data_supports_date_schema_fallback(self, tmp_path):
         duckdb = pytest.importorskip("duckdb")

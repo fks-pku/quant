@@ -102,7 +102,6 @@ def apply_professional_rubric(
     )
     if _critical_risk(risk_flags):
         admission = min(admission, signal_quality + 1.0)
-    threshold = float((config or {}).get("min_admission_score", 6.0) or 6.0)
     report.risk_flags = risk_flags
     report.required_data_fields = required_data_fields
     report.validation_tests = validation_tests
@@ -113,9 +112,9 @@ def apply_professional_rubric(
     report.bias_risk_score = round(bias_risk, 2)
     report.admission_score = round(admission, 2)
     report.evidence_notes = _evidence_notes(raw, report, quality)
-    if report.admission_score < threshold and not report.rejection_reason:
-        report.rejection_reason = f"admission_score={report.admission_score:.1f} < {threshold:.1f}"
-    elif report.admission_score >= threshold and report.rejection_reason.startswith("admission_score="):
+    if "high_frequency_not_daily" in risk_flags and not report.rejection_reason:
+        report.rejection_reason = "not daily-bar adaptable"
+    elif report.rejection_reason.startswith("admission_score="):
         report.rejection_reason = ""
     if report.suitability_score <= 0:
         report.suitability_score = round(report.admission_score, 2)

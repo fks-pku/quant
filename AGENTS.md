@@ -12,7 +12,7 @@ Quant trading platform. Hexagonal (Ports & Adapters) + Event-Driven. Python 3.10
 |--------|------|-------------|-----------|
 | domain | `quant/domain/` | 纯业务逻辑，零外部依赖 (CENTER) | `quant/domain/AGENTS.md` |
 | infrastructure | `quant/infrastructure/` | 端口实现 (ADAPTERS): DuckDB, providers, brokers | `quant/infrastructure/AGENTS.md` |
-| analytics | `quant/analytics/` | 跨回测/实盘复用的绩效指标计算 | `quant/analytics/AGENTS.md` |
+| analytics | `quant/analytics/` | 跨回测/实盘复用的绩效指标与信号数值计算 | `quant/analytics/AGENTS.md` |
 | runtime | `quant/runtime/` | 跨回测/实盘复用的策略生命周期分发 helper | `quant/runtime/AGENTS.md` |
 | backtest | `quant/features/backtest/` | 回测引擎、步进验证、绩效分析 | `quant/features/backtest/AGENTS.md` |
 | trading | `quant/features/trading/` | 交易引擎、风控、调度器 | `quant/features/trading/AGENTS.md` |

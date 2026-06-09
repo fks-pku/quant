@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from quant.domain.ports.research_source import ResearchSource
 
@@ -82,24 +82,39 @@ _SEED_IDEAS = (
 
 
 class ASharePublicForumSource(ResearchSource):
-    def __init__(self, fetch_page_excerpt: bool = False, timeout: float = 10.0):
+    def __init__(
+        self,
+        fetch_page_excerpt: bool = False,
+        timeout: float = 10.0,
+        source_name: str = "ashare_public_forum",
+        source_filter: Optional[Iterable[str]] = None,
+    ):
         self._fetch_page_excerpt = bool(fetch_page_excerpt)
         self._timeout = timeout
+        self._source_name = source_name
+        self._source_filter = {str(item).lower() for item in source_filter or []} or None
 
     @property
     def source_name(self) -> str:
-        return "ashare_public_forum"
+        return self._source_name
 
     def search(self, query: Dict[str, Any], max_results: int = 10) -> List[Dict[str, Any]]:
         tokens = self._query_tokens(query)
         rows = []
         for seed in _SEED_IDEAS:
+            seed_source = str(seed.get("source", "")).lower()
+            if self._source_filter is not None and seed_source not in self._source_filter:
+                continue
             if tokens and not self._matches(seed, tokens):
                 continue
             row = dict(seed)
+            original_source = str(row.get("source", ""))
+            if self._source_filter is not None:
+                row["source"] = self._source_name
             row["description"] = self._description(seed)
             row["metadata"] = {
-                "source_family": "ashare_public_forum",
+                "source_family": self._source_name,
+                "original_source": original_source,
                 "tags": list(seed.get("tags") or []),
                 "requires_manual_replication": True,
                 "needs_bias_audit": True,
@@ -155,3 +170,29 @@ class ASharePublicForumSource(ResearchSource):
     @staticmethod
     def _clean_html(value: str) -> str:
         return " ".join(re.sub(r"<[^>]+>", " ", value or "").split())
+
+
+class BigQuantSource(ASharePublicForumSource):
+    def __init__(self, fetch_page_excerpt: bool = False, timeout: float = 10.0):
+        super().__init__(
+            fetch_page_excerpt=fetch_page_excerpt,
+            timeout=timeout,
+            source_name="bigquant",
+            source_filter={"bigquant"},
+        )
+
+
+class JoinQuantSource(ASharePublicForumSource):
+    def __init__(
+        self,
+        fetch_page_excerpt: bool = False,
+        timeout: float = 10.0,
+        source_name: str = "joinquant",
+        source_filter: Optional[Set[str]] = None,
+    ):
+        super().__init__(
+            fetch_page_excerpt=fetch_page_excerpt,
+            timeout=timeout,
+            source_name=source_name,
+            source_filter=source_filter or {"joinquant"},
+        )

@@ -23,6 +23,7 @@ STAGE_REPORT_HTML = {
 FULL_REPORT_HTML = Path("full_research_report.html")
 LAST_RESULT_JSON = Path("last_result.json")
 STRATEGY_EVALUATION_MD = Path("strategy_evaluation.md")
+INITIAL_SCREENING_TABLE_MD = Path("initial_screening_table.md")
 LATEST_REPORT_METADATA = LATEST_REPORT_DIR / "metadata.json"
 
 
