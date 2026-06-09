@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 from types import SimpleNamespace
 
@@ -231,6 +232,41 @@ def test_submit_order_normalizes_limit_price_before_qmt_call():
     assert price == pytest.approx(9.307)
     assert strategy_name == "barbell"
     assert remark == ""
+
+
+def test_submit_order_does_not_hold_lock_during_qmt_order_stock_callback_probe():
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456", trade_mode="REAL")
+    broker.connect()
+    trader = FakeTrader.instances[-1]
+
+    def order_stock_with_callback_probe(account, stock_code, order_type, volume, price_type, price, strategy_name, order_remark):
+        acquired = []
+
+        def probe_callback_thread():
+            with broker._lock:
+                acquired.append(True)
+
+        thread = threading.Thread(target=probe_callback_thread)
+        thread.start()
+        thread.join(timeout=0.5)
+        assert acquired == [True]
+        trader.orders.append((account, stock_code, order_type, volume, price_type, price, strategy_name, order_remark))
+        return 9002
+
+    trader.order_stock = order_stock_with_callback_probe
+
+    order_id = broker.submit_order(
+        Order(
+            symbol="510300",
+            quantity=300,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            price=4.769,
+            strategy_name="ashare_broad_asset_etf_rotation",
+        )
+    )
+
+    assert order_id == "9002"
 
 
 def test_qmt_simulate_trade_mode_refuses_order_submission():

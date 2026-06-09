@@ -675,6 +675,42 @@ def test_order_manager_records_strategy_signal_and_broker_order(tmp_path):
     assert orders[-1]["status"] == "submitted"
 
 
+def test_order_manager_skips_duplicate_live_order_already_recorded_today(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path)
+    existing_timestamp = datetime.now()
+    recorder.record_order(
+        Order(
+            symbol="510300",
+            quantity=300,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            order_id="1082173127",
+            price=4.769,
+            timestamp=existing_timestamp,
+            strategy_name="ashare_broad_asset_etf_rotation",
+        ),
+        broker_order_id="1082173127",
+        status="submitted",
+        timestamp=existing_timestamp,
+    )
+    broker = DummyBroker()
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=ApprovingRisk(True),
+        event_bus=EventBus(),
+        config={},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+
+    manager.submit_order("510300", 300, "BUY", "LIMIT", 4.769032, "ashare_broad_asset_etf_rotation")
+
+    orders = recorder.read_day("orders", existing_timestamp.date().isoformat())
+    assert broker.submitted == []
+    assert len(orders) == 1
+    assert orders[0]["broker_order_id"] == "1082173127"
+
+
 def test_order_manager_record_pending_only_does_not_submit_to_broker(tmp_path):
     recorder = LiveTradingRecorder(tmp_path)
     broker = DummyBroker()

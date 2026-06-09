@@ -181,6 +181,19 @@ class OrderManager:
 
     def _submit_to_broker(self, order: Order) -> None:
         """Submit order to broker with retry logic."""
+        existing_order_id = self._existing_submitted_live_order_id(order)
+        if existing_order_id:
+            updated = replace(order, order_id=existing_order_id, status=OrderStatus.SUBMITTED)
+            with self._lock:
+                if order.order_id:
+                    self._orders[order.order_id] = updated
+                self._orders[existing_order_id] = updated
+            self.logger.info(
+                f"Order submit skipped as already recorded: {existing_order_id} {order.symbol} {order.side} {order.quantity}"
+            )
+            self._record_strategy(existing_order_id, order.strategy_name)
+            return
+
         broker = self.get_broker_for_symbol(order.symbol)
 
         for attempt in range(self._max_retries):
@@ -385,3 +398,35 @@ class OrderManager:
             self._live_recorder.record_order(order, broker_order_id, status, reason=reason)
         except Exception as e:
             self.logger.error(f"Failed to record order: {e}")
+
+    def _existing_submitted_live_order_id(self, order: Order) -> Optional[str]:
+        if self._live_recorder is None:
+            return None
+        read_day = getattr(self._live_recorder, "read_day", None)
+        if read_day is None:
+            return None
+        timestamp = order.timestamp or datetime.now()
+        strategy_name = order.strategy_name or "default"
+        try:
+            rows = read_day("orders", timestamp.date().isoformat(), strategy_name=strategy_name)
+        except Exception:
+            return None
+        side = order.side.value if hasattr(order.side, "value") else str(order.side)
+        order_type = order.order_type.value if hasattr(order.order_type, "value") else str(order.order_type)
+        for row in reversed(rows):
+            status = str(row.get("status") or "").lower()
+            if status not in {"submitted", "partial", "filled"}:
+                continue
+            if str(row.get("symbol") or "") != order.symbol:
+                continue
+            if str(row.get("side") or "").upper() != side:
+                continue
+            if str(row.get("order_type") or "").upper() != order_type:
+                continue
+            try:
+                if abs(float(row.get("quantity") or 0.0) - float(order.quantity)) > 1e-9:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            return str(row.get("broker_order_id") or row.get("order_id") or "") or None
+        return None

@@ -390,27 +390,30 @@ class QMTBroker(BrokerAdapter):
                 price = _normalize_qmt_limit_price(qmt_code, order.side, float(order.price or 0.0))
             strategy_name = (getattr(order, "strategy_name", "") or "quant")[:32]
             order_remark = ""
+            trader = self._trader
+            account = self._account
 
-            self.logger.info(
-                f"QMT order: {order.side.value} {volume} {qmt_code} "
-                f"type={order.order_type.value} price={price}"
-            )
+        self.logger.info(
+            f"QMT order: {order.side.value} {volume} {qmt_code} "
+            f"type={order.order_type.value} price={price}"
+        )
 
-            result = self._trader.order_stock(
-                self._account,
-                qmt_code,
-                order_type,
-                volume,
-                price_type,
-                price,
-                strategy_name,
-                order_remark,
-            )
+        result = trader.order_stock(
+            account,
+            qmt_code,
+            order_type,
+            volume,
+            price_type,
+            price,
+            strategy_name,
+            order_remark,
+        )
 
-            if result is None or not isinstance(result, int) or result <= 0:
-                raise RuntimeError(f"QMT order_stock failed for {order.symbol}: result={result}")
+        if result is None or not isinstance(result, int) or result <= 0:
+            raise RuntimeError(f"QMT order_stock failed for {order.symbol}: result={result}")
 
-            order_id = str(result)
+        order_id = str(result)
+        with self._lock:
             updated = self._set_order_attrs(order, {
                 "order_id": order_id,
                 "status": OrderStatus.SUBMITTED,
