@@ -252,6 +252,28 @@ class TestASharePublicForumSource:
         assert all(row["metadata"]["source_family"] == "ashare_public_forum" for row in results)
         assert all(row["metadata"]["requires_manual_replication"] is True for row in results)
 
+    def test_bigquant_source_only_returns_bigquant_seed_ideas(self):
+        from quant.infrastructure.research.sources import BigQuantSource
+
+        source = BigQuantSource(fetch_page_excerpt=False)
+
+        results = source.search({"query": "行业 轮动"}, max_results=10)
+
+        assert results
+        assert all(row["source"] == "bigquant" for row in results)
+        assert all(row["metadata"]["source_family"] == "bigquant" for row in results)
+
+    def test_joinquant_source_supports_jointquant_alias(self):
+        from quant.infrastructure.research.sources import JoinQuantSource
+
+        source = JoinQuantSource(fetch_page_excerpt=False, source_name="jointquant")
+
+        results = source.search({"query": "小市值"}, max_results=10)
+
+        assert results
+        assert all(row["source"] == "jointquant" for row in results)
+        assert all(row["metadata"]["original_source"] == "joinquant" for row in results)
+
 
 class TestArxivSourceQuery:
     def test_phrase_query_is_tokenized_and_category_can_be_overridden(self):

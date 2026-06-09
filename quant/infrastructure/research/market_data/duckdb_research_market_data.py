@@ -7,6 +7,7 @@ from quant.infrastructure.data.storage_duckdb import (
     _DEFAULT_DB,
     _DEFAULT_ETF_DB,
     _DEFAULT_FINANCIAL_INDICATOR_DB,
+    _DEFAULT_INDUSTRY_MEMBERSHIP_DB,
     _DEFAULT_INDEX_DB,
     _FINANCIAL_INDICATOR_SCHEMA,
     _FINANCIAL_INDICATOR_TABLE,
@@ -24,6 +25,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
         pit_as_of_date: str = None,
         daily_basic_db_path: str = _DEFAULT_DAILY_BASIC_DB,
         financial_indicator_db_path: str = _DEFAULT_FINANCIAL_INDICATOR_DB,
+        industry_membership_db_path: str = _DEFAULT_INDUSTRY_MEMBERSHIP_DB,
         etf_db_path: str = _DEFAULT_ETF_DB,
         index_db_path: str = _DEFAULT_INDEX_DB,
     ):
@@ -32,6 +34,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
         self._pit_as_of_date = pit_as_of_date
         self._daily_basic_db_path = daily_basic_db_path
         self._financial_indicator_db_path = financial_indicator_db_path
+        self._industry_membership_db_path = industry_membership_db_path
         self._etf_db_path = etf_db_path
         self._index_db_path = index_db_path
 
@@ -74,6 +77,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
             if table == "daily_cn_ochl":
                 fields.extend([field for field in self._daily_basic_fields(conn) if field not in fields])
                 fields.extend([field for field in self._financial_indicator_fields(conn) if field not in fields])
+                fields.extend([field for field in self._industry_membership_fields(conn) if field not in fields])
             return fields
         except Exception as e:
             logger.warning(f"Field introspection failed for {table}: {e}")
@@ -110,6 +114,7 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 date_select, start_filter, end_filter = self._date_expressions(conn, table)
                 price_select = self._price_select_columns(conn, table, requested_fields)
                 sidecar_select = self._daily_basic_select_columns(conn, table, requested_fields)
+                industry_select = self._industry_membership_select_columns(conn, table, requested_fields)
                 if not price_select:
                     logger.warning(f"Market data table has no price columns: {table}")
                     continue
@@ -121,6 +126,18 @@ class DuckDBResearchMarketData(ResearchMarketData):
                     LEFT JOIN daily_basic.cn_daily_basic db
                       ON b.symbol = db.symbol
                      AND CAST(b.timestamp AS DATE) = db.trade_date
+                    """
+                if industry_select:
+                    select_parts.append(industry_select)
+                    trade_date_expr = self._trade_date_expression(conn, table)
+                    join_clause += f"""
+                    LEFT JOIN industry_membership.cn_industry_membership im
+                      ON b.symbol = im.symbol
+                     AND {trade_date_expr} >= im.start_date
+                     AND (im.end_date IS NULL OR {trade_date_expr} <= im.end_date)
+                     AND COALESCE(im.industry_system, '') = 'SW'
+                     AND COALESCE(im.classification_version, '') = 'SW2021'
+                     AND COALESCE(im.industry_level, '') = 'L3'
                     """
                 query = f"""
                     SELECT b.symbol, {date_select}, {", ".join(select_parts)}
@@ -228,6 +245,14 @@ class DuckDBResearchMarketData(ResearchMarketData):
                 "b.date >= CAST(? AS DATE)",
                 "b.date <= CAST(? AS DATE)",
             )
+        raise ValueError(f"{table} has neither timestamp nor date column")
+
+    def _trade_date_expression(self, conn: Any, table: str) -> str:
+        columns = {row[1].lower() for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+        if "timestamp" in columns:
+            return "CAST(b.timestamp AS DATE)"
+        if "date" in columns:
+            return "CAST(b.date AS DATE)"
         raise ValueError(f"{table} has neither timestamp nor date column")
 
     def _price_select_columns(self, conn: Any, table: str, requested_fields: set = None) -> str:
@@ -372,6 +397,59 @@ class DuckDBResearchMarketData(ResearchMarketData):
             if field in requested_fields
         ]
         return ", ".join(f"fi.{field}" for field in fields)
+
+    def _industry_membership_available(self, conn: Any) -> bool:
+        try:
+            from pathlib import Path
+
+            path = Path(self._industry_membership_db_path)
+            if not path.exists():
+                return False
+            attached = {
+                row[1]
+                for row in conn.execute("PRAGMA database_list").fetchall()
+                if len(row) > 1
+            }
+            if "industry_membership" not in attached:
+                escaped = str(path).replace("'", "''")
+                conn.execute(f"ATTACH IF NOT EXISTS '{escaped}' AS industry_membership (READ_ONLY)")
+            exists = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_catalog = 'industry_membership'
+                  AND table_name = 'cn_industry_membership'
+                """
+            ).fetchone()[0]
+            return bool(exists)
+        except Exception as e:
+            logger.warning(f"Industry membership sidecar unavailable: {e}")
+            return False
+
+    def _industry_membership_fields(self, conn: Any) -> List[str]:
+        if not self._industry_membership_available(conn):
+            return []
+        rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_catalog = 'industry_membership'
+              AND table_name = 'cn_industry_membership'
+            ORDER BY ordinal_position
+            """
+        ).fetchall()
+        keys = {"symbol", "ts_code", "name", "start_date", "end_date", "is_current", "source", "updated_at"}
+        return [str(row[0]) for row in rows if str(row[0]) not in keys]
+
+    def _industry_membership_select_columns(self, conn: Any, table: str, requested_fields: set = None) -> str:
+        if table != "daily_cn_ochl" or not requested_fields:
+            return ""
+        fields = [
+            field
+            for field in self._industry_membership_fields(conn)
+            if field in requested_fields
+        ]
+        return ", ".join(f"im.{field}" for field in fields)
 
     def _add_financial_indicators(self, conn: Any, frame: Any, requested_fields: set = None) -> Any:
         if frame is None or frame.empty or not requested_fields:

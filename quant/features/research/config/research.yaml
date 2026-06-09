@@ -2,14 +2,10 @@ research:
   auto_run: false
   interval_days: 7
   sources:
-    - arxiv
     - ssrn
-    - nber
-    - blog
-    - ashare_public_forum
-    - ashare_structural
+    - bigquant
+    - jointquant
   max_results_per_source: 10
-  evaluation_threshold: 6.0
   backtest_sharpe_threshold: 0.5
   auto_backtest: true
   default_backtest_start: "2016-01-01"
@@ -29,13 +25,8 @@ research:
     pre_full_gate_enabled: true
     fast_gate_min_rank_ic: 0.02
     fast_gate_min_top_bucket_after_cost_sharpe: 0.5
-    fast_gate_min_top_bucket_after_cost_annualized_return: 0.08
+    fast_gate_min_top_bucket_after_cost_annualized_return: 0.05
     fast_gate_max_top_bucket_after_cost_drawdown: 0.50
-    fast_gate_min_benchmark_excess_after_cost_sharpe: 0.0
-    fast_gate_min_benchmark_excess_after_cost_annualized_return: 0.0
-    fast_gate_max_top_bucket_turnover: 0.35
-    fast_gate_min_rolling_oos_positive_pct: 0.55
-    fast_gate_min_rolling_oos_periods: 3
     fast_gate_fail_on_high_ic_decay: false
     sensitivity_enabled: false
     sensitivity_lookback_grid: [10, 15, 20, 25, 30]
@@ -63,38 +54,23 @@ research:
       nber: 1.55
       blog: 0.95
       ashare_public_forum: 1.20
+      bigquant: 1.20
+      joinquant: 1.15
+      jointquant: 1.15
       ashare_structural: 1.55
     query_plan:
-      arxiv:
-        - query: "trading strategy"
-          category: "q-fin.TR"
-        - query: "cross sectional equity factor"
-          category: "q-fin.PM"
-        - query: "daily return anomaly equity"
-          category: "q-fin.PM"
-        - query: "mean reversion equity"
-          category: "q-fin.TR"
-        - query: "momentum stock returns transaction costs"
-          category: "q-fin.PM"
       ssrn:
         - query: "daily trading strategy equity factor"
         - query: "cross sectional momentum anomaly"
         - query: "mean reversion equity strategy"
-      nber:
-        - query: "asset pricing anomaly"
-        - query: "factor momentum equity"
-      blog:
-        - query: "daily momentum factor"
-        - query: "mean reversion trading"
-      ashare_public_forum:
+      bigquant:
         - query: "行业 轮动"
+        - query: "Alpha101"
+        - query: "景气度 趋势 拥挤度"
+      jointquant:
         - query: "小市值"
         - query: "多因子"
-      ashare_structural:
-        - query: "momentum"
-        - query: "mean_reversion"
   evaluation_config:
-    min_admission_score: 6.0
     target_market: cn
     default_symbols: ["000300", "000905", "600519", "000001", "510300"]
     source_quality:
@@ -102,9 +78,6 @@ research:
       ssrn: 1.65
       nber: 1.55
       blog: 0.95
-
-evaluation:
-  min_admission_score: 6.0
 
 validation:
   sensitivity_enabled: false

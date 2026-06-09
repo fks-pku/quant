@@ -9,7 +9,7 @@ import pytest
 import pandas as pd
 
 from quant.features.research.evaluator import StrategyEvaluator
-from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, EvaluationReport, RawStrategy, ResearchConfig, ResearchResult, StrategySpec, ValidationReport
+from quant.features.research.models import DEFAULT_A_SHARE_SYMBOLS, EvaluationReport, RawStrategy, ResearchConfig, ResearchResult, ResearchLogEntry, StrategySpec, ValidationReport
 from quant.features.research.pool import CandidatePool
 from quant.features.research.research_engine import ResearchEngine
 from quant.infrastructure.research.repository import FileResearchStore
@@ -48,6 +48,22 @@ def _evaluation_report() -> EvaluationReport:
     )
 
 
+def _passing_portfolio_diagnostics() -> dict:
+    return {
+        "top_bucket_after_cost_sharpe": 0.75,
+        "top_bucket_after_cost_annualized_return": 0.08,
+        "top_bucket_after_cost_max_drawdown": -0.35,
+        "benchmark_excess_after_cost_sharpe": -1.0,
+        "benchmark_excess_after_cost_annualized_return": -0.20,
+        "top_bucket_turnover": 2.0,
+        "rolling_oos": [
+            {"split": "2020", "annualized_return": -0.10},
+            {"split": "2021", "annualized_return": -0.08},
+            {"split": "2022", "annualized_return": -0.04},
+        ],
+    }
+
+
 def _test_root() -> Path:
     root = Path(__file__).resolve().parents[1] / "infrastructure" / "var" / "test_research_pipeline" / str(uuid.uuid4())
     root.mkdir(parents=True, exist_ok=True)
@@ -73,6 +89,66 @@ def test_research_defaults_and_spec_universe_are_a_share_only():
     cli_report = HeuristicEvaluator().evaluate(_raw_strategy())
 
     assert cli_report.recommended_symbols == DEFAULT_A_SHARE_SYMBOLS
+
+
+def test_initial_screening_table_writes_one_clickable_latest_markdown_table(tmp_path):
+    research_store = FileResearchStore(tmp_path / "research")
+    engine = ResearchEngine(config=ResearchConfig(), research_store=research_store)
+    raw = _raw_strategy()
+    report = _evaluation_report()
+    strategy_file = (
+        Path(__file__).resolve().parents[1]
+        / "features"
+        / "strategies"
+        / "reject"
+        / "daily_momentum_breakout"
+        / "strategy.py"
+    )
+    result = ResearchResult(
+        log=[
+            ResearchLogEntry(
+                phase="stage1_spec",
+                title=raw.title,
+                source=raw.source,
+                source_url=raw.source_url,
+                verdict="pass",
+                reason="Ready",
+                scores={"strategy_id": "daily_momentum_breakout", "formula": "momentum_close_return"},
+            ),
+            ResearchLogEntry(
+                phase="stage2_validation",
+                title=raw.title,
+                source=raw.source,
+                source_url=raw.source_url,
+                verdict="fail",
+                reason="Validation failed: rank_ic=0.0100 <= 0.0200",
+                scores={
+                    "rank_ic": 0.01,
+                    "top_bucket_after_cost_sharpe": 0.25,
+                    "strategy_code_path": str(strategy_file),
+                },
+            ),
+        ]
+    )
+
+    rows = engine._initial_screening_rows(
+        [(raw, report, "validation_failed", "Validation failed: rank_ic=0.0100 <= 0.0200")],
+        result,
+    )
+    research_store.write_initial_screening_table(rows)
+
+    latest = tmp_path / "research" / "reports" / "latest"
+    markdown = (latest / "initial_screening_table.md").read_text(encoding="utf-8")
+
+    assert "| idea | source | 策略解释 | 策略实现代码文件 | rank_ic | sharpe | 结论 |" in markdown
+    assert "[Daily Momentum Breakout](<https://example.test/paper>)" in markdown
+    assert (
+        "[quant/features/strategies/reject/daily_momentum_breakout/strategy.py]"
+        f"(<{strategy_file}>)"
+    ) in markdown
+    assert "| 0.0100 | 0.25 |" in markdown
+    assert not (latest / "initial_screening_table.csv").exists()
+    assert not (latest / "initial_screening_table.json").exists()
 
 
 def test_cn_strict_backtests_always_attach_family_appropriate_execution_cost_model():
@@ -2016,7 +2092,10 @@ def test_research_engine_writes_candidate_scorecard_artifact():
             if raw.title == low.title:
                 report.suitability_score = 2.0
                 report.estimated_edge = 0.01
-                report.risk_flags = ["hf_not_daily"]
+                report.data_requirement = "high-frequency"
+                report.daily_adaptable = False
+                report.risk_flags = ["high_frequency_not_daily"]
+                report.required_data_fields = ["close", "intraday_or_order_book"]
             return report
 
     class RecordingArtifactStore:
@@ -2056,7 +2135,7 @@ def test_research_engine_writes_candidate_scorecard_artifact():
         assert "signal_quality_score" in rows[0]
         assert rows[1]["status"] == "rejected"
         assert rows[1]["suitability_score"] == pytest.approx(2.0)
-        assert "suitability=2.0" in rows[1]["decision_reason"]
+        assert "Not suitable for daily A-share research" in rows[1]["decision_reason"]
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -2068,10 +2147,14 @@ def test_research_engine_records_rejected_hypothesis_ledger():
         def search(self, sources=None, max_results=10):
             return [_raw_strategy()]
 
-    class LowScoreEvaluator:
+    class IntradayEvaluator:
         def evaluate(self, raw):
             report = _evaluation_report()
             report.suitability_score = 3.0
+            report.data_requirement = "high-frequency"
+            report.daily_adaptable = False
+            report.risk_flags = ["intraday_dependency"]
+            report.required_data_fields = ["close", "intraday_or_order_book"]
             return report
 
     try:
@@ -2079,7 +2162,7 @@ def test_research_engine_records_rejected_hypothesis_ledger():
         engine = ResearchEngine(
             config=ResearchConfig(auto_backtest=False, evaluation_threshold=6.0),
             scout=FixedScout(),
-            evaluator=LowScoreEvaluator(),
+            evaluator=IntradayEvaluator(),
             research_store=research_store,
             strategies_dir=str(tmp_path / "strategies"),
         )
@@ -2091,7 +2174,7 @@ def test_research_engine_records_rejected_hypothesis_ledger():
         assert len(hypotheses) == 1
         assert hypotheses[0]["strategy_id"] == ""
         assert hypotheses[0]["stage"] == "stage1_admission"
-        assert "suitability=3.0" in hypotheses[0]["decision_reason"]
+        assert "Not suitable for daily A-share research" in hypotheses[0]["decision_reason"]
         assert hypotheses[0]["metrics"]["suitability_score"] == pytest.approx(3.0)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
@@ -2226,6 +2309,7 @@ def test_nonviable_walkforward_rejects_candidate_and_updates_ledger():
                 data_start="2020-01-01",
                 data_end="2020-12-31",
                 n_observations=120,
+                portfolio_diagnostics=_passing_portfolio_diagnostics(),
             )
 
     class NonviableRigorHub:
@@ -2349,6 +2433,7 @@ def test_ic_decay_warning_is_logged_without_rejecting():
                 data_start="2020-01-01",
                 data_end="2020-12-31",
                 n_observations=120,
+                portfolio_diagnostics=_passing_portfolio_diagnostics(),
             )
 
     try:
@@ -2415,6 +2500,7 @@ def test_research_engine_passes_ready_strategy_spec_to_integrator():
                 data_start="2020-01-01",
                 data_end="2020-12-31",
                 n_observations=120,
+                portfolio_diagnostics=_passing_portfolio_diagnostics(),
             )
 
     class RecordingIntegrator:
@@ -2529,6 +2615,59 @@ def test_fast_validation_gate_fails_weak_after_cost_portfolio_diagnostics():
         assert idea["status"] == "validation_failed"
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_stage1_daily_a_share_fit_gate_ignores_low_admission_score():
+    report = _evaluation_report()
+    report.admission_score = 1.0
+    report.suitability_score = 1.0
+
+    gate = ResearchEngine._daily_a_share_fit_gate(_raw_strategy(), report)
+
+    assert gate["passed"] is True
+    assert gate["metrics"]["daily_a_share_fit"] is True
+
+
+def test_stage1_daily_a_share_fit_gate_rejects_intraday_dependency():
+    report = _evaluation_report()
+    report.data_requirement = "high-frequency"
+    report.daily_adaptable = False
+    report.risk_flags = ["intraday_dependency"]
+    report.required_data_fields = ["close", "intraday_or_order_book"]
+
+    gate = ResearchEngine._daily_a_share_fit_gate(_raw_strategy(), report)
+
+    assert gate["passed"] is False
+    assert "Not suitable for daily A-share research" in gate["reason"]
+    assert "intraday_dependency" in gate["reason"]
+
+
+def test_fast_validation_gate_uses_rank_ic_and_top20_after_cost_metrics_only():
+    engine = ResearchEngine(config=ResearchConfig())
+    report = ValidationReport(
+        strategy_id="daily_momentum_breakout",
+        status="validated",
+        rank_ic=0.021,
+        rank_ic_ir=0.5,
+        ic_decay=[],
+        fdr_adjusted_p=0.90,
+        fdr_significant=False,
+        ff_alpha_monthly=0.0,
+        ff_alpha_tstat=0.0,
+        ff_r2=0.0,
+        long_short_spread=0.0,
+        hit_rate=0.50,
+        data_start="2020-01-01",
+        data_end="2020-12-31",
+        n_observations=120,
+        portfolio_diagnostics=_passing_portfolio_diagnostics(),
+    )
+
+    gate = engine._fast_validation_gate(report)
+
+    assert gate["passed"] is True
+    assert gate["failures"] == []
+    assert gate["metrics"]["top_bucket_after_cost_annualized_return"] == pytest.approx(0.08)
 
 
 def test_research_engine_stops_before_integration_after_negative_rank_ic_direction():
@@ -2735,6 +2874,7 @@ def test_research_engine_uses_strategy_spec_universe_for_walkforward():
                 data_start="2020-01-01",
                 data_end="2020-12-31",
                 n_observations=120,
+                portfolio_diagnostics=_passing_portfolio_diagnostics(),
             )
 
     class RecordingRigorHub:
@@ -3129,11 +3269,15 @@ def test_api_yearly_returns_from_equity_uses_calendar_years():
 def test_api_make_strategy_scout_uses_infrastructure_sources():
     from quant.api import research_bp as research_module
 
-    scout = research_module._make_strategy_scout(ResearchConfig(sources=["ssrn"], scout_config={"rank_results": True}))
+    scout = research_module._make_strategy_scout(
+        ResearchConfig(sources=["ssrn", "bigquant", "jointquant"], scout_config={"rank_results": True})
+    )
 
     assert scout._source_hub is not None
-    assert scout._hub_sources == ["ssrn"]
+    assert scout._hub_sources == ["ssrn", "bigquant", "jointquant"]
     assert scout._source_hub._sources["ssrn"].__class__.__name__ == "SSRNSource"
+    assert scout._source_hub._sources["bigquant"].__class__.__name__ == "BigQuantSource"
+    assert scout._source_hub._sources["jointquant"].__class__.__name__ == "JoinQuantSource"
 
 
 def test_api_load_research_config_reads_feature_yaml():
@@ -3141,10 +3285,12 @@ def test_api_load_research_config_reads_feature_yaml():
 
     cfg = research_module._load_research_config()
 
-    assert cfg.sources == ["arxiv", "ssrn", "nber", "blog", "ashare_public_forum", "ashare_structural"]
+    assert cfg.sources == ["ssrn", "bigquant", "jointquant"]
     assert cfg.default_backtest_start == "2016-01-01"
     assert cfg.default_backtest_end == "2026-05-31"
     assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
+    assert cfg.scout_config["query_plan"]["bigquant"][0]["query"] == "行业 轮动"
+    assert cfg.scout_config["query_plan"]["jointquant"][0]["query"] == "小市值"
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
     assert cfg.production_gate_config["max_drawdown_cagr_10_15"] == 0.25
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
@@ -3873,18 +4019,22 @@ def test_cli_make_strategy_scout_uses_configured_source_hub():
     from quant.scripts import run_research as cli
 
     cfg = ResearchConfig(
-        sources=["ashare_public_forum"],
+        sources=["bigquant", "jointquant"],
         scout_config={
             "rank_results": True,
-            "query_plan": {"ashare_public_forum": [{"query": "行业 轮动"}]},
+            "query_plan": {
+                "bigquant": [{"query": "行业 轮动"}],
+                "jointquant": [{"query": "小市值"}],
+            },
         },
     )
 
     scout = cli._create_configured_scout(cfg)
 
     assert scout._source_hub is not None
-    assert scout._hub_sources == ["ashare_public_forum"]
-    assert scout._source_hub._sources["ashare_public_forum"].__class__.__name__ == "ASharePublicForumSource"
+    assert scout._hub_sources == ["bigquant", "jointquant"]
+    assert scout._source_hub._sources["bigquant"].__class__.__name__ == "BigQuantSource"
+    assert scout._source_hub._sources["jointquant"].__class__.__name__ == "JoinQuantSource"
 
 
 def test_cli_select_top_idea_ids_for_scout_formal_uses_discovery_score(tmp_path):
@@ -3926,20 +4076,20 @@ def test_low_frequency_idea_scout_writes_idea_bank_and_summary(tmp_path):
     from quant.scripts.run_low_frequency_idea_scout import run_scout
 
     cfg = ResearchConfig(
-        sources=["ashare_public_forum"],
+        sources=["bigquant"],
         max_results_per_source=5,
         scout_config={
             "rank_results": True,
             "min_discovery_score": 5.0,
             "required_match_terms": ["daily_ohlcv"],
-            "query_plan": {"ashare_public_forum": [{"query": "行业 轮动"}]},
+            "query_plan": {"bigquant": [{"query": "行业 轮动"}]},
         },
     )
 
     summary = run_scout(
         cfg,
         research_root=tmp_path,
-        sources=["ashare_public_forum"],
+        sources=["bigquant"],
         status="discovered",
         max_results=5,
         summary_name="test_low_frequency_scout",

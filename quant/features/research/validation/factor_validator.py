@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from quant.analytics.signal_kernels import uses_positive_signal_filter
 from quant.features.research.models import StrategySpec, ValidationReport
 from quant.features.research.validation.cross_sectional import (
     compute_cross_sectional_ic,
@@ -98,6 +99,35 @@ def _signal_error(formula_key: str) -> str:
     return f"Unsupported formula: {formula_key}"
 
 
+_FIELD_ALIASES = {
+    "market_cap": {
+        "total_mv",
+        "circ_mv",
+        "market_cap",
+        "total_market_cap",
+        "float_market_cap",
+        "circulating_market_cap",
+    },
+    "point_in_time_market_cap": {
+        "total_mv",
+        "circ_mv",
+        "market_cap",
+        "total_market_cap",
+        "float_market_cap",
+        "circulating_market_cap",
+    },
+    "turnover": {"turnover", "turnover_rate", "turnover_rate_f", "volume"},
+    "close": {"close", "adj_close"},
+    "open": {"open", "adj_open"},
+    "high": {"high", "adj_high"},
+    "low": {"low", "adj_low"},
+    "l1_code": {"l1_code", "industry_l1_code", "sw_l1_code"},
+    "l1_name": {"l1_name", "industry_l1_name", "sw_l1_name"},
+    "industry_code": {"industry_code", "l3_code", "l2_code", "l1_code"},
+    "industry_name": {"industry_name", "l3_name", "l2_name", "l1_name"},
+}
+
+
 class FactorValidator:
     def __init__(
         self,
@@ -118,7 +148,7 @@ class FactorValidator:
         self._start_date = str(self._config.get("start_date", "2016-01-01"))
         self._end_date = str(self._config.get("end_date", "2026-05-31"))
 
-    def validate(self, spec: StrategySpec) -> ValidationReport:
+    def validate(self, spec: StrategySpec, compute_signal: Any = None) -> ValidationReport:
         if spec.status != "ready":
             return ValidationReport(
                 strategy_id=spec.strategy_id,
@@ -131,7 +161,10 @@ class FactorValidator:
                 errors=[f"Spec status is '{spec.status}', not 'ready'"],
             )
 
-        from quant.features.research.validation.signal_library import compute_signal
+        if compute_signal is None:
+            from quant.features.research.validation.signal_library import compute_signal as default_compute_signal
+
+            compute_signal = default_compute_signal
 
         symbols = self._resolve_universe(spec)
         seed_universe_size = len(list(spec.universe or []))
@@ -205,15 +238,23 @@ class FactorValidator:
         }
 
     def _preflight_required_fields(self, spec: StrategySpec, symbols: List[str]) -> str:
-        if spec.signal_formula_key not in {"joinquant_small_cap_size_factor", "joinquant_small_cap_low_price_factor"}:
-            return ""
         if not symbols or not hasattr(self._market_data, "available_fields"):
             return ""
-        fields = set(self._market_data.available_fields(detect_market(symbols[0])) or [])
-        market_cap_fields = {"total_mv", "circ_mv", "market_cap", "total_market_cap", "float_market_cap", "circulating_market_cap"}
-        if fields.intersection(market_cap_fields):
+        market = detect_market(symbols[0])
+        fields = {str(field).lower() for field in self._market_data.available_fields(market) or []}
+        missing = [
+            field
+            for field in spec.required_fields
+            if not self._field_available(str(field).lower(), fields)
+        ]
+        if not missing:
             return ""
-        return _signal_error(spec.signal_formula_key)
+        return f"DB field mismatch for {market}: missing required fields {', '.join(missing)}"
+
+    @staticmethod
+    def _field_available(field: str, available_fields: set[str]) -> bool:
+        aliases = _FIELD_ALIASES.get(field, {field})
+        return bool(aliases.intersection(available_fields))
 
     def _requested_market_data_fields(self, spec: StrategySpec) -> Optional[List[str]]:
         if spec.signal_formula_key in {"joinquant_small_cap_size_factor", "joinquant_small_cap_low_price_factor"}:
@@ -229,6 +270,18 @@ class FactorValidator:
                 "total_market_cap",
                 "float_market_cap",
                 "circulating_market_cap",
+            ]
+        if spec.signal_formula_key == "ashare_industry_prosperity_trend_crowding_rotation":
+            return [
+                "close",
+                "adj_close",
+                "adj_factor",
+                "volume",
+                "turnover",
+                "l1_code",
+                "l1_name",
+                "industry_code",
+                "industry_name",
             ]
         return None
 
@@ -299,7 +352,7 @@ class FactorValidator:
             return self._error_report(spec, [_signal_error(spec.signal_formula_key)], universe_metadata)
 
         close_prices = adjusted_price_matrix(frame, "close")
-        forward_returns = close_prices.pct_change(spec.horizon_days).shift(-spec.horizon_days - self._exec_lag)
+        forward_returns = close_prices.pct_change(spec.horizon_days, fill_method=None).shift(-spec.horizon_days - self._exec_lag)
         daily_ic = compute_cross_sectional_ic(
             signal_matrix,
             forward_returns,
@@ -621,12 +674,7 @@ class FactorValidator:
         cost_bps: float,
     ) -> List[Dict[str, Any]]:
         layers: List[Dict[str, Any]] = []
-        non_positive_signal_formulas = {
-            "worldquant_alpha_004",
-            "joinquant_small_cap_size_factor",
-            "joinquant_small_cap_low_price_factor",
-        }
-        strategy_positive_only = str(spec.signal_formula_key) not in non_positive_signal_formulas
+        strategy_positive_only = uses_positive_signal_filter(str(spec.signal_formula_key))
         strategy_selection_note = (
             "使用策略生成器规则：top 1% capped 20，且 signal > 0。"
             if strategy_positive_only

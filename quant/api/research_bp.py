@@ -3078,7 +3078,15 @@ def _make_strategy_scout(cfg: ResearchConfig):
     from quant.features.research.discovery.ashare_structural import AShareStructuralSource
     from quant.features.research.discovery.source_hub import SourceHub
     from quant.features.research.scout import StrategyScout
-    from quant.infrastructure.research.sources import ASharePublicForumSource, ArxivSource, BlogSource, NBERSource, SSRNSource
+    from quant.infrastructure.research.sources import (
+        ASharePublicForumSource,
+        ArxivSource,
+        BigQuantSource,
+        BlogSource,
+        JoinQuantSource,
+        NBERSource,
+        SSRNSource,
+    )
 
     scout_cfg = getattr(cfg, "scout_config", {}) or {}
     source_hub = SourceHub({
@@ -3087,6 +3095,9 @@ def _make_strategy_scout(cfg: ResearchConfig):
         "nber": NBERSource(),
         "blog": BlogSource(),
         "ashare_public_forum": ASharePublicForumSource(),
+        "bigquant": BigQuantSource(),
+        "joinquant": JoinQuantSource(),
+        "jointquant": JoinQuantSource(source_name="jointquant"),
         "ashare_structural": AShareStructuralSource(),
     }, query_plan=scout_cfg.get("query_plan"), quality_config=scout_cfg)
     return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None), config=scout_cfg)
@@ -3478,7 +3489,8 @@ def get_schedule():
         "interval_days": cfg.interval_days,
         "sources": cfg.sources,
         "max_results_per_source": cfg.max_results_per_source,
-        "evaluation_threshold": cfg.evaluation_threshold,
+        "stage1_gate": "daily_a_share_fit",
+        "evaluation_threshold_deprecated": cfg.evaluation_threshold,
         "scout_config": cfg.scout_config,
         "evaluation_config": cfg.evaluation_config,
         "backtest_sharpe_threshold": cfg.backtest_sharpe_threshold,

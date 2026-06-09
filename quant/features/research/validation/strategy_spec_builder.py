@@ -1,3 +1,4 @@
+import hashlib
 import re
 from typing import Any, Dict, List, Optional
 
@@ -76,6 +77,14 @@ _FORMULA_MAP = {
         "horizon_days": 10,
         "execution_lag_days": 1,
     },
+    "ashare_industry_prosperity_trend_crowding_rotation": {
+        "formula_key": "ashare_industry_prosperity_trend_crowding_rotation",
+        "strategy_type": "momentum",
+        "required_fields": ["close", "volume", "l1_code"],
+        "lookback_days": 60,
+        "horizon_days": 20,
+        "execution_lag_days": 1,
+    },
     "ashare_range_contraction_breakout": {
         "formula_key": "ashare_range_contraction_breakout",
         "strategy_type": "breakout",
@@ -98,6 +107,14 @@ _FORMULA_MAP = {
         "required_fields": ["turnover"],
         "lookback_days": 20,
         "horizon_days": 10,
+        "execution_lag_days": 1,
+    },
+    "ashare_price_volume_multifactor": {
+        "formula_key": "ashare_price_volume_multifactor",
+        "strategy_type": "factor",
+        "required_fields": ["close", "volume"],
+        "lookback_days": 20,
+        "horizon_days": 5,
         "execution_lag_days": 1,
     },
     "joinquant_small_cap_ma_stop": {
@@ -202,7 +219,7 @@ class StrategySpecBuilder:
         worldquant_formula = _worldquant_formula_key(raw)
         metadata_formula = _metadata_formula_key(raw)
         strategy_type = "worldquant_factor" if worldquant_formula else report.strategy_type
-        formula_lookup_key = worldquant_formula or metadata_formula or strategy_type
+        formula_lookup_key = worldquant_formula or metadata_formula or self._auto_formula_key(raw, report) or strategy_type
         strategy_id = _strategy_id(raw.title)
         resolved_universe = self._resolve_universe(universe, report)
         formula = self._formula_map.get(formula_lookup_key)
@@ -234,7 +251,7 @@ class StrategySpecBuilder:
                 execution_lag_days=0,
                 required_fields=[],
                 status="missing_formula",
-                reason=f"No formula mapping for '{formula_lookup_key}'",
+                reason=f"No faithful signal formula mapping for '{formula_lookup_key}'",
             )
 
         return StrategySpec(
@@ -258,12 +275,41 @@ class StrategySpecBuilder:
             return list(self._default_universe)
         return recommended or list(DEFAULT_A_SHARE_SYMBOLS)
 
+    def _auto_formula_key(self, raw: RawStrategy, report: EvaluationReport) -> str:
+        text = f"{raw.title} {raw.description}".lower()
+        source = str(raw.source or "").lower()
+        if "小市值" in text and "低价" in text:
+            return "joinquant_small_cap_low_price"
+        if "small cap" in text and "low price" in text:
+            return "joinquant_small_cap_low_price"
+        if "alpha101" in text or "worldquant" in text:
+            return "worldquant_alpha_001"
+        if "多因子" in text or "multi-factor" in text or "multifactor" in text:
+            return "ashare_price_volume_multifactor"
+        if (
+            "行业轮动" in text
+            or ("行业" in text and ("轮动" in text or "景气度" in text or "拥挤度" in text))
+            or (("sector" in text or "industry" in text) and "rotation" in text)
+        ):
+            return "ashare_industry_prosperity_trend_crowding_rotation"
+        return ""
+
 
 def _strategy_id(title: str) -> str:
     hyphen_replaced = title.replace("-", " ")
     cleaned = re.sub(r"[^a-zA-Z0-9_\s]", "", hyphen_replaced)
     underscored = re.sub(r"\s+", "_", cleaned.strip()).lower()
-    return re.sub(r"_+", "_", underscored).strip("_")[:50].strip("_") or "strategy_candidate"
+    base = re.sub(r"_+", "_", underscored).strip("_") or "strategy_candidate"
+    if _needs_stable_suffix(title, base):
+        suffix = hashlib.sha1(str(title).encode("utf-8")).hexdigest()[:8]
+        prefix = base[: max(1, 49 - len(suffix))].strip("_") or "strategy"
+        base = f"{prefix}_{suffix}"
+    return base[:50].strip("_") or "strategy_candidate"
+
+
+def _needs_stable_suffix(title: str, base: str) -> bool:
+    has_non_ascii = any(ord(char) > 127 for char in str(title or ""))
+    return has_non_ascii and len([part for part in base.split("_") if part]) <= 1
 
 
 def _a_share_universe(symbols: Optional[List[str]]) -> List[str]:

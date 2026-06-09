@@ -154,7 +154,8 @@ def test_integrator_generates_mean_reversion_formula_logic(tmp_path):
     code = (tmp_path / strategy_id / "strategy.py").read_text(encoding="utf-8")
 
     assert "mean_reversion_close_to_ma" in code
-    assert "moving_average" in code
+    assert "from quant.analytics.signal_kernels import compute_signal" in code
+    assert 'compute_signal("mean_reversion_close_to_ma", frame, self.lookback)' in code
     assert "TODO" not in code
 
 
@@ -169,7 +170,7 @@ def test_integrator_generates_a_share_structural_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "ashare_short_reversal_5d" in code
-    assert "return float(-(current / past - 1.0))" in code
+    assert 'compute_signal("ashare_short_reversal_5d", frame, self.lookback)' in code
     assert "Manual implementation required" not in code
     assert "TODO" not in code
 
@@ -190,7 +191,7 @@ def test_integrator_generates_a_share_extended_liquidity_formula_logic(tmp_path)
 
     assert "ashare_liquidity_weighted_low_volatility" in code
     assert "_bar_turnover" in code
-    assert "np.log1p(avg_turnover)" in code
+    assert 'compute_signal("ashare_liquidity_weighted_low_volatility", frame, self.lookback)' in code
     assert "Manual implementation required" not in code
 
     cls = _load_generated_class(strategy_file, "AshareLiquidityweightedLowVolatilityStrategy")
@@ -209,7 +210,7 @@ def test_integrator_generates_worldquant_alpha_001_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "worldquant_alpha_001" in code
-    assert "_worldquant_alpha_001_raw" in code
+    assert 'compute_signal("worldquant_alpha_001", frame, self.lookback)' in code
     assert code.count("def _execute_rebalance") == 1
     assert "Manual implementation required" not in code
     assert "TODO" not in code
@@ -218,6 +219,25 @@ def test_integrator_generates_worldquant_alpha_001_formula_logic(tmp_path):
     strategy = cls(symbols=["600001", "600002"], lookback=20)
     assert strategy.name == "worldquant_101_alpha_001"
     assert strategy.max_position_pct == 1.0
+
+
+def test_generated_strategy_uses_analytics_signal_kernel_for_screening_source(tmp_path):
+    integrator = StrategyIntegrator(tmp_path)
+    raw = _raw("BigQuant Industry Rotation")
+    report = _report("momentum")
+    spec = _spec(
+        "momentum",
+        "ashare_industry_prosperity_trend_crowding_rotation",
+        strategy_id="bigquant_industry_rotation",
+    )
+
+    strategy_file = integrator.write_screening_source(raw, report, spec=spec)
+    assert strategy_file == tmp_path / "reject" / "bigquant_industry_rotation" / "strategy.py"
+    assert strategy_file.exists()
+    code = strategy_file.read_text(encoding="utf-8")
+
+    assert "from quant.analytics.signal_kernels import compute_signal" in code
+    assert 'compute_signal("ashare_industry_prosperity_trend_crowding_rotation", frame, self.lookback)' in code
 
 
 def test_integrator_generates_worldquant_alpha_002_formula_logic(tmp_path):
@@ -231,8 +251,7 @@ def test_integrator_generates_worldquant_alpha_002_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "worldquant_alpha_002" in code
-    assert "_worldquant_alpha_002_scores" in code
-    assert "delta_values" in code
+    assert 'compute_signal("worldquant_alpha_002", frame, self.lookback)' in code
     assert code.count("def _execute_rebalance") == 1
     assert "Manual implementation required" not in code
     assert "TODO" not in code
@@ -253,9 +272,7 @@ def test_integrator_generates_worldquant_alpha_003_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "worldquant_alpha_003" in code
-    assert "_worldquant_alpha_003_scores" in code
-    assert "ranked_open" in code
-    assert "ranked_volume" in code
+    assert 'compute_signal("worldquant_alpha_003", frame, self.lookback)' in code
     assert code.count("def _execute_rebalance") == 1
     assert "Manual implementation required" not in code
     assert "TODO" not in code
@@ -276,10 +293,7 @@ def test_integrator_generates_worldquant_alpha_004_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "worldquant_alpha_004" in code
-    assert "_worldquant_alpha_004_scores" in code
-    assert "ranked_low_history" in code
-    assert "signal = -ts_rank" in code
-    assert "signal > 0" not in code
+    assert 'compute_signal("worldquant_alpha_004", frame, self.lookback)' in code
     assert code.count("def _execute_rebalance") == 1
     assert "Manual implementation required" not in code
     assert "TODO" not in code
@@ -300,10 +314,7 @@ def test_integrator_generates_worldquant_alpha_006_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "worldquant_alpha_006" in code
-    assert "_worldquant_alpha_006_scores" in code
-    assert "open_values" in code
-    assert "volume_values" in code
-    assert "signal = -self._correlation(open_values, volume_values)" in code
+    assert 'compute_signal("worldquant_alpha_006", frame, self.lookback)' in code
     assert code.count("def _execute_rebalance") == 1
     assert "Manual implementation required" not in code
     assert "TODO" not in code
@@ -324,9 +335,7 @@ def test_integrator_generates_worldquant_alpha_010_formula_logic(tmp_path):
     code = strategy_file.read_text(encoding="utf-8")
 
     assert "worldquant_alpha_010" in code
-    assert "_worldquant_alpha_010_scores" in code
-    assert "raw_values[symbol] = -current_delta" in code
-    assert "delta_window = max(2, int(self.lookback))" in code
+    assert 'compute_signal("worldquant_alpha_010", frame, self.lookback)' in code
     assert code.count("def _execute_rebalance") == 1
     assert "Manual implementation required" not in code
     assert "TODO" not in code

@@ -58,5 +58,9 @@ class ResearchStore(ABC):
         ...
 
     @abstractmethod
+    def write_initial_screening_table(self, rows: Iterable[Dict[str, Any]]) -> None:
+        ...
+
+    @abstractmethod
     def save_run_result(self, result: Any) -> None:
         ...

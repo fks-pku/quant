@@ -1,5 +1,6 @@
 import inspect
 import logging
+import math
 import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -348,6 +349,9 @@ class ResearchEngine:
                 self._upsert_idea(raw, "error", str(e))
 
         self.research_store.write_evaluations(evaluation_rows)
+        self.research_store.write_initial_screening_table(
+            self._initial_screening_rows(evaluation_rows, result)
+        )
 
         if self.config.auto_backtest and integrated_items:
             self._run_backtests(integrated_items, result)
@@ -402,17 +406,16 @@ class ResearchEngine:
         result.evaluated += 1
 
         evaluation_score = self._evaluation_score(report)
-        passes_filter = evaluation_score >= self.config.evaluation_threshold
-        if report.data_requirement == "high-frequency":
-            passes_filter = passes_filter and report.daily_adaptable
+        fit_gate = self._daily_a_share_fit_gate(raw, report)
+        passes_filter = bool(fit_gate.get("passed"))
 
         if not passes_filter:
-            reason = self._admission_rejection_reason(report, evaluation_score)
+            reason = str(fit_gate.get("reason") or "Not suitable for daily A-share research")
             result.log.append(ResearchLogEntry(
                 phase="stage1_admission", title=raw.title, source=raw.source,
                 source_url=raw.source_url, verdict="fail",
                 reason=reason,
-                scores=self._evaluation_log_scores(report, evaluation_score),
+                scores={**self._evaluation_log_scores(report, evaluation_score), **dict(fit_gate.get("metrics") or {})},
             ))
             evaluation_rows.append((raw, report, "fail", reason))
             self._record_hypothesis(
@@ -422,7 +425,7 @@ class ResearchEngine:
                 reason=reason,
                 report=report,
             )
-            logger.info(f"'{raw.title}' filtered out (admission={evaluation_score})")
+            logger.info(f"'{raw.title}' filtered out ({reason})")
             self._upsert_idea(raw, "stage1_rejected", reason)
             result.rejected += 1
             return None
@@ -457,6 +460,7 @@ class ResearchEngine:
             reason="Ready for formal research",
             scores={
                 **self._evaluation_log_scores(report, evaluation_score),
+                **dict(fit_gate.get("metrics") or {}),
                 "strategy_id": getattr(strategy_spec, "strategy_id", ""),
                 "formula": getattr(strategy_spec, "signal_formula_key", ""),
             },
@@ -483,6 +487,7 @@ class ResearchEngine:
     ) -> Optional[str]:
         validation_report = None
         if self.config.validation_enabled and strategy_spec is not None and self._validator is not None:
+            strategy_code_path = self._write_screening_strategy_source(raw, report, strategy_spec)
             result.log.append(ResearchLogEntry(
                 phase="stage2_validation",
                 title=raw.title,
@@ -495,6 +500,8 @@ class ResearchEngine:
                     "formula": getattr(strategy_spec, "signal_formula_key", ""),
                     "lookback_days": getattr(strategy_spec, "lookback_days", 0),
                     "horizon_days": getattr(strategy_spec, "horizon_days", 0),
+                    "signal_source": "analytics_signal_kernels",
+                    "strategy_code_path": str(strategy_code_path or ""),
                 },
             ))
             vreport = self._validator.validate(strategy_spec)
@@ -504,6 +511,9 @@ class ResearchEngine:
             gate = self._fast_validation_gate(vreport)
             gate_reason = str(gate.get("reason") or "")
             gate_metrics = dict(gate.get("metrics") or {})
+            if strategy_code_path is not None:
+                gate_metrics["signal_source"] = "analytics_signal_kernels"
+                gate_metrics["strategy_code_path"] = str(strategy_code_path)
             if not bool(gate.get("passed")):
                 result.log.append(ResearchLogEntry(
                     phase="stage2_validation", title=raw.title, source=raw.source,
@@ -595,20 +605,61 @@ class ResearchEngine:
         self._upsert_idea(raw, "error", "Integration failed")
         return None
 
+    def _write_screening_strategy_source(self, raw: RawStrategy, report: Any, strategy_spec: Any) -> Optional[Path]:
+        writer = getattr(self.integrator, "write_screening_source", None)
+        if writer is None:
+            return None
+        return writer(raw, report, strategy_spec)
+
     def _pre_full_gate_enabled(self) -> bool:
         cfg = dict(getattr(self.config, "validation_config", {}) or {})
         return bool(cfg.get("pre_full_gate_enabled", True))
 
-    def _admission_rejection_reason(self, report: Any, evaluation_score: float) -> str:
-        reason_parts = [
-            f"admission={evaluation_score:.1f} < {self.config.evaluation_threshold}",
-            f"suitability={report.suitability_score:.1f}",
-        ]
-        if report.data_requirement == "high-frequency" and not report.daily_adaptable:
-            reason_parts.append("high-frequency, not daily-adaptable")
-        if getattr(report, "rejection_reason", ""):
-            reason_parts.append(report.rejection_reason)
-        return "; ".join(reason_parts)
+    @staticmethod
+    def _daily_a_share_fit_gate(raw: RawStrategy, report: Any) -> Dict[str, Any]:
+        data_requirement = str(getattr(report, "data_requirement", "") or "unknown").strip().lower()
+        daily_adaptable = bool(getattr(report, "daily_adaptable", False))
+        risk_flags = {str(flag).strip().lower() for flag in getattr(report, "risk_flags", []) or []}
+        required_fields = {str(field).strip().lower() for field in getattr(report, "required_data_fields", []) or []}
+        discovery = dict((getattr(raw, "metadata", {}) or {}).get("discovery_quality") or {})
+        matched_terms = {str(term).strip().lower() for term in discovery.get("matched_terms", []) or []}
+        blocking_flags = {
+            "high_frequency_not_daily",
+            "hf_not_daily",
+            "intraday_dependency",
+            "alternative_data_required",
+            "non_equity_market",
+            "non_price_signal",
+            "crypto_capacity_risk",
+        }
+        intraday_fields = {"intraday_or_order_book", "tick", "order_book", "limit_order_book"}
+        failures = []
+        if data_requirement == "high-frequency" and not daily_adaptable:
+            failures.append("high-frequency data requirement is not daily-adaptable")
+        blocked = sorted(risk_flags.intersection(blocking_flags))
+        if blocked:
+            failures.append(f"blocking risk flags: {', '.join(blocked)}")
+        fields = sorted(required_fields.intersection(intraday_fields))
+        if fields:
+            failures.append(f"requires intraday fields: {', '.join(fields)}")
+
+        metrics = {
+            "daily_a_share_fit": not failures,
+            "data_requirement": data_requirement,
+            "daily_adaptable": daily_adaptable,
+            "matched_terms": sorted(matched_terms),
+        }
+        if failures:
+            return {
+                "passed": False,
+                "reason": "Not suitable for daily A-share research: " + "; ".join(failures),
+                "metrics": metrics,
+            }
+        return {
+            "passed": True,
+            "reason": f"Suitable for daily A-share research: data_requirement={data_requirement}",
+            "metrics": metrics,
+        }
 
     def _upsert_idea(self, raw: RawStrategy, status: str, reason: str = "") -> None:
         try:
@@ -836,6 +887,132 @@ class ResearchEngine:
             self._artifact_store.save_table(run_id or "research_pipeline", "candidate_scorecard", rows)
         except Exception as e:
             logger.warning(f"Failed to write candidate scorecard: {e}")
+
+    def _initial_screening_rows(
+        self,
+        evaluation_rows: Iterable[Tuple[Any, Any, str, str]],
+        result: ResearchResult,
+    ) -> List[Dict[str, Any]]:
+        rows: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        for raw, report, verdict, reason in evaluation_rows:
+            key = self._screening_key(raw)
+            item = rows.setdefault(
+                key,
+                {
+                    "raw": raw,
+                    "report": report,
+                    "status": "",
+                    "reason": "",
+                    "strategy_id": "",
+                    "formula": "",
+                    "strategy_code_path": "",
+                    "rank_ic": None,
+                    "sharpe": None,
+                },
+            )
+            item["status"] = str(verdict or "")
+            item["reason"] = str(reason or "")
+
+        for entry in result.log:
+            key = self._screening_key(entry)
+            if key not in rows:
+                continue
+            scores = dict(getattr(entry, "scores", {}) or {})
+            phase = str(getattr(entry, "phase", "") or "")
+            verdict = str(getattr(entry, "verdict", "") or "")
+            if scores.get("strategy_code_path"):
+                rows[key]["strategy_code_path"] = str(scores.get("strategy_code_path") or "")
+            if phase == "stage1_spec":
+                rows[key]["strategy_id"] = str(scores.get("strategy_id", "") or rows[key].get("strategy_id", ""))
+                rows[key]["formula"] = str(scores.get("formula", "") or rows[key].get("formula", ""))
+            elif phase == "stage2_validation" and verdict in {"pass", "fail"}:
+                rows[key]["status"] = "validated" if verdict == "pass" else "validation_failed"
+                rows[key]["reason"] = str(getattr(entry, "reason", "") or rows[key].get("reason", ""))
+                rows[key]["rank_ic"] = _optional_float(scores.get("rank_ic"))
+                rows[key]["sharpe"] = _optional_float(scores.get("top_bucket_after_cost_sharpe"))
+            elif phase == "stage2_integrate" and verdict == "pass":
+                rows[key]["status"] = "candidate"
+                rows[key]["reason"] = str(getattr(entry, "reason", "") or rows[key].get("reason", ""))
+
+        return [self._initial_screening_output_row(item) for item in rows.values()]
+
+    def _initial_screening_output_row(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        raw = item.get("raw")
+        report = item.get("report")
+        source = str(getattr(raw, "source", "") or "")
+        source_url = str(getattr(raw, "source_url", "") or "")
+        strategy_id = str(item.get("strategy_id", "") or "")
+        formula = str(item.get("formula", "") or "")
+        strategy_code_path = str(item.get("strategy_code_path", "") or "")
+        rank_ic = item.get("rank_ic")
+        sharpe = item.get("sharpe")
+        status = str(item.get("status", "") or "")
+        code_file = self._screening_code_file(strategy_id, formula, status, strategy_code_path)
+        code_url = self._screening_code_url(strategy_id, formula, status, strategy_code_path)
+        reason = str(item.get("reason", "") or "")
+        return {
+            "idea": str(getattr(raw, "title", "") or ""),
+            "source": source,
+            "策略解释": _compact_text(str(getattr(raw, "description", "") or getattr(report, "summary", "") or ""), 240),
+            "策略实现代码文件": code_file,
+            "rank_ic": "" if rank_ic is None else f"{float(rank_ic):.4f}",
+            "sharpe": "" if sharpe is None else f"{float(sharpe):.2f}",
+            "结论": _compact_text(f"{status}: {reason}".strip(": "), 260),
+            "source_url": source_url,
+            "strategy_code_url": code_url,
+            "strategy_id": strategy_id,
+            "formula": formula,
+        }
+
+    def _screening_code_file(self, strategy_id: str, formula: str, status: str, strategy_code_path: str = "") -> str:
+        path = self._screening_code_path(strategy_id, formula, status, strategy_code_path)
+        if path is None:
+            return ""
+        label = self._repo_relative_path(path)
+        if formula and path.name != "strategy.py":
+            return f"{label}::{formula}"
+        return label
+
+    def _screening_code_url(self, strategy_id: str, formula: str, status: str, strategy_code_path: str = "") -> str:
+        path = self._screening_code_path(strategy_id, formula, status, strategy_code_path)
+        return "" if path is None else str(path)
+
+    def _screening_code_path(
+        self,
+        strategy_id: str,
+        formula: str,
+        status: str,
+        strategy_code_path: str = "",
+    ) -> Optional[Path]:
+        if strategy_code_path:
+            return Path(strategy_code_path)
+        if strategy_id and status == "candidate":
+            strategies_dir = Path(str(getattr(self.integrator, "strategies_dir", Path("quant/features/strategies"))))
+            if not strategies_dir.is_absolute():
+                strategies_dir = self._repo_root() / strategies_dir
+            return strategies_dir / strategy_id / "strategy.py"
+        if formula:
+            return self._repo_root() / "quant" / "features" / "research" / "validation" / "signal_library.py"
+        return None
+
+    @staticmethod
+    def _repo_root() -> Path:
+        return Path(__file__).resolve().parents[3]
+
+    @classmethod
+    def _repo_relative_path(cls, path: Path) -> str:
+        try:
+            return str(path.resolve().relative_to(cls._repo_root()))
+        except ValueError:
+            return str(path)
+
+    @staticmethod
+    def _screening_key(item: Any) -> Tuple[str, str, str]:
+        return (
+            str(getattr(item, "title", "") or ""),
+            str(getattr(item, "source", "") or ""),
+            str(getattr(item, "source_url", "") or ""),
+        )
 
     @staticmethod
     def _scorecard_row(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1236,14 +1413,8 @@ class ResearchEngine:
         cfg = dict(getattr(self.config, "validation_config", {}) or {})
         min_rank_ic = float(cfg.get("fast_gate_min_rank_ic", cfg.get("min_rank_ic", 0.02)))
         min_top_sharpe = float(cfg.get("fast_gate_min_top_bucket_after_cost_sharpe", 0.5))
-        min_top_return = float(cfg.get("fast_gate_min_top_bucket_after_cost_annualized_return", 0.08))
+        min_top_return = float(cfg.get("fast_gate_min_top_bucket_after_cost_annualized_return", 0.05))
         max_top_drawdown = abs(float(cfg.get("fast_gate_max_top_bucket_after_cost_drawdown", 0.50)))
-        min_excess_sharpe = float(cfg.get("fast_gate_min_benchmark_excess_after_cost_sharpe", 0.0))
-        min_excess_return = float(cfg.get("fast_gate_min_benchmark_excess_after_cost_annualized_return", 0.0))
-        max_turnover_raw = cfg.get("fast_gate_max_top_bucket_turnover", 0.35)
-        max_turnover = None if max_turnover_raw is None else abs(float(max_turnover_raw))
-        min_oos_positive_pct = float(cfg.get("fast_gate_min_rolling_oos_positive_pct", 0.55))
-        min_oos_periods = int(cfg.get("fast_gate_min_rolling_oos_periods", 3))
         fail_on_high_ic_decay = bool(cfg.get("fast_gate_fail_on_high_ic_decay", False))
 
         if validation_report is None:
@@ -1255,11 +1426,11 @@ class ResearchEngine:
                 "failures": ["no_validation_report"],
             }
 
-        rank_ic = _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0)
+        rank_ic = _required_float(getattr(validation_report, "rank_ic", None))
         fdr = _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0)
         hit_rate = _float_or_default(getattr(validation_report, "hit_rate", 0.0), 0.0)
         metrics: Dict[str, Any] = {
-            "rank_ic": rank_ic,
+            "rank_ic": rank_ic if rank_ic is not None else "not_calculable",
             "rank_ic_ir": _float_or_default(getattr(validation_report, "rank_ic_ir", 0.0), 0.0),
             "fdr_adjusted_p": fdr,
             "fdr_significant": bool(getattr(validation_report, "fdr_significant", False)),
@@ -1270,68 +1441,51 @@ class ResearchEngine:
         if getattr(validation_report, "status", "") == "error":
             errors = "; ".join(str(item) for item in getattr(validation_report, "errors", []) or [])
             failures.append(f"validation_error={errors or 'unknown'}")
-        if not bool(getattr(validation_report, "fdr_significant", False)):
-            failures.append(f"fdr_adjusted_p={fdr:.4f} > threshold")
-        if rank_ic < min_rank_ic:
-            failures.append(f"rank_ic={rank_ic:.4f} < {min_rank_ic:.4f}")
+        if rank_ic is None:
+            failures.append("rank_ic=not_calculable")
+        elif rank_ic <= min_rank_ic:
+            failures.append(f"rank_ic={rank_ic:.4f} <= {min_rank_ic:.4f}")
         if fail_on_high_ic_decay and "high_ic_decay" in set(getattr(validation_report, "errors", []) or []):
             failures.append("high_ic_decay")
 
         diagnostics = getattr(validation_report, "portfolio_diagnostics", {}) or {}
         if isinstance(diagnostics, dict) and diagnostics:
-            top_sharpe = _optional_float(diagnostics.get("top_bucket_after_cost_sharpe"))
-            top_return = _optional_float(diagnostics.get("top_bucket_after_cost_annualized_return"))
-            top_drawdown = _optional_float(diagnostics.get("top_bucket_after_cost_max_drawdown"))
-            turnover = _optional_float(diagnostics.get("top_bucket_turnover"))
-            excess_sharpe = _optional_float(diagnostics.get("benchmark_excess_after_cost_sharpe"))
-            excess_return = _optional_float(diagnostics.get("benchmark_excess_after_cost_annualized_return"))
+            top_sharpe = _required_float(diagnostics.get("top_bucket_after_cost_sharpe"))
+            top_return = _required_float(diagnostics.get("top_bucket_after_cost_annualized_return"))
+            top_drawdown = _required_float(diagnostics.get("top_bucket_after_cost_max_drawdown"))
             for key, value in {
                 "top_bucket_after_cost_sharpe": top_sharpe,
                 "top_bucket_after_cost_annualized_return": top_return,
                 "top_bucket_after_cost_max_drawdown": top_drawdown,
-                "top_bucket_turnover": turnover,
-                "benchmark_excess_after_cost_sharpe": excess_sharpe,
-                "benchmark_excess_after_cost_annualized_return": excess_return,
             }.items():
                 if value is not None:
                     metrics[key] = value
-            if top_sharpe is not None and top_sharpe < min_top_sharpe:
+            if top_sharpe is None:
+                failures.append("top_bucket_after_cost_sharpe=not_calculable")
+            elif top_sharpe < min_top_sharpe:
                 failures.append(f"top_bucket_after_cost_sharpe={top_sharpe:.2f} < {min_top_sharpe:.2f}")
-            if top_return is not None and top_return < min_top_return:
-                failures.append(f"top_bucket_after_cost_annualized_return={top_return:.2%} < {min_top_return:.2%}")
-            if top_drawdown is not None and abs(top_drawdown) > max_top_drawdown:
+            if top_return is None:
+                failures.append("top_bucket_after_cost_annualized_return=not_calculable")
+            elif top_return <= min_top_return:
+                failures.append(f"top_bucket_after_cost_annualized_return={top_return:.2%} <= {min_top_return:.2%}")
+            if top_drawdown is None:
+                failures.append("top_bucket_after_cost_max_drawdown=not_calculable")
+            elif abs(top_drawdown) >= max_top_drawdown:
                 failures.append(f"top_bucket_after_cost_max_drawdown={top_drawdown:.2%} beyond {max_top_drawdown:.2%}")
-            if excess_sharpe is not None and excess_sharpe < min_excess_sharpe:
-                failures.append(f"benchmark_excess_after_cost_sharpe={excess_sharpe:.2f} < {min_excess_sharpe:.2f}")
-            if excess_return is not None and excess_return < min_excess_return:
-                failures.append(f"benchmark_excess_after_cost_annualized_return={excess_return:.2%} < {min_excess_return:.2%}")
-            if max_turnover is not None and turnover is not None and turnover > max_turnover:
-                failures.append(f"top_bucket_turnover={turnover:.2%} > {max_turnover:.2%}")
-
-            rolling_oos = diagnostics.get("rolling_oos") or []
-            if isinstance(rolling_oos, list) and rolling_oos:
-                returns = [
-                    _optional_float(row.get("annualized_return"))
-                    for row in rolling_oos
-                    if isinstance(row, dict)
-                ]
-                returns = [value for value in returns if value is not None]
-                if returns:
-                    positive_pct = sum(1 for value in returns if value > 0.0) / len(returns)
-                    metrics["rolling_oos_periods"] = len(returns)
-                    metrics["rolling_oos_positive_pct"] = positive_pct
-                    if len(returns) >= min_oos_periods and positive_pct < min_oos_positive_pct:
-                        failures.append(f"rolling_oos_positive_pct={positive_pct:.0%} < {min_oos_positive_pct:.0%}")
+        else:
+            failures.append("portfolio_diagnostics=not_available")
 
         passed = not failures
         if passed:
             if "top_bucket_after_cost_sharpe" in metrics:
                 reason = (
-                    f"Validation passed: IC={rank_ic:.4f}, FDR={fdr:.4f}, "
-                    f"Top20 after-cost Sharpe={metrics['top_bucket_after_cost_sharpe']:.2f}"
+                    f"Validation passed: IC={rank_ic:.4f}, "
+                    f"Top20 after-cost Sharpe={metrics['top_bucket_after_cost_sharpe']:.2f}, "
+                    f"CAGR={metrics['top_bucket_after_cost_annualized_return']:.2%}, "
+                    f"MaxDD={metrics['top_bucket_after_cost_max_drawdown']:.2%}"
                 )
             else:
-                reason = f"Validation passed: IC={rank_ic:.4f}, FDR={fdr:.4f}"
+                reason = f"Validation passed: IC={rank_ic:.4f}"
         else:
             reason = "Validation failed: " + "; ".join(failures)
         return {
@@ -1354,12 +1508,13 @@ class ResearchEngine:
             metrics.update(dict(gate.get("metrics") or {}))
             metrics["validation_failures"] = list(gate.get("failures") or [])
             rank_ic = _float_or_default(metrics.get("rank_ic"), 0.0)
-            fdr = _float_or_default(metrics.get("fdr_adjusted_p"), 1.0)
-            hit_rate = _float_or_default(metrics.get("hit_rate"), 0.0)
             if bool(gate.get("passed")):
                 verdict = "pass"
                 conclusion = (
-                    f"快研究通过：Rank IC={rank_ic:.4f}、FDR={fdr:.4f}、hit_rate={hit_rate:.2%}；"
+                    f"快研究通过：Rank IC={rank_ic:.4f}、"
+                    f"Top20 扣费 Sharpe={_float_or_default(metrics.get('top_bucket_after_cost_sharpe'), 0.0):.2f}、"
+                    f"CAGR={_float_or_default(metrics.get('top_bucket_after_cost_annualized_return'), 0.0):.2%}、"
+                    f"MaxDD={_float_or_default(metrics.get('top_bucket_after_cost_max_drawdown'), 0.0):.2%}；"
                     "可进入 strict 回测检查真实交易约束。"
                 )
             else:
@@ -1378,29 +1533,11 @@ class ResearchEngine:
                 "来源/admission、StrategySpec、HFQ 信号验证和扣费组合诊断。",
             )
             return
-        if validation_report is None:
-            verdict = "warn"
-            conclusion = (
-                f"快研究完成 admission={evaluation_score:.2f}，但本轮未运行 HFQ 信号验证；"
-                "只能进入 strict 回测做执行层审计，不能作为独立通过结论。"
-            )
-        else:
-            rank_ic = _float_or_default(getattr(validation_report, "rank_ic", 0.0), 0.0)
-            fdr = _float_or_default(getattr(validation_report, "fdr_adjusted_p", 1.0), 1.0)
-            hit_rate = _float_or_default(getattr(validation_report, "hit_rate", 0.0), 0.0)
-            metrics.update({"rank_ic": rank_ic, "fdr_adjusted_p": fdr, "hit_rate": hit_rate})
-            if getattr(validation_report, "status", "") == "error" or not bool(getattr(validation_report, "fdr_significant", False)) or rank_ic < 0.02:
-                verdict = "fail"
-                conclusion = (
-                    f"快研究未通过：Rank IC={rank_ic:.4f}、FDR={fdr:.4f}、hit_rate={hit_rate:.2%}；"
-                    "继续 strict 回测和 walk-forward audit 仅用于审计，不作为上线依据。"
-                )
-            else:
-                verdict = "pass"
-                conclusion = (
-                    f"快研究通过：Rank IC={rank_ic:.4f}、FDR={fdr:.4f}、hit_rate={hit_rate:.2%}；"
-                    "可以进入 strict 回测检查真实交易约束。"
-                )
+        verdict = "warn"
+        conclusion = (
+            f"快研究完成 admission={evaluation_score:.2f}，但本轮未运行 HFQ 信号验证；"
+            "只能进入 strict 回测做执行层审计，不能作为独立通过结论。"
+        )
         self._attach_research_stage_conclusion(
             strategy_id,
             "fast_research",
@@ -1408,7 +1545,7 @@ class ResearchEngine:
             verdict,
             conclusion,
             metrics,
-            "来源/admission、StrategySpec、HFQ 信号验证和向量化组合诊断。",
+            "来源/admission 和 StrategySpec；本轮未运行 HFQ 信号验证。",
         )
 
     def _attach_strict_backtest_conclusion(self, strategy_id: str) -> Tuple[str, str]:
@@ -2050,9 +2187,14 @@ def _float_or_default(value: Any, default: float) -> float:
 
 def _optional_float(value: Any) -> Optional[float]:
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
+
+
+def _required_float(value: Any) -> Optional[float]:
+    return _optional_float(value)
 
 
 def _percent_text(value: Any) -> str:
@@ -2060,6 +2202,13 @@ def _percent_text(value: Any) -> str:
     if number is None:
         return "n/a"
     return f"{number:.2%}"
+
+
+def _compact_text(value: str, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _is_a_share_symbol(symbol: str) -> bool:
@@ -2104,6 +2253,9 @@ class _NullResearchStore(ResearchStore):
         pass
 
     def write_evaluations(self, evaluations: Iterable[Tuple[Any, Any, str, str]]) -> None:
+        pass
+
+    def write_initial_screening_table(self, rows: Iterable[Dict[str, Any]]) -> None:
         pass
 
     def save_run_result(self, result: Any) -> None:

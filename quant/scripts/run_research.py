@@ -1,7 +1,7 @@
 """Standalone research pipeline runner.
 
 Usage:
-    python quant/scripts/run_research.py [--mode discover|formal|scout_formal|full] [--source config] [--max 5] [--threshold 6.0]
+    python quant/scripts/run_research.py [--mode discover|formal|scout_formal|full] [--source config] [--max 5]
 """
 import argparse
 import logging
@@ -232,7 +232,9 @@ def _create_configured_scout(config):
     from quant.infrastructure.research.sources import (
         ASharePublicForumSource,
         ArxivSource,
+        BigQuantSource,
         BlogSource,
+        JoinQuantSource,
         NBERSource,
         SSRNSource,
     )
@@ -245,6 +247,9 @@ def _create_configured_scout(config):
             "nber": NBERSource(),
             "blog": BlogSource(),
             "ashare_public_forum": ASharePublicForumSource(),
+            "bigquant": BigQuantSource(),
+            "joinquant": JoinQuantSource(),
+            "jointquant": JoinQuantSource(source_name="jointquant"),
             "ashare_structural": AShareStructuralSource(),
         },
         query_plan=scout_cfg.get("query_plan"),
@@ -386,13 +391,13 @@ def main():
         choices=["full", "discover", "formal", "fast", "strict", "walkforward", "scout_formal", "scout-formal"],
         help="Pipeline mode",
     )
-    parser.add_argument("--source", default="config", help="Source (config, all, arxiv, ssrn, nber, blog, ashare_public_forum, ashare_structural, or comma list)")
+    parser.add_argument("--source", default="config", help="Source (config, all, ssrn, bigquant, jointquant, joinquant, or comma list)")
     parser.add_argument("--max", type=int, default=5, dest="max_results", help="Max results per source")
     parser.add_argument("--max-ideas", type=int, default=None, help="Max local ideas to research in formal mode")
     parser.add_argument("--idea-id", action="append", dest="idea_ids", help="Specific idea_bank id to research in formal mode")
     parser.add_argument("--strategy-id", action="append", dest="strategy_ids", help="Specific strategy id for strict/walkforward modes")
     parser.add_argument("--idea-status", action="append", dest="idea_statuses", help="Idea bank status to load in formal mode")
-    parser.add_argument("--threshold", type=float, default=6.0, help="Suiteability threshold (0-10)")
+    parser.add_argument("--threshold", type=float, default=None, help="Deprecated; stage1 now gates on daily A-share fit")
     parser.add_argument(
         "--backtest",
         action="store_true",
@@ -422,7 +427,8 @@ def main():
     config = _load_research_config()
     config.sources = _resolve_source_arg(args.source, config.sources)
     config.max_results_per_source = args.max_results
-    config.evaluation_threshold = args.threshold
+    if args.threshold is not None:
+        config.evaluation_threshold = args.threshold
     config.validation_enabled = not args.no_validation
     if not config.default_symbols:
         config.default_symbols = list(_CN_RESEARCH_SYMBOLS)
@@ -483,7 +489,7 @@ def main():
     print("  QUANT RESEARCH PIPELINE")
     print(f"  Mode: {args.mode}")
     print(f"  Sources: {', '.join(config.sources)} | Max/query: {args.max_results}")
-    print(f"  Threshold: {args.threshold} | Evaluator: {'heuristic' if not args.no_heuristic else 'LLM'}")
+    print(f"  Stage1 gate: daily A-share fit | Evaluator: {'heuristic' if not args.no_heuristic else 'LLM'}")
     print(f"  Backtest runner: {'ON' if needs_backtest_runner else 'OFF'}")
     if needs_backtest_runner:
         print(f"  Walk-forward workers: {max(1, args.walkforward_workers)}")
@@ -560,7 +566,7 @@ def main():
             _print_generated_files(c["id"])
     else:
         print()
-        print("  No candidates passed the threshold.")
+        print("  No candidates passed the configured gates.")
 
     _print_store_contents(store, var_root)
 

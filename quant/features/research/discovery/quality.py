@@ -15,6 +15,7 @@ _SOURCE_PROFILE = {
     "ashare_public_forum": ("practitioner_community", 1.20),
     "bigquant": ("practitioner_community", 1.20),
     "joinquant": ("practitioner_community", 1.15),
+    "jointquant": ("practitioner_community", 1.15),
     "joinquant_community": ("practitioner_community", 1.15),
     "alpha_architect": ("practitioner_research", 1.35),
     "quantocracy": ("curated_blog", 1.15),

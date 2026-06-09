@@ -14,6 +14,7 @@ from quant.infrastructure.research.asset_paths import (
     IDEA_BANK_MD,
     DISCOVERED_STRATEGIES_MD,
     FULL_REPORT_HTML,
+    INITIAL_SCREENING_TABLE_MD,
     LAST_RESULT_JSON,
     LATEST_REPORT_DIR,
     LATEST_REPORT_METADATA,
@@ -23,6 +24,9 @@ from quant.infrastructure.research.asset_paths import (
     latest_stage_report_html_path,
     report_dir,
     report_id_for_result,
+)
+from quant.infrastructure.research.initial_screening_table import (
+    initial_screening_table_markdown,
 )
 from quant.infrastructure.research.reporting import build_research_full_report_html, build_research_stage_report_html
 
@@ -300,6 +304,10 @@ class DuckDBResearchStore(ResearchStore):
                 ]
             )
         self._write_text(LATEST_REPORT_DIR / STRATEGY_EVALUATION_MD, "\n".join(lines))
+
+    def write_initial_screening_table(self, rows: Iterable[Dict[str, Any]]) -> None:
+        data = list(rows)
+        self._write_text(LATEST_REPORT_DIR / INITIAL_SCREENING_TABLE_MD, initial_screening_table_markdown(data))
 
     def save_run_result(self, result: Any) -> None:
         data = result.to_dict() if hasattr(result, "to_dict") else dict(result)

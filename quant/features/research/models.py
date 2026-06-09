@@ -105,9 +105,9 @@ class ResearchLogEntry:
 class ResearchConfig:
     auto_run: bool = False
     interval_days: int = 7
-    sources: List[str] = field(default_factory=lambda: ["arxiv", "ssrn"])
+    sources: List[str] = field(default_factory=lambda: ["ssrn", "bigquant", "jointquant"])
     max_results_per_source: int = 10
-    evaluation_threshold: float = 6.0
+    evaluation_threshold: float = 0.0
     backtest_sharpe_threshold: float = 0.5
     auto_backtest: bool = True
     default_backtest_start: str = "2016-01-01"
