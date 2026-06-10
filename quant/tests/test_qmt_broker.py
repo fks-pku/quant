@@ -53,6 +53,17 @@ class FakeTrade:
     strategy_name = "DemoStrategy"
 
 
+class FakeOrderHistory:
+    order_id = 9002
+    stock_code = "510300.SH"
+    order_type = 23
+    order_volume = 300
+    order_price = 4.769
+    order_status = 56
+    order_time = 1780969187
+    strategy_name = "ashare_broad_asset_etf_"
+
+
 class FakeTrader:
     instances = []
 
@@ -103,6 +114,10 @@ class FakeTrader:
     def query_stock_trades(self, account):
         self.trades_account = account
         return [FakeTrade()]
+
+    def query_stock_orders(self, account):
+        self.orders_account = account
+        return [FakeOrderHistory()]
 
 
 @pytest.fixture(autouse=True)
@@ -329,6 +344,26 @@ def test_qmt_trade_history_maps_xtquant_trade_records():
         "quantity": 100.0,
         "price": 101.5,
         "commission": 1.25,
+    }]
+
+
+def test_qmt_order_history_maps_filled_status_and_epoch_timestamp():
+    broker = QMTBroker(userdata_mini_path="D:/QMT/userdata_mini", account="123456")
+    broker.connect()
+
+    orders = broker.get_order_history()
+
+    trader = FakeTrader.instances[-1]
+    assert isinstance(trader.orders_account, FakeStockAccount)
+    assert orders == [{
+        "order_id": "9002",
+        "timestamp": "2026-06-09T09:39:47",
+        "strategy_name": "ashare_broad_asset_etf_",
+        "symbol": "510300",
+        "side": "BUY",
+        "quantity": 300.0,
+        "price": 4.769,
+        "status": "56",
     }]
 
 

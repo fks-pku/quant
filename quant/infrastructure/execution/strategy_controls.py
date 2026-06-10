@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from quant.infrastructure.execution.strategy_mode_records import append_control_operation
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.infrastructure.execution.strategy_ledger import append_strategy_audit
 
 
@@ -87,6 +88,7 @@ def apply_strategy_control_action(
     note: str = "",
     default_live_enabled: bool = False,
     mode: str = "live",
+    initial_cash: Optional[float] = None,
 ) -> StrategyControl:
     if action not in VALID_ACTIONS:
         raise ValueError(f"Unsupported strategy control action: {action}")
@@ -158,7 +160,7 @@ def apply_strategy_control_action(
         },
         timestamp=now,
     )
-    append_control_operation(
+    operation = append_control_operation(
         _control_path(path),
         strategy_name=strategy_name,
         mode=control_mode,
@@ -166,6 +168,69 @@ def apply_strategy_control_action(
         control=updated.to_dict(),
         timestamp=timestamp,
         note=note,
+    )
+    state_store = StrategyStateStore(_control_path(path).parent / "strategy_state.duckdb")
+    state_operation = state_store.record_operation(
+        mode=control_mode,
+        strategy_name=strategy_name,
+        operation_type=action,
+        requested_by="dashboard",
+        requested_at=timestamp,
+        effective_date=timestamp[:10],
+        params={"control": updated.to_dict(), "note": note},
+        status="applied",
+        applied_at=timestamp,
+        idempotency_key=str(operation.get("_record_key") or ""),
+    )
+    run = state_store.active_run(mode=control_mode, strategy_name=strategy_name)
+    if action == "start":
+        run = state_store.ensure_run(
+            mode=control_mode,
+            strategy_name=strategy_name,
+            initial_cash=float(initial_cash or 0.0),
+            started_at=timestamp,
+            operation_id=state_operation["operation_id"],
+        )
+    elif action == "resume" and run:
+        run = state_store.record_run_state(
+            mode=control_mode,
+            strategy_name=strategy_name,
+            run_id=str(run.get("run_id") or ""),
+            status="active",
+            timestamp=timestamp,
+            operation_id=state_operation["operation_id"],
+        )
+    elif action == "pause" and run:
+        run = state_store.record_run_state(
+            mode=control_mode,
+            strategy_name=strategy_name,
+            run_id=str(run.get("run_id") or ""),
+            status="paused",
+            timestamp=timestamp,
+            operation_id=state_operation["operation_id"],
+        )
+    elif action in {"stop", "liquidate_stop"} and run:
+        run = state_store.record_run_state(
+            mode=control_mode,
+            strategy_name=strategy_name,
+            run_id=str(run.get("run_id") or ""),
+            status="stopped" if action == "stop" else "active",
+            timestamp=timestamp,
+            operation_id=state_operation["operation_id"],
+        )
+    run_id = str((run or {}).get("run_id") or "")
+    state_store.record_control_state(
+        mode=control_mode,
+        strategy_name=strategy_name,
+        lifecycle_state=updated.live_state,
+        signal_enabled=updated.accepts_live_signals,
+        submit_enabled=updated.accepts_live_signals,
+        reconcile_enabled=True,
+        valuation_enabled=True,
+        current_run_id=run_id,
+        last_operation_id=state_operation["operation_id"],
+        timestamp=timestamp,
+        raw=updated.to_dict(),
     )
     return updated
 

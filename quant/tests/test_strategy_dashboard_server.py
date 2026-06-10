@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from quant.scripts.strategy_dashboard_server import _pending_submit_orders, build_dashboard_payload, create_app
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 
 
 def test_strategy_dashboard_payload_reads_live_records_positions_and_controls(tmp_path):
@@ -211,6 +212,9 @@ def test_strategy_dashboard_payload_reads_live_records_positions_and_controls(tm
     assert strategy["paper"]["initial_cash"] == pytest.approx(30000.0)
     assert strategy["live"]["control"]["mode"] == "live"
     assert strategy["live"]["control"]["live_state"] == "running"
+    assert strategy["live"]["state"]["run"]["initial_cash"] == pytest.approx(50000.0)
+    assert strategy["live"]["state"]["control_state"]["lifecycle_state"] == "running"
+    assert strategy["live"]["state"]["watermark"]["latest_market_data_date"] == "2026-06-03"
     assert strategy["paper"]["control"]["mode"] == "paper"
     assert strategy["paper"]["control"]["live_state"] == "running"
     assert strategy["paper"]["accepts_signals"] is True
@@ -336,20 +340,133 @@ def test_strategy_dashboard_materializes_and_reads_strategy_mode_records(tmp_pat
     strategy = next(item for item in payload["strategies"] if item["name"] == "DemoStrategy")
 
     assert payload["record_dirs"]["strategy_modes"].endswith("strategy_modes")
+    assert payload["record_dirs"]["strategy_state"].endswith("strategy_state.duckdb")
     assert payload["latest_record_date"] == {"live": "2026-06-03", "paper": "2026-06-03"}
     assert [row["symbol"] for row in strategy["live"]["records"]["signals"]] == ["600519"]
     assert [row["symbol"] for row in strategy["paper"]["records"]["signals"]] == ["000001"]
+    assert strategy["live"]["records"]["signals"][0]["run_id"] == strategy["live"]["state"]["run"]["run_id"]
+    assert strategy["paper"]["records"]["signals"][0]["run_id"] == strategy["paper"]["state"]["run"]["run_id"]
     assert strategy["paper"]["control"]["live_state"] == "paused"
     assert (
         root
         / "quant"
         / "infrastructure"
         / "var"
-        / "strategy_modes"
-        / "live"
-        / "DemoStrategy"
-        / "signals.jsonl"
+        / "strategy_state.duckdb"
     ).exists()
+
+
+def test_strategy_dashboard_api_reads_strict_state_without_migration_writes(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    live_records = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-03"
+    live_config.mkdir(parents=True)
+    live_records.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 20000}]}),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        live_records / "signals.jsonl",
+        [{
+            "timestamp": "2026-06-03T15:00:00",
+            "strategy_name": "DemoStrategy",
+            "order_id": "LIVE-1",
+            "symbol": "600519",
+            "side": "BUY",
+            "quantity": 100,
+            "order_type": "MARKET",
+            "status": "accepted",
+        }],
+    )
+    build_dashboard_payload(root)
+    state_path = root / "quant" / "infrastructure" / "var" / "strategy_state.duckdb"
+    before = state_path.stat().st_mtime_ns
+
+    res = create_app(root).test_client().get("/api/dashboard")
+
+    assert res.status_code == 200
+    assert res.get_json()["record_dirs"]["strategy_state"].endswith("strategy_state.duckdb")
+    assert state_path.stat().st_mtime_ns == before
+
+
+def test_strategy_dashboard_signal_table_hides_live_submit_attempts(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    live_records_day = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-08"
+    live_submit_day = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-09"
+    live_config.mkdir(parents=True)
+    live_records_day.mkdir(parents=True)
+    live_submit_day.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 20000}]}),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        live_records_day / "signals.jsonl",
+        [{
+            "timestamp": "2026-06-08T15:00:00",
+            "strategy_name": "DemoStrategy",
+            "order_id": "SIGNAL-1",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "order_type": "LIMIT",
+            "price": None,
+            "execution_cost_bps": 25.0,
+            "status": "accepted",
+            "submit_date": "2026-06-09",
+        }],
+    )
+    _write_jsonl(
+        live_submit_day / "signals.jsonl",
+        [{
+            "timestamp": "2026-06-09T09:39:47.208000",
+            "strategy_name": "DemoStrategy",
+            "order_id": "BRK-1",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "order_type": "LIMIT",
+            "price": 4.769,
+            "execution_reference_price": 4.769,
+            "status": "accepted",
+        }],
+    )
+    _write_jsonl(
+        live_submit_day / "orders.jsonl",
+        [{
+            "timestamp": "2026-06-09T09:39:47.208000",
+            "strategy_name": "DemoStrategy",
+            "order_id": "BRK-1",
+            "broker_order_id": "BRK-1",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "order_type": "LIMIT",
+            "price": 4.769,
+            "status": "submitted",
+        }],
+    )
+    _write_jsonl(
+        live_submit_day / "fills.jsonl",
+        [{
+            "timestamp": "2026-06-09T09:39:48",
+            "strategy_name": "DemoStrategy",
+            "order_id": "BRK-1",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "price": 4.769,
+            "commission": 5.0,
+        }],
+    )
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+
+    assert [row["timestamp"] for row in strategy["live"]["records"]["signals"]] == ["2026-06-08T15:00:00"]
+    assert strategy["live"]["records"]["pending_orders"] == []
+    assert strategy["live"]["records"]["orders"][0]["display_status"] == "filled"
 
 
 def test_strategy_dashboard_cash_only_configured_strategy_uses_initial_cash(tmp_path):
@@ -389,16 +506,10 @@ def test_strategy_dashboard_cash_only_configured_strategy_uses_initial_cash(tmp_
     assert strategy["paper"]["records"]["snapshots"][-1]["date"] == "2026-06-04"
     assert strategy["paper"]["records"]["snapshots"][-1]["nav"] == pytest.approx(25000.0)
     assert strategy["paper"]["performance"]["pnl_curve"][-1]["nav"] == pytest.approx(25000.0)
-    assert (
-        root
-        / "quant"
-        / "infrastructure"
-        / "var"
-        / "strategy_modes"
-        / "paper"
-        / "CashOnlyStrategy"
-        / "snapshots.jsonl"
-    ).exists()
+    state_store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_state.duckdb")
+    state_snapshots = state_store.read("snapshots", mode="paper", strategy_name="CashOnlyStrategy")
+    assert state_snapshots[-1]["source"] == "cash_only_no_activity"
+    assert state_snapshots[-1]["nav"] == pytest.approx(25000.0)
 
 
 def test_strategy_dashboard_derives_live_curve_from_fills_when_snapshots_missing(tmp_path):
@@ -471,6 +582,173 @@ def test_strategy_dashboard_derives_live_curve_from_fills_when_snapshots_missing
     assert curve[0]["nav"] == pytest.approx(20000.0)
     assert curve[1]["nav"] == pytest.approx(20000 - 200.5 + 201.0)
     assert curve[2]["nav"] == pytest.approx(20000 - 200.5 + 203.0)
+
+
+def test_strategy_dashboard_does_not_publish_live_nav_after_latest_market_data(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    live_records_prev = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-08"
+    live_records_today = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-09"
+    positions_path = root / "quant" / "features" / "data" / "strategy_positions.json"
+    stock_db = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb"
+    live_config.mkdir(parents=True)
+    live_records_prev.mkdir(parents=True)
+    live_records_today.mkdir(parents=True)
+    positions_path.parent.mkdir(parents=True)
+    stock_db.parent.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 10000}]}),
+        encoding="utf-8",
+    )
+    positions_path.write_text(
+        json.dumps({
+            "positions": {
+                "DemoStrategy": {
+                    "510300": {
+                        "symbol": "510300",
+                        "strategy_name": "DemoStrategy",
+                        "qty": 300.0,
+                        "avg_cost": 4.7856666667,
+                    }
+                }
+            },
+            "realized_pnl": {"DemoStrategy": 0.0},
+            "order_map": {"BRK-1": "DemoStrategy"},
+        }),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        live_records_prev / "snapshots.jsonl",
+        [{
+            "timestamp": "2026-06-08T15:00:00",
+            "date": "2026-06-08",
+            "strategy_name": "DemoStrategy",
+            "nav": 10000.0,
+            "cash": 10000.0,
+            "market_value": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "total_pnl": 0.0,
+        }],
+    )
+    _write_jsonl(
+        live_records_today / "orders.jsonl",
+        [{
+            "timestamp": "2026-06-09T09:39:47",
+            "strategy_name": "DemoStrategy",
+            "order_id": "BRK-1",
+            "broker_order_id": "BRK-1",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "order_type": "LIMIT",
+            "price": 4.769,
+            "status": "submitted",
+        }],
+    )
+    _write_jsonl(
+        live_records_today / "fills.jsonl",
+        [{
+            "timestamp": "2026-06-09T09:39:48",
+            "strategy_name": "DemoStrategy",
+            "order_id": "BRK-1",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "price": 4.769,
+            "commission": 5.0,
+        }],
+    )
+    _write_daily_ohlc(stock_db, "510300", "2026-06-08", 4.7, 4.739)
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+    curve = strategy["live"]["performance"]["pnl_curve"]
+
+    assert strategy["live"]["records"]["orders"][0]["display_status"] == "filled"
+    assert strategy["live"]["records"]["fills"][0]["timestamp"] == "2026-06-09T09:39:48"
+    assert [row["date"] for row in curve] == ["2026-06-08"]
+    assert strategy["live"]["performance"]["latest_snapshot"]["date"] == "2026-06-08"
+    assert strategy["live"]["performance"]["total_nav"] == pytest.approx(9995.0)
+    assert strategy["live"]["performance"]["cash"] == pytest.approx(8564.3)
+    assert strategy["live"]["performance"]["total_pnl"] == pytest.approx(-5.0)
+    assert strategy["live"]["performance"]["unrealized_pnl"] == pytest.approx(-5.0)
+    assert strategy["live"]["performance"]["total_return"] == pytest.approx(-5.0 / 10000.0)
+    assert strategy["live"]["holdings"]["price_date"] is None
+    assert strategy["live"]["holdings"]["cash"] == pytest.approx(8564.3)
+    assert strategy["live"]["holdings"]["nav"] == pytest.approx(9995.0)
+    assert strategy["live"]["holdings"]["total_market_value"] == pytest.approx(1430.7)
+    assert strategy["live"]["holdings"]["total_cost"] == pytest.approx(1435.7)
+    assert strategy["live"]["holdings"]["total_pnl"] == pytest.approx(-5.0)
+    assert strategy["live"]["holdings"]["items"][0]["valuation_status"] == "unmarked_after_activity"
+    assert strategy["live"]["holdings"]["items"][0]["current_price"] == pytest.approx(4.769)
+    assert strategy["live"]["holdings"]["items"][0]["price_source"] == "unmarked_fill_after_activity"
+    assert strategy["live"]["holdings"]["items"][0]["unrealized_pnl"] == pytest.approx(-5.0)
+    assert strategy["live"]["holdings"]["cash"] == pytest.approx(
+        10000.0
+        - strategy["live"]["records"]["orders"][0]["filled_qty"] * strategy["live"]["records"]["orders"][0]["fill_price"]
+        - strategy["live"]["records"]["orders"][0]["commission"]
+    )
+    assert strategy["live"]["holdings"]["nav"] == pytest.approx(
+        strategy["live"]["holdings"]["cash"] + strategy["live"]["holdings"]["total_market_value"]
+    )
+    assert strategy["live"]["holdings"]["total_pnl"] == pytest.approx(
+        strategy["live"]["holdings"]["nav"] - 10000.0
+    )
+
+
+def test_strategy_dashboard_submitted_orders_without_fills_keep_cash_unchanged(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    live_records_prev = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-08"
+    live_records_today = root / "quant" / "infrastructure" / "var" / "live_trading" / "2026-06-09"
+    live_config.mkdir(parents=True)
+    live_records_prev.mkdir(parents=True)
+    live_records_today.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 10000}]}),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        live_records_prev / "snapshots.jsonl",
+        [{
+            "timestamp": "2026-06-08T15:00:00",
+            "date": "2026-06-08",
+            "strategy_name": "DemoStrategy",
+            "nav": 10000.0,
+            "cash": 10000.0,
+            "market_value": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "total_pnl": 0.0,
+        }],
+    )
+    _write_jsonl(
+        live_records_today / "orders.jsonl",
+        [{
+            "timestamp": "2026-06-09T09:39:47",
+            "strategy_name": "DemoStrategy",
+            "order_id": "BRK-UNFILLED",
+            "broker_order_id": "BRK-UNFILLED",
+            "symbol": "510300",
+            "side": "BUY",
+            "quantity": 300,
+            "order_type": "LIMIT",
+            "price": 4.769,
+            "status": "submitted",
+        }],
+    )
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+
+    assert strategy["live"]["records"]["orders"][0]["display_status"] == "no_fill"
+    assert strategy["live"]["records"]["orders"][0]["filled_qty"] == pytest.approx(0.0)
+    assert strategy["live"]["holdings"]["items"] == []
+    assert strategy["live"]["holdings"]["cash"] == pytest.approx(10000.0)
+    assert strategy["live"]["holdings"]["total_market_value"] == pytest.approx(0.0)
+    assert strategy["live"]["holdings"]["nav"] == pytest.approx(10000.0)
+    assert strategy["live"]["performance"]["cash"] == pytest.approx(10000.0)
+    assert strategy["live"]["performance"]["total_nav"] == pytest.approx(10000.0)
+    assert strategy["live"]["performance"]["total_pnl"] == pytest.approx(0.0)
 
 
 def test_strategy_dashboard_materializes_canonical_snapshot_when_legacy_snapshot_mismatches_initial_cash(tmp_path):
@@ -550,29 +828,76 @@ def test_strategy_dashboard_materializes_canonical_snapshot_when_legacy_snapshot
 
     strategy = build_dashboard_payload(root)["strategies"][0]
     curve = strategy["paper"]["performance"]["pnl_curve"]
-    snapshot_path = (
-        root
-        / "quant"
-        / "infrastructure"
-        / "var"
-        / "strategy_modes"
-        / "paper"
-        / "DemoStrategy"
-        / "snapshots.jsonl"
-    )
-    snapshot_rows = [json.loads(line) for line in snapshot_path.read_text(encoding="utf-8").splitlines()]
+    snapshot_rows = StrategyStateStore(
+        root / "quant" / "infrastructure" / "var" / "strategy_state.duckdb"
+    ).read("snapshots", mode="paper", strategy_name="DemoStrategy")
     canonical = [row for row in snapshot_rows if row.get("source") == "canonical_fill_ledger"]
 
     assert curve[0]["date"] == "2026-06-02"
     assert curve[0]["cash"] == pytest.approx(20000.0)
     assert curve[0]["nav"] == pytest.approx(20000.0)
     assert curve[1]["date"] == "2026-06-03"
-    assert curve[1]["cash"] == pytest.approx(19800.0)
-    assert curve[1]["nav"] == pytest.approx(20010.0)
+    assert curve[1]["cash"] == pytest.approx(19795.0)
+    assert curve[1]["nav"] == pytest.approx(20005.0)
+    assert strategy["paper"]["records"]["orders"][0]["commission"] == pytest.approx(5.0)
+    assert strategy["paper"]["records"]["fills"][0]["commission"] == pytest.approx(5.0)
+    assert strategy["paper"]["records"]["fills"][0]["commission_source"] == "estimated_paper_shared_model"
+    assert strategy["paper"]["performance"]["total_commission"] == pytest.approx(5.0)
     assert canonical[0]["cash"] == pytest.approx(20000.0)
     assert canonical[0]["nav"] == pytest.approx(20000.0)
-    assert canonical[-1]["cash"] == pytest.approx(19800.0)
-    assert canonical[-1]["nav"] == pytest.approx(20010.0)
+    assert canonical[-1]["cash"] == pytest.approx(19795.0)
+    assert canonical[-1]["nav"] == pytest.approx(20005.0)
+
+
+def test_strategy_dashboard_paper_reused_order_ids_match_fills_by_record_date(tmp_path):
+    root = tmp_path
+    paper_config = root / "quant" / "infrastructure" / "var" / "paper_config"
+    day1 = root / "quant" / "infrastructure" / "var" / "paper_trading" / "2026-06-04"
+    day2 = root / "quant" / "infrastructure" / "var" / "paper_trading" / "2026-06-05"
+    paper_config.mkdir(parents=True)
+    day1.mkdir(parents=True)
+    day2.mkdir(parents=True)
+    (paper_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 20000}]}),
+        encoding="utf-8",
+    )
+    for day, side, price in ((day1, "SELL", 2.017), (day2, "BUY", 1.989)):
+        _write_jsonl(
+            day / "orders.jsonl",
+            [{
+                "timestamp": f"{day.name}T09:31:00",
+                "strategy_name": "DemoStrategy",
+                "order_id": "PAPER_1",
+                "broker_order_id": "PAPER_1",
+                "symbol": "159949",
+                "side": side,
+                "quantity": 100,
+                "order_type": "LIMIT",
+                "price": price,
+                "status": "submitted",
+            }],
+        )
+        _write_jsonl(
+            day / "fills.jsonl",
+            [{
+                "timestamp": f"{day.name}T09:31:01",
+                "strategy_name": "DemoStrategy",
+                "order_id": "PAPER_1",
+                "symbol": "159949",
+                "side": side,
+                "quantity": 100,
+                "price": price,
+                "commission": 0.0,
+            }],
+        )
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+    orders = strategy["paper"]["records"]["orders"]
+    fills = strategy["paper"]["records"]["fills"]
+
+    assert [row["filled_qty"] for row in orders] == [pytest.approx(100.0), pytest.approx(100.0)]
+    assert [row["commission"] for row in orders] == [pytest.approx(5.0), pytest.approx(5.0)]
+    assert [row["commission"] for row in fills] == [pytest.approx(5.0), pytest.approx(5.0)]
 
 
 def test_strategy_dashboard_does_not_mark_near_timestamp_order_as_pending(tmp_path):
@@ -618,6 +943,97 @@ def test_strategy_dashboard_does_not_mark_near_timestamp_order_as_pending(tmp_pa
     strategy = build_dashboard_payload(root)["strategies"][0]
 
     assert strategy["paper"]["records"]["pending_orders"] == []
+
+
+def test_strategy_dashboard_does_not_keep_d_close_signal_pending_after_execution_order(tmp_path):
+    pending = _pending_submit_orders(
+        tmp_path,
+        [{
+            "order_id": "CLIENT-1",
+            "order_type": "LIMIT",
+            "price": 2.9060032716214454,
+            "quantity": 200,
+            "side": "BUY",
+            "status": "accepted",
+            "strategy_name": "DemoStrategy",
+            "symbol": "510050",
+            "timestamp": "2026-06-08T15:00:00",
+        }],
+        [{
+            "broker_order_id": "BROKER-1",
+            "order_id": "BROKER-1",
+            "order_type": "LIMIT",
+            "price": 2.9090084456355316,
+            "quantity": 200,
+            "side": "BUY",
+            "status": "submitted",
+            "strategy_name": "DemoStrategy",
+            "symbol": "510050",
+            "timestamp": "2026-06-09T09:39:47.176570",
+        }],
+        [],
+        as_of_date="2026-06-09",
+    )
+
+    assert pending == []
+
+
+def test_strategy_dashboard_does_not_keep_retry_signal_pending_after_earlier_order(tmp_path):
+    pending = _pending_submit_orders(
+        tmp_path,
+        [{
+            "order_id": "CLIENT-RETRY",
+            "order_type": "LIMIT",
+            "price": 4.7690324738177505,
+            "quantity": 300,
+            "side": "BUY",
+            "status": "accepted",
+            "strategy_name": "DemoStrategy",
+            "symbol": "510300",
+            "timestamp": "2026-06-09T09:50:49.780552",
+        }],
+        [{
+            "broker_order_id": "BROKER-1",
+            "order_id": "BROKER-1",
+            "order_type": "LIMIT",
+            "price": 4.769,
+            "quantity": 300,
+            "side": "BUY",
+            "status": "submitted",
+            "strategy_name": "DemoStrategy",
+            "symbol": "510300",
+            "timestamp": "2026-06-09T09:39:47.208000",
+        }],
+        [],
+        as_of_date="2026-06-09",
+    )
+
+    assert pending == []
+
+
+def test_strategy_dashboard_marks_submit_failure_in_pending_actions(tmp_path):
+    pending = _pending_submit_orders(
+        tmp_path,
+        [{
+            "order_id": None,
+            "order_type": "LIMIT",
+            "price": 1.887081939845566,
+            "quantity": 100,
+            "reason": "risk_check_failed",
+            "side": "BUY",
+            "status": "rejected",
+            "strategy_name": "DemoStrategy",
+            "symbol": "159949",
+            "timestamp": "2026-06-09T09:39:47.176570",
+        }],
+        [],
+        [],
+        as_of_date="2026-06-09",
+    )
+
+    assert pending[0]["display_status"] == "failed"
+    assert pending[0]["submit_date"] == "2026-06-09"
+    assert pending[0]["reason"] == "risk_check_failed"
 
 
 def test_strategy_dashboard_expires_past_submit_date_from_pending_orders(tmp_path):
@@ -726,11 +1142,20 @@ def test_strategy_dashboard_renders_only_state_appropriate_mode_actions():
     assert "controlState === 'running'" in html
 
 
+def test_strategy_dashboard_nav_tile_labels_current_execution_state():
+    html = Path(".codex/strategy_dashboard.html").read_text(encoding="utf-8")
+
+    assert "navSourceText(perf, mode)" in html
+    assert "current fills + cash" in html
+    assert "total_nav_source === 'current_execution_state'" in html
+
+
 def test_strategy_dashboard_pending_table_renders_submit_bps_column():
     html = Path(".codex/strategy_dashboard.html").read_text(encoding="utf-8")
 
     assert "['Signal Date', 'Submit Date', 'Symbol', 'Side', 'Qty', 'Type', 'Submit +bps', 'Status', 'Order ID', 'Reason']" in html
     assert "submitBps(row)" in html
+    assert "value === 'failed'" in html
     assert "controlState === 'paused'" in html
     assert "not configured in ${escapeHtml(modeLabel(mode))}" in html
     assert "already started" in html
@@ -765,8 +1190,12 @@ def test_strategy_dashboard_uses_mode_subpages_with_shared_components():
     assert "renderMetricsTable(strategy, mode)" in html
     assert "drawCurve(selected, state.mode)" in html
     assert "filterCurveByStart(" in html
+    assert "alignSeriesDates(series)" in html
+    assert "function alignSeriesDates(series)" in html
+    assert "carried: true" in html
     assert "curveDateDomain(series)" in html
     assert "function curveX(dateText, domain, pad, width)" in html
+    assert "const index = domain.dates.indexOf(dateKey)" in html
     assert "baseValue: strategyInitialCash" in html
     assert "explicitBase > 0 ? explicitBase : points[0].value" in html
     assert "width / 2" not in html
@@ -911,6 +1340,8 @@ def test_strategy_dashboard_start_unconfigured_mode_assigns_initial_cash(tmp_pat
     strategy = payload["strategies"][0]
     assert strategy["paper"]["configured"] is True
     assert strategy["paper"]["initial_cash"] == pytest.approx(25000.0)
+    assert strategy["paper"]["state"]["run"]["initial_cash"] == pytest.approx(25000.0)
+    assert strategy["paper"]["state"]["control_state"]["current_run_id"] == strategy["paper"]["state"]["run"]["run_id"]
 
 
 def test_strategy_dashboard_start_unconfigured_mode_requires_initial_cash(tmp_path):

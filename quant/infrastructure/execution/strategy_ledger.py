@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
+
 
 DEFAULT_AUDIT_FILE = Path(__file__).resolve().parents[1] / "var" / "strategy_audit.jsonl"
 DEFAULT_PLAN_DIR = Path(__file__).resolve().parents[1] / "var" / "strategy_liquidation_plans"
@@ -253,24 +255,29 @@ def sync_broker_trade_history(
     audit_path: Optional[Any] = None,
 ) -> Dict[str, Any]:
     history_getter = getattr(broker, "get_trade_history", None)
-    if not callable(history_getter):
+    order_history_getter = getattr(broker, "get_order_history", None)
+    if not callable(history_getter) and not callable(order_history_getter):
         return {
             "broker_history_supported": False,
             "imported_count": 0,
             "skipped_count": 0,
             "unresolved_count": 0,
         }
-    try:
-        trades = history_getter(start_date=start_date, end_date=end_date)
-    except TypeError:
-        trades = history_getter()
-    if trades is None:
-        trades = []
+    trades = []
+    if callable(history_getter):
+        try:
+            trades = history_getter(start_date=start_date, end_date=end_date)
+        except TypeError:
+            trades = history_getter()
+        if trades is None:
+            trades = []
 
     existing = _existing_fill_keys(getattr(recorder, "base_dir", None))
+    filled_order_ids = _existing_fill_order_ids(getattr(recorder, "base_dir", None))
     imported = 0
     skipped = 0
     unresolved = 0
+    touched_strategies = set()
     for raw in trades:
         trade = _normalize_trade(raw)
         if not trade:
@@ -280,11 +287,7 @@ def sync_broker_trade_history(
             skipped += 1
             continue
         order_id = trade["order_id"]
-        strategy_name = trade.get("strategy_name") or ""
-        if not strategy_name:
-            strategy_getter = getattr(tracker, "get_strategy_for_order", None)
-            if callable(strategy_getter):
-                strategy_name = strategy_getter(order_id)
+        strategy_name = _strategy_for_recovered_order(tracker, order_id, fallback=trade.get("strategy_name"))
         if not strategy_name or strategy_name == "default":
             strategy_name = "default"
             unresolved += 1
@@ -309,6 +312,7 @@ def sync_broker_trade_history(
             commission=trade["commission"],
             fill_id=trade.get("trade_id"),
         )
+        touched_strategies.add(strategy_name)
         update = getattr(tracker, "update_from_fill", None)
         if callable(update):
             update(
@@ -320,15 +324,119 @@ def sync_broker_trade_history(
                 commission=trade["commission"],
             )
         existing.add(fill_key)
+        filled_order_ids.add(order_id)
         imported += 1
-    return {
+    order_history_imported = 0
+    order_history_skipped = 0
+    if callable(order_history_getter):
+        try:
+            orders = order_history_getter(start_date=start_date, end_date=end_date)
+        except TypeError:
+            orders = order_history_getter()
+        local_orders = _existing_order_rows(getattr(recorder, "base_dir", None))
+        for raw in orders or []:
+            order = _normalize_filled_order(raw, local_orders=local_orders, broker=broker)
+            if not order:
+                continue
+            order_id = order["order_id"]
+            if order_id in filled_order_ids:
+                skipped += 1
+                order_history_skipped += 1
+                continue
+            fill_key = _fill_key(order)
+            if fill_key in existing:
+                skipped += 1
+                order_history_skipped += 1
+                continue
+            strategy_name = _strategy_for_recovered_order(
+                tracker,
+                order_id,
+                fallback=order.get("strategy_name"),
+            )
+            if not strategy_name or strategy_name == "default":
+                strategy_name = "default"
+                unresolved += 1
+                append_strategy_audit(
+                    audit_path,
+                    strategy_name=strategy_name,
+                    mode=mode,
+                    action="broker_history_unresolved",
+                    source="recovery",
+                    note="Broker filled order has no known strategy attribution",
+                    payload={"order_id": order_id, "symbol": order.get("symbol"), "source": "order_history"},
+                    timestamp=order["timestamp"],
+                )
+            recorder.record_fill(
+                order_id=order_id,
+                timestamp=order["timestamp"],
+                strategy_name=strategy_name,
+                symbol=order["symbol"],
+                side=order["side"],
+                quantity=order["quantity"],
+                price=order["price"],
+                commission=order["commission"],
+                fill_id=order.get("trade_id"),
+            )
+            touched_strategies.add(strategy_name)
+            update = getattr(tracker, "update_from_fill", None)
+            if callable(update):
+                update(
+                    strategy_name=strategy_name,
+                    symbol=order["symbol"],
+                    side=order["side"],
+                    qty=order["quantity"],
+                    price=order["price"],
+                    commission=order["commission"],
+                )
+            existing.add(fill_key)
+            filled_order_ids.add(order_id)
+            imported += 1
+            order_history_imported += 1
+    result = {
         "broker_history_supported": True,
         "imported_count": imported,
         "skipped_count": skipped,
         "unresolved_count": unresolved,
+        "order_history_imported_count": order_history_imported,
+        "order_history_skipped_count": order_history_skipped,
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat() if end_date else None,
     }
+    _record_reconciliation_from_recovery(
+        recorder=recorder,
+        mode=mode,
+        strategies=touched_strategies,
+        result=result,
+    )
+    return result
+
+
+def _record_reconciliation_from_recovery(
+    *,
+    recorder: Any,
+    mode: str,
+    strategies: Iterable[str],
+    result: Dict[str, Any],
+) -> None:
+    base_dir = getattr(recorder, "base_dir", None)
+    if base_dir is None:
+        return
+    strategy_names = sorted({str(name or "default") for name in strategies if name})
+    if not strategy_names and any(_float(result.get(key)) > 0 for key in ("imported_count", "skipped_count", "unresolved_count")):
+        strategy_names = ["default"]
+    if not strategy_names:
+        return
+    state_store = StrategyStateStore(Path(base_dir).parent / "strategy_state.duckdb")
+    status = "warning" if _float(result.get("unresolved_count")) > 0 else "ok"
+    for strategy_name in strategy_names:
+        state_store.record_reconciliation(
+            mode=mode,
+            strategy_name=strategy_name,
+            run_id=state_store.active_run_id(mode=mode, strategy_name=strategy_name),
+            reconciliation_type="broker_trade_history",
+            status=status,
+            payload=result,
+        )
 
 
 def _existing_fill_keys(base_dir: Optional[Any]) -> set[Tuple[str, str, str, str, str, str]]:
@@ -348,6 +456,50 @@ def _existing_fill_keys(base_dir: Optional[Any]) -> set[Tuple[str, str, str, str
                     continue
                 keys.add(_fill_key(json.loads(line)))
     return keys
+
+
+def _existing_fill_order_ids(base_dir: Optional[Any]) -> set[str]:
+    if base_dir is None:
+        return set()
+    base = Path(base_dir)
+    if not base.exists():
+        return set()
+    ids = set()
+    for day_dir in sorted(path for path in base.iterdir() if path.is_dir()):
+        path = day_dir / "fills.jsonl"
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                order_id = str(json.loads(line).get("order_id") or "")
+                if order_id:
+                    ids.add(order_id)
+    return ids
+
+
+def _existing_order_rows(base_dir: Optional[Any]) -> Dict[str, Dict[str, Any]]:
+    if base_dir is None:
+        return {}
+    base = Path(base_dir)
+    if not base.exists():
+        return {}
+    rows: Dict[str, Dict[str, Any]] = {}
+    for day_dir in sorted(path for path in base.iterdir() if path.is_dir()):
+        path = day_dir / "orders.jsonl"
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                for key in ("order_id", "broker_order_id"):
+                    order_id = str(item.get(key) or "")
+                    if order_id:
+                        rows[order_id] = item
+    return rows
 
 
 def _normalize_trade(raw: Any) -> Optional[Dict[str, Any]]:
@@ -372,6 +524,66 @@ def _normalize_trade(raw: Any) -> Optional[Dict[str, Any]]:
         "price": price,
         "commission": _float(_pick(item, "commission", "m_dCommission", "fee", "entrust_fee")),
     }
+
+
+def _normalize_filled_order(
+    raw: Any,
+    *,
+    local_orders: Dict[str, Dict[str, Any]],
+    broker: Any,
+) -> Optional[Dict[str, Any]]:
+    item = raw if isinstance(raw, dict) else raw.__dict__ if hasattr(raw, "__dict__") else {}
+    status = str(_pick(item, "status", "order_status", "m_nOrderStatus") or "").lower()
+    if status not in _filled_order_statuses():
+        return None
+    order_id = str(_pick(item, "order_id", "broker_order_id", "m_nOrderID", "order_sysid") or "")
+    if not order_id:
+        return None
+    local = local_orders.get(order_id, {})
+    symbol = str(_pick(item, "symbol", "stock_code", "m_strStockCode", "code") or local.get("symbol") or "")
+    side = _side_text(_pick(item, "side", "order_side", "direction", "order_type", "entrust_bs"))
+    if not side:
+        side = _side_text(local.get("side"))
+    quantity = _float(_pick(item, "quantity", "traded_volume", "order_volume", "volume", "m_nVolume", "qty"))
+    if quantity <= 0:
+        quantity = _float(local.get("quantity"))
+    price = _float(_pick(item, "avg_price", "traded_price", "price", "order_price", "m_dPrice", "fill_price"))
+    if price <= 0:
+        price = _float(local.get("price"))
+    if not symbol or not side or quantity <= 0 or price <= 0:
+        return None
+    commission = _float(_pick(item, "commission", "m_dCommission", "fee", "entrust_fee"))
+    estimator = getattr(broker, "estimate_commission", None)
+    if commission <= 0 and callable(estimator):
+        try:
+            commission = _float(estimator(_cn_symbol(symbol), side, quantity, price))
+        except Exception:
+            commission = 0.0
+    strategy_name = str(local.get("strategy_name") or _pick(item, "strategy_name", "strategy", "remark", "order_remark") or "")
+    return {
+        "order_id": order_id,
+        "trade_id": f"order_history:{order_id}",
+        "timestamp": _parse_datetime(_pick(item, "timestamp", "traded_time", "trade_time", "order_time", "m_strTradeTime")),
+        "strategy_name": strategy_name,
+        "symbol": _cn_symbol(symbol),
+        "side": side,
+        "quantity": quantity,
+        "price": price,
+        "commission": commission,
+    }
+
+
+def _filled_order_statuses() -> set[str]:
+    return {"56", "filled", "all_traded", "alltraded", "fully_filled", "done"}
+
+
+def _strategy_for_recovered_order(tracker: Any, order_id: str, *, fallback: Any = "") -> str:
+    strategy_getter = getattr(tracker, "get_strategy_for_order", None)
+    if callable(strategy_getter):
+        strategy_name = strategy_getter(order_id)
+        if strategy_name:
+            return str(strategy_name)
+    return str(fallback or "")
 
 
 def _fill_key(item: Dict[str, Any]) -> Tuple[str, str, str, str, str, str]:
@@ -490,6 +702,13 @@ def _parse_datetime(value: Any) -> datetime:
     if not text:
         return datetime.now()
     text = text.replace(" ", "T")
+    if text.isdigit():
+        try:
+            epoch_seconds = int(text)
+            if 946684800 <= epoch_seconds <= 4102444800:
+                return datetime.fromtimestamp(epoch_seconds)
+        except (OverflowError, ValueError):
+            pass
     try:
         return datetime.fromisoformat(text)
     except ValueError:

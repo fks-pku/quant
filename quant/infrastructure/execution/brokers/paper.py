@@ -8,6 +8,7 @@ from quant.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 from quant.domain.models.position import Position
 from quant.domain.models.account import AccountInfo
 from quant.domain.ports.broker import BrokerAdapter
+from quant.runtime.execution_commission import total_commission
 from quant.shared.utils.logger import setup_logger
 from quant.shared.utils.symbol_utils import is_cn_symbol as _is_cn_symbol
 
@@ -20,12 +21,14 @@ class PaperBroker(BrokerAdapter):
         initial_cash: float = 10000.0,
         slippage_bps: float = 5,
         data_provider: Any = None,
+        commission_config: Any = None,
     ):
         super().__init__("paper")
         self.initial_cash = initial_cash
         self.cash = initial_cash
         self.slippage_bps = slippage_bps
         self.data_provider = data_provider
+        self.commission_config = commission_config or {}
         self.positions: Dict[str, Position] = {}
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
@@ -178,8 +181,9 @@ class PaperBroker(BrokerAdapter):
             'avg_fill_price': fill_price,
         })
 
-        self._update_position(filled, fill_price)
-        self._queue_trade_notification(filled, fill_price)
+        commission = self.estimate_commission(order.symbol, side_value, order.quantity, fill_price)
+        self._update_position(filled, fill_price, commission)
+        self._queue_trade_notification(filled, fill_price, commission)
         return filled
 
     def _get_current_price(self, symbol: str) -> float:
@@ -214,7 +218,13 @@ class PaperBroker(BrokerAdapter):
         self.logger.warning(f"No price data for {symbol}, using fallback 100.0")
         return 100.0
 
-    def _queue_trade_notification(self, order: Order, fill_price: float) -> None:
+    def estimate_commission(self, symbol: str, side: str, quantity: float, price: float) -> float:
+        try:
+            return float(total_commission(symbol, price, quantity, str(side).upper(), self.commission_config))
+        except Exception:
+            return 0.0
+
+    def _queue_trade_notification(self, order: Order, fill_price: float, commission: float) -> None:
         side_value = order.side.value if isinstance(order.side, OrderSide) else str(order.side)
         self._pending_trade_notifications.append({
             "order_id": order.order_id,
@@ -222,7 +232,7 @@ class PaperBroker(BrokerAdapter):
             "side": side_value,
             "quantity": order.quantity,
             "price": fill_price,
-            "commission": 0.0,
+            "commission": commission,
             "timestamp": order.timestamp or datetime.now(),
             "strategy_name": order.strategy_name,
         })
@@ -277,7 +287,7 @@ class PaperBroker(BrokerAdapter):
             return number
         return None
 
-    def _update_position(self, order: Order, fill_price: float) -> None:
+    def _update_position(self, order: Order, fill_price: float, commission: float) -> None:
         if order.symbol not in self.positions:
             self.positions[order.symbol] = Position(
                 symbol=order.symbol,
@@ -291,14 +301,14 @@ class PaperBroker(BrokerAdapter):
         side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
 
         if side_value == "BUY":
-            total_cost = pos.avg_cost * pos.quantity + fill_price * order.quantity
+            total_cost = pos.avg_cost * pos.quantity + fill_price * order.quantity + commission
             pos.quantity += order.quantity
             pos.avg_cost = total_cost / pos.quantity if pos.quantity > 0 else 0
             pos.add_buy_lot(date.today(), order.quantity)
-            self.cash -= fill_price * order.quantity
+            self.cash -= fill_price * order.quantity + commission
         else:
             sell_qty = min(order.quantity, pos.quantity)
-            self.cash += fill_price * sell_qty
+            self.cash += fill_price * sell_qty - commission
             pos.quantity -= sell_qty
             pos.remove_sell_lots(sell_qty)
             if pos.quantity <= 0:

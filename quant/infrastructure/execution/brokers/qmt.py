@@ -161,6 +161,13 @@ def _qmt_timestamp_from_record(record: Any) -> Optional[str]:
     if isinstance(value, datetime):
         return value.isoformat()
     text = str(value).strip().replace(" ", "T")
+    if text.isdigit():
+        try:
+            epoch_seconds = int(text)
+            if 946684800 <= epoch_seconds <= 4102444800:
+                return datetime.fromtimestamp(epoch_seconds).isoformat()
+        except (OverflowError, ValueError):
+            pass
     try:
         return datetime.fromisoformat(text).isoformat()
     except ValueError:

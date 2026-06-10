@@ -1,21 +1,34 @@
 import json
 from datetime import date, datetime
 
+import pytest
+
+from quant.domain.models.order import Order, OrderSide, OrderType
 from quant.features.portfolio.tracker import StrategyPositionTracker
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
 from quant.infrastructure.execution.strategy_controls import apply_strategy_control_action
 from quant.infrastructure.execution.strategy_ledger import build_strategy_mode_ledger, sync_broker_trade_history
 from quant.infrastructure.execution.strategy_mode_records import StrategyModeRecordStore
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 
 
 class HistoryBroker:
-    def __init__(self, trades):
+    def __init__(self, trades, orders=None):
         self.trades = trades
+        self.orders = orders or []
         self.calls = []
+        self.order_calls = []
 
     def get_trade_history(self, start_date=None, end_date=None):
         self.calls.append((start_date, end_date))
         return list(self.trades)
+
+    def get_order_history(self, start_date=None, end_date=None):
+        self.order_calls.append((start_date, end_date))
+        return list(self.orders)
+
+    def estimate_commission(self, symbol, side, quantity, price):
+        return 5.0
 
 
 def test_strategy_mode_record_store_isolates_strategy_and_mode(tmp_path):
@@ -86,6 +99,121 @@ def test_strategy_control_action_writes_mode_operation(tmp_path):
     assert store.read("operations", mode="live", strategy_name="DemoStrategy") == []
 
 
+def test_strategy_state_store_records_strict_run_control_and_facts(tmp_path):
+    store = StrategyStateStore(tmp_path / "strategy_state.duckdb")
+
+    operation = store.record_operation(
+        mode="live",
+        strategy_name="DemoStrategy",
+        operation_type="start",
+        requested_by="dashboard",
+        requested_at="2026-06-03T09:30:00",
+        params={"initial_cash": 25000},
+    )
+    run = store.ensure_run(
+        mode="live",
+        strategy_name="DemoStrategy",
+        initial_cash=25000,
+        started_at="2026-06-03T09:30:00",
+        operation_id=operation["operation_id"],
+    )
+    store.record_control_state(
+        mode="live",
+        strategy_name="DemoStrategy",
+        lifecycle_state="running",
+        signal_enabled=True,
+        submit_enabled=True,
+        current_run_id=run["run_id"],
+        last_operation_id=operation["operation_id"],
+        timestamp="2026-06-03T09:30:00",
+    )
+    signal = {
+        "timestamp": "2026-06-03T15:00:00",
+        "strategy_name": "DemoStrategy",
+        "order_id": "SIG-1",
+        "symbol": "600519",
+        "side": "BUY",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "status": "accepted",
+    }
+    store.migrate_records(
+        mode="live",
+        strategy_name="DemoStrategy",
+        records={
+            "signals": [signal],
+            "orders": [{
+                "timestamp": "2026-06-04T09:30:00",
+                "strategy_name": "DemoStrategy",
+                "order_id": "BRK-1",
+                "symbol": "600519",
+                "side": "BUY",
+                "quantity": 100,
+                "price": 10.0,
+                "status": "submitted",
+            }],
+            "fills": [{
+                "timestamp": "2026-06-04T09:31:00",
+                "strategy_name": "DemoStrategy",
+                "order_id": "BRK-1",
+                "symbol": "600519",
+                "side": "BUY",
+                "quantity": 100,
+                "price": 10.0,
+                "commission": 1.0,
+            }],
+            "snapshots": [{
+                "timestamp": "2026-06-04T15:00:00",
+                "date": "2026-06-04",
+                "strategy_name": "DemoStrategy",
+                "nav": 25010.0,
+                "cash": 24000.0,
+                "market_value": 1010.0,
+            }],
+        },
+        run_id=run["run_id"],
+    )
+    first_count = len(store.read("signals", mode="live", strategy_name="DemoStrategy"))
+    store.migrate_records(
+        mode="live",
+        strategy_name="DemoStrategy",
+        records={"signals": [signal]},
+        run_id=run["run_id"],
+    )
+
+    records = store.read_records(mode="live", strategy_name="DemoStrategy")
+    assert records["operations"][0]["operation_type"] == "start"
+    assert records["runs"][0]["initial_cash"] == pytest.approx(25000.0)
+    assert records["control_state"][-1]["current_run_id"] == run["run_id"]
+    assert records["signals"][0]["run_id"] == run["run_id"]
+    assert records["orders"][0]["run_id"] == run["run_id"]
+    assert records["fills"][0]["run_id"] == run["run_id"]
+    assert records["snapshots"][0]["run_id"] == run["run_id"]
+    assert len(records["signals"]) == first_count
+    assert store.latest_record_date("live") == "2026-06-04"
+
+
+def test_strategy_control_action_writes_strict_run_and_control_state(tmp_path):
+    control_file = tmp_path / "var" / "strategy_controls.json"
+
+    apply_strategy_control_action(
+        "DemoStrategy",
+        "start",
+        control_file,
+        mode="paper",
+        default_live_enabled=True,
+        initial_cash=30000.0,
+        now=datetime(2026, 6, 3, 9, 30),
+    )
+
+    state_store = StrategyStateStore(tmp_path / "var" / "strategy_state.duckdb")
+    records = state_store.read_records(mode="paper", strategy_name="DemoStrategy")
+    assert records["operations"][-1]["operation_type"] == "start"
+    assert records["runs"][-1]["initial_cash"] == pytest.approx(30000.0)
+    assert records["control_state"][-1]["lifecycle_state"] == "running"
+    assert records["control_state"][-1]["current_run_id"] == records["runs"][-1]["run_id"]
+
+
 def test_sync_broker_trade_history_imports_missing_fills_once(tmp_path):
     recorder = LiveTradingRecorder(tmp_path / "live_trading")
     tracker = StrategyPositionTracker(tmp_path / "strategy_positions.json")
@@ -130,6 +258,77 @@ def test_sync_broker_trade_history_imports_missing_fills_once(tmp_path):
     positions = tracker.get_positions_for_strategy("DemoStrategy")
     assert positions["600519"]["qty"] == 100
     assert positions["600519"]["avg_cost"] == 10.01
+    state_store = StrategyStateStore(tmp_path / "strategy_state.duckdb")
+    reconciliations = state_store.read("reconciliations", mode="live", strategy_name="DemoStrategy")
+    assert reconciliations[-1]["reconciliation_type"] == "broker_trade_history"
+    assert reconciliations[-1]["status"] == "ok"
+
+
+def test_sync_broker_trade_history_imports_filled_order_history_when_trades_empty(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live_trading")
+    tracker = StrategyPositionTracker(tmp_path / "strategy_positions.json")
+    tracker.record_order("BRK-FILLED", "DemoStrategy")
+    recorder.record_order(
+        Order(
+            symbol="510300",
+            quantity=300,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            order_id="BRK-FILLED",
+            price=4.769,
+            timestamp=datetime(2026, 6, 9, 9, 39, 47),
+            strategy_name="DemoStrategy",
+        ),
+        broker_order_id="BRK-FILLED",
+        status="submitted",
+        timestamp=datetime(2026, 6, 9, 9, 39, 47),
+    )
+    broker = HistoryBroker(
+        [],
+        orders=[{
+            "order_id": "BRK-FILLED",
+            "timestamp": datetime(2026, 6, 9, 9, 39, 47),
+            "strategy_name": "Demo",
+            "symbol": "510300",
+            "side": "",
+            "quantity": 300,
+            "price": 4.769,
+            "status": "56",
+        }],
+    )
+
+    first = sync_broker_trade_history(
+        broker=broker,
+        recorder=recorder,
+        tracker=tracker,
+        mode="live",
+        start_date=date(2026, 6, 9),
+        end_date=date(2026, 6, 9),
+    )
+    second = sync_broker_trade_history(
+        broker=broker,
+        recorder=recorder,
+        tracker=tracker,
+        mode="live",
+        start_date=date(2026, 6, 9),
+        end_date=date(2026, 6, 9),
+    )
+
+    assert first["broker_history_supported"] is True
+    assert first["imported_count"] == 1
+    assert first["order_history_imported_count"] == 1
+    assert second["imported_count"] == 0
+    fills = recorder.read_day("fills", "2026-06-09", strategy_name="DemoStrategy")
+    assert len(fills) == 1
+    assert fills[0]["order_id"] == "BRK-FILLED"
+    assert fills[0]["fill_id"] == "order_history:BRK-FILLED"
+    assert fills[0]["timestamp"] == "2026-06-09T09:39:47"
+    assert fills[0]["side"] == "BUY"
+    assert fills[0]["commission"] == 5.0
+    assert fills[0]["value"] == pytest.approx(1430.7)
+    positions = tracker.get_positions_for_strategy("DemoStrategy")
+    assert positions["510300"]["qty"] == 300
+    assert positions["510300"]["avg_cost"] == pytest.approx((300 * 4.769 + 5.0) / 300)
 
 
 def test_sync_broker_trade_history_marks_unknown_order_attribution(tmp_path):

@@ -18,6 +18,7 @@ Current daily target execution-cost contract: D-day strategy price or signal-bar
 - `run_daily_snapshots(strategies, trading_date, bars, strict=True, call_before=False, after_feed=None)` — 共享日线策略执行入口：完整快照校验 → 全部 runnable 策略批量喂 bar → `after_feed` → 全部 runnable 策略 `after_trading`
 - `ExecutionReferencePriceResolver(mode, broker, data_provider, allow_strategy_price_fallback=False)` — MARKET 执行参考价解析：优先 broker/data_provider quote open，再按 side/last 退化；默认不使用策略传入价兜底
 - `estimate_cost_protection_limit(...)` — 纯函数：用 D 日可知 reference/bar 和 `execution_cost_model` 估算成本保护 bps，不读未来 bar、不提交订单；返回的 `limit_price` 只可作诊断，订单路径必须用执行日 open/reference 重新锚定真实 LIMIT
+- `execution_commission.calculate_commission(...)` and `total_commission(...)` are the shared backtest/paper execution fee model; do not fork CN ETF/A-share commission logic inside adapters.
 
 ## 依赖
 
@@ -31,6 +32,7 @@ Current daily target execution-cost contract: D-day strategy price or signal-bar
 - Runtime helper 不保存跨事件状态，不生成订单，不改变策略调仓 gate
 - 日线策略的完整性检查必须以策略 `symbols` 为 required symbols；strict 模式遇到缺失或跨日 bar 必须跳过策略 hook
 - Daily `MARKET` target generation must separate D-day cost bps estimation from execution-day LIMIT anchoring: strategy price/signal close is the cost reference, while resolver open/reference is the D+1 execution anchor.
+- Backtest and paper mode must share `execution_commission` for fee totals; adapter-local paper fills may differ in broker mechanics, but not in the commission formula for the same symbol, side, price, quantity, and config.
 
 ## 修改守则
 

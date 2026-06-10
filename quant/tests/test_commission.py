@@ -176,6 +176,11 @@ class TestCalculateCommissionBySymbol:
         breakdown = calculate_commission("510300", 10.0, 1000, "BUY", cfg)
         assert breakdown["commission"] == pytest.approx(1.0, rel=1e-4)
 
+    def test_default_cn_fund_commission_uses_realistic_minimum(self):
+        cfg = CommissionConfig()
+        breakdown = calculate_commission("510300", 10.0, 100, "BUY", cfg)
+        assert breakdown["commission"] == pytest.approx(5.0)
+
     def test_hk_symbol_uses_hk_rules(self):
         cfg = CommissionConfig()
         breakdown = calculate_commission("00700", 100.0, 1000, "BUY", cfg)

@@ -11,7 +11,7 @@
 | `engine.py` | 编排器：日循环调度，委托所有子模块 |
 | `entities.py` | 纯数据结构：BacktestResult, BacktestDiagnostics, CommissionConfig, Exporter, Context |
 | `market_rules.py` | 市场规则注册：市场识别、手数、涨跌停、T+1 结算、停牌判定、FIFO 切片 |
-| `commission.py` | 佣金引擎：CN/HK/US 费率计算、成交量上限 |
+| `commission.py` | Shared commission compatibility entrypoint; re-exports `quant.runtime.execution_commission` so backtest and paper use one fee model |
 | `order_executor.py` | 订单执行管线：成交价解析（MARKET/LIMIT）→手数→成交量→冲击成本→佣金→资金校验→成交 |
 | `dividend_processor.py` | 除权除息：现金/送股、CN 红利税 |
 | `portfolio_factory.py` | 组合/风控创建：单 Portfolio 和 SubPortfolio 模式 |
@@ -29,7 +29,7 @@ domain/models/trade.py
 entities.py               (零内部依赖)
     ↓
 market_rules.py           (依赖 entities)
-commission.py             (依赖 entities + market_rules)
+commission.py             (compatibility re-export of runtime/execution_commission.py)
     ↓
 order_executor.py         (依赖 entities + commission + market_rules)
 dividend_processor.py     (依赖 entities + market_rules)
@@ -86,7 +86,7 @@ while current_date ≤ end:
 | 改什么 | 改哪个文件 |
 |--------|-----------|
 | 回测日循环调度 | `engine.py` |
-| 佣金费率/计算 | `commission.py` |
+| 佣金费率/计算 | `quant/runtime/execution_commission.py` plus `commission.py` compatibility exports |
 | 市场规则（涨跌停/T+1/手数） | `market_rules.py` |
 | 订单执行流程（滑点/成交） | `order_executor.py` |
 | 除权除息/红利税 | `dividend_processor.py` |
@@ -101,7 +101,7 @@ while current_date ≤ end:
 ## Known Pitfalls
 
 - Backtest signal generation after daily order-manager prep must call runtime `run_daily_snapshots()`; do not split D-close feed, portfolio close-price marking, and `after_trading` into a separate backtest-only path.
-- CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. Research backtests default fund fees to `fund_percent=0.0001` and `fund_min_per_order=0.0`.
+- CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. The default backtest/paper CN config is `{"type": "cn_realistic"}` with the realistic minimum; research scripts may explicitly override fund rates/minimums, but PaperBroker and backtest must consume the same shared runtime commission model for the same config.
 - BUY liquidity control is a global execution invariant: after market impact is applied, final BUY notional must still be `<= max_participation_rate * ADV value` (default research gate 5% ADV). Do not implement per-strategy sizing that assumes this cap can be bypassed.
 - `prev_close_bars` 在 Step ② 中必须在 `prev_bars` 更新之前捕获，否则涨跌停检查会用今日数据
 - `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` 在每个日循环末尾调用，勿遗漏

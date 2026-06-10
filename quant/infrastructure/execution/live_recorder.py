@@ -14,6 +14,7 @@ from quant.analytics.performance import calculate_performance_metrics, calculate
 from quant.domain.models.trade import Trade
 from quant.domain.models.order import Order
 from quant.infrastructure.execution.strategy_mode_records import StrategyModeRecordStore
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.shared.utils.logger import setup_logger
 
 
@@ -37,6 +38,7 @@ class LiveTradingRecorder:
         self.base_dir = Path(base_dir) if base_dir is not None else _DEFAULT_BASE_DIR
         self._mode = "paper" if self.base_dir.name == "paper_trading" else "live"
         self._mode_store = StrategyModeRecordStore(self.base_dir.parent / "strategy_modes")
+        self._state_store = StrategyStateStore(self.base_dir.parent / "strategy_state.duckdb")
         self._lock = threading.RLock()
         self.logger = setup_logger("LiveTradingRecorder")
 
@@ -272,6 +274,13 @@ class LiveTradingRecorder:
                 strategy_name=strategy_name,
                 record=payload,
                 unique=True,
+            )
+            state_kind = "snapshots" if kind == "snapshots" else kind
+            self._state_store.upsert_record(
+                state_kind,
+                mode=self._mode,
+                strategy_name=strategy_name,
+                record=payload,
             )
             if kind == "snapshots":
                 self._mode_store.append_operation(

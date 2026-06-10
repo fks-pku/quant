@@ -678,7 +678,7 @@
         <div class="overview">
           ${tile('Mode', modeLabel(mode), data.configured ? (control.live_state || 'running') : 'not configured')}
           ${tile('Initial Cash', initialCashText(initialCash), 'strategy allocation')}
-          ${tile('Total NAV', money(perf.total_nav), `latest ${modeLabel(mode)} snapshot`)}
+          ${tile('Total NAV', money(perf.total_nav), navSourceText(perf, mode))}
           ${tile('Cash', money(perf.cash), `available ${modeLabel(mode)} cash`)}
           ${tile('Total Return', pnlPct(perf.total_return), pnlText(perf))}
           ${tile('Commission', money(perf.total_commission), 'separate from slippage')}
@@ -865,10 +865,11 @@
         (state.data.benchmark?.points || []).map(p => ({ date: p.date, value: Number(p.value) })),
         strategyPoints[0]?.date || ''
       );
-      const series = [
+      let series = [
         { name: '沪深300', color: colors.benchmark, points: benchmarkPoints },
         { name: modeLabel(mode), color: colors[mode], points: strategyPoints, baseValue: strategyInitialCash },
       ].map(normalizeSeries).filter(s => s.points.length);
+      series = alignSeriesDates(series);
       drawAxes(ctx, pad, width, height);
       if (!series.length) {
         ctx.fillStyle = '#86868b';
@@ -905,22 +906,59 @@
       return points.filter(point => String(point.date || '') >= startDate);
     }
 
+    function alignSeriesDates(series) {
+      const dates = Array.from(new Set(
+        series.flatMap(item => (item.points || []).map(point => curveDateKey(point.date)).filter(Boolean))
+      )).sort();
+      if (dates.length <= 1) return series;
+      return series.map(item => {
+        const byDate = new Map((item.points || []).map(point => [curveDateKey(point.date), point]));
+        let lastPoint = null;
+        const points = [];
+        dates.forEach(date => {
+          const exact = byDate.get(date);
+          if (exact) {
+            lastPoint = { ...exact, date };
+            points.push(lastPoint);
+          } else if (lastPoint) {
+            points.push({ ...lastPoint, date, carried: true });
+          }
+        });
+        return { ...item, points };
+      }).filter(item => item.points.length);
+    }
+
     function curveDateDomain(series) {
-      const times = series
+      const dates = Array.from(new Set(
+        series
         .flatMap(item => item.points || [])
-        .map(point => curveTime(point.date))
-        .filter(value => Number.isFinite(value));
+        .map(point => curveDateKey(point.date))
+        .filter(Boolean)
+      )).sort();
+      const times = dates.map(curveTime).filter(value => Number.isFinite(value));
       if (!times.length) return { min: 0, max: 0 };
-      return { min: Math.min(...times), max: Math.max(...times) };
+      return { min: Math.min(...times), max: Math.max(...times), dates };
+    }
+
+    function curveDateKey(dateText) {
+      const text = String(dateText || '').slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
     }
 
     function curveTime(dateText) {
-      const text = String(dateText || '').slice(0, 10);
+      const text = curveDateKey(dateText);
       if (!text) return NaN;
       return Date.parse(`${text}T00:00:00Z`);
     }
 
     function curveX(dateText, domain, pad, width) {
+      const dateKey = curveDateKey(dateText);
+      if (domain?.dates?.length) {
+        const index = domain.dates.indexOf(dateKey);
+        if (index < 0) return pad.left + width;
+        if (domain.dates.length === 1) return pad.left + width;
+        return pad.left + (index / (domain.dates.length - 1)) * width;
+      }
       const value = curveTime(dateText);
       if (!Number.isFinite(value)) return pad.left + width;
       if (!Number.isFinite(domain.min) || !Number.isFinite(domain.max) || domain.max <= domain.min) {
@@ -977,9 +1015,9 @@
       ctx.fillText(`${max.toFixed(1)}%`, pad.left - 8, pad.top + 4);
       ctx.fillText(`${min.toFixed(1)}%`, pad.left - 8, pad.top + height);
       ctx.textAlign = 'left';
-      ctx.fillText(domainDate(domain.min), pad.left, pad.top + height + 28);
+      ctx.fillText(domain.dates?.[0] || domainDate(domain.min), pad.left, pad.top + height + 28);
       ctx.textAlign = 'right';
-      ctx.fillText(domainDate(domain.max), pad.left + width, pad.top + height + 28);
+      ctx.fillText(domain.dates?.[domain.dates.length - 1] || domainDate(domain.max), pad.left + width, pad.top + height + 28);
     }
 
     function domainDate(value) {
@@ -1103,10 +1141,16 @@
       return `realized ${money(perf.realized_pnl)} / unrealized ${money(perf.unrealized_pnl)}`;
     }
 
+    function navSourceText(perf, mode) {
+      if (perf?.total_nav_source === 'current_execution_state') return 'current fills + cash';
+      if (perf?.total_nav_source === 'initial_cash') return 'initial cash';
+      return `latest ${modeLabel(mode)} snapshot`;
+    }
+
     function pillClass(value) {
       if (value === 'running' || value === 'filled') return 'green';
       if (value === 'paused' || value === 'partial' || value === 'no_fill' || value === 'pending_submit') return 'amber';
-      if (value === 'liquidating' || value === 'stopped') return 'red';
+      if (value === 'liquidating' || value === 'stopped' || value === 'failed') return 'red';
       return '';
     }
 

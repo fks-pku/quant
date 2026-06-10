@@ -1036,7 +1036,10 @@ def test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks():
     assert seen[-1]["symbol"] == "518880"
     assert seen[-1]["quantity"] == pytest.approx(1000)
     assert seen[-1]["price"] == pytest.approx(9.302)
+    assert seen[-1]["commission"] == pytest.approx(5.0)
     assert seen[-1]["strategy_name"] == "Barbell"
+    assert broker.cash == pytest.approx(10000.0 - 9302.0 - 5.0)
+    assert broker.get_positions()[0].avg_cost == pytest.approx(9.307)
 
     rejected_id = broker.submit_order(Order(
         symbol="518880",
@@ -1076,7 +1079,70 @@ def test_order_manager_flushes_paper_broker_fills_after_submission():
 
     assert seen[-1]["order_id"] == "PAPER_1"
     assert seen[-1]["price"] == pytest.approx(10.0)
+    assert seen[-1]["commission"] == pytest.approx(5.03)
     assert manager.get_order_status("PAPER_1") == OrderStatus.FILLED
+
+
+def test_paper_broker_commission_matches_backtest_execution_for_cn_etf():
+    from quant.features.backtest.entities import BacktestDiagnostics, CommissionConfig
+    from quant.features.backtest.order_executor import execute_order
+    from quant.features.backtest.schemas import DeferredOrder
+    from quant.features.trading.portfolio import Portfolio
+
+    commission = {"CN": {"type": "cn_realistic"}}
+    broker = PaperBroker(slippage_bps=0, commission_config=commission)
+    broker.connect()
+    broker.set_execution_bars([
+        {"symbol": "518880", "open": 9.302, "close": 9.295, "volume": 1_000_000},
+    ])
+    seen = []
+    broker.register_trade_callback(lambda **trade: seen.append(trade))
+
+    broker.submit_order(Order(
+        symbol="518880",
+        quantity=1000,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=9.307,
+        strategy_name="Barbell",
+    ))
+    broker.flush_trade_callbacks()
+
+    portfolio = Portfolio(initial_cash=10000)
+    trades = execute_order(
+        order=DeferredOrder(
+            symbol="518880",
+            quantity=1000,
+            side="BUY",
+            order_type="LIMIT",
+            price=9.307,
+            strategy="Barbell",
+            signal_date=datetime(2026, 6, 8),
+        ),
+        portfolio=portfolio,
+        symbol="518880",
+        bar={
+            "symbol": "518880",
+            "timestamp": datetime(2026, 6, 9, 9, 31),
+            "open": 9.302,
+            "high": 9.35,
+            "low": 9.25,
+            "close": 9.295,
+            "volume": 1_000_000,
+        },
+        entry_times={},
+        entry_prices={},
+        diag=BacktestDiagnostics(),
+        lot_sizes={},
+        ipo_dates={},
+        slippage_bps=0,
+        commission_config=CommissionConfig(CN=commission["CN"]),
+    )
+
+    assert seen[-1]["price"] == pytest.approx(trades[0].fill_price)
+    assert seen[-1]["commission"] == pytest.approx(trades[0].commission)
+    assert broker.cash == pytest.approx(portfolio.cash)
+    assert broker.get_positions()[0].avg_cost == pytest.approx(portfolio.get_position("518880").avg_cost)
 
 
 def test_strategy_tracker_calibration_updates_live_market_values(tmp_path):

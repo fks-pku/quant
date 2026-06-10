@@ -35,11 +35,54 @@
         "market_value": 0.0,
         "unrealized_pnl": 0.0
       }
+    },
+    "ashare_broad_asset_etf_rotation": {
+      "510050": {
+        "symbol": "510050",
+        "strategy_name": "ashare_broad_asset_etf_rotation",
+        "qty": 200.0,
+        "avg_cost": 2.9339999999999997,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
+      },
+      "510300": {
+        "symbol": "510300",
+        "strategy_name": "ashare_broad_asset_etf_rotation",
+        "qty": 300.0,
+        "avg_cost": 4.785666666666667,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
+      },
+      "510880": {
+        "symbol": "510880",
+        "strategy_name": "ashare_broad_asset_etf_rotation",
+        "qty": 400.0,
+        "avg_cost": 3.2965,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
+      },
+      "159915": {
+        "symbol": "159915",
+        "strategy_name": "ashare_broad_asset_etf_rotation",
+        "qty": 700.0,
+        "avg_cost": 3.8891428571428572,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
+      },
+      "159949": {
+        "symbol": "159949",
+        "strategy_name": "ashare_broad_asset_etf_rotation",
+        "qty": 1500.0,
+        "avg_cost": 1.8903333333333334,
+        "market_value": 0.0,
+        "unrealized_pnl": 0.0
+      }
     }
   },
   "realized_pnl": {
     "default": 67149.99999999999,
-    "ashare_gold_equity_barbell_timing": 0.0
+    "ashare_gold_equity_barbell_timing": 0.0,
+    "ashare_broad_asset_etf_rotation": 0.0
   },
   "order_map": {
     "2F218A7A-454": "default",
@@ -142,6 +185,7 @@
     "888EC3DF-65D": "ashare_broad_asset_etf_rotation",
     "1082182023": "ashare_broad_asset_etf_rotation",
     "21183C3B-97D": "ashare_broad_asset_etf_rotation",
-    "1082182025": "ashare_broad_asset_etf_rotation"
+    "1082182025": "ashare_broad_asset_etf_rotation",
+    "72AB833D-BC1": "ashare_broad_asset_etf_rotation"
   }
 }

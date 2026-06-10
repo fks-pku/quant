@@ -30,8 +30,8 @@ from quant.infrastructure.execution.cn_trading_calendar import (
 )
 from quant.infrastructure.execution.strategy_mode_records import (
     StrategyModeRecordStore,
-    materialize_daily_records,
 )
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.infrastructure.execution.strategy_ledger import (
     build_operations_health,
     build_strategy_mode_ledger,
@@ -39,6 +39,7 @@ from quant.infrastructure.execution.strategy_ledger import (
     read_liquidation_plan,
     read_strategy_audit,
 )
+from quant.runtime.execution_commission import total_commission
 
 
 LIVE_RECORD_DIR = ROOT / "quant" / "infrastructure" / "var" / "live_trading"
@@ -74,7 +75,7 @@ def create_app(root: Path = ROOT) -> Flask:
 
     @app.get("/api/dashboard")
     def dashboard():
-        return jsonify(_json_safe(build_dashboard_payload(root)))
+        return jsonify(_json_safe(build_dashboard_payload(root, migrate=False)))
 
     @app.post("/api/strategies/<strategy_name>/control")
     def control(strategy_name: str):
@@ -99,6 +100,11 @@ def create_app(root: Path = ROOT) -> Flask:
             }), 409
         liquidation_plan = None
         try:
+            current_strategy_config = _configured_strategies(config_dir).get(strategy_name)
+            action_initial_cash = _configured_strategy_initial_cash(
+                current_strategy_config,
+                default_cash=_default_strategy_initial_cash(root),
+            )
             control_state = apply_strategy_control_action(
                 strategy_name,
                 action,
@@ -106,6 +112,7 @@ def create_app(root: Path = ROOT) -> Flask:
                 note=note,
                 default_live_enabled=configured,
                 mode=mode,
+                initial_cash=action_initial_cash,
             )
             if action == "liquidate_stop":
                 liquidation_plan = create_liquidation_plan(
@@ -171,7 +178,7 @@ def create_app(root: Path = ROOT) -> Flask:
     return app
 
 
-def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
+def build_dashboard_payload(root: Path = ROOT, *, migrate: bool = True) -> Dict[str, Any]:
     live_config = _configured_strategies(root / "quant" / "infrastructure" / "var" / "qmt_live_config")
     paper_config = _configured_strategies(root / "quant" / "infrastructure" / "var" / "paper_config")
     live_positions = _read_position_file(root / "quant" / "features" / "data" / "strategy_positions.json")
@@ -180,6 +187,7 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
     paper_records_dir = root / "quant" / "infrastructure" / "var" / "paper_trading"
     control_file = root / "quant" / "infrastructure" / "var" / "strategy_controls.json"
     mode_record_store = StrategyModeRecordStore(root / "quant" / "infrastructure" / "var" / "strategy_modes")
+    state_store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_state.duckdb")
     audit_file = root / "quant" / "infrastructure" / "var" / "strategy_audit.jsonl"
     audit_records = read_strategy_audit(audit_file)
 
@@ -190,9 +198,10 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
         live_positions=live_positions,
         paper_positions=paper_positions,
         live_records_dir=live_records_dir,
-        paper_records_dir=paper_records_dir,
-        mode_record_store=mode_record_store,
-    )
+            paper_records_dir=paper_records_dir,
+            mode_record_store=mode_record_store,
+            state_store=state_store,
+        )
     benchmark = _benchmark_curve(root)
     all_position_symbols = _position_symbols(live_positions) | _position_symbols(paper_positions)
     latest_prices = _latest_close_prices(root, all_position_symbols)
@@ -235,10 +244,13 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             strategy_name,
             mode="live",
             mode_record_store=mode_record_store,
+            state_store=state_store,
             control=live_control_file.to_dict(),
             configured=live_configured,
             initial_cash=live_initial_cash,
             latest_market_data_date=latest_market_data_date,
+            commission_config=_mode_commission_config(root, "live"),
+            migrate=migrate,
         )
         paper_records = _read_mode_records(
             root,
@@ -246,19 +258,22 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             strategy_name,
             mode="paper",
             mode_record_store=mode_record_store,
+            state_store=state_store,
             control=paper_control_file.to_dict(),
             configured=paper_configured,
             initial_cash=paper_initial_cash,
             latest_market_data_date=latest_market_data_date,
+            commission_config=_mode_commission_config(root, "paper"),
+            migrate=migrate,
         )
-        live_control = _control_from_mode_operations(
-            live_records.get("operations", []),
+        live_control = _control_from_state_records(
+            live_records,
             live_control_file.to_dict(),
             configured=live_configured,
             mode="live",
         )
-        paper_control = _control_from_mode_operations(
-            paper_records.get("operations", []),
+        paper_control = _control_from_state_records(
+            paper_records,
             paper_control_file.to_dict(),
             configured=paper_configured,
             mode="paper",
@@ -337,6 +352,7 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
                 "control": live_control,
                 "accepts_signals": _control_accepts_signals(live_control),
                 "ledger": live_ledger,
+                "state": _mode_state_summary(live_records),
                 "recovery": _recovery_status(live_ledger),
                 "liquidation_plan": live_liquidation_plan,
                 "performance": live_performance,
@@ -349,6 +365,7 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
                 "control": paper_control,
                 "accepts_signals": _control_accepts_signals(paper_control),
                 "ledger": paper_ledger,
+                "state": _mode_state_summary(paper_records),
                 "recovery": _recovery_status(paper_ledger),
                 "liquidation_plan": paper_liquidation_plan,
                 "performance": paper_performance,
@@ -358,8 +375,8 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
         })
 
     latest_record_dates = {
-        "live": mode_record_store.latest_record_date("live"),
-        "paper": mode_record_store.latest_record_date("paper"),
+        "live": state_store.latest_record_date("live"),
+        "paper": state_store.latest_record_date("paper"),
     }
     payload = {
         "generated_at": datetime.now().isoformat(),
@@ -369,6 +386,7 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             "live": str(live_records_dir),
             "paper": str(paper_records_dir),
             "strategy_modes": str(mode_record_store.base_dir),
+            "strategy_state": str(state_store.db_path),
         },
         "latest_record_date": latest_record_dates,
         "latest_record_mtime": {
@@ -547,6 +565,13 @@ def _mode_config_dir(root: Path, mode: str) -> Path:
     raise ValueError("mode must be live or paper")
 
 
+def _mode_commission_config(root: Path, mode: str) -> Dict[str, Any]:
+    config = _read_yaml(_mode_config_dir(root, mode) / "config.yaml")
+    execution = config.get("execution", {}) if isinstance(config, dict) else {}
+    commission = execution.get("commission", {}) if isinstance(execution, dict) else {}
+    return commission if isinstance(commission, dict) else {}
+
+
 def _read_yaml(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -611,6 +636,7 @@ def _discover_strategy_names(
     live_records_dir: Path,
     paper_records_dir: Path,
     mode_record_store: StrategyModeRecordStore,
+    state_store: StrategyStateStore,
 ) -> List[str]:
     names = set(live_config) | set(paper_config)
     names.update(_strategy_dirs(root))
@@ -620,6 +646,8 @@ def _discover_strategy_names(
     names.update(_record_strategy_names(paper_records_dir))
     names.update(mode_record_store.strategy_names("live"))
     names.update(mode_record_store.strategy_names("paper"))
+    names.update(state_store.strategy_names("live"))
+    names.update(state_store.strategy_names("paper"))
     ordered = [name for name in sorted(names) if name and name != "default"]
     if "default" in names:
         ordered.append("default")
@@ -653,10 +681,13 @@ def _read_mode_records(
     *,
     mode: str,
     mode_record_store: StrategyModeRecordStore,
+    state_store: StrategyStateStore,
     control: Dict[str, Any],
     configured: bool,
     initial_cash: float,
     latest_market_data_date: Optional[str],
+    commission_config: Optional[Dict[str, Any]] = None,
+    migrate: bool = True,
 ) -> Dict[str, Any]:
     legacy_records = {
         "signals": _filter_strategy(_read_jsonl_records(base_dir, "signals"), strategy_name),
@@ -664,60 +695,106 @@ def _read_mode_records(
         "fills": _filter_strategy(_read_jsonl_records(base_dir, "fills"), strategy_name),
         "snapshots": _filter_strategy(_read_jsonl_records(base_dir, "snapshots"), strategy_name),
     }
-    materialize_daily_records(
-        mode_record_store,
-        mode=mode,
-        strategy_name=strategy_name,
-        records=legacy_records,
+    state_run = None
+    if migrate:
+        state_run = _materialize_state_control_tables(
+            state_store,
+            strategy_name=strategy_name,
+            mode=mode,
+            control=control,
+            configured=configured,
+            initial_cash=initial_cash,
+        )
+        state_store.migrate_records(
+            mode=mode,
+            strategy_name=strategy_name,
+            records=legacy_records,
+            run_id=str((state_run or {}).get("run_id") or ""),
+        )
+        state_store.migrate_records(
+            mode=mode,
+            strategy_name=strategy_name,
+            records=mode_record_store.read_records(mode=mode, strategy_name=strategy_name),
+            run_id=str((state_run or {}).get("run_id") or ""),
     )
-    _materialize_control_operation(
-        mode_record_store,
-        strategy_name=strategy_name,
-        mode=mode,
-        control=control,
-        configured=configured,
-    )
-    stored_records = mode_record_store.read_records(mode=mode, strategy_name=strategy_name)
+    stored_records = state_store.read_records(mode=mode, strategy_name=strategy_name)
     stored_orders = stored_records["orders"]
     stored_fills = stored_records["fills"]
-    stored_order_rows = _dashboard_order_rows(mode, stored_orders, stored_fills, _open_prices_for_orders(root, stored_orders))
-    _materialize_canonical_snapshots(
-        mode_record_store,
-        mode=mode,
-        strategy_name=strategy_name,
-        curve=_curve_from_order_rows(
-            root=root,
+    stored_display_fills = _dashboard_fill_rows(mode, stored_orders, stored_fills, commission_config=commission_config)
+    stored_order_rows = _dashboard_order_rows(
+        mode,
+        stored_orders,
+        stored_display_fills,
+        _open_prices_for_orders(root, stored_orders),
+        commission_config=commission_config,
+    )
+    if migrate:
+        _materialize_canonical_snapshots(
+            state_store,
+            mode=mode,
             strategy_name=strategy_name,
-            order_rows=stored_order_rows,
+            curve=_curve_from_order_rows(
+                root=root,
+                strategy_name=strategy_name,
+                order_rows=stored_order_rows,
+                initial_cash=initial_cash,
+                latest_market_data_date=latest_market_data_date,
+            ),
             initial_cash=initial_cash,
-        ),
-        initial_cash=initial_cash,
-    )
-    _materialize_cash_only_snapshot(
-        mode_record_store,
-        mode=mode,
-        strategy_name=strategy_name,
-        configured=configured,
-        control=control,
-        initial_cash=initial_cash,
-        latest_market_data_date=latest_market_data_date,
-        existing_snapshots=stored_records["snapshots"],
-        has_filled_activity=bool(stored_fills) or any(_float(row.get("filled_qty")) > 0 for row in stored_order_rows),
-    )
-    stored_records = mode_record_store.read_records(mode=mode, strategy_name=strategy_name)
+        )
+        _materialize_cash_only_snapshot(
+            state_store,
+            mode=mode,
+            strategy_name=strategy_name,
+            configured=configured,
+            control=control,
+            initial_cash=initial_cash,
+            latest_market_data_date=latest_market_data_date,
+            existing_snapshots=stored_records["snapshots"],
+            has_filled_activity=bool(stored_fills) or any(_float(row.get("filled_qty")) > 0 for row in stored_order_rows),
+        )
+        stored_records = state_store.read_records(mode=mode, strategy_name=strategy_name)
     signals = stored_records["signals"]
     orders = stored_records["orders"]
-    fills = stored_records["fills"]
-    snapshots = stored_records["snapshots"]
-    order_rows = _dashboard_order_rows(mode, orders, fills, _open_prices_for_orders(root, orders))
+    fills = _dashboard_fill_rows(mode, orders, stored_records["fills"], commission_config=commission_config)
+    snapshots = _dashboard_snapshot_rows(stored_records["snapshots"], latest_market_data_date)
+    order_rows = _dashboard_order_rows(
+        mode,
+        orders,
+        fills,
+        _open_prices_for_orders(root, orders),
+        commission_config=commission_config,
+    )
+    signal_rows = _dashboard_signal_rows(root, signals, orders, fills)
+    watermark = (
+        _materialize_state_watermark(
+            state_store,
+            mode=mode,
+            strategy_name=strategy_name,
+            records={**stored_records, "orders": order_rows, "signals": signal_rows, "snapshots": snapshots},
+            latest_market_data_date=latest_market_data_date,
+        )
+        if migrate
+        else state_store.latest("watermarks", mode=mode, strategy_name=strategy_name)
+    )
+    if migrate:
+        stored_records = state_store.read_records(mode=mode, strategy_name=strategy_name)
     return {
         "operations": sorted(stored_records["operations"], key=lambda item: item.get("timestamp", "")),
-        "signals": sorted(signals, key=lambda item: item.get("timestamp", "")),
+        "runs": sorted(stored_records["runs"], key=lambda item: item.get("timestamp", "")),
+        "control_state": sorted(stored_records["control_state"], key=lambda item: item.get("timestamp", "")),
+        "capital_events": sorted(stored_records["capital_events"], key=lambda item: item.get("timestamp", "")),
+        "signals": signal_rows,
+        "submit_attempts": sorted(stored_records["submit_attempts"], key=lambda item: item.get("timestamp", "")),
         "orders": order_rows,
         "fills": sorted(fills, key=lambda item: item.get("timestamp", "")),
+        "positions": sorted(stored_records["positions"], key=lambda item: item.get("timestamp", "")),
         "snapshots": sorted(snapshots, key=lambda item: item.get("timestamp", "")),
+        "watermarks": sorted(stored_records["watermarks"], key=lambda item: item.get("timestamp", "")),
+        "reconciliations": sorted(stored_records["reconciliations"], key=lambda item: item.get("timestamp", "")),
         "pending_orders": _pending_submit_orders(root, signals, orders, fills, as_of_date=date.today().isoformat()),
         "execution_summary": _dashboard_execution_summary(order_rows, fills),
+        "latest_watermark": watermark,
     }
 
 
@@ -766,8 +843,72 @@ def _materialize_control_operation(
     )
 
 
+def _materialize_state_control_tables(
+    state_store: StrategyStateStore,
+    *,
+    strategy_name: str,
+    mode: str,
+    control: Dict[str, Any],
+    configured: bool,
+    initial_cash: float,
+) -> Optional[Dict[str, Any]]:
+    timestamp = str(control.get("updated_at") or datetime.now().isoformat())
+    lifecycle_state = str(control.get("live_state") or ("running" if configured else "stopped"))
+    operation = state_store.record_operation(
+        mode=mode,
+        strategy_name=strategy_name,
+        operation_type="control_state",
+        requested_by="strategy_controls",
+        requested_at=timestamp,
+        effective_date=timestamp[:10],
+        params={"control": dict(control), "configured": configured},
+        status="applied",
+        applied_at=timestamp,
+        idempotency_key=f"control_state:{mode}:{strategy_name}:{timestamp}",
+    )
+    run = state_store.active_run(mode=mode, strategy_name=strategy_name)
+    if configured and initial_cash > 0 and lifecycle_state in {"running", "paused", "liquidating"}:
+        run = state_store.ensure_run(
+            mode=mode,
+            strategy_name=strategy_name,
+            initial_cash=initial_cash,
+            started_at=timestamp,
+            operation_id=operation["operation_id"],
+            status="paused" if lifecycle_state == "paused" else "active",
+        )
+    elif lifecycle_state == "stopped" and run:
+        run = state_store.record_run_state(
+            mode=mode,
+            strategy_name=strategy_name,
+            run_id=str(run.get("run_id") or ""),
+            status="stopped",
+            timestamp=timestamp,
+            operation_id=operation["operation_id"],
+        )
+    run_id = str((run or {}).get("run_id") or "")
+    accepts = (
+        bool(control.get("live_enabled"))
+        and lifecycle_state == "running"
+        and not bool(control.get("liquidation_requested"))
+    )
+    state_store.record_control_state(
+        mode=mode,
+        strategy_name=strategy_name,
+        lifecycle_state=lifecycle_state,
+        signal_enabled=accepts,
+        submit_enabled=accepts,
+        reconcile_enabled=True,
+        valuation_enabled=True,
+        current_run_id=run_id,
+        last_operation_id=operation["operation_id"],
+        timestamp=timestamp,
+        raw=control,
+    )
+    return run
+
+
 def _materialize_canonical_snapshots(
-    mode_record_store: StrategyModeRecordStore,
+    state_store: StrategyStateStore,
     *,
     mode: str,
     strategy_name: str,
@@ -786,31 +927,62 @@ def _materialize_canonical_snapshots(
         snapshot["date"] = point_date
         snapshot["source"] = "canonical_fill_ledger"
         snapshot["initial_cash"] = initial_cash
-        mode_record_store.append(
+        state_store.upsert_record(
             "snapshots",
             mode=mode,
             strategy_name=strategy_name,
             record=snapshot,
-            unique=True,
         )
-        mode_record_store.append_operation(
+        state_store.record_operation(
             mode=mode,
             strategy_name=strategy_name,
-            action="canonical_snapshot",
-            timestamp=snapshot["timestamp"],
-            source="strategy_mode_ledger",
-            payload={
+            operation_type="canonical_snapshot",
+            requested_by="strategy_state_store",
+            requested_at=snapshot["timestamp"],
+            effective_date=point_date,
+            params={
                 "date": point_date,
                 "initial_cash": initial_cash,
                 "nav": snapshot.get("nav"),
                 "total_pnl": snapshot.get("total_pnl"),
             },
-            unique=True,
+            status="applied",
+            applied_at=snapshot["timestamp"],
+            idempotency_key=f"canonical_snapshot:{mode}:{strategy_name}:{point_date}",
         )
 
 
+def _dashboard_snapshot_rows(
+    snapshots: List[Dict[str, Any]],
+    latest_market_data_date: Optional[str],
+) -> List[Dict[str, Any]]:
+    max_date = str(latest_market_data_date or "")[:10]
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for row in snapshots:
+        row_date = str(row.get("date") or row.get("record_date") or row.get("timestamp") or "")[:10]
+        if not row_date:
+            continue
+        if max_date and row_date > max_date:
+            continue
+        existing = by_date.get(row_date)
+        if existing is None or _snapshot_rank(row) >= _snapshot_rank(existing):
+            by_date[row_date] = row
+    return sorted(by_date.values(), key=lambda item: str(item.get("timestamp") or item.get("date") or ""))
+
+
+def _snapshot_rank(row: Dict[str, Any]) -> tuple[int, str]:
+    source = str(row.get("source") or "")
+    if source == "canonical_fill_ledger":
+        priority = 3
+    elif source == "cash_only_no_activity":
+        priority = 2
+    else:
+        priority = 1
+    return (priority, str(row.get("timestamp") or ""))
+
+
 def _materialize_cash_only_snapshot(
-    mode_record_store: StrategyModeRecordStore,
+    state_store: StrategyStateStore,
     *,
     mode: str,
     strategy_name: str,
@@ -848,27 +1020,126 @@ def _materialize_cash_only_snapshot(
         "unrealized_pnl": 0.0,
         "total_pnl": 0.0,
     }
-    mode_record_store.append(
+    state_store.upsert_record(
         "snapshots",
         mode=mode,
         strategy_name=strategy_name,
         record=snapshot,
-        unique=True,
     )
-    mode_record_store.append_operation(
+    state_store.record_operation(
         mode=mode,
         strategy_name=strategy_name,
-        action="cash_only_snapshot",
-        timestamp=timestamp,
-        source="strategy_mode_ledger",
-        payload={
+        operation_type="cash_only_snapshot",
+        requested_by="strategy_state_store",
+        requested_at=timestamp,
+        effective_date=snapshot_date,
+        params={
             "date": snapshot_date,
             "initial_cash": initial_cash,
             "nav": initial_cash,
             "reason": "configured mode has no activity but still needs a NAV point",
         },
-        unique=True,
+        status="applied",
+        applied_at=timestamp,
+        idempotency_key=f"cash_only_snapshot:{mode}:{strategy_name}:{snapshot_date}",
     )
+
+
+def _materialize_state_watermark(
+    state_store: StrategyStateStore,
+    *,
+    mode: str,
+    strategy_name: str,
+    records: Dict[str, Any],
+    latest_market_data_date: Optional[str],
+) -> Dict[str, Any]:
+    run_id = state_store.active_run_id(mode=mode, strategy_name=strategy_name)
+    latest_signal_date = _latest_record_day(records.get("signals", []))
+    latest_submit_date = _latest_submit_day(records.get("signals", []), records.get("submit_attempts", []))
+    latest_order_date = _latest_record_day(records.get("orders", []))
+    latest_fill_date = _latest_record_day(records.get("fills", []))
+    latest_nav_date = _latest_record_day(records.get("snapshots", []))
+    latest_record_date = _records_latest_date(records)
+    return state_store.record_watermark(
+        mode=mode,
+        strategy_name=strategy_name,
+        run_id=run_id,
+        latest_market_data_date=latest_market_data_date,
+        latest_signal_date=latest_signal_date,
+        latest_submit_date=latest_submit_date,
+        latest_order_date=latest_order_date,
+        latest_fill_date=latest_fill_date,
+        latest_nav_date=latest_nav_date,
+        latest_record_date=latest_record_date,
+        status="ok",
+    )
+
+
+def _latest_record_day(records: Iterable[Dict[str, Any]]) -> Optional[str]:
+    latest: Optional[str] = None
+    for record in records:
+        value = _record_date(record)
+        if value and (latest is None or value > latest):
+            latest = value
+    return latest
+
+
+def _latest_submit_day(
+    signals: Iterable[Dict[str, Any]],
+    submit_attempts: Iterable[Dict[str, Any]],
+) -> Optional[str]:
+    latest: Optional[str] = None
+    for record in list(signals) + list(submit_attempts):
+        value = str(record.get("submit_date") or record.get("execution_date") or "")[:10]
+        if len(value) == 10 and (latest is None or value > latest):
+            latest = value
+    return latest
+
+
+def _control_from_state_records(
+    records: Dict[str, Any],
+    fallback: Dict[str, Any],
+    *,
+    configured: bool,
+    mode: str,
+) -> Dict[str, Any]:
+    control = _control_from_mode_operations(
+        records.get("operations", []),
+        fallback,
+        configured=configured,
+        mode=mode,
+    )
+    latest_state = _latest_by_timestamp(records.get("control_state", []))
+    if latest_state:
+        lifecycle = str(latest_state.get("lifecycle_state") or control.get("live_state") or "stopped")
+        control["live_state"] = lifecycle
+        control["live_enabled"] = lifecycle in {"running", "paused"}
+        control["liquidation_requested"] = lifecycle == "liquidating"
+        control["updated_at"] = latest_state.get("updated_at") or latest_state.get("timestamp") or control.get("updated_at", "")
+        control["current_run_id"] = latest_state.get("current_run_id")
+        control["signal_enabled"] = bool(latest_state.get("signal_enabled"))
+        control["submit_enabled"] = bool(latest_state.get("submit_enabled"))
+        control["reconcile_enabled"] = bool(latest_state.get("reconcile_enabled", True))
+        control["valuation_enabled"] = bool(latest_state.get("valuation_enabled", True))
+    control["mode"] = mode
+    return control
+
+
+def _mode_state_summary(records: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "run": _latest_by_timestamp(records.get("runs", [])),
+        "control_state": _latest_by_timestamp(records.get("control_state", [])),
+        "watermark": _latest_by_timestamp(records.get("watermarks", [])),
+        "capital_events": list(records.get("capital_events", []))[-20:],
+        "reconciliations": list(records.get("reconciliations", []))[-20:],
+    }
+
+
+def _latest_by_timestamp(records: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    rows = list(records)
+    if not rows:
+        return None
+    return sorted(rows, key=lambda item: str(item.get("updated_at") or item.get("timestamp") or item.get("created_at") or ""))[-1]
 
 
 def _control_from_mode_operations(
@@ -884,11 +1155,16 @@ def _control_from_mode_operations(
     control.setdefault("live_state", "running" if control.get("live_enabled") else "stopped")
     for operation in sorted(operations, key=lambda item: str(item.get("timestamp") or "")):
         payload = operation.get("payload", {})
+        if not isinstance(payload, dict):
+            payload = {}
+        params = operation.get("params_json", {})
+        if isinstance(params, dict) and not payload:
+            payload = params
         if isinstance(payload, dict) and isinstance(payload.get("control"), dict):
             control.update(payload["control"])
             control["mode"] = mode
             continue
-        action = str(operation.get("action") or "")
+        action = str(operation.get("action") or operation.get("operation_type") or "")
         if action in {"start", "resume"}:
             control.update({"live_enabled": True, "live_state": "running", "liquidation_requested": False})
         elif action == "pause":
@@ -927,20 +1203,27 @@ def _dashboard_order_rows(
     orders: List[Dict[str, Any]],
     fills: List[Dict[str, Any]],
     open_prices: Optional[Dict[tuple[str, str], float]] = None,
+    *,
+    commission_config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     open_prices = open_prices or {}
-    fill_totals: Dict[str, Dict[str, float]] = {}
+    fill_totals: Dict[tuple[str, str], Dict[str, float]] = {}
     for fill in fills:
-        order_id = str(fill.get("order_id", ""))
-        if not order_id:
+        identifiers = _record_identifiers(fill)
+        fill_date = _record_date(fill)
+        if not identifiers or not fill_date:
             continue
         qty = _float(fill.get("quantity"))
         price = _float(fill.get("price"))
         commission = _float(fill.get("commission"))
-        totals = fill_totals.setdefault(order_id, {"quantity": 0.0, "value": 0.0, "commission": 0.0})
-        totals["quantity"] += qty
-        totals["value"] += qty * price
-        totals["commission"] += commission
+        for identifier in identifiers:
+            totals = fill_totals.setdefault(
+                (identifier, fill_date),
+                {"quantity": 0.0, "value": 0.0, "commission": 0.0},
+            )
+            totals["quantity"] += qty
+            totals["value"] += qty * price
+            totals["commission"] += commission
 
     rows = []
     for order in sorted(orders, key=lambda item: item.get("timestamp", "")):
@@ -950,13 +1233,21 @@ def _dashboard_order_rows(
         limit_price = _float(order.get("price"))
         raw_fill_price = totals["value"] / filled_qty if filled_qty > 0 else None
         display_fill_price = _display_fill_price(mode, limit_price, raw_fill_price, filled_qty)
+        commission = _display_commission(
+            mode,
+            order,
+            filled_qty,
+            raw_fill_price,
+            totals["commission"],
+            commission_config,
+        )
         open_price = open_prices.get(_order_open_key(order))
         row["limit_price"] = limit_price
         row["open_price"] = open_price
         row["filled_qty"] = filled_qty
         row["raw_fill_price"] = raw_fill_price
         row["fill_price"] = display_fill_price
-        row["commission"] = totals["commission"]
+        row["commission"] = commission
         row["slippage_bps"] = _order_slippage_bps(open_price, display_fill_price, filled_qty)
         row["display_contract"] = "paper_limit_fill" if mode == "paper" else "live_actual_fill"
         order_qty = _float(order.get("quantity"))
@@ -968,6 +1259,86 @@ def _dashboard_order_rows(
             row["display_status"] = "partial"
         rows.append(row)
     return rows
+
+
+def _dashboard_fill_rows(
+    mode: str,
+    orders: List[Dict[str, Any]],
+    fills: List[Dict[str, Any]],
+    *,
+    commission_config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    if mode != "paper":
+        return [dict(fill) for fill in fills]
+    order_dates = {
+        (identifier, _record_date(order))
+        for order in orders
+        for identifier in _record_identifiers(order)
+        if _record_date(order)
+    }
+    grouped: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+    passthrough: List[Dict[str, Any]] = []
+    for fill in fills:
+        row = dict(fill)
+        keys = [
+            (identifier, _record_date(row))
+            for identifier in _record_identifiers(row)
+            if _record_date(row)
+        ]
+        matching_keys = [key for key in keys if key in order_dates] or keys
+        if not matching_keys:
+            passthrough.append(row)
+            continue
+        grouped.setdefault(matching_keys[0], []).append(row)
+    result = passthrough
+    for group_rows in grouped.values():
+        recorded_total = sum(_float(row.get("commission")) for row in group_rows)
+        if recorded_total > 0:
+            result.extend(group_rows)
+            continue
+        qty = sum(_float(row.get("quantity")) for row in group_rows)
+        value = sum(_float(row.get("quantity")) * _float(row.get("price")) for row in group_rows)
+        symbol = str((group_rows[0].get("symbol") if group_rows else "") or "").split(".")[0]
+        side = str((group_rows[0].get("side") if group_rows else "") or "").upper()
+        estimated = 0.0
+        if qty > 0 and value > 0 and symbol and side in {"BUY", "SELL"}:
+            try:
+                estimated = round(float(total_commission(symbol, value / qty, qty, side, commission_config or {})), 6)
+            except Exception:
+                estimated = 0.0
+        for row in group_rows:
+            item = dict(row)
+            if estimated > 0:
+                row_value = _float(row.get("quantity")) * _float(row.get("price"))
+                item["commission"] = round(estimated * row_value / value, 6) if value > 0 else estimated / len(group_rows)
+                item["commission_source"] = "estimated_paper_shared_model"
+            result.append(item)
+    return sorted(result, key=lambda item: item.get("timestamp", ""))
+
+
+def _display_commission(
+    mode: str,
+    order: Dict[str, Any],
+    filled_qty: float,
+    raw_fill_price: Optional[float],
+    recorded_commission: float,
+    commission_config: Optional[Dict[str, Any]],
+) -> float:
+    if recorded_commission > 0 or mode != "paper" or filled_qty <= 0:
+        return recorded_commission
+    price = _float(raw_fill_price)
+    if price <= 0:
+        price = _float(order.get("avg_fill_price")) or _float(order.get("price"))
+    if price <= 0:
+        return recorded_commission
+    symbol = str(order.get("symbol") or "").split(".")[0]
+    side = str(order.get("side") or "").upper()
+    if not symbol or side not in {"BUY", "SELL"}:
+        return recorded_commission
+    try:
+        return round(float(total_commission(symbol, price, filled_qty, side, commission_config or {})), 6)
+    except Exception:
+        return recorded_commission
 
 
 def _open_prices_for_orders(root: Path, orders: List[Dict[str, Any]]) -> Dict[tuple[str, str], float]:
@@ -1015,18 +1386,31 @@ def _order_open_key(order: Dict[str, Any]) -> tuple[str, str]:
 
 
 def _fill_totals_for_order(
-    fill_totals: Dict[str, Dict[str, float]],
+    fill_totals: Dict[tuple[str, str], Dict[str, float]],
     order: Dict[str, Any],
 ) -> Dict[str, float]:
-    keys = []
-    for key in ("order_id", "broker_order_id"):
-        value = str(order.get(key) or "")
-        if value and value not in keys:
-            keys.append(value)
+    order_date = _record_date(order)
+    keys = [(identifier, order_date) for identifier in _record_identifiers(order) if order_date]
     for key in keys:
         if key in fill_totals:
             return fill_totals[key]
+    identifiers = _record_identifiers(order)
+    matches = [
+        totals for (identifier, _), totals in fill_totals.items()
+        if identifier in identifiers
+    ]
+    if len(matches) == 1:
+        return matches[0]
     return {"quantity": 0.0, "value": 0.0, "commission": 0.0}
+
+
+def _record_identifiers(record: Dict[str, Any]) -> List[str]:
+    identifiers: List[str] = []
+    for key in ("order_id", "broker_order_id"):
+        value = str(record.get(key) or "")
+        if value and value not in identifiers:
+            identifiers.append(value)
+    return identifiers
 
 
 def _display_fill_price(
@@ -1071,11 +1455,48 @@ def _dashboard_execution_summary(order_rows: List[Dict[str, Any]], fills: List[D
             weighted_sum += _float(slippage_bps) * weight
             weight_total += weight
     return {
-        "total_commission": round(sum(_float(fill.get("commission")) for fill in fills), 6),
+        "total_commission": round(sum(_float(row.get("commission")) for row in order_rows), 6),
         "median_slippage_bps": round(_median(samples), 6) if samples else None,
         "weighted_avg_slippage_bps": round(weighted_sum / weight_total, 6) if weight_total > 0 else None,
         "slippage_sample_count": len(samples),
     }
+
+
+def _dashboard_signal_rows(
+    root: Path,
+    signals: List[Dict[str, Any]],
+    orders: List[Dict[str, Any]],
+    fills: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    submitted_ids = _submitted_order_ids(orders, fills)
+    submitted_signatures = [
+        (_order_signature(record), _order_action_signature(record), _record_date(record), _timestamp_text(record))
+        for record in orders
+        if _is_submitted_order(record)
+    ]
+    rows = []
+    for signal in sorted(signals, key=lambda item: item.get("timestamp", "")):
+        if _is_dashboard_submit_attempt_signal(signal, root, submitted_ids, submitted_signatures):
+            continue
+        rows.append(signal)
+    return rows
+
+
+def _is_dashboard_submit_attempt_signal(
+    signal: Dict[str, Any],
+    root: Path,
+    submitted_ids: set[str],
+    submitted_signatures: List[tuple[Optional[tuple[Any, ...]], Optional[tuple[Any, ...]], str, str]],
+) -> bool:
+    status = str(signal.get("status", "")).lower()
+    if status in _failed_signal_statuses():
+        return True
+    if status not in _pending_signal_statuses():
+        return False
+    if not _is_intraday_signal(signal):
+        return False
+    submit_date = _signal_submit_date(signal, root=root, failed=False)
+    return _signal_is_submitted(signal, submitted_ids, submitted_signatures, submit_date)
 
 
 def _apply_execution_summary(performance: Dict[str, Any], summary: Dict[str, Any]) -> None:
@@ -1095,25 +1516,24 @@ def _pending_submit_orders(
 ) -> List[Dict[str, Any]]:
     submitted_ids = _submitted_order_ids(orders, fills)
     submitted_signatures = [
-        (_order_signature(record), _timestamp_text(record))
+        (_order_signature(record), _order_action_signature(record), _record_date(record), _timestamp_text(record))
         for record in orders
+        if _is_submitted_order(record)
     ]
     close_prices = _signal_close_prices(root, signals)
     pending = []
     for signal in sorted(signals, key=lambda item: item.get("timestamp", "")):
-        if str(signal.get("status", "")).lower() not in {"accepted", "pending", "queued", "pending_submit"}:
+        status = str(signal.get("status", "")).lower()
+        if status not in _pending_signal_statuses() and status not in _failed_signal_statuses():
             continue
-        if _signal_is_submitted(signal, submitted_ids, submitted_signatures):
+        failed = status in _failed_signal_statuses()
+        submit_date = _signal_submit_date(signal, root=root, failed=failed)
+        if not failed and _signal_is_submitted(signal, submitted_ids, submitted_signatures, submit_date):
             continue
         signal_date = _record_date(signal)
         row = dict(signal)
         row["signal_date"] = signal_date
-        row["submit_date"] = str(
-            row.get("submit_date")
-            or row.get("execution_date")
-            or _next_trading_date(signal_date, root=root)
-            or ""
-        )
+        row["submit_date"] = submit_date
         if _date_before(row["submit_date"], as_of_date):
             continue
         cost_bps = _pending_submit_cost_bps(
@@ -1123,9 +1543,39 @@ def _pending_submit_orders(
         if cost_bps is not None:
             row["cost_bps"] = cost_bps
             row["cost_bps_display"] = f"+{cost_bps:.1f} bps"
-        row["display_status"] = "pending_submit"
+        row["display_status"] = "failed" if failed else "pending_submit"
         pending.append(row)
     return pending
+
+
+def _pending_signal_statuses() -> set[str]:
+    return {"accepted", "pending", "queued", "pending_submit"}
+
+
+def _failed_signal_statuses() -> set[str]:
+    return {"rejected", "failed", "error", "dropped", "cancelled", "canceled", "expired"}
+
+
+def _is_submitted_order(record: Dict[str, Any]) -> bool:
+    return str(record.get("status") or "").lower() not in _failed_signal_statuses()
+
+
+def _signal_submit_date(signal: Dict[str, Any], *, root: Path, failed: bool = False) -> str:
+    explicit = str(signal.get("submit_date") or signal.get("execution_date") or "")[:10]
+    if explicit:
+        return explicit
+    signal_date = _record_date(signal)
+    if failed or _is_intraday_signal(signal):
+        return signal_date
+    return str(_next_trading_date(signal_date, root=root) or "")
+
+
+def _is_intraday_signal(signal: Dict[str, Any]) -> bool:
+    timestamp = str(signal.get("timestamp") or "")
+    if "T" not in timestamp:
+        return False
+    time_text = timestamp.split("T", 1)[1][:8]
+    return bool(time_text) and time_text < "15:00:00"
 
 
 def _pending_submit_cost_bps(row: Dict[str, Any], signal_close: Optional[float]) -> Optional[float]:
@@ -1203,7 +1653,7 @@ def _submitted_order_ids(
     fills: List[Dict[str, Any]],
 ) -> set[str]:
     ids: set[str] = set()
-    for record in [*orders, *fills]:
+    for record in [record for record in orders if _is_submitted_order(record)] + fills:
         for key in ("order_id", "broker_order_id"):
             value = str(record.get(key) or "")
             if value:
@@ -1214,22 +1664,28 @@ def _submitted_order_ids(
 def _signal_is_submitted(
     signal: Dict[str, Any],
     submitted_ids: set[str],
-    submitted_signatures: List[tuple[Optional[tuple[Any, ...]], str]],
+    submitted_signatures: List[tuple[Optional[tuple[Any, ...]], Optional[tuple[Any, ...]], str, str]],
+    submit_date: str,
 ) -> bool:
     order_id = str(signal.get("order_id") or "")
     if order_id and order_id in submitted_ids:
         return True
     signature = _order_signature(signal)
-    if signature is None:
+    action_signature = _order_action_signature(signal)
+    if signature is None and action_signature is None:
         return False
     signal_time = _timestamp_text(signal)
-    for submitted_signature, submitted_time in submitted_signatures:
-        if submitted_signature != signature:
-            continue
-        if not signal_time or not submitted_time or submitted_time >= signal_time:
-            return True
-        if _timestamps_near(submitted_time, signal_time):
-            return True
+    for submitted_signature, submitted_action_signature, submitted_date, submitted_time in submitted_signatures:
+        if signature is not None and submitted_signature == signature:
+            if not signal_time or not submitted_time or submitted_time >= signal_time:
+                return True
+            if _timestamps_near(submitted_time, signal_time):
+                return True
+        if action_signature is not None and submitted_action_signature == action_signature:
+            if submit_date and submitted_date == submit_date:
+                return True
+            if submitted_time and signal_time and _timestamps_near(submitted_time, signal_time):
+                return True
     return False
 
 
@@ -1249,6 +1705,21 @@ def _order_signature(record: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
         order_type,
         round(quantity, 6),
         round(price, 6),
+    )
+
+
+def _order_action_signature(record: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
+    strategy_name = str(record.get("strategy_name") or "default")
+    symbol = str(record.get("symbol") or "").split(".")[0]
+    side = str(record.get("side") or "").upper()
+    quantity = _float(record.get("quantity"))
+    if not symbol or not side or quantity <= 0:
+        return None
+    return (
+        strategy_name,
+        symbol,
+        side,
+        round(quantity, 6),
     )
 
 
@@ -1376,6 +1847,7 @@ def _holdings_for_strategy(
     stored_positions = position_data.get("positions", {}).get(strategy_name, {}) or {}
     contract_state = _contract_position_state(order_rows or [])
     contract_positions = contract_state["positions"]
+    contract_activity_dates = contract_state.get("symbol_activity_dates", {})
     has_contract_activity = bool(contract_state["has_activity"])
     realized = (
         contract_state["realized_pnl"]
@@ -1405,18 +1877,31 @@ def _holdings_for_strategy(
             continue
         stored_market_value = _float(raw.get("market_value"))
         close_price = latest_prices.get(str(symbol).split(".")[0], {})
-        if close_price:
+        stale_after_activity = False
+        symbol_activity_date = str(contract_activity_dates.get(symbol) or "")
+        if close_price and contract_position:
+            close_date = str(close_price.get("date", ""))[:10]
+            stale_after_activity = bool(symbol_activity_date and close_date and close_date < symbol_activity_date)
+        if close_price and not stale_after_activity:
             current_price = _float(close_price.get("price"))
             price_date = str(close_price.get("date", ""))
             price_source = str(close_price.get("source", "duckdb"))
+            valuation_status = "marked"
+        elif contract_position and stale_after_activity:
+            current_price = _float(contract_position.get("unmarked_price")) or avg_cost
+            price_date = ""
+            price_source = "unmarked_fill_after_activity"
+            valuation_status = "unmarked_after_activity"
         elif qty > 0 and stored_market_value > 0:
             current_price = stored_market_value / qty
             price_date = ""
             price_source = "position_market_value"
+            valuation_status = "stored_position_mark"
         else:
             current_price = last_contract_prices.get(symbol, last_fill_prices.get(symbol, avg_cost))
             price_date = ""
             price_source = "display_contract_fill" if symbol in last_contract_prices else "last_fill"
+            valuation_status = "unmarked_after_activity" if contract_position else "fallback_mark"
         market_value = current_price * qty
         unrealized = market_value - cost_value
         if price_date:
@@ -1430,6 +1915,7 @@ def _holdings_for_strategy(
             "current_price": current_price,
             "price_date": price_date,
             "price_source": price_source,
+            "valuation_status": valuation_status,
             "avg_cost": avg_cost,
             "market_value": market_value,
             "unrealized_pnl": unrealized,
@@ -1465,6 +1951,7 @@ def _holdings_for_strategy(
         "cash_source": cash_source,
         "nav": nav,
         "price_date": sorted(price_dates)[-1] if price_dates else None,
+        "latest_activity_date": contract_state.get("latest_activity_date"),
     }
 
 
@@ -1473,6 +1960,8 @@ def _contract_position_state(order_rows: List[Dict[str, Any]]) -> Dict[str, Any]
     realized_pnl = 0.0
     cash_delta = 0.0
     has_activity = False
+    latest_activity_date = ""
+    symbol_activity_dates: Dict[str, str] = {}
     for row in sorted(order_rows, key=lambda item: item.get("timestamp", "")):
         symbol = str(row.get("symbol") or "")
         side = str(row.get("side") or "").upper()
@@ -1482,10 +1971,15 @@ def _contract_position_state(order_rows: List[Dict[str, Any]]) -> Dict[str, Any]
         if not symbol or qty <= 0 or fill_price <= 0:
             continue
         has_activity = True
+        row_date = _record_date(row)
+        if row_date and row_date > latest_activity_date:
+            latest_activity_date = row_date
+        if row_date and (symbol not in symbol_activity_dates or row_date > symbol_activity_dates[symbol]):
+            symbol_activity_dates[symbol] = row_date
         notional = qty * fill_price
         if side == "BUY":
             unit_cost = (notional + commission) / qty
-            lots.setdefault(symbol, []).append({"qty": qty, "unit_cost": unit_cost})
+            lots.setdefault(symbol, []).append({"qty": qty, "unit_cost": unit_cost, "unit_price": fill_price})
             cash_delta -= notional + commission
         elif side == "SELL":
             removed_cost = 0.0
@@ -1508,18 +2002,22 @@ def _contract_position_state(order_rows: List[Dict[str, Any]]) -> Dict[str, Any]
     for symbol, symbol_lots in lots.items():
         qty = sum(_float(lot.get("qty")) for lot in symbol_lots)
         cost_value = sum(_float(lot.get("qty")) * _float(lot.get("unit_cost")) for lot in symbol_lots)
+        unmarked_value = sum(_float(lot.get("qty")) * _float(lot.get("unit_price")) for lot in symbol_lots)
         if qty <= 1e-9:
             continue
         positions[symbol] = {
             "qty": qty,
             "avg_cost": cost_value / qty,
             "cost_value": cost_value,
+            "unmarked_price": unmarked_value / qty if unmarked_value > 0 else cost_value / qty,
         }
     return {
         "positions": positions,
         "realized_pnl": realized_pnl,
         "cash_delta": cash_delta,
         "has_activity": has_activity,
+        "latest_activity_date": latest_activity_date,
+        "symbol_activity_dates": symbol_activity_dates,
     }
 
 
@@ -1590,14 +2088,21 @@ def _performance(
         if denominator and denominator > 0
         else performance.get("total_return", 0.0)
     )
+    if holdings.get("cash_source") in {"order_contract", "initial_cash"}:
+        performance["total_nav"] = holdings.get("nav", 0.0)
+        performance["cash"] = holdings.get("cash", 0.0)
+        performance["total_nav_source"] = (
+            "current_execution_state"
+            if holdings.get("cash_source") == "order_contract"
+            else "initial_cash"
+        )
     if latest_snapshot is not None:
         performance["latest_snapshot"] = latest_snapshot
-        if holdings.get("cash_source") in {"order_contract", "initial_cash"}:
-            performance["total_nav"] = holdings.get("nav", 0.0)
-            performance["cash"] = holdings.get("cash", 0.0)
-        elif _float(performance.get("total_nav")) <= 0:
+        if holdings.get("cash_source") not in {"order_contract", "initial_cash"} and _float(performance.get("total_nav")) <= 0:
             performance["total_nav"] = latest_snapshot.get("nav", 0.0)
+            performance["total_nav_source"] = "latest_snapshot"
     performance.setdefault("total_nav", 0.0)
+    performance.setdefault("total_nav_source", "latest_snapshot")
     performance["pnl_curve"] = curve
     return performance
 
@@ -1608,10 +2113,13 @@ def _curve_from_order_rows(
     strategy_name: str,
     order_rows: List[Dict[str, Any]],
     initial_cash: float,
+    latest_market_data_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    max_mark_date = str(latest_market_data_date or date.today().isoformat())[:10]
     filled_rows = [
         row for row in order_rows
         if _float(row.get("filled_qty")) > 0 and _float(row.get("fill_price")) > 0
+        and _record_date(row) <= max_mark_date
     ]
     if initial_cash <= 0 or not filled_rows:
         return []
@@ -1620,7 +2128,7 @@ def _curve_from_order_rows(
     if not symbols or not dates:
         return []
     start = min(dates)
-    end = date.today().isoformat()
+    end = max_mark_date
     price_history = _close_price_history(root, symbols, start, end)
     trading_dates = sorted({
         price_date
@@ -1771,7 +2279,13 @@ def _snapshot_from_holdings(strategy_name: str, holdings: Dict[str, Any]) -> Opt
         return None
     cash = _float(holdings.get("cash")) if holdings.get("cash_source") in {"order_contract", "initial_cash"} else 0.0
     nav = _float(holdings.get("nav")) if holdings.get("cash_source") in {"order_contract", "initial_cash"} else market_value
-    snapshot_date = str(holdings.get("price_date") or date.today().isoformat())
+    snapshot_date = str(holdings.get("price_date") or "")
+    if holdings.get("cash_source") == "order_contract":
+        latest_activity_date = str(holdings.get("latest_activity_date") or "")[:10]
+        if not snapshot_date or (latest_activity_date and snapshot_date < latest_activity_date):
+            return None
+    if not snapshot_date:
+        snapshot_date = date.today().isoformat()
     return {
         "date": snapshot_date,
         "timestamp": datetime.now().isoformat(),
