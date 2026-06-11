@@ -1,10 +1,10 @@
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
 
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.scripts.backfill_paper_from_live_records import backfill_paper_from_live_records
 
 
@@ -59,8 +59,8 @@ def test_backfill_paper_from_live_signals_uses_execution_open_and_skips_manual_o
     assert [fill["price"] for fill in paper_fills] == pytest.approx([1.995, 9.28])
     assert "MANUAL-RETRY" not in {order["order_id"] for order in paper_orders}
 
-    marker = root / "quant" / "infrastructure" / "var" / "paper_trading" / trading_date / "_daily_replay_complete.json"
-    assert json.loads(marker.read_text(encoding="utf-8"))["source"] == "backfill_live_signals"
+    paper_day = root / "quant" / "infrastructure" / "var" / "paper_trading" / trading_date
+    assert not list(paper_day.glob("*.json*")) if paper_day.exists() else True
 
     second = backfill_paper_from_live_records(trading_date, root=root)
     assert second["skipped"] == 2
@@ -69,10 +69,11 @@ def test_backfill_paper_from_live_signals_uses_execution_open_and_skips_manual_o
     forced = backfill_paper_from_live_records(trading_date, root=root, force=True)
     assert forced["written"] == 2
     assert len(paper_recorder.read_day("orders", trading_date)) == 2
-    tracker = json.loads((root / "quant" / "infrastructure" / "var" / "paper_trading" / "strategy_positions.json").read_text(encoding="utf-8"))
-    positions = tracker["positions"]["DemoStrategy"]
-    assert positions["159949"]["qty"] == 4900
-    assert positions["518880"]["qty"] == 1000
+    assert not (root / "quant" / "infrastructure" / "var" / "paper_trading" / "strategy_positions.json").exists()
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    positions = {row["symbol"]: row for row in store.get_positions(strategy_name="DemoStrategy", mode="paper")}
+    assert positions["159949"]["quantity"] == 4900
+    assert positions["518880"]["quantity"] == 1000
 
 
 def test_scheduled_scripts_replay_paper_after_post_close_data_update():
@@ -89,12 +90,22 @@ def test_scheduled_scripts_replay_paper_after_post_close_data_update():
     assert "skip live pending because live recovery failed" in update_script
     assert "run_qmt_live_daily.ps1" in update_script
     assert "-PendingOnly" in update_script
+    assert "paper signal command" in update_script
+    assert "paper signal exit_code=" in update_script
+    assert "-SignalOnly" in update_script
     assert "resolve_cn_trading_date.py" in update_script
     assert "resolve_cn_trading_date.py" in live_script
     assert "resolve_cn_trading_date.py" in paper_script
     assert "dryrun_update_cn_data_oss" in update_script
     assert "dryrun_qmt_live_daily" in live_script
     assert "dryrun_paper_daily" in paper_script
+    assert "[switch]$SignalOnly" in paper_script
+    assert "latest-data" in paper_script
+    assert '"--pending-only"' in paper_script
+    assert "CODEX_PAPER_COMPLETION_MODE" in paper_script
+    assert 'mode == "signal"' in paper_script
+    assert "_daily_replay_complete.json" not in paper_script
+    assert "strategy_dashboard.duckdb" in paper_script
     assert "paper replay deferred to post-close data update" in live_script
     assert "--pending-only" in live_script
     assert "-not $PendingOnly -and -not $ConfirmRealOrders" in live_script

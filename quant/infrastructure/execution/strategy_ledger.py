@@ -3,130 +3,101 @@
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 
 
-DEFAULT_AUDIT_FILE = Path(__file__).resolve().parents[1] / "var" / "strategy_audit.jsonl"
-DEFAULT_PLAN_DIR = Path(__file__).resolve().parents[1] / "var" / "strategy_liquidation_plans"
-
-
-def append_strategy_audit(
-    path: Optional[Any],
-    *,
-    strategy_name: str,
-    mode: str,
-    action: str,
-    source: str = "system",
-    note: str = "",
-    payload: Optional[Dict[str, Any]] = None,
-    timestamp: Optional[datetime] = None,
-) -> Dict[str, Any]:
-    audit_path = Path(path) if path is not None else DEFAULT_AUDIT_FILE
-    ts = timestamp or datetime.now()
-    row = {
-        "timestamp": ts.isoformat(),
-        "strategy_name": strategy_name or "default",
-        "mode": _mode(mode),
-        "action": action,
-        "source": source,
-        "note": note,
-        "payload": payload or {},
-    }
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-    with audit_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(_jsonable(row), ensure_ascii=False, sort_keys=True) + "\n")
-    return row
-
-
-def read_strategy_audit(path: Optional[Any], max_records: int = 500) -> List[Dict[str, Any]]:
-    audit_path = Path(path) if path is not None else DEFAULT_AUDIT_FILE
-    if not audit_path.exists():
-        return []
-    rows: List[Dict[str, Any]] = []
-    with audit_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows[-max_records:]
-
 
 def create_liquidation_plan(
     *,
-    root: Path,
     strategy_name: str,
     mode: str,
-    positions_data: Dict[str, Any],
+    store: StrategyStateStore,
     note: str = "",
-    plan_dir: Optional[Any] = None,
-    audit_path: Optional[Any] = None,
+    timestamp: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     control_mode = _mode(mode)
+    ts = (timestamp or datetime.now()).isoformat()
+    positions = store.get_positions(strategy_name=strategy_name, mode=control_mode)
     orders = []
-    positions = positions_data.get("positions", {}).get(strategy_name, {})
-    if isinstance(positions, dict):
-        for symbol, data in sorted(positions.items()):
-            qty = _float(data.get("qty", data.get("quantity")))
-            if qty <= 0:
-                continue
-            orders.append({
-                "symbol": str(symbol),
-                "side": "SELL",
-                "quantity": qty,
-                "avg_cost": _float(data.get("avg_cost")),
-                "market_value": _float(data.get("market_value")),
-            })
-    timestamp = datetime.now().isoformat()
+    for pos in positions:
+        qty = _float(pos.get("quantity"))
+        if qty <= 0:
+            continue
+        orders.append({
+            "symbol": str(pos.get("symbol", "")),
+            "side": "SELL",
+            "quantity": qty,
+            "avg_cost": _float(pos.get("avg_cost")),
+        })
     plan = {
         "strategy_name": strategy_name,
         "mode": control_mode,
         "status": "planned",
-        "created_at": timestamp,
-        "updated_at": timestamp,
+        "created_at": ts,
+        "updated_at": ts,
         "note": note,
         "orders": orders,
     }
-    path = liquidation_plan_path(root, strategy_name, control_mode, plan_dir=plan_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
-    append_strategy_audit(
-        audit_path or _default_audit_path(root),
+    store.record_state(
         strategy_name=strategy_name,
         mode=control_mode,
-        action="liquidation_plan_created",
-        source="dashboard",
-        note=note,
-        payload={"order_count": len(orders), "plan_path": str(path)},
+        from_state="running",
+        to_state="liquidating",
+        signal_enabled=False,
+        submit_enabled=False,
+        liquidation_requested=True,
+        note=f"liquidation_plan_created: {note}",
+        recorded_at=ts,
     )
     return plan
 
 
 def read_liquidation_plan(
     *,
-    root: Path,
     strategy_name: str,
     mode: str,
-    plan_dir: Optional[Any] = None,
+    store: StrategyStateStore,
 ) -> Optional[Dict[str, Any]]:
-    path = liquidation_plan_path(root, strategy_name, mode, plan_dir=plan_dir)
-    if not path.exists():
+    control_mode = _mode(mode)
+    current = store.get_current_state(strategy_name=strategy_name, mode=control_mode)
+    if current is None:
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    to_state = str(current.get("to_state", ""))
+    if to_state != "liquidating":
+        return None
+    positions = store.get_positions(strategy_name=strategy_name, mode=control_mode)
+    orders = []
+    for pos in positions:
+        qty = _float(pos.get("quantity"))
+        if qty <= 0:
+            continue
+        orders.append({
+            "symbol": str(pos.get("symbol", "")),
+            "side": "SELL",
+            "quantity": qty,
+            "avg_cost": _float(pos.get("avg_cost")),
+        })
+    return {
+        "strategy_name": strategy_name,
+        "mode": control_mode,
+        "status": str(current.get("to_state", "planned")),
+        "created_at": str(current.get("recorded_at", "")),
+        "updated_at": str(current.get("recorded_at", "")),
+        "note": str(current.get("note", "")),
+        "orders": orders,
+    }
 
 
-def liquidation_plan_path(
-    root: Path,
-    strategy_name: str,
-    mode: str,
-    *,
-    plan_dir: Optional[Any] = None,
-) -> Path:
-    base = Path(plan_dir) if plan_dir is not None else root / "quant" / "infrastructure" / "var" / "strategy_liquidation_plans"
-    safe_name = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in strategy_name)
-    return base / _mode(mode) / f"{safe_name}.json"
+def _next_business_date(value: Optional[str]) -> Optional[str]:
+    day = _parse_date(value)
+    if day is None:
+        return None
+    day += timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day.isoformat()
 
 
 def build_strategy_mode_ledger(
@@ -140,8 +111,8 @@ def build_strategy_mode_ledger(
     positions_data: Dict[str, Any],
     latest_market_data_date: Optional[str],
     latest_record_date: Optional[str],
-    audit_records: Optional[Sequence[Dict[str, Any]]] = None,
     liquidation_plan: Optional[Dict[str, Any]] = None,
+    state_store: Optional[StrategyStateStore] = None,
 ) -> Dict[str, Any]:
     control_mode = _mode(mode)
     latest_signal_date = _latest_record_day(records.get("signals", []))
@@ -154,7 +125,7 @@ def build_strategy_mode_ledger(
         order for order in records.get("orders", [])
         if str(order.get("display_status") or order.get("status") or "").lower() in {"no_fill", "partial", "pending", "submitted"}
     ])
-    positions = positions_data.get("positions", {}).get(strategy_name, {})
+    positions = positions_data.get(strategy_name, {})
     holding_count = len([
         item for item in positions.values()
         if isinstance(item, dict) and _float(item.get("qty", item.get("quantity"))) > 0
@@ -165,11 +136,9 @@ def build_strategy_mode_ledger(
         latest_market_data_date=latest_market_data_date,
         enabled=configured and accepts,
     )
-    audit = [
-        row for row in (audit_records or [])
-        if row.get("strategy_name") == strategy_name and row.get("mode") == control_mode
-    ]
-    last_audit_at = max((str(row.get("timestamp") or "") for row in audit), default="")
+    last_audit_at = ""
+    if state_store is not None:
+        last_audit_at = state_store.get_latest_recorded_at(strategy_name=strategy_name, mode=control_mode) or ""
     issues = []
     if configured and accepts and missing_signal_dates:
         issues.append({
@@ -252,7 +221,7 @@ def sync_broker_trade_history(
     mode: str,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    audit_path: Optional[Any] = None,
+    logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
     history_getter = getattr(broker, "get_trade_history", None)
     order_history_getter = getattr(broker, "get_order_history", None)
@@ -272,8 +241,8 @@ def sync_broker_trade_history(
         if trades is None:
             trades = []
 
-    existing = _existing_fill_keys(getattr(recorder, "base_dir", None))
-    filled_order_ids = _existing_fill_order_ids(getattr(recorder, "base_dir", None))
+    existing = _existing_fill_keys(recorder)
+    filled_order_ids = _existing_fill_order_ids(recorder)
     imported = 0
     skipped = 0
     unresolved = 0
@@ -291,16 +260,11 @@ def sync_broker_trade_history(
         if not strategy_name or strategy_name == "default":
             strategy_name = "default"
             unresolved += 1
-            append_strategy_audit(
-                audit_path,
-                strategy_name=strategy_name,
-                mode=mode,
-                action="broker_history_unresolved",
-                source="recovery",
-                note="Broker fill has no known strategy attribution",
-                payload={"order_id": order_id, "trade_id": trade.get("trade_id"), "symbol": trade.get("symbol")},
-                timestamp=trade["timestamp"],
-            )
+            if logger:
+                try:
+                    logger.warning("Broker fill has no known strategy attribution: order_id=%s symbol=%s", order_id, trade.get("symbol"))
+                except Exception:
+                    pass
         recorder.record_fill(
             order_id=order_id,
             timestamp=trade["timestamp"],
@@ -333,7 +297,7 @@ def sync_broker_trade_history(
             orders = order_history_getter(start_date=start_date, end_date=end_date)
         except TypeError:
             orders = order_history_getter()
-        local_orders = _existing_order_rows(getattr(recorder, "base_dir", None))
+        local_orders = _existing_order_rows(recorder)
         for raw in orders or []:
             order = _normalize_filled_order(raw, local_orders=local_orders, broker=broker)
             if not order:
@@ -356,16 +320,11 @@ def sync_broker_trade_history(
             if not strategy_name or strategy_name == "default":
                 strategy_name = "default"
                 unresolved += 1
-                append_strategy_audit(
-                    audit_path,
-                    strategy_name=strategy_name,
-                    mode=mode,
-                    action="broker_history_unresolved",
-                    source="recovery",
-                    note="Broker filled order has no known strategy attribution",
-                    payload={"order_id": order_id, "symbol": order.get("symbol"), "source": "order_history"},
-                    timestamp=order["timestamp"],
-                )
+                if logger:
+                    try:
+                        logger.warning("Broker filled order has no known strategy attribution: order_id=%s symbol=%s", order_id, order.get("symbol"))
+                    except Exception:
+                        pass
             recorder.record_fill(
                 order_id=order_id,
                 timestamp=order["timestamp"],
@@ -402,104 +361,71 @@ def sync_broker_trade_history(
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat() if end_date else None,
     }
-    _record_reconciliation_from_recovery(
-        recorder=recorder,
-        mode=mode,
-        strategies=touched_strategies,
-        result=result,
-    )
     return result
 
 
-def _record_reconciliation_from_recovery(
-    *,
-    recorder: Any,
-    mode: str,
-    strategies: Iterable[str],
-    result: Dict[str, Any],
-) -> None:
-    base_dir = getattr(recorder, "base_dir", None)
-    if base_dir is None:
-        return
-    strategy_names = sorted({str(name or "default") for name in strategies if name})
-    if not strategy_names and any(_float(result.get(key)) > 0 for key in ("imported_count", "skipped_count", "unresolved_count")):
-        strategy_names = ["default"]
-    if not strategy_names:
-        return
-    state_store = StrategyStateStore(Path(base_dir).parent / "strategy_state.duckdb")
-    status = "warning" if _float(result.get("unresolved_count")) > 0 else "ok"
-    for strategy_name in strategy_names:
-        state_store.record_reconciliation(
-            mode=mode,
-            strategy_name=strategy_name,
-            run_id=state_store.active_run_id(mode=mode, strategy_name=strategy_name),
-            reconciliation_type="broker_trade_history",
-            status=status,
-            payload=result,
-        )
-
-
-def _existing_fill_keys(base_dir: Optional[Any]) -> set[Tuple[str, str, str, str, str, str]]:
-    if base_dir is None:
-        return set()
-    base = Path(base_dir)
-    if not base.exists():
+def _existing_fill_keys(recorder: Any) -> set[Tuple[str, str, str, str, str, str]]:
+    store = getattr(recorder, "_state_store", None)
+    mode = getattr(recorder, "_mode", "live")
+    if store is None:
         return set()
     keys = set()
-    for day_dir in sorted(path for path in base.iterdir() if path.is_dir()):
-        path = day_dir / "fills.jsonl"
-        if not path.exists():
-            continue
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                keys.add(_fill_key(json.loads(line)))
+    all_signals = store.get_signals(strategy_name="default", mode=mode, limit=50000)
+    for signal in all_signals:
+        if signal.get("fill_quantity", 0) > 0:
+            keys.add(_fill_key(signal))
+    strategy_signals = store.get_recent_signals(mode=mode, days=365)
+    for signal in strategy_signals:
+        if signal.get("fill_quantity", 0) > 0:
+            keys.add(_fill_key(signal))
     return keys
 
 
-def _existing_fill_order_ids(base_dir: Optional[Any]) -> set[str]:
-    if base_dir is None:
-        return set()
-    base = Path(base_dir)
-    if not base.exists():
+def _existing_fill_order_ids(recorder: Any) -> set[str]:
+    store = getattr(recorder, "_state_store", None)
+    mode = getattr(recorder, "_mode", "live")
+    if store is None:
         return set()
     ids = set()
-    for day_dir in sorted(path for path in base.iterdir() if path.is_dir()):
-        path = day_dir / "fills.jsonl"
-        if not path.exists():
-            continue
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                order_id = str(json.loads(line).get("order_id") or "")
-                if order_id:
-                    ids.add(order_id)
+    strategy_signals = store.get_recent_signals(mode=mode, days=365)
+    for signal in strategy_signals:
+        if signal.get("fill_quantity", 0) > 0:
+            order_id = str(signal.get("order_id") or "")
+            if order_id:
+                ids.add(order_id)
     return ids
 
 
-def _existing_order_rows(base_dir: Optional[Any]) -> Dict[str, Dict[str, Any]]:
-    if base_dir is None:
-        return {}
-    base = Path(base_dir)
-    if not base.exists():
+def _existing_order_rows(recorder: Any) -> Dict[str, Dict[str, Any]]:
+    store = getattr(recorder, "_state_store", None)
+    mode = getattr(recorder, "_mode", "live")
+    if store is None:
         return {}
     rows: Dict[str, Dict[str, Any]] = {}
-    for day_dir in sorted(path for path in base.iterdir() if path.is_dir()):
-        path = day_dir / "orders.jsonl"
-        if not path.exists():
-            continue
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                item = json.loads(line)
-                for key in ("order_id", "broker_order_id"):
-                    order_id = str(item.get(key) or "")
-                    if order_id:
-                        rows[order_id] = item
+    strategy_signals = store.get_recent_signals(mode=mode, days=365)
+    for signal in strategy_signals:
+        if signal.get("order_id"):
+            for key in ("order_id", "broker_order_id"):
+                order_id = str(signal.get(key) or "")
+                if order_id:
+                    rows[order_id] = _signal_to_order_jsonl(signal)
     return rows
+
+
+def _signal_to_order_jsonl(signal: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "timestamp": signal.get("timestamp", ""),
+        "order_id": signal.get("order_id", ""),
+        "broker_order_id": signal.get("broker_order_id", ""),
+        "strategy_name": signal.get("strategy_name", ""),
+        "symbol": signal.get("symbol", ""),
+        "side": signal.get("side", ""),
+        "quantity": signal.get("quantity", 0.0),
+        "order_type": signal.get("order_type", ""),
+        "price": signal.get("reference_price", 0.0),
+        "status": signal.get("status", ""),
+        "reason": signal.get("failure_reason", ""),
+    }
 
 
 def _normalize_trade(raw: Any) -> Optional[Dict[str, Any]]:
@@ -614,7 +540,7 @@ def _max_date_text(*values: Optional[str]) -> Optional[str]:
 def _record_day(record: Dict[str, Any]) -> Optional[str]:
     if record.get("record_date"):
         return str(record.get("record_date"))[:10]
-    timestamp = record.get("timestamp") or record.get("date")
+    timestamp = record.get("timestamp") or record.get("date") or record.get("snapshot_date")
     if isinstance(timestamp, datetime):
         return timestamp.date().isoformat()
     text = str(timestamp or "")
@@ -655,10 +581,6 @@ def _next_business_date(value: Optional[str]) -> Optional[str]:
     while day.weekday() >= 5:
         day += timedelta(days=1)
     return day.isoformat()
-
-
-def _default_audit_path(root: Path) -> Path:
-    return root / "quant" / "infrastructure" / "var" / "strategy_audit.jsonl"
 
 
 def _mode(mode: str) -> str:
@@ -729,15 +651,3 @@ def _float(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_jsonable(v) for v in value]
-    return value

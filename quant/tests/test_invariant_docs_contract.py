@@ -31,3 +31,25 @@ def test_invariant_docs_match_case_tests(doc_path: Path, test_path: Path):
     test_cases = _case_ids(test_path, r"^# CASE-(\d+[A-Za-z]?)")
 
     assert doc_cases == test_cases
+
+
+def test_trading_invariants_describe_strategy_dashboard_lifecycle():
+    text = (REPO_ROOT / "quant/features/trading/docs/trading-invariants.md").read_text(
+        encoding="utf-8"
+    )
+    expected_fragments = [
+        "### Strategy Dashboard Lifecycle",
+        "configure/start -> restore positions -> D close data/OSS -> "
+        "D pending-only signal generation -> D+1 order execution -> "
+        "fill/position/NAV sync -> next close snapshot",
+        "Live and paper share the signal-generation contract, diverge only at execution adapters",
+        "pause/stop/liquidating states must block D+1 execution for that mode",
+        "record_pending_only",
+        "must not require D+1 bars",
+        "must not call broker `submit_order`",
+        "legacy JSONL is migration input only",
+    ]
+
+    missing = [fragment for fragment in expected_fragments if fragment not in text]
+
+    assert missing == []

@@ -355,6 +355,298 @@
       background: rgba(251, 251, 253, 0.86);
     }
     .health-row strong { color: var(--text); }
+    .run-status-strip {
+      display: grid;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .run-status-wrap {
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .run-status-row {
+      min-width: 680px;
+      display: grid;
+      grid-template-columns: 86px repeat(4, minmax(108px, 1fr));
+      gap: 6px;
+      align-items: stretch;
+    }
+    .run-status-timeline {
+      min-width: 940px;
+      width: max-content;
+    }
+    .run-status-date-groups {
+      min-width: 940px;
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+    }
+    .run-status-date-group {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 6px;
+      min-width: var(--run-group-width, 224px);
+      padding-right: 10px;
+    }
+    .run-status-date-group + .run-status-date-group {
+      border-left: 1px dashed rgba(60, 60, 67, 0.24);
+      padding-left: 10px;
+    }
+    .run-status-date-label {
+      min-height: 17px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 780;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      line-height: 17px;
+      white-space: nowrap;
+    }
+    .run-status-date-steps {
+      display: grid;
+      grid-template-columns: repeat(var(--run-step-count, 2), minmax(104px, 1fr));
+      gap: 6px;
+      align-items: stretch;
+    }
+    .run-status-row.header {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 780;
+      text-transform: uppercase;
+    }
+    .run-status-date {
+      display: flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 8px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fbfbfd;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 780;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .run-status-step {
+      display: grid;
+      grid-template-columns: 9px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 0 8px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fbfbfd;
+      color: var(--subtext);
+      font-size: 10px;
+      font-weight: 720;
+      line-height: 1.15;
+      cursor: pointer;
+      text-align: left;
+    }
+    .run-status-step.active {
+      border-color: rgba(0, 113, 227, 0.35);
+      box-shadow: inset 0 0 0 1px rgba(0, 113, 227, 0.12);
+    }
+    .run-status-step span:last-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .run-status-step-text {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .run-status-step-label,
+    .run-status-step-action {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .run-status-step-label {
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 780;
+    }
+    .run-status-step-action {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .run-status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 3px rgba(118, 118, 128, 0.10);
+    }
+    .run-status-step.ok .run-status-dot { background: var(--green); box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.14); }
+    .run-status-step.warning .run-status-dot { background: var(--amber); box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.16); }
+    .run-status-step.blocked .run-status-dot,
+    .run-status-step.failed .run-status-dot { background: var(--red); box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.14); }
+    .run-status-step.pending { color: var(--muted); background: rgba(251, 251, 253, 0.66); }
+    .run-detail-card {
+      margin-top: 12px;
+      min-width: 680px;
+      display: grid;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: rgba(251, 251, 253, 0.82);
+    }
+    .run-detail-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 780;
+      font-variant-numeric: tabular-nums;
+    }
+    .run-detail-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 8px;
+    }
+    .run-detail-line {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: #fff;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .run-detail-main {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      color: var(--text);
+      font-weight: 780;
+    }
+    .run-detail-main span:first-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .run-detail-meta,
+    .run-detail-qty {
+      color: var(--muted);
+      font-weight: 690;
+      overflow-wrap: anywhere;
+    }
+    .run-evidence {
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+      min-width: 760px;
+    }
+    .run-evidence-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 780;
+      text-transform: uppercase;
+    }
+    .run-evidence-day {
+      display: grid;
+      gap: 8px;
+    }
+    .run-evidence-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 780;
+      font-variant-numeric: tabular-nums;
+    }
+    .run-evidence-tags {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+      gap: 8px;
+      align-items: stretch;
+    }
+    .run-evidence-tag {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 6px;
+      min-height: 88px;
+      min-width: 0;
+      padding: 9px;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: rgba(251, 251, 253, 0.80);
+      color: var(--subtext);
+      font-size: 11px;
+      line-height: 1.38;
+      box-shadow: inset 3px 0 0 rgba(118, 118, 128, 0.28);
+    }
+    .run-evidence-tag.ok {
+      border-color: rgba(52, 199, 89, 0.24);
+      background: rgba(52, 199, 89, 0.08);
+      box-shadow: inset 3px 0 0 var(--green);
+    }
+    .run-evidence-tag.blocked,
+    .run-evidence-tag.failed {
+      border-color: rgba(255, 59, 48, 0.24);
+      background: rgba(255, 59, 48, 0.08);
+      box-shadow: inset 3px 0 0 var(--red);
+    }
+    .run-evidence-tag.pending {
+      background: rgba(251, 251, 253, 0.62);
+    }
+    .run-evidence-tag-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--text);
+      font-weight: 760;
+      min-width: 0;
+    }
+    .run-evidence-tag-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .run-evidence-tag .pill {
+      min-height: 20px;
+      padding: 0 7px;
+      font-size: 10px;
+    }
+    .run-evidence-observed {
+      min-width: 0;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 720;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .run-evidence-decision {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
     .ledger-grid {
       margin-top: 12px;
       display: grid;
@@ -399,6 +691,7 @@
       .overview, .split-grid { grid-template-columns: 1fr; }
       .hero-head { display: block; }
       .hero-actions { justify-content: flex-start; margin-top: 12px; }
+      .run-evidence-tags { grid-template-columns: repeat(auto-fit, minmax(156px, 1fr)); }
     }
   </style>
 </head>
@@ -422,8 +715,13 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const state = { assetVersion: '', data: null, selected: null, mode: initialMode() };
+    const state = { assetVersion: '', data: null, selected: null, mode: initialMode(), runExpanded: null };
     const colors = { benchmark: '#34c759', paper: '#0071e3', live: '#ff3b30' };
+    const fallbackRunStatusSteps = [
+      { key: 'DATA_READY', label: '数据OK', expected: 'Market data covers the trading date.' },
+      { key: 'SIGNAL_READY', label: '策略信号', expected: 'Strategy emits zero or more signal decisions.' },
+      { key: 'ORDER_SUBMITTED', label: '订单提交', expected: 'For due signals, submitted and filled quantities are reconciled.' },
+    ];
 
     function initialMode() {
       const hash = String(window.location.hash || '').replace('#', '').toLowerCase();
@@ -475,10 +773,7 @@
       const el = document.getElementById('topStatus');
       const liveDate = state.data?.latest_record_date?.live || 'no live records';
       const paperDate = state.data?.latest_record_date?.paper || 'no paper records';
-      const health = state.data?.operations_health || {};
-      const healthClass = health.status === 'blocked' ? 'red' : health.status === 'warning' ? 'amber' : 'green';
       el.innerHTML = `
-        <span class="pill ${healthClass}">Ops ${escapeHtml(health.status || 'ok')}</span>
         <span class="pill green">Live ${escapeHtml(liveDate)}</span>
         <span class="pill blue">Paper ${escapeHtml(paperDate)}</span>
         <span>${fmtTime(state.data?.generated_at)}</span>
@@ -541,6 +836,7 @@
       `;
       bindModeTabs();
       bindActionButtons(strategy);
+      bindRunStatusButtons(strategy, mode);
     }
 
     function renderModeNavigation(strategy, activeMode) {
@@ -576,8 +872,7 @@
       const label = modeLabel(mode);
       return `
         ${renderModeOverview(strategy, mode)}
-        ${panel('Operations Health', renderOperationsHealth(strategy, mode))}
-        ${panel('Data Freshness', renderDataFreshness(strategy, mode))}
+        ${panel('Run Status', renderRunStatusBar(strategy, mode))}
         ${panel(`${label} Control`, renderModeControl(strategy, mode))}
         ${panel('Performance Metrics', renderMetricsTable(strategy, mode))}
         ${panel(`Pending Orders (${pendingOrders.length})`, renderPendingOrdersTable(pendingOrders))}
@@ -598,73 +893,270 @@
       });
     }
 
-    function renderOperationsHealth(strategy, mode) {
-      const health = state.data?.operations_health || {};
-      const rows = [];
-      const globalClass = health.status === 'blocked' ? 'red' : health.status === 'warning' ? 'amber' : 'green';
-      rows.push(`
-        <div class="health-row">
-          <span class="pill ${globalClass}">${escapeHtml(health.status || 'ok')}</span>
-          <strong>System</strong>
-          <span>${Number(health.issue_count || 0)} issue(s)</span>
-          <span>market data ${escapeHtml(state.data?.latest_market_data_date || '-')}</span>
+    function renderRunStatusBar(strategy, mode) {
+      const bar = strategy[mode]?.run_status_bar || {};
+      const timeline = Array.isArray(bar.timeline) ? bar.timeline : [];
+      if (timeline.length) return renderRunStatusTimeline(strategy, mode, timeline);
+      const steps = Array.isArray(bar.steps) && bar.steps.length ? bar.steps : fallbackRunStatusSteps;
+      const days = Array.isArray(bar.days) ? bar.days : [];
+      if (!days.length) return `<div class="empty">No run checkpoints</div>`;
+      const header = `
+        <div class="run-status-row header">
+          <div>date</div>
+          ${steps.map(step => `<div>${escapeHtml(step.label || step.key)}</div>`).join('')}
         </div>
-      `);
-      const ledger = strategy[mode]?.ledger || {};
-      const cls = ledger.health_status === 'blocked' ? 'red' : ledger.health_status === 'warning' ? 'amber' : 'green';
-      const missing = ledger.missing_signal_dates || [];
-      rows.push(`
-        <div class="health-row">
-          <span class="pill ${cls}">${escapeHtml(modeLabel(mode))} ${escapeHtml(ledger.health_status || 'ok')}</span>
-          <strong>${escapeHtml(strategy.display_name)}</strong>
-          <span>signal ${escapeHtml(ledger.latest_signal_date || '-')}</span>
-          <span>fill ${escapeHtml(ledger.latest_fill_date || '-')}</span>
-          <span>pending ${Number(ledger.pending_action_count || 0)}</span>
-          <span>missing ${missing.length ? escapeHtml(missing.join(', ')) : '-'}</span>
-        </div>
-      `);
-      return `<div class="health-list">${rows.join('')}</div>`;
+      `;
+      const rows = days.map(day => {
+        const checkpointMap = new Map((day.checkpoints || []).map(item => [item.key, item]));
+        return `
+          <div class="run-status-row">
+            <div class="run-status-date">${escapeHtml(day.date || '-')}</div>
+            ${steps.map(step => {
+              const item = checkpointMap.get(step.key) || { key: step.key, status: 'pending', message: 'missing checkpoint' };
+              const status = String(item.status || 'pending').toLowerCase();
+              const displayStatus = runStatusClass(status);
+              const action = runActionText(item);
+              const message = `${step.key}: ${action}`;
+              const active = state.runExpanded
+                && state.runExpanded.strategy === strategy.name
+                && state.runExpanded.mode === mode
+                && state.runExpanded.date === day.date
+                && state.runExpanded.key === step.key ? 'active' : '';
+              return `
+                <button class="run-status-step ${escapeHtml(displayStatus)} ${active}" type="button" data-run-date="${escapeHtml(day.date || '')}" data-run-step="${escapeHtml(step.key)}" title="${escapeHtml(message)}">
+                  <span class="run-status-dot"></span>
+                  <span>${escapeHtml(action)}</span>
+                </button>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }).join('');
+      const details = renderRunCheckpointDetails(strategy, mode, steps, days);
+      return `<div class="run-status-wrap"><div class="run-status-strip">${header}${rows}</div>${details}</div>`;
     }
 
-    function renderDataFreshness(strategy, mode) {
-      const freshness = state.data?.freshness || {};
-      const jobs = state.data?.scheduled_jobs || {};
-      const modeData = strategy[mode] || {};
-      const ledger = modeData.ledger || {};
-      const rows = [];
-      const priceClass = freshness.market_data_stale ? 'amber' : 'green';
-      const recordClass = freshness[`${mode}_record_stale`] ? 'amber' : 'green';
-      rows.push(`
-        <div class="health-row">
-          <span class="pill ${priceClass}">prices ${escapeHtml(freshness.latest_market_data_date || '-')}</span>
-          <strong>Expected ${escapeHtml(freshness.expected_market_data_date || '-')}</strong>
-          <span>${freshness.market_data_stale ? 'market data is stale' : 'market data ok'}</span>
-          <span>holdings ${escapeHtml(modeData.holdings?.price_date || '-')}</span>
-        </div>
-      `);
-      rows.push(`
-        <div class="health-row">
-          <span class="pill ${recordClass}">${escapeHtml(modeLabel(mode))} records ${escapeHtml(ledger.latest_record_date || '-')}</span>
-          <strong>Signals ${escapeHtml(ledger.latest_signal_date || '-')}</strong>
-          <span>next ${escapeHtml(ledger.next_execution_date || '-')}</span>
-          <span>pending ${Number(ledger.pending_action_count || 0)}</span>
-        </div>
-      `);
-      const jobKeys = mode === 'paper' ? ['data_update', 'paper_replay'] : ['data_update', 'live_pending'];
-      jobKeys.forEach(key => {
-        const job = jobs[key] || {};
-        if (!job.name) return;
-        const ok = Number(job.exit_code) === 0;
-        rows.push(`
-          <div class="health-row">
-            <span class="pill ${ok ? 'green' : 'red'}">${escapeHtml(job.name)}</span>
-            <strong>${escapeHtml(job.finished_at || '-')}</strong>
-            <span>exit ${escapeHtml(String(job.exit_code ?? '-'))}</span>
-            <span>${escapeHtml(job.error || job.status || '')}</span>
+    function renderRunStatusTimeline(strategy, mode, timeline) {
+      const rows = groupRunTimelineByDate(timeline).map(group => {
+        const width = Math.max(group.items.length * 112, 224);
+        const steps = group.items.map(item => {
+          const status = String(item.status || 'pending').toLowerCase();
+          const displayStatus = runStatusClass(status);
+          const action = runActionText(item);
+          const active = state.runExpanded
+            && state.runExpanded.strategy === strategy.name
+            && state.runExpanded.mode === mode
+            && state.runExpanded.id === item.id ? 'active' : '';
+          const title = `${item.key || ''}: ${action}`;
+          return `
+            <button class="run-status-step ${escapeHtml(displayStatus)} ${active}" type="button" data-run-id="${escapeHtml(item.id || '')}" title="${escapeHtml(title)}">
+              <span class="run-status-dot"></span>
+              <span class="run-status-step-text">
+                <span class="run-status-step-label">${escapeHtml(runTimelineStepLabel(item))}</span>
+                <span class="run-status-step-action">${escapeHtml(action)}</span>
+              </span>
+            </button>
+          `;
+        }).join('');
+        return `
+          <div class="run-status-date-group" style="--run-step-count: ${escapeHtml(group.items.length)}; --run-group-width: ${escapeHtml(width)}px;">
+            <div class="run-status-date-label">${escapeHtml(runTimelineDateLabel(group.date))}</div>
+            <div class="run-status-date-steps">${steps}</div>
           </div>
-        `);
+        `;
+      }).join('');
+      const details = renderRunTimelineDetails(strategy, mode, timeline);
+      return `<div class="run-status-wrap"><div class="run-status-timeline"><div class="run-status-date-groups">${rows}</div></div>${details}</div>`;
+    }
+
+    function groupRunTimelineByDate(timeline) {
+      return timeline.reduce((groups, item) => {
+        const date = item.date || '-';
+        const current = groups[groups.length - 1];
+        if (current && current.date === date) {
+          current.items.push(item);
+        } else {
+          groups.push({ date, items: [item] });
+        }
+        return groups;
+      }, []);
+    }
+
+    function runTimelineDateLabel(date) {
+      const text = String(date || '-');
+      return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(5, 10) : text;
+    }
+
+    function runTimelineStepLabel(item) {
+      const label = String(item.label || item.key || '-');
+      const date = String(item.date || '');
+      const shortDate = runTimelineDateLabel(date);
+      if (shortDate !== '-' && label.startsWith(`${shortDate} `)) return label.slice(shortDate.length + 1);
+      if (date && label.startsWith(`${date} `)) return label.slice(date.length + 1);
+      return label;
+    }
+
+    function renderRunTimelineDetails(strategy, mode, timeline) {
+      const active = state.runExpanded;
+      if (!active || active.strategy !== strategy.name || active.mode !== mode) return '';
+      const item = timeline.find(entry => entry.id === active.id);
+      if (!item) return '';
+      return renderRunDetailCard(item);
+    }
+
+    function renderRunCheckpointDetails(strategy, mode, steps, days) {
+      const active = state.runExpanded;
+      if (!active || active.strategy !== strategy.name || active.mode !== mode) return '';
+      const day = days.find(item => item.date === active.date);
+      if (!day) return '';
+      const step = steps.find(item => item.key === active.key) || {};
+      const checkpointMap = new Map((day.checkpoints || []).map(item => [item.key, item]));
+      const item = checkpointMap.get(active.key) || { key: active.key, status: 'pending', message: 'missing checkpoint', details: [] };
+      return renderRunDetailCard({ ...item, date: day.date, label: `${day.date || '-'} / ${step.label || item.key || '-'}` });
+    }
+
+    function renderRunDetailCard(item) {
+      const status = runStatusClass(item.status);
+      const details = Array.isArray(item.details) ? item.details : [];
+      const body = details.length
+        ? `<div class="run-detail-list">${details.map(detail => renderRunDetailLine(item.key, detail)).join('')}</div>`
+        : `<div class="run-detail-line"><div class="run-detail-meta">${escapeHtml(item.observed || item.decision || '-')}</div></div>`;
+      return `
+        <div class="run-detail-card">
+          <div class="run-detail-head">
+            <span>${escapeHtml(item.label || item.date || '-')}</span>
+            <span class="pill ${runPillClass(status)}">${escapeHtml(runActionText(item))}</span>
+          </div>
+          ${body}
+          <div class="run-detail-meta">${escapeHtml(item.decision || item.observed || '-')}</div>
+        </div>
+      `;
+    }
+
+    function renderRunDetailLine(key, detail) {
+      const status = runStatusClass(detail.status);
+      const symbol = detail.symbol || '-';
+      const side = detail.side || '-';
+      if (key === 'SIGNAL_READY') {
+        return `
+          <div class="run-detail-line">
+            <div class="run-detail-main">
+              <span>${escapeHtml(symbol)} ${escapeHtml(side)} ${escapeHtml(formatRunQty(detail.quantity))}</span>
+              <span class="pill ${runPillClass(status)}">${escapeHtml(detail.status || '-')}</span>
+            </div>
+            <div class="run-detail-meta">提交日 ${escapeHtml(detail.submit_date || '-')} / ${escapeHtml(detail.order_type || '-')}</div>
+            <div class="run-detail-meta">参考价 ${escapeHtml(formatRunQty(detail.reference_price))} / ${escapeHtml(detail.order_id || '-')}</div>
+          </div>
+        `;
+      }
+      if (key === 'ORDER_SUBMITTED') {
+        return `
+          <div class="run-detail-line">
+            <div class="run-detail-main">
+              <span>${escapeHtml(symbol)} ${escapeHtml(side)}</span>
+              <span class="pill ${runPillClass(status)}">${escapeHtml(detail.status || '-')}</span>
+            </div>
+            <div class="run-detail-qty">信号 ${escapeHtml(formatRunQty(detail.signal_quantity))} / 提交 ${escapeHtml(formatRunQty(detail.submitted_quantity))} / 成交 ${escapeHtml(formatRunQty(detail.filled_quantity))}</div>
+            <div class="run-detail-meta">提交日 ${escapeHtml(detail.submit_date || '-')} / ${escapeHtml(detail.order_id || '-')}</div>
+          </div>
+        `;
+      }
+      return `
+        <div class="run-detail-line">
+          <div class="run-detail-main">
+            <span>${escapeHtml(symbol)}</span>
+            <span class="pill ${runPillClass(status)}">${escapeHtml(detail.status || '-')}</span>
+          </div>
+          <div class="run-detail-meta">${escapeHtml(JSON.stringify(detail))}</div>
+        </div>
+      `;
+    }
+
+    function bindRunStatusButtons(strategy, mode) {
+      document.querySelectorAll('[data-run-id]').forEach(button => {
+        button.addEventListener('click', () => {
+          toggleRunTimelineDetail(strategy.name, mode, button.dataset.runId || '');
+        });
       });
-      return `<div class="health-list">${rows.join('')}</div>`;
+      document.querySelectorAll('[data-run-step]').forEach(button => {
+        button.addEventListener('click', () => {
+          toggleRunDetail(strategy.name, mode, button.dataset.runDate || '', button.dataset.runStep || '');
+        });
+      });
+    }
+
+    function toggleRunTimelineDetail(strategyName, mode, id) {
+      const current = state.runExpanded;
+      if (current && current.strategy === strategyName && current.mode === mode && current.id === id) {
+        state.runExpanded = null;
+      } else {
+        state.runExpanded = { strategy: strategyName, mode, id };
+      }
+      render();
+    }
+
+    function toggleRunDetail(strategyName, mode, date, key) {
+      const current = state.runExpanded;
+      if (current && current.strategy === strategyName && current.mode === mode && current.date === date && current.key === key) {
+        state.runExpanded = null;
+      } else {
+        state.runExpanded = { strategy: strategyName, mode, date, key };
+      }
+      render();
+    }
+
+    function runStatusClass(status) {
+      const value = String(status || '').toLowerCase();
+      if (value === 'ok' || value === 'filled') return 'ok';
+      if (value === 'warning' || value === 'partial' || value === 'no_fill' || value === 'pending_submit') return 'warning';
+      if (value === 'blocked' || value === 'failed' || value === 'missing') return 'blocked';
+      return 'pending';
+    }
+
+    function runPillClass(status) {
+      const value = String(status || '').toLowerCase();
+      if (value === 'ok') return 'green';
+      if (value === 'warning') return 'amber';
+      if (value === 'blocked' || value === 'failed') return 'red';
+      return '';
+    }
+
+    function runActionText(item) {
+      const text = String(item?.message || item?.observed || item?.decision || item?.status || '').trim();
+      if (!text) return '无记录';
+      if (text === 'market data ready') return '数据已就绪';
+      if (text === 'market data missing') return '数据缺失';
+      if (text === 'mode not configured') return '未配置';
+      if (text === 'no signal') return '无信号';
+      if (text === 'signal failed') return '信号失败';
+      if (/^\d+ signal\(s\)$/.test(text)) return `${text.match(/^\d+/)[0]} 个信号`;
+      if (text === 'submit disabled') return '提交关闭';
+      if (text === 'no order needed') return '无需提交订单';
+      if (text === 'waiting submit date') return '等待提交日';
+      if (text === 'all filled') return '全部成交';
+      if (text === 'partial fill') return '部分成交';
+      if (text === 'no fill') return '完全无成交';
+      if (text === 'order missing') return '订单缺失';
+      if (text === 'order failed') return '订单失败';
+      if (text.startsWith('order missing:')) return '订单缺失';
+      if (/^\d+ order\(s\)$/.test(text)) return `${text.match(/^\d+/)[0]} 个订单`;
+      if (text === 'no execution needed') return '无需成交';
+      if (text === 'fill missing') return '成交缺失';
+      if (text === 'execution incomplete') return '成交不完整';
+      if (/^\d+ fill\(s\)$/.test(text)) return `${text.match(/^\d+/)[0]} 笔成交`;
+      if (text.startsWith('position missing:')) return '持仓未同步';
+      if (text === 'snapshot missing') return '收盘未写入';
+      if (/^\d+ snapshot\(s\)$/.test(text)) return `${text.match(/^\d+/)[0]} 条收盘记录`;
+      if (text === 'waiting for prior checkpoint') return '等待前序节点';
+      if (text === 'unknown checkpoint') return '未知节点';
+      return text;
+    }
+
+    function formatRunQty(value) {
+      const num = Number(value || 0);
+      if (!Number.isFinite(num)) return '-';
+      if (Math.abs(num - Math.round(num)) < 1e-9) return String(Math.round(num));
+      return num.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
     }
 
     function renderModeOverview(strategy, mode) {

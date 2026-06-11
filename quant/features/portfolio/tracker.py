@@ -1,27 +1,26 @@
-"""Per-strategy position tracking via order-level attribution."""
+"""Per-strategy position tracking via DB-backed StrategyStateStore."""
 
-import json
 import threading
 from dataclasses import dataclass, asdict
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.shared.utils.logger import setup_logger
 
-_STRATEGY_POSITIONS_FILE = Path(__file__).parent.parent / "data" / "strategy_positions.json"
 DEFAULT_STRATEGY = "default"
 
 _tracker_instance: Optional["StrategyPositionTracker"] = None
 _tracker_lock = threading.Lock()
 
 
-def get_tracker() -> "StrategyPositionTracker":
+def get_tracker(store: Optional[StrategyStateStore] = None, mode: str = "live") -> "StrategyPositionTracker":
     global _tracker_instance
     if _tracker_instance is None:
         with _tracker_lock:
             if _tracker_instance is None:
-                _tracker_instance = StrategyPositionTracker()
+                _tracker_instance = StrategyPositionTracker(store=store, mode=mode)
     return _tracker_instance
 
 
@@ -50,50 +49,44 @@ class StrategySnapshot:
 
 
 class StrategyPositionTracker:
-    def __init__(self, persist_path: Optional[Path] = None):
-        self._path = persist_path or _STRATEGY_POSITIONS_FILE
+    def __init__(self, store: Optional[StrategyStateStore] = None, mode: str = "live"):
+        self._store = store
+        self._mode = mode
         self._positions: Dict[str, Dict[str, StrategyPosition]] = {}
         self._realized_pnl: Dict[str, float] = {}
         self._order_strategy_map: Dict[str, str] = {}
         self._lock = threading.RLock()
         self.logger = setup_logger("StrategyPositionTracker")
-        self._load()
+        if self._store is not None:
+            self._load()
 
     def _load(self) -> None:
-        if self._path.exists():
-            try:
-                with open(self._path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for strat, positions in data.get("positions", {}).items():
-                    self._positions[strat] = {}
-                    for sym, pos_data in positions.items():
-                        self._positions[strat][sym] = StrategyPosition(**pos_data)
-                self._realized_pnl = data.get("realized_pnl", {})
-                self._order_strategy_map = data.get("order_map", {})
-                self.logger.info(f"Loaded {sum(len(v) for v in self._positions.values())} strategy positions from {self._path}")
-            except Exception as e:
-                self.logger.warning(f"Failed to load strategy positions: {e}")
+        if self._store is None:
+            return
+        try:
+            positions_list = self._store.get_all_positions_for_mode(mode=self._mode)
+            for pos_data in positions_list:
+                strategy = pos_data.get("strategy_name", DEFAULT_STRATEGY)
+                if strategy not in self._positions:
+                    self._positions[strategy] = {}
+                self._positions[strategy][pos_data["symbol"]] = StrategyPosition(
+                    symbol=pos_data["symbol"],
+                    strategy_name=strategy,
+                    qty=float(pos_data.get("quantity", 0.0)),
+                    avg_cost=float(pos_data.get("avg_cost", 0.0)),
+                )
+                self._realized_pnl[strategy] = float(pos_data.get("realized_pnl", 0.0))
+            if self._positions:
+                self.logger.info("Loaded %d strategy positions from DB", sum(len(v) for v in self._positions.values()))
+        except Exception as e:
+            self.logger.warning("Failed to load strategy positions from DB: %s", e)
 
     def _save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "positions": {
-                    strat: {sym: pos.to_dict() for sym, pos in positions.items()}
-                    for strat, positions in self._positions.items()
-                },
-                "realized_pnl": self._realized_pnl,
-                "order_map": self._order_strategy_map,
-            }
-            with open(self._path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.logger.error(f"Failed to save strategy positions: {e}")
+        pass
 
     def record_order(self, order_id: str, strategy_name: Optional[str]) -> None:
         with self._lock:
             self._order_strategy_map[order_id] = strategy_name or DEFAULT_STRATEGY
-            self._save()
 
     def get_strategy_for_order(self, order_id: str) -> str:
         with self._lock:
@@ -139,8 +132,6 @@ class StrategyPositionTracker:
                 pos.qty -= qty
                 if pos.qty <= 1e-9:
                     del positions[symbol]
-
-            self._save()
 
     def calibrate(self, broker_positions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         with self._lock:
@@ -281,4 +272,3 @@ class StrategyPositionTracker:
             self._positions.clear()
             self._realized_pnl.clear()
             self._order_strategy_map.clear()
-            self._save()

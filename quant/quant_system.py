@@ -168,6 +168,7 @@ class QuantSystem:
                 data_provider=self.engine.data_providers.get("default"),
                 commission_config=commission_config,
             )
+            broker.set_portfolio(self.engine.portfolio)
             broker.connect()
             self.engine.set_broker(broker)
             self.logger.info("Paper broker initialized")
@@ -284,12 +285,6 @@ class QuantSystem:
         overlap_days = int((recovery_config or {}).get("history_overlap_days", 7) or 7)
         end_day = date.today()
         start_day = end_day - timedelta(days=max(overlap_days, 1))
-        control_path = live_config.get("strategy_control_file") if isinstance(live_config, dict) else None
-        audit_path = (
-            self._resolve_repo_path(control_path).parent / "strategy_audit.jsonl"
-            if control_path
-            else Path(__file__).resolve().parent / "infrastructure" / "var" / "strategy_audit.jsonl"
-        )
         try:
             result = sync_broker_trade_history(
                 broker=broker,
@@ -298,7 +293,7 @@ class QuantSystem:
                 mode="live",
                 start_date=start_day,
                 end_date=end_day,
-                audit_path=audit_path,
+                logger=self.logger,
             )
         except Exception as exc:
             self.logger.warning(f"Live strategy recovery skipped: {exc}")
@@ -320,12 +315,10 @@ class QuantSystem:
     def _strategy_tracker_for_mode(self) -> StrategyPositionTracker:
         if getattr(self, "_strategy_tracker", None) is not None:
             return self._strategy_tracker
-        if self._system_mode_text() != "paper":
-            self._strategy_tracker = get_tracker()
-            return self._strategy_tracker
-        self._strategy_tracker = StrategyPositionTracker(
-            self._paper_runtime_dir() / "strategy_positions.json"
-        )
+        from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
+        db_path = Path(__file__).resolve().parent / "infrastructure" / "var" / "strategy_dashboard.duckdb"
+        store = StrategyStateStore(db_path)
+        self._strategy_tracker = StrategyPositionTracker(store=store, mode=self._system_mode_text())
         return self._strategy_tracker
 
     def _record_dir_for_mode(self) -> Optional[Path]:
@@ -754,19 +747,26 @@ class QuantSystem:
         bars = self._load_snapshot_bars(provider, symbols, signal_day)
         if not bars:
             raise RuntimeError(f"No daily bars loaded for {signal_day}")
-        self._prepare_paper_execution_context(provider, symbols, execution_day)
         order_manager = getattr(self.engine, "order_manager", None)
         pending_only = bool(self.config.get("execution", {}).get("record_pending_only", False))
+        if not pending_only:
+            self._prepare_paper_execution_context(provider, symbols, execution_day)
         signal_timestamp_set = False
+        signal_submit_date_set = False
         if pending_only and hasattr(order_manager, "set_signal_timestamp"):
             signal_timestamp = datetime.combine(signal_day, datetime.min.time()).replace(hour=15)
             order_manager.set_signal_timestamp(signal_timestamp)
             signal_timestamp_set = True
+        if pending_only and hasattr(order_manager, "set_signal_submit_date"):
+            order_manager.set_signal_submit_date(execution_day.isoformat())
+            signal_submit_date_set = True
         try:
             results = self.engine.inject_daily_snapshot(signal_day, bars, execution_day)
         finally:
             if signal_timestamp_set and hasattr(order_manager, "clear_signal_timestamp"):
                 order_manager.clear_signal_timestamp()
+            if signal_submit_date_set and hasattr(order_manager, "clear_signal_submit_date"):
+                order_manager.clear_signal_submit_date()
         if pending_only:
             self._record_live_strategy_snapshots(
                 timestamp=datetime.combine(signal_day, datetime.min.time()).replace(hour=15),
@@ -1011,8 +1011,8 @@ def main():
         raise SystemExit("--recover-trades-only requires --mode live")
     if args.pending_only and not args.simulate_daily:
         raise SystemExit("--pending-only requires --simulate-daily")
-    if args.pending_only and mode != "live":
-        raise SystemExit("--pending-only requires --mode live")
+    if args.pending_only and mode not in {"live", "paper"}:
+        raise SystemExit("--pending-only requires --mode live or --mode paper")
     if mode:
         system.config.setdefault("system", {})["mode"] = mode
     if args.recover_trades_only:

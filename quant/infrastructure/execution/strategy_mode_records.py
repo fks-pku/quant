@@ -1,4 +1,8 @@
-"""Mode-scoped append-only records for one strategy."""
+"""DEPRECATED: Mode-scoped append-only records for one strategy.
+
+This module is retained for backward compatibility only. New code should use
+StrategyStateStore (strategy_dashboard.duckdb) for control state, positions, and signals.
+"""
 
 import hashlib
 import json

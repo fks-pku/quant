@@ -54,6 +54,7 @@ class OrderManager:
         self._retry_delay = float(execution_config.get("retry_delay", 1.0) or 1.0)
         self._record_pending_only = bool(execution_config.get("record_pending_only", False))
         self._signal_timestamp: Optional[datetime] = None
+        self._signal_submit_date: Optional[str] = None
         self.logger = setup_logger("OrderManager")
 
     def register_broker(self, name: str, broker: BrokerAdapter, symbols: Optional[List[str]] = None) -> None:
@@ -88,6 +89,9 @@ class OrderManager:
         """
         Submit an order after risk checks.
         Returns order_id if successful, None if rejected.
+
+        In record_pending_only mode, risk checks are deferred to D+1 submit;
+        the signal is recorded as accepted without checking cash/position limits.
         """
         check_price = price
         if check_price is None:
@@ -96,6 +100,34 @@ class OrderManager:
             else:
                 check_price = self._get_last_price(symbol)
                 price = check_price
+
+        if self._record_pending_only:
+            order_id = str(uuid.uuid4())[:12].upper()
+            with self._lock:
+                self._orders[order_id] = Order(
+                    symbol=symbol, quantity=quantity,
+                    side=OrderSide(side), order_type=OrderType(order_type),
+                    order_id=order_id, status=OrderStatus.PENDING,
+                    price=price, timestamp=datetime.now(),
+                    strategy_name=strategy_name,
+                )
+            self._record_signal(
+                symbol=symbol,
+                quantity=quantity,
+                side=side,
+                order_type=order_type,
+                price=price,
+                strategy_name=strategy_name,
+                status="accepted",
+                order_id=order_id,
+                signal_metadata=signal_metadata,
+            )
+            self._record_strategy(order_id, strategy_name)
+            self.logger.info(
+                f"Order signal recorded pending submission: {order_id} {symbol} {side} {quantity}"
+            )
+            return order_id
+
         order_value = abs(quantity * check_price)
 
         risk_engine = self._risk_engine_for(strategy_name)
@@ -163,11 +195,6 @@ class OrderManager:
         )
         self._record_strategy(order_id, strategy_name)
         self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value)
-        if self._record_pending_only:
-            self.logger.info(
-                f"Order signal recorded pending submission: {order_id} {symbol} {side} {quantity}"
-            )
-            return order_id
         self._submit_to_broker(order)
 
         return order_id
@@ -178,6 +205,13 @@ class OrderManager:
 
     def clear_signal_timestamp(self) -> None:
         self.set_signal_timestamp(None)
+
+    def set_signal_submit_date(self, submit_date: Optional[str]) -> None:
+        with self._lock:
+            self._signal_submit_date = str(submit_date)[:10] if submit_date else None
+
+    def clear_signal_submit_date(self) -> None:
+        self.set_signal_submit_date(None)
 
     def _submit_to_broker(self, order: Order) -> None:
         """Submit order to broker with retry logic."""
@@ -369,6 +403,10 @@ class OrderManager:
         try:
             with self._lock:
                 timestamp = self._signal_timestamp or datetime.now()
+                submit_date = self._signal_submit_date
+            metadata = dict(signal_metadata or {})
+            if submit_date and not metadata.get("submit_date") and not metadata.get("execution_date"):
+                metadata["submit_date"] = submit_date
             self._live_recorder.record_signal(
                 timestamp=timestamp,
                 strategy_name=strategy_name,
@@ -380,7 +418,7 @@ class OrderManager:
                 status=status,
                 order_id=order_id,
                 reason=reason,
-                metadata=signal_metadata,
+                metadata=metadata,
             )
         except Exception as e:
             self.logger.error(f"Failed to record strategy signal: {e}")

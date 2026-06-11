@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from quant.domain.models.order import Order, OrderSide, OrderType
 from quant.features.portfolio.tracker import StrategyPositionTracker
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
+from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 
 
 LIVE_DIR = ROOT / "quant" / "infrastructure" / "var" / "live_trading"
@@ -45,26 +46,23 @@ def backfill_paper_from_live_records(
 ) -> Dict[str, Any]:
     live_dir = root / "quant" / "infrastructure" / "var" / "live_trading"
     paper_dir = root / "quant" / "infrastructure" / "var" / "paper_trading"
-    tracker_path = paper_dir / "strategy_positions.json"
+    state_store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
     live_recorder = LiveTradingRecorder(live_dir)
 
-    signals = live_recorder.read_day("signals", trading_date)
+    signals = [
+        signal for signal in live_recorder.read_day("signals", trading_date)
+        if _is_replayable_live_signal(signal)
+    ]
     target_order_ids = {
         f"PAPER-{str(signal.get('order_id') or '')}" if signal.get("order_id") else _fallback_order_id(signal)
         for signal in signals
     }
-    target_strategy_names = {str(signal.get("strategy_name") or "default") for signal in signals}
     if force and target_order_ids:
-        _remove_day_records(
-            paper_dir=paper_dir,
-            trading_date=trading_date,
-            order_ids=target_order_ids,
-            strategy_names=target_strategy_names,
-        )
-        _rebuild_tracker_from_paper_fills(paper_dir, tracker_path)
+        state_store.delete_signals_for_orders(mode="paper", order_ids=target_order_ids, signal_date=trading_date)
+        _rebuild_positions_from_paper_fills(state_store)
 
     paper_recorder = LiveTradingRecorder(paper_dir)
-    tracker = StrategyPositionTracker(tracker_path)
+    tracker = StrategyPositionTracker(store=state_store, mode="paper")
     slippage_bps = _load_paper_slippage_bps(root)
     existing_order_ids = {
         str(record.get("order_id"))
@@ -91,7 +89,7 @@ def backfill_paper_from_live_records(
         side = str(signal.get("side") or "").upper()
         quantity = _float(signal.get("quantity"))
         order_type = str(signal.get("order_type") or "MARKET").upper()
-        limit_price = _optional_float(signal.get("price"))
+        limit_price = _optional_float(signal.get("reference_price") if signal.get("reference_price") is not None else signal.get("price"))
         timestamp = _parse_timestamp(signal.get("timestamp"), trading_date)
         bar = _load_execution_bar(root, symbol, trading_date)
         fill_price, reason = _paper_fill_price(
@@ -160,19 +158,6 @@ def backfill_paper_from_live_records(
         trading_date=trading_date,
         strategy_names=strategy_names,
     )
-    _write_marker(
-        paper_dir=paper_dir,
-        trading_date=trading_date,
-        payload={
-            "source": "backfill_live_signals",
-            "trading_date": trading_date,
-            "written": written,
-            "filled": filled,
-            "rejected": rejected,
-            "skipped": skipped,
-            "updated_at": datetime.now().isoformat(),
-        },
-    )
     return {
         "trading_date": trading_date,
         "signals": len(signals),
@@ -211,6 +196,15 @@ def _apply_slippage(price: float, side: str, slippage_bps: float) -> float:
     if side.upper() == "BUY":
         return price + adjustment
     return price - adjustment
+
+
+def _is_replayable_live_signal(signal: Dict[str, Any]) -> bool:
+    order_id = str(signal.get("order_id") or "")
+    broker_order_id = str(signal.get("broker_order_id") or "")
+    status = str(signal.get("status") or "").lower()
+    if broker_order_id and broker_order_id == order_id and status in {"submitted", "filled", "cancelled", "canceled"}:
+        return False
+    return True
 
 
 def _load_paper_slippage_bps(root: Path) -> float:
@@ -292,82 +286,53 @@ def _record_snapshots(
         )
 
 
-def _write_marker(paper_dir: Path, trading_date: str, payload: Dict[str, Any]) -> None:
-    day_dir = paper_dir / trading_date
-    day_dir.mkdir(parents=True, exist_ok=True)
-    marker = day_dir / "_daily_replay_complete.json"
-    marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def _rebuild_positions_from_paper_fills(store: StrategyStateStore) -> None:
+    store.clear_positions_for_mode(mode="paper")
+    fills = [
+        signal for signal in store.get_recent_signals(mode="paper", days=3650)
+        if _float(signal.get("fill_quantity")) > 0
+    ]
+    for fill in sorted(fills, key=lambda item: str(item.get("fill_time") or item.get("timestamp") or "")):
+        _apply_fill_to_position(store, fill)
 
 
-def _remove_day_records(
-    *,
-    paper_dir: Path,
-    trading_date: str,
-    order_ids: set[str],
-    strategy_names: set[str],
-) -> None:
-    day_dir = paper_dir / trading_date
-    if not day_dir.exists():
+def _apply_fill_to_position(store: StrategyStateStore, fill: Dict[str, Any]) -> None:
+    strategy_name = str(fill.get("strategy_name") or "default")
+    symbol = str(fill.get("symbol") or "")
+    side = str(fill.get("side") or "").upper()
+    quantity = _float(fill.get("fill_quantity") or fill.get("quantity"))
+    price = _float(fill.get("fill_price") or fill.get("price"))
+    commission = _float(fill.get("commission"))
+    if not symbol or quantity <= 0 or price <= 0:
         return
-    for kind in ("signals", "orders", "fills"):
-        path = day_dir / f"{kind}.jsonl"
-        if not path.exists():
-            continue
-        rows = _read_jsonl(path)
-        kept = [
-            row for row in rows
-            if str(row.get("order_id") or row.get("broker_order_id") or "") not in order_ids
-        ]
-        _write_jsonl(path, kept)
-    snapshot_path = day_dir / "snapshots.jsonl"
-    if snapshot_path.exists() and strategy_names:
-        rows = _read_jsonl(snapshot_path)
-        kept = [
-            row for row in rows
-            if str(row.get("strategy_name") or "") not in strategy_names
-        ]
-        _write_jsonl(snapshot_path, kept)
-
-
-def _rebuild_tracker_from_paper_fills(paper_dir: Path, tracker_path: Path) -> None:
-    if tracker_path.exists():
-        tracker_path.unlink()
-    tracker = StrategyPositionTracker(tracker_path)
-    if not paper_dir.exists():
+    current = store.get_position(strategy_name=strategy_name, mode="paper", symbol=symbol)
+    current_qty = _float((current or {}).get("quantity"))
+    current_avg = _float((current or {}).get("avg_cost"))
+    current_rpnl = _float((current or {}).get("realized_pnl"))
+    if side == "BUY":
+        new_qty = current_qty + quantity
+        total_cost = (current_avg * current_qty) + (price * quantity) + commission
+        new_avg = total_cost / new_qty if new_qty > 0 else 0.0
+        new_rpnl = current_rpnl
+    elif side == "SELL":
+        new_qty = max(0.0, current_qty - quantity)
+        realized = (price - current_avg) * min(quantity, current_qty) - commission if current_qty > 0 else 0.0
+        new_avg = current_avg if new_qty > 0 else 0.0
+        new_rpnl = current_rpnl + realized
+    else:
         return
-    fills = []
-    for day_dir in sorted(path for path in paper_dir.iterdir() if path.is_dir()):
-        fill_path = day_dir / "fills.jsonl"
-        if fill_path.exists():
-            fills.extend(_read_jsonl(fill_path))
-    for fill in sorted(fills, key=lambda item: str(item.get("timestamp", ""))):
-        order_id = str(fill.get("order_id") or "")
-        strategy_name = str(fill.get("strategy_name") or "default")
-        if order_id:
-            tracker.record_order(order_id, strategy_name)
-        tracker.update_from_fill(
-            strategy_name,
-            str(fill.get("symbol") or ""),
-            str(fill.get("side") or ""),
-            _float(fill.get("quantity")),
-            _float(fill.get("price")),
-            _float(fill.get("commission")),
+    if new_qty <= 0:
+        store.delete_position(strategy_name=strategy_name, mode="paper", symbol=symbol)
+    else:
+        store.upsert_position(
+            strategy_name=strategy_name,
+            mode="paper",
+            symbol=symbol,
+            quantity=new_qty,
+            avg_cost=new_avg,
+            realized_pnl=new_rpnl,
+            updated_at=str(fill.get("fill_time") or fill.get("timestamp") or datetime.now().isoformat()),
         )
-
-
-def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
-    rows = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
-
-
-def _write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
-    path.write_text(text, encoding="utf-8")
 
 
 def _fallback_order_id(signal: Dict[str, Any]) -> str:

@@ -11,8 +11,8 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `ParquetLakeStorage` — writes day-partitioned lake datasets under `var/parquet_lake/`; use it when Parquet/OSS is the source of truth and DuckDB is only the query engine/cache
 - `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
 - `PaperBroker`, `FutuProvider`, `QMTBroker` — implement `BrokerAdapter` port
-- `LiveTradingRecorder` — writes daily JSONL live records for strategy signals, broker orders, fills, and strategy snapshots under `infrastructure/var/live_trading/`; performance views are derived with `quant.analytics`
-- `strategy_controls.py` — persists per-strategy live control state under `infrastructure/var/strategy_controls.json`; dashboard actions update this file and never submit broker orders directly
+- `LiveTradingRecorder` — writes daily JSONL live records and dual-writes signals/positions to DuckDB (`var/strategy_dashboard.duckdb`) for dashboard queries; performance views are derived with `quant.analytics`
+- `strategy_controls.py` — persists per-strategy live control state in DuckDB `strategy_states` table (`var/strategy_dashboard.duckdb`); dashboard actions update this table and never submit broker orders directly
 - `LiveExecutionManager` — converts live target signals into cost-bounded LIMIT orders and drops unfilled orders after the configured intraday deadline
 
 ## 依赖
@@ -90,10 +90,10 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 ## Recent Additions
 
-- `execution/strategy_controls.py` persists per-strategy and per-mode control state in `var/strategy_controls.json`; dashboard control actions must append an audit row and must not submit broker orders directly.
+- `execution/strategy_controls.py` persists per-strategy and per-mode control state in DuckDB `strategy_states` table; dashboard control actions record state transitions and must not submit broker orders directly.
 - `execution/strategy_ledger.py` owns strategy operations ledgers, dashboard audit JSONL, mode-scoped liquidation plans, and optional broker-history reconciliation after a live restart.
-- `execution/strategy_mode_records.py` owns legacy append-only `strategy_modes/<mode>/<strategy_name>/` JSONL records for migration compatibility; these records are raw inputs to the strict state store, not the dashboard state source.
-- `execution/strategy_state_store.py` owns the strict DuckDB dashboard state store (`var/strategy_state.duckdb`) with tables for operations, runs, control state, capital events, signals, submit attempts, orders, fills, positions, NAV snapshots, watermarks, and reconciliations. Dashboard state reads must use this store after migrating JSONL inputs.
+- `execution/strategy_state_store.py` owns the simplified DuckDB dashboard state store (`var/strategy_dashboard.duckdb`) with 3 tables: `strategy_states` (control state transitions), `strategy_positions` (current holdings per strategy×mode×symbol), and `strategy_signals` (signal-to-fill lifecycle records).
+- `execution/strategy_mode_records.py` is DEPRECATED — legacy append-only JSONL records, kept for backward compatibility only.
 - `execution/cn_trading_calendar.py` owns CN trading-calendar resolution for live/paper schedulers, combining Tushare `trade_cal` cache with local DuckDB market/status dates.
 - Broker adapters may expose `get_trade_history(start_date=None, end_date=None)` and `get_order_history(start_date=None, end_date=None)` for restart reconciliation. Implementations must return normalized dict-like records without importing `features/`.
 - Strategy dashboard audit, liquidation plans, and broker-history reconciliation are always scoped by `strategy_name` and `mode`; sharing one real broker account must not merge virtual strategy state.

@@ -25,11 +25,10 @@ class PaperBroker(BrokerAdapter):
     ):
         super().__init__("paper")
         self.initial_cash = initial_cash
-        self.cash = initial_cash
         self.slippage_bps = slippage_bps
         self.data_provider = data_provider
         self.commission_config = commission_config or {}
-        self.positions: Dict[str, Position] = {}
+        self._portfolio_ref: Any = None
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self._lock = threading.RLock()
@@ -39,6 +38,23 @@ class PaperBroker(BrokerAdapter):
         self._trade_callbacks: List[Callable[..., None]] = []
         self._pending_trade_notifications: List[Dict[str, Any]] = []
         self.logger = setup_logger("PaperBroker")
+
+    def set_portfolio(self, portfolio: Any) -> None:
+        self._portfolio_ref = portfolio
+
+    @property
+    def cash(self) -> float:
+        port = self._portfolio_ref
+        if port is not None:
+            return float(getattr(port, "cash", self.initial_cash) or 0.0)
+        return self.initial_cash
+
+    @property
+    def positions(self) -> Dict[str, Any]:
+        port = self._portfolio_ref
+        if port is not None and hasattr(port, "positions"):
+            return port.positions
+        return {}
 
     def update_price(self, symbol: str, price: float) -> None:
         self._latest_prices[symbol] = price
@@ -146,7 +162,8 @@ class PaperBroker(BrokerAdapter):
         order_type = order.order_type.value if isinstance(order.order_type, OrderType) else str(order.order_type)
 
         if side_value == "SELL" and _is_cn_symbol(order.symbol):
-            pos = self.positions.get(order.symbol)
+            positions = self._portfolio_positions()
+            pos = positions.get(order.symbol)
             if pos and pos.quantity > 0:
                 today = date.today()
                 settled = pos.settled_quantity(today)
@@ -182,7 +199,6 @@ class PaperBroker(BrokerAdapter):
         })
 
         commission = self.estimate_commission(order.symbol, side_value, order.quantity, fill_price)
-        self._update_position(filled, fill_price, commission)
         self._queue_trade_notification(filled, fill_price, commission)
         return filled
 
@@ -287,35 +303,11 @@ class PaperBroker(BrokerAdapter):
             return number
         return None
 
-    def _update_position(self, order: Order, fill_price: float, commission: float) -> None:
-        if order.symbol not in self.positions:
-            self.positions[order.symbol] = Position(
-                symbol=order.symbol,
-                quantity=0,
-                avg_cost=0,
-                market_value=0,
-                unrealized_pnl=0,
-            )
-
-        pos = self.positions[order.symbol]
-        side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
-
-        if side_value == "BUY":
-            total_cost = pos.avg_cost * pos.quantity + fill_price * order.quantity + commission
-            pos.quantity += order.quantity
-            pos.avg_cost = total_cost / pos.quantity if pos.quantity > 0 else 0
-            pos.add_buy_lot(date.today(), order.quantity)
-            self.cash -= fill_price * order.quantity + commission
-        else:
-            sell_qty = min(order.quantity, pos.quantity)
-            self.cash += fill_price * sell_qty - commission
-            pos.quantity -= sell_qty
-            pos.remove_sell_lots(sell_qty)
-            if pos.quantity <= 0:
-                pos.quantity = 0
-                pos.avg_cost = 0
-
-        pos.market_value = pos.quantity * fill_price
+    def _portfolio_positions(self) -> Dict[str, Any]:
+        port = self._portfolio_ref
+        if port is not None and hasattr(port, "positions"):
+            return port.positions
+        return {}
 
     def cancel_order(self, order_id: str) -> bool:
         with self._lock:
@@ -333,18 +325,32 @@ class PaperBroker(BrokerAdapter):
 
     def get_positions(self) -> List[Position]:
         with self._lock:
-            return [pos for pos in self.positions.values() if pos.quantity > 0]
+            port = self._portfolio_ref
+            if port is not None and hasattr(port, "positions"):
+                return [pos for pos in port.positions.values() if getattr(pos, "quantity", 0) > 0]
+            return []
 
     def get_account_info(self) -> AccountInfo:
         with self._lock:
-            total_value = self.cash + sum(
-                pos.market_value for pos in self.positions.values()
-            )
+            port = self._portfolio_ref
+            if port is not None:
+                cash = float(getattr(port, "cash", self.initial_cash) or 0.0)
+                total_value = cash + sum(
+                    getattr(pos, "market_value", 0.0) or 0.0
+                    for pos in (getattr(port, "positions", {}) or {}).values()
+                )
+                return AccountInfo(
+                    account_id="PAPER_ACCOUNT",
+                    cash=cash,
+                    buying_power=cash,
+                    equity=total_value,
+                    margin_used=0,
+                )
             return AccountInfo(
                 account_id="PAPER_ACCOUNT",
-                cash=self.cash,
-                buying_power=self.cash,
-                equity=total_value,
+                cash=self.initial_cash,
+                buying_power=self.initial_cash,
+                equity=self.initial_cash,
                 margin_used=0,
             )
 

@@ -148,13 +148,25 @@ if ($LiveRecoveryExit -ne 0) {
     Write-Log "live pending exit_code=$LivePendingExit"
 }
 
+$PaperSignalExit = 0
 $PaperExit = 0
 if (-not $SkipPaper) {
     $PaperScript = Join-Path $RepoRoot "quant\scripts\run_paper_daily.ps1"
     if (-not (Test-Path $PaperScript)) {
         Write-Log "missing paper replay script: $PaperScript"
+        $PaperSignalExit = 1
         $PaperExit = 1
     } else {
+        $PaperSignalArgs = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $PaperScript,
+            "-SignalOnly"
+        )
+        Write-Log "paper signal command: powershell.exe $($PaperSignalArgs -join ' ')"
+        $PaperSignalExit = Invoke-LoggedNative -FilePath "powershell.exe" -Arguments $PaperSignalArgs
+        Write-Log "paper signal exit_code=$PaperSignalExit"
+
         $PaperArgs = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
@@ -176,5 +188,8 @@ if ($LiveRecoveryExit -ne 0) {
 }
 if ($LivePendingExit -ne 0) {
     exit $LivePendingExit
+}
+if ($PaperSignalExit -ne 0) {
+    exit $PaperSignalExit
 }
 exit $PaperExit

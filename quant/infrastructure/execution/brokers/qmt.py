@@ -759,8 +759,8 @@ def _qmt_order_callback(broker: QMTBroker, order: Any) -> None:
 
 def _qmt_trade_callback(broker: QMTBroker, trade: Any) -> None:
     order_id = _order_identifier(trade)
-    fill_price = _safe_float(_get_field(trade, "traded_price", "m_dPrice", default=0.0))
-    fill_qty = _safe_float(_get_field(trade, "traded_volume", "m_nVolume", default=0.0))
+    fill_price = _safe_float(_get_field(trade, "traded_price", "m_dPrice", "price", "avg_price", "fill_price", "order_price", default=0.0))
+    fill_qty = _safe_float(_get_field(trade, "traded_volume", "m_nVolume", "volume", "quantity", "qty", "deal_volume", default=0.0))
     fill_ts = datetime.now()
     symbol = _qmt_symbol_to_cn(_get_field(trade, "stock_code", "m_strStockCode", "m_strInstrumentID", default=""))
     side = ""
@@ -794,6 +794,18 @@ def _qmt_trade_callback(broker: QMTBroker, trade: Any) -> None:
             commission=commission,
             strategy_name=strategy_name,
             timestamp=fill_ts,
+        )
+    else:
+        broker.logger.warning(
+            f"QMT trade callback extracted zero price/qty: "
+            f"fill_price={fill_price} fill_qty={fill_qty} order={order_id}. "
+            f"Raw trade fields: traded_price={_get_field(trade, 'traded_price', default='N/A')}, "
+            f"m_dPrice={_get_field(trade, 'm_dPrice', default='N/A')}, "
+            f"price={_get_field(trade, 'price', default='N/A')}, "
+            f"traded_volume={_get_field(trade, 'traded_volume', default='N/A')}, "
+            f"m_nVolume={_get_field(trade, 'm_nVolume', default='N/A')}, "
+            f"volume={_get_field(trade, 'volume', default='N/A')}, "
+            f"quantity={_get_field(trade, 'quantity', default='N/A')}"
         )
     broker.logger.info(f"QMT trade: {fill_qty} @ {fill_price}, order={order_id}")
 
