@@ -53,10 +53,7 @@ def backfill_paper_from_live_records(
         signal for signal in live_recorder.read_day("signals", trading_date)
         if _is_replayable_live_signal(signal)
     ]
-    target_order_ids = {
-        f"PAPER-{str(signal.get('order_id') or '')}" if signal.get("order_id") else _fallback_order_id(signal)
-        for signal in signals
-    }
+    target_order_ids = {_paper_order_id_for_signal(signal) for signal in signals}
     if force and target_order_ids:
         state_store.delete_signals_for_orders(mode="paper", order_ids=target_order_ids, signal_date=trading_date)
         _rebuild_positions_from_paper_fills(state_store)
@@ -78,8 +75,7 @@ def backfill_paper_from_live_records(
 
     for signal in signals:
         strategy_name = str(signal.get("strategy_name") or "default")
-        live_signal_id = str(signal.get("order_id") or "")
-        paper_order_id = f"PAPER-{live_signal_id}" if live_signal_id else _fallback_order_id(signal)
+        paper_order_id = _paper_order_id_for_signal(signal)
         if paper_order_id in existing_order_ids and not force:
             skipped += 1
             strategy_names.add(strategy_name)
@@ -185,7 +181,7 @@ def _paper_fill_price(
             return None, "limit_not_marketable"
         if side == "SELL" and bar.open < limit_price:
             return None, "limit_not_marketable"
-        return bar.open, ""
+        return limit_price, ""
     fill_price = _apply_slippage(bar.open, side, slippage_bps)
     return fill_price, ""
 
@@ -288,10 +284,7 @@ def _record_snapshots(
 
 def _rebuild_positions_from_paper_fills(store: StrategyStateStore) -> None:
     store.clear_positions_for_mode(mode="paper")
-    fills = [
-        signal for signal in store.get_recent_signals(mode="paper", days=3650)
-        if _float(signal.get("fill_quantity")) > 0
-    ]
+    fills = store.get_recent_fills(mode="paper", days=3650)
     for fill in sorted(fills, key=lambda item: str(item.get("fill_time") or item.get("timestamp") or "")):
         _apply_fill_to_position(store, fill)
 
@@ -339,6 +332,16 @@ def _fallback_order_id(signal: Dict[str, Any]) -> str:
     timestamp = str(signal.get("timestamp") or "").replace(":", "").replace("-", "")
     symbol = str(signal.get("symbol") or "UNKNOWN")
     return f"PAPER-{timestamp}-{symbol}"
+
+
+def _paper_order_id_for_signal(signal: Dict[str, Any]) -> str:
+    legacy_order_id = str(signal.get("order_id") or "")
+    if legacy_order_id:
+        return f"PAPER-{legacy_order_id}"
+    signal_id = str(signal.get("signal_id") or "")
+    if signal_id:
+        return f"PAPER-{signal_id.replace(':', '-')}"
+    return _fallback_order_id(signal)
 
 
 def _parse_timestamp(value: Any, trading_date: str) -> datetime:

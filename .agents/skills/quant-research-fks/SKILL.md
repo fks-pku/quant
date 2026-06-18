@@ -276,6 +276,8 @@ from quant.shared.utils.logger import get_logger
 
 ### Critical Rules
 
+Research capital exceptions: Formal A-share research default initial cash remains `10000`. Dedicated public-source replication runners may override it only when the cited source specifies capital or CN lot-size plus basket-width constraints would otherwise force a mechanical zero-trade run; document the source and rationale in the runner, strategy README, report evidence, and tests.
+
 | 规则 | 说明 |
 |------|------|
 | **禁止 look-ahead** | 信号只能用当日及之前数据，回测引擎已内置 T+1 保护 |
@@ -368,7 +370,23 @@ from quant.shared.utils.logger import get_logger
 
 ## 整体工作流程
 
-正式研究管线分为两个可单独运行的阶段：`discover` 只搜集并沉淀多个 idea 到本地 `idea_bank`；`formal` 针对已入库的单个 idea 逐一完成准入评估、StrategySpec、真实数据验证、严格 Backtester、benchmark 比较和 full report。手工研究时可以按下面子步骤组织，但产物路径和报告模板必须遵守当前项目契约。
+正式研究管线的 canonical 短文档是 `quant/features/research/docs/research-pipeline.md`。任何改变 stage 顺序、CLI/API mode 行为、准入/验证/生产 gate 阈值、产物路径、状态流转、策略归档位置或报告 contract 的修改，都必须在同一个变更里同步更新该 Markdown 文件和本 skill。
+
+当前自动化漏斗是：
+
+`public/local idea sources → idea_bank → daily A-share admission → StrategySpec → HFQ signal validation → candidate integration → strict Backtester → walk-forward audit → HTML reports and status transition`
+
+可单独运行的主要 mode：
+
+- `discover`：只做 source search、quality scoring、deduplication 和 idea-bank persistence。
+- `scout_formal`：先 scout，再选择 top local ideas 进入 formal research。
+- `formal`：从本地 idea bank 加载 idea，完成 fast research；通过 gate 后继续 integration、strict backtest 和 walk-forward。
+- `fast`：单阶段快研，禁用 strict backtest 和 walk-forward。
+- `strict`：对已有候选运行 standalone strict Backtester stage。
+- `walkforward`：对已有候选运行 standalone walk-forward strict audit。
+- `full`：端到端 discovery + formal + strict + walk-forward + reports。
+
+默认新策略研究使用 `full` 或 `formal`。`fast`、`strict`、`walkforward` 只用于明确的单阶段重跑或调试。
 
 ## Full Report Template Contract (MANDATORY)
 
@@ -378,20 +396,21 @@ from quant.shared.utils.logger import get_logger
 
 当前渲染后的 canonical sample 是 `quant/features/strategies/xueqiu_small_cap_financial_filter/full_research_report.html`。以后用户说“研究策略”“策略研究”“做一个策略研究”“full report”时，必须按这份报告的章节顺序、默认口径和信息密度生成，不能临时改回旧版报告结构。
 
-固定 6 个顶层章节：
+固定 7 个顶层可展开卡片：
 
 1. Final Decision
-2. Metric Checklist
-3. Strategy Logic And Core Evidence（必须包含白话版 `策略逻辑` 与 `止盈止损逻辑`）
-4. Key Risks
-5. Appendix
-6. TODO：上线前还需要做什么
+2. 策略逻辑
+3. 策略表现
+4. 重要 Metric
+5. Walk-forward
+6. Stability
+7. Risk
 
-默认 full report 和 strict report 不展示参数敏感性分析；参数敏感性可以作为后续增量审计单独运行和归档，但不要混入默认报告模板。
+`Final Decision` 是 active Go / No-Go checklist 加 executive snapshot，不另设顶层 `Metric Checklist`。默认 full report 不渲染 Appendix 或 TODO，除非用户明确要求增量审计产物。默认 full report 和 strict report 不展示参数敏感性分析；参数敏感性可以作为后续增量审计单独运行和归档，但不要混入默认报告模板。
 
-默认 full report 不展示止盈止损开关对照。风险退出/止盈止损默认开启，并在 `Strategy Logic And Core Evidence` 下用白话解释具体退出逻辑、触发条件、保护的风险、可能牺牲的收益来源和执行优先级。
+默认 full report 不展示止盈止损开关对照。风险退出/止盈止损默认开启，并在 `策略逻辑` 卡片下用中文白话解释具体退出逻辑、触发条件、保护的风险、可能牺牲的收益来源和执行优先级。
 
-正式报告应写入 `quant/infrastructure/var/research/reports/<strategy_or_idea_id>/full_research_report.html`，并同步维护 `quant/infrastructure/var/research/reports/latest/full_research_report.html`。`full_research_report.md` 只作为轻量入口索引。任何报告格式变更必须同时更新模板与 `quant/tests/test_research_report_contract.py`。
+正式报告应写入 `quant/infrastructure/var/research/reports/<strategy_or_idea_id>/full_research_report.html`，并同步维护 `quant/infrastructure/var/research/reports/latest/full_research_report.html`。不得生成或维护 `full_research_report.md`。任何报告格式变更必须同时更新模板与 `quant/tests/test_research_report_contract.py`。
 
 ### 阶段 1：策略搜索 (Strategy Discovery)
 
@@ -404,11 +423,14 @@ from quant.shared.utils.logger import get_logger
 
 **量化社区与论坛**
 - Quantocracy：https://quantocracy.com/
+- Hudson & Thames：https://hudsonthames.org/research/
+- Portfolio Optimizer：https://portfoliooptimizer.io/blog/
 - QuantConnect Forum：https://www.quantconnect.com/forum
 - Reddit r/algotrading：https://www.reddit.com/r/algotrading/
 
 **研究机构**
 - Alpha Architect Blog：https://alphaarchitect.com/blog/
+- Quantpedia Blog：https://quantpedia.com/blog/
 - AQR Research：https://www.aqr.com/Insights/Research
 - NBER Working Papers (Finance)
 
@@ -520,20 +542,11 @@ from quant.shared.utils.logger import get_logger
 3. 同步 `quant/infrastructure/var/research/reports/latest/full_research_report.html`
 4. 归档规则：如果当前生产 checklist 全部通过，策略必须归入 `quant/features/strategies/<strategy_or_idea_id>/`，并同步附带同一份 `full_research_report.html`；如果 checklist 失败或证据缺失，策略留在 `quant/features/strategies/reject/<strategy_or_idea_id>/`。参数敏感性可后续增量运行，不是当前归档阻塞项，除非用户明确把它加入 checklist。
 
-**Walk-Forward 验证（推荐）：**
+**Walk-Forward 审计：**
 
-对通过的策略额外运行步进验证：
+默认 full/formal 研究会在 strict Backtester 之后运行 walk-forward strict audit。它是滚动 OOS strict replay，用于记录样本外稳定性、DSR、regime breakdown、capacity 和 no-trade split evidence。
 
-```python
-from quant.features.backtest.walkforward import WalkForwardEngine
-
-wf_result = WalkForwardEngine(train_window_days=126, test_window_days=21, step_days=21).run(...)
-```
-
-Walk-Forward 通过标准：
-- `avg_test_sharpe > 0.5`
-- `sharpe_degradation < 50%`
-- `pct_profitable > 50%`
+Walk-forward evidence 保留在独立 `walkforward_audit_report.html` 和 full report 的 `Walk-forward` 卡片中。当前生产 Go / No-Go checklist 由 strict backtest 的生产门槛决定；walk-forward 结论作为审计 evidence 和 warning 展示，不作为当前硬拒绝项。
 
 ---
 

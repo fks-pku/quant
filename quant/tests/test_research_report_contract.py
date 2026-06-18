@@ -892,6 +892,59 @@ def test_walkforward_report_shows_effective_split_denominator_and_no_trade_exclu
     assert "-9.0000</td><td>-2.00%</td><td>0</td><td>excluded_no_trade" not in html
 
 
+def test_walkforward_report_marks_unknown_trade_count_as_na_not_no_trade():
+    result = {"run_id": "walkforward_unknown_trade_count", "walkforward_passed": 0}
+    rows = [
+        {
+            "title": "Walkforward Unknown Trade Count",
+            "strategy_id": "walkforward_unknown_trade_count",
+            "status": "needs_more_research",
+            "metrics": {
+                "walkforward": {
+                    "verdict": "warn",
+                    "aggregate_oos_sharpe": 0.7,
+                    "worst_oos_sharpe": 0.7,
+                    "pct_profitable_splits": 1.0,
+                    "total_splits": 2,
+                    "evaluated_splits": 1,
+                    "no_trade_splits": 1,
+                    "splits": [
+                        {
+                            "split": 1,
+                            "train_start": "2024-01-01",
+                            "train_end": "2024-06-30",
+                            "test_start": "2024-07-01",
+                            "test_end": "2024-07-31",
+                            "oos_sharpe": 0.0,
+                            "return": 0.0,
+                            "trade_count": 0,
+                            "has_trades": False,
+                            "verdict": "excluded_no_trade",
+                        },
+                        {
+                            "split": 2,
+                            "train_start": "2024-01-01",
+                            "train_end": "2024-06-30",
+                            "test_start": "2024-08-01",
+                            "test_end": "2024-08-31",
+                            "oos_sharpe": 0.7,
+                            "return": 0.03,
+                            "trade_count": None,
+                            "has_trades": True,
+                            "verdict": "pass",
+                        }
+                    ],
+                }
+            },
+        }
+    ]
+
+    html = build_research_stage_report_html("walkforward_strict_audit", result, rows)
+
+    assert "<td>2</td><td>2024-01-01 - 2024-06-30</td><td>2024-08-01 - 2024-08-31</td><td>frozen parameters</td><td>0.7000</td><td>3.00%</td><td>n/a</td><td>pass</td>" in html
+    assert "n/a (no trades)</td><td>3.00%" not in html
+
+
 def test_small_cap_strict_grid_best_respects_drawdown_constraint_before_return():
     from quant.scripts.run_ashare_small_cap_pure_baseline_strict_backtest import _select_best
 

@@ -19,6 +19,8 @@ Current daily target execution-cost contract: D-day strategy price or signal-bar
 - `ExecutionReferencePriceResolver(mode, broker, data_provider, allow_strategy_price_fallback=False)` — MARKET 执行参考价解析：优先 broker/data_provider quote open，再按 side/last 退化；默认不使用策略传入价兜底
 - `estimate_cost_protection_limit(...)` — 纯函数：用 D 日可知 reference/bar 和 `execution_cost_model` 估算成本保护 bps，不读未来 bar、不提交订单；返回的 `limit_price` 只可作诊断，订单路径必须用执行日 open/reference 重新锚定真实 LIMIT
 - `execution_commission.calculate_commission(...)` and `total_commission(...)` are the shared backtest/paper execution fee model; do not fork CN ETF/A-share commission logic inside adapters.
+- `execution_market_rules.py` owns shared market, lot-size, CN price-limit, settlement, and FIFO-lot helper rules. Backtest keeps compatibility imports only.
+- `execution_simulator.simulate_order_execution(...)` is the pure backtest/paper single-order matching kernel: price field, LIMIT marketability, price-limit rejection, lot rounding, liquidity cap, market impact for MARKET orders, cash/position gates, and commission. Marketable LIMIT orders fill at the submitted limit price so cost-protection/slippage budgets are reflected in fill facts. It returns an execution fact and must not submit broker orders or write durable state.
 
 ## 依赖
 
@@ -32,7 +34,8 @@ Current daily target execution-cost contract: D-day strategy price or signal-bar
 - Runtime helper 不保存跨事件状态，不生成订单，不改变策略调仓 gate
 - 日线策略的完整性检查必须以策略 `symbols` 为 required symbols；strict 模式遇到缺失或跨日 bar 必须跳过策略 hook
 - Daily `MARKET` target generation must separate D-day cost bps estimation from execution-day LIMIT anchoring: strategy price/signal close is the cost reference, while resolver open/reference is the D+1 execution anchor.
-- Backtest and paper mode must share `execution_commission` for fee totals; adapter-local paper fills may differ in broker mechanics, but not in the commission formula for the same symbol, side, price, quantity, and config.
+- Backtest and paper mode must share the runtime execution simulator for deterministic local matching semantics. PaperBroker may differ only in adapter duties (order IDs, order history, callbacks), not in price-limit, marketability, LIMIT fill-at-limit, lot, volume, settlement, cash, or commission decisions.
+- Any change to shared execution simulator semantics must update both backtest `execute_order()` coverage and `PaperBroker` coverage; `infrastructure/` must not import `features/`.
 
 ## 修改守则
 

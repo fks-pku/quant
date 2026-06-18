@@ -3458,7 +3458,7 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
                         _pct(return_value),
                         _pct(maxdd_value),
                         _pct(turnover_value),
-                        _int_cell(trade_count),
+                        _split_trade_count_cell(split),
                         _split_verdict(split),
                     )
                 )
@@ -3515,9 +3515,16 @@ def _walkforward_split_contract_table(data: Dict[str, Any], rows: List[Dict[str,
 def _split_oos_sharpe_cell(split: Dict[str, Any]) -> str:
     if split.get("has_trades") is False:
         return "n/a (no trades)"
-    if _safe_int(split.get("trade_count")) == 0:
+    if split.get("trade_count") is not None and _safe_int(split.get("trade_count")) == 0:
         return "n/a (no trades)"
     return _fmt(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe"))
+
+
+def _split_trade_count_cell(split: Dict[str, Any]) -> str:
+    trade_count = split.get("trade_count")
+    if trade_count is None:
+        return "n/a"
+    return _int_cell(trade_count)
 
 
 def _decision_contract(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
@@ -3759,7 +3766,9 @@ def _split_verdict(split: Dict[str, Any]) -> str:
     explicit = split.get("verdict") or split.get("result")
     if explicit:
         return str(explicit)
-    if split.get("has_trades") is False or _safe_int(split.get("trade_count")) == 0:
+    if split.get("has_trades") is False:
+        return "excluded_no_trade"
+    if split.get("trade_count") is not None and _safe_int(split.get("trade_count")) == 0:
         return "excluded_no_trade"
     sharpe = _safe_float(_first_present(split, "oos_sharpe", "test_sharpe", "sharpe"))
     return "pass" if sharpe is not None and sharpe > 0 else "fail"

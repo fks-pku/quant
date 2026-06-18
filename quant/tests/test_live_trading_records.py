@@ -206,6 +206,73 @@ def test_live_trading_recorder_persists_daily_signals_fills_and_performance(tmp_
     assert perf["pnl_curve"][-1]["nav"] == pytest.approx(100020)
 
 
+def test_live_trading_recorder_writes_separate_signal_order_fill_ledgers(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "paper_trading")
+    ts = datetime(2026, 6, 15, 9, 30)
+
+    recorder.record_signal(
+        timestamp=ts,
+        strategy_name="DemoStrategy",
+        symbol="159949",
+        side="BUY",
+        quantity=200,
+        order_type="MARKET",
+        price=1.9,
+        status="accepted",
+        order_id="SIG-1",
+        metadata={"submit_date": "2026-06-16", "execution_cost_bps": 25.0},
+    )
+    recorder.record_order(
+        Order(
+            symbol="159949",
+            quantity=200,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            order_id="SIG-1",
+            price=1.905,
+            status=OrderStatus.SUBMITTED,
+            timestamp=datetime(2026, 6, 16, 9, 30),
+            strategy_name="DemoStrategy",
+        ),
+        broker_order_id="PAPER-1",
+        status="submitted",
+        metadata={"execution_reference_price": 1.9, "execution_cost_bps": 25.0},
+    )
+    recorder.record_fill(
+        order_id="SIG-1",
+        timestamp=datetime(2026, 6, 16, 9, 31),
+        strategy_name="DemoStrategy",
+        symbol="159949",
+        side="BUY",
+        quantity=200,
+        price=1.902,
+        commission=5.0,
+        fill_id="FILL-1",
+    )
+
+    store = recorder._state_store
+    signals = store.get_signals(strategy_name="DemoStrategy", mode="paper", limit=10)
+    orders = store.get_orders(strategy_name="DemoStrategy", mode="paper", limit=10)
+    fills = store.get_fills(strategy_name="DemoStrategy", mode="paper", limit=10)
+
+    assert len(signals) == 1
+    assert len(orders) == 1
+    assert len(fills) == 1
+    assert signals[0]["order_id"] == ""
+    assert signals[0]["fill_quantity"] == pytest.approx(0.0)
+    assert orders[0]["signal_id"] == signals[0]["signal_id"]
+    assert orders[0]["order_id"] == "SIG-1"
+    assert orders[0]["broker_order_id"] == "PAPER-1"
+    assert orders[0]["record_date"] == "2026-06-16"
+    assert orders[0]["signal_date"] == "2026-06-15"
+    assert orders[0]["execution_reference_price"] == pytest.approx(1.9)
+    assert fills[0]["order_row_id"] == orders[0]["order_row_id"]
+    assert fills[0]["signal_id"] == signals[0]["signal_id"]
+    assert fills[0]["fill_id"] == "FILL-1"
+    assert fills[0]["quantity"] == pytest.approx(200.0)
+    assert fills[0]["price"] == pytest.approx(1.902)
+
+
 @pytest.mark.skip(reason="strategy_mode_records removed from recorder")
 def test_live_trading_recorder_writes_strategy_mode_records(tmp_path):
     from quant.infrastructure.execution.strategy_mode_records import StrategyModeRecordStore
@@ -312,6 +379,45 @@ def test_live_trading_recorder_calculates_slippage_stats(tmp_path):
     assert perf["slippage_sample_count"] == 2
     assert perf["median_slippage_bps"] == pytest.approx(75.0)
     assert perf["weighted_avg_slippage_bps"] == pytest.approx(60.12024)
+
+
+def test_live_recorder_does_not_cross_match_reused_paper_order_ids(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "paper_trading")
+    ts = datetime(2026, 6, 15, 9, 30)
+    recorder.record_order(
+        Order(
+            symbol="159949",
+            quantity=100,
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            order_id="PAPER_1",
+            price=1.8859,
+            status=OrderStatus.SUBMITTED,
+            timestamp=ts,
+            strategy_name="GoldStrategy",
+        ),
+        broker_order_id="PAPER_1",
+        status="submitted",
+    )
+
+    recorder.record_fill(
+        order_id="PAPER_1",
+        timestamp=ts,
+        strategy_name="BroadStrategy",
+        symbol="510880",
+        side="SELL",
+        quantity=500,
+        price=3.291,
+        commission=5.0,
+    )
+
+    gold = recorder.read_day("orders", "2026-06-15", strategy_name="GoldStrategy")
+    broad = recorder.read_day("fills", "2026-06-15", strategy_name="BroadStrategy")
+
+    assert gold[-1]["fill_quantity"] == pytest.approx(0.0)
+    assert gold[-1].get("fill_price") is None
+    assert broad[-1]["symbol"] == "510880"
+    assert broad[-1]["quantity"] == pytest.approx(500.0)
 
 
 def test_live_trading_recorder_summarizes_live_metrics(tmp_path):
@@ -665,9 +771,54 @@ def test_order_manager_records_strategy_signal_and_broker_order(tmp_path):
     orders = recorder.read_day("orders", datetime.now().date().isoformat())
     assert order_id is not None
     assert signals[-1]["strategy_name"] == "DemoStrategy"
-    assert signals[-1]["status"] == "submitted"
-    assert orders[-1]["broker_order_id"] == "BRK-1"
-    assert orders[-1]["status"] == "submitted"
+    assert signals[-1]["status"] == "accepted"
+    assert any(row.get("broker_order_id") == "BRK-1" for row in orders)
+    assert any(
+        row.get("broker_order_id") == "BRK-1" and row.get("status") == "submitted"
+        for row in orders
+    )
+
+
+def test_order_manager_persists_execution_reference_on_submitted_order(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live")
+    broker = DummyBroker()
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=ApprovingRisk(True),
+        event_bus=EventBus(),
+        config={},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+    manager.set_execution_timestamp(datetime(2026, 6, 16, 9, 30))
+
+    try:
+        order_id = manager.submit_order(
+            "510880",
+            200,
+            "BUY",
+            "LIMIT",
+            12.03,
+            "DemoStrategy",
+            signal_metadata={
+                "reference_price": 10.0,
+                "execution_reference_price": 12.0,
+                "execution_cost_bps": 25.0,
+            },
+        )
+    finally:
+        manager.clear_execution_timestamp()
+
+    signals = recorder.read_day("signals", "2026-06-16", strategy_name="DemoStrategy")
+    orders = recorder.read_day("orders", "2026-06-16", strategy_name="DemoStrategy")
+    submitted = next(row for row in orders if row.get("broker_order_id") == "BRK-1")
+    accepted = next(row for row in signals if row.get("symbol") == "510880")
+    assert accepted["order_id"] == ""
+    assert submitted["price"] == pytest.approx(12.03)
+    assert submitted["execution_reference_price"] == pytest.approx(12.0)
+    assert submitted["cost_bps"] == pytest.approx(25.0)
+    assert submitted["price"] == pytest.approx(12.03)
+    assert accepted["reference_price"] == pytest.approx(10.0)
 
 
 def test_order_manager_skips_duplicate_live_order_already_recorded_today(tmp_path):
@@ -729,9 +880,34 @@ def test_order_manager_record_pending_only_does_not_submit_to_broker(tmp_path):
     orders = recorder.read_day("orders", "2026-06-03")
     assert order_id is not None
     assert broker.submitted == []
-    assert len(orders) == 1
+    assert len(orders) == 0
     assert signals[-1]["strategy_name"] == "DemoStrategy"
     assert signals[-1]["submit_date"] == "2026-06-04"
+
+
+def test_order_manager_record_pending_only_is_idempotent_for_same_db_signal(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live")
+    broker = DummyBroker()
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=ApprovingRisk(True),
+        event_bus=EventBus(),
+        config={"execution": {"record_pending_only": True}},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+    manager.set_signal_timestamp(datetime(2026, 6, 3, 15, 0))
+    manager.set_signal_submit_date("2026-06-04")
+
+    first_order_id = manager.submit_order("159949", 100, "BUY", "LIMIT", 2.01, "DemoStrategy")
+    second_order_id = manager.submit_order("159949", 100, "BUY", "LIMIT", 2.01, "DemoStrategy")
+
+    signals = recorder.read_day("signals", "2026-06-03", strategy_name="DemoStrategy")
+    assert first_order_id == second_order_id
+    assert broker.submitted == []
+    assert len(signals) == 1
+    assert signals[0]["order_id"] == ""
+    assert signals[0]["submit_date"] == "2026-06-04"
 
 
 def test_live_execution_manager_pending_only_records_cost_bps_without_execution_limit(tmp_path):
@@ -763,11 +939,12 @@ def test_live_execution_manager_pending_only_records_cost_bps_without_execution_
     assert signals[-1]["order_type"] == "LIMIT"
     assert signals[-1]["reference_price"] == pytest.approx(10.0)
     assert signals[-1]["cost_bps"] == pytest.approx(25.0)
-    assert signals[-1].get("price") is None
+    assert signals[-1].get("price") == pytest.approx(10.0)
+    assert signals[-1].get("execution_reference_price") is None
     assert signals[-1]["symbol"] == "600519"
     assert signals[-1]["side"] == "BUY"
     assert signals[-1]["status"] == "accepted"
-    assert signals[-1]["order_id"] == order_id
+    assert signals[-1]["order_id"] == ""
     assert manager.get_order_status(order_id) == OrderStatus.PENDING
     # risk check deferred to D+1 in pending-only mode
 
@@ -878,6 +1055,57 @@ def test_order_manager_records_rejected_strategy_signal(tmp_path):
     order_id = manager.submit_order("600519", 100, "BUY", "LIMIT", 10.0, "DemoStrategy")
 
     signals = recorder.read_day("signals", datetime.now().date().isoformat())
+    assert order_id is None
+    assert signals[-1]["status"] == "rejected"
+    assert signals[-1]["failure_reason"] == "risk_check_failed"
+
+
+def test_order_manager_uses_execution_timestamp_for_cross_day_submit_records(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live")
+    broker = DummyBroker()
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=ApprovingRisk(True),
+        event_bus=EventBus(),
+        config={},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+
+    assert hasattr(manager, "set_execution_timestamp")
+    manager.set_execution_timestamp(datetime(2026, 6, 12, 9, 30))
+    try:
+        order_id = manager.submit_order("600519", 100, "BUY", "LIMIT", 10.0, "DemoStrategy")
+    finally:
+        manager.clear_execution_timestamp()
+
+    signals = recorder.read_day("signals", "2026-06-12", strategy_name="DemoStrategy")
+    orders = recorder.read_day("orders", "2026-06-12", strategy_name="DemoStrategy")
+    assert order_id is not None
+    assert signals[-1]["status"] == "accepted"
+    assert signals[-1]["order_id"] == ""
+    assert any(row.get("broker_order_id") == "BRK-1" for row in orders)
+
+
+def test_order_manager_uses_execution_timestamp_for_cross_day_rejections(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live")
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=ApprovingRisk(False),
+        event_bus=EventBus(),
+        config={},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", DummyBroker())
+
+    assert hasattr(manager, "set_execution_timestamp")
+    manager.set_execution_timestamp(datetime(2026, 6, 12, 9, 30))
+    try:
+        order_id = manager.submit_order("600519", 100, "BUY", "LIMIT", 10.0, "DemoStrategy")
+    finally:
+        manager.clear_execution_timestamp()
+
+    signals = recorder.read_day("signals", "2026-06-12", strategy_name="DemoStrategy")
     assert order_id is None
     assert signals[-1]["status"] == "rejected"
     assert signals[-1]["failure_reason"] == "risk_check_failed"
@@ -1005,7 +1233,7 @@ def test_recorder_accepts_domain_order_objects(tmp_path):
     assert orders[-1]["broker_order_id"] == "BRK-1"
 
 
-def test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks():
+def test_paper_broker_uses_limit_price_for_marketable_limit_fill_and_callbacks():
     from quant.features.trading.portfolio import Portfolio
     portfolio = Portfolio(initial_cash=10000, currency="CNY")
     broker = PaperBroker(slippage_bps=5)
@@ -1041,7 +1269,7 @@ def test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks():
     ))
 
     assert broker.get_order_status(order_id) == OrderStatus.FILLED
-    assert broker.get_order(order_id).avg_fill_price == pytest.approx(9.302)
+    assert broker.get_order(order_id).avg_fill_price == pytest.approx(9.307)
     assert seen == []
 
     broker.flush_trade_callbacks()
@@ -1049,11 +1277,11 @@ def test_paper_broker_uses_execution_open_for_limit_fill_and_callbacks():
     assert seen[-1]["order_id"] == order_id
     assert seen[-1]["symbol"] == "518880"
     assert seen[-1]["quantity"] == pytest.approx(1000)
-    assert seen[-1]["price"] == pytest.approx(9.302)
+    assert seen[-1]["price"] == pytest.approx(9.307)
     assert seen[-1]["commission"] == pytest.approx(5.0)
     assert seen[-1]["strategy_name"] == "Barbell"
-    assert portfolio.cash == pytest.approx(10000.0 - 9302.0 - 5.0)
-    assert portfolio.positions["518880"].avg_cost == pytest.approx(9.307)
+    assert portfolio.cash == pytest.approx(10000.0 - 9307.0 - 5.0)
+    assert portfolio.positions["518880"].avg_cost == pytest.approx(9.312)
 
     rejected_id = broker.submit_order(Order(
         symbol="518880",
@@ -1092,8 +1320,8 @@ def test_order_manager_flushes_paper_broker_fills_after_submission():
     manager.submit_order("600519", 100, "BUY", "LIMIT", 10.1, "DemoStrategy")
 
     assert seen[-1]["order_id"] == "PAPER_1"
-    assert seen[-1]["price"] == pytest.approx(10.0)
-    assert seen[-1]["commission"] == pytest.approx(5.03)
+    assert seen[-1]["price"] == pytest.approx(10.1)
+    assert seen[-1]["commission"] == pytest.approx(5.0303)
     assert manager.get_order_status("PAPER_1") == OrderStatus.FILLED
 
 
@@ -1165,6 +1393,74 @@ def test_paper_broker_commission_matches_backtest_execution_for_cn_etf():
     assert seen[-1]["commission"] == pytest.approx(trades[0].commission)
     assert broker_pf.cash == pytest.approx(portfolio.cash)
     assert broker_pf.positions["518880"].avg_cost == pytest.approx(portfolio.positions["518880"].avg_cost)
+
+
+def test_paper_broker_rejects_cn_limit_up_buy_like_backtest():
+    from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
+    from quant.features.backtest.entities import BacktestDiagnostics, CommissionConfig
+    from quant.features.backtest.order_executor import execute_order
+    from quant.features.backtest.schemas import DeferredOrder
+    from quant.features.trading.portfolio import Portfolio
+
+    bar = {
+        "symbol": "600519",
+        "timestamp": datetime(2026, 6, 9, 9, 31),
+        "open": 11.0,
+        "high": 11.0,
+        "low": 11.0,
+        "close": 11.0,
+        "volume": 1_000_000,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+    }
+    commission = {"CN": {"type": "cn_realistic"}}
+    broker = PaperBroker(slippage_bps=0, commission_config=commission)
+    broker_pf = Portfolio(initial_cash=100_000, currency="CNY")
+    broker.set_portfolio(broker_pf)
+    broker.connect()
+    broker.set_execution_bars([bar], trading_date=date(2026, 6, 9))
+    seen = []
+    broker.register_trade_callback(lambda **trade: seen.append(trade))
+
+    order_id = broker.submit_order(Order(
+        symbol="600519",
+        quantity=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=11.1,
+        strategy_name="LimitUpBuy",
+    ))
+    broker.flush_trade_callbacks()
+
+    assert broker.get_order_status(order_id) == OrderStatus.REJECTED
+    assert seen == []
+
+    diag = BacktestDiagnostics()
+    with pytest.raises(OrderRejectedError) as exc:
+        execute_order(
+            order=DeferredOrder(
+                symbol="600519",
+                quantity=100,
+                side="BUY",
+                order_type="LIMIT",
+                price=11.1,
+                strategy="LimitUpBuy",
+                signal_date=datetime(2026, 6, 8),
+            ),
+            portfolio=Portfolio(initial_cash=100_000, currency="CNY"),
+            symbol="600519",
+            bar=bar,
+            prev_bar={"symbol": "600519", "close": 10.0},
+            entry_times={},
+            entry_prices={},
+            diag=diag,
+            lot_sizes={},
+            ipo_dates={},
+            slippage_bps=0,
+            commission_config=CommissionConfig(CN=commission["CN"]),
+        )
+    assert exc.value.reason == OrderRejectionReason.PRICE_AT_LIMIT
+    assert diag.limit_rejected_orders == 1
 
 
 def test_strategy_tracker_calibration_updates_live_market_values(tmp_path):
@@ -1425,6 +1721,59 @@ def test_quant_system_paper_daily_snapshot_records_execution_day_snapshot_marker
         provider_name="duckdb",
     )
 
+    assert snapshots == [datetime(2026, 6, 4, 15, 0)]
+
+
+def test_quant_system_paper_daily_snapshot_sets_execution_timestamp_for_replay():
+    from quant.quant_system import QuantSystem
+
+    class FakeOrderManager:
+        def __init__(self):
+            self.execution_timestamp = None
+            self.cleared = False
+
+        def set_execution_timestamp(self, timestamp):
+            self.execution_timestamp = timestamp
+
+        def clear_execution_timestamp(self):
+            self.cleared = True
+            self.execution_timestamp = None
+
+    class FakeEngine:
+        def __init__(self):
+            self.order_manager = FakeOrderManager()
+            self.strategies = [SimpleNamespace(name="DemoStrategy", symbols=["159949"])]
+
+        def inject_daily_snapshot(self, signal_day, bars, execution_day):
+            assert signal_day == date(2026, 6, 3)
+            assert execution_day == date(2026, 6, 4)
+            assert self.order_manager.execution_timestamp == datetime(2026, 6, 4, 9, 30)
+            return {"DemoStrategy": SimpleNamespace(ran=True)}
+
+    snapshots = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.engine = FakeEngine()
+    quant.config = {"system": {"mode": "paper"}, "execution": {}, "live_trading": {}}
+    quant._assert_current_broker_safe_for_paper = lambda: None
+    quant._select_snapshot_provider = lambda provider_name: object()
+    quant._strategy_symbols = lambda: ["159949"]
+    quant._load_snapshot_bars = (
+        lambda provider, symbols, start_day, end_day=None: [
+            {"symbol": "159949", "timestamp": str(start_day), "close": 2.017}
+        ]
+    )
+    quant._prepare_paper_execution_context = lambda provider, symbols, execution_day: None
+    quant._record_live_strategy_snapshots = lambda timestamp=None: snapshots.append(timestamp)
+
+    results = QuantSystem.run_daily_snapshot_once(
+        quant,
+        "2026-06-03",
+        execution_date="2026-06-04",
+        provider_name="duckdb",
+    )
+
+    assert results["DemoStrategy"].ran is True
+    assert quant.engine.order_manager.cleared is True
     assert snapshots == [datetime(2026, 6, 4, 15, 0)]
 
 

@@ -23,11 +23,13 @@ START = datetime(2016, 1, 1)
 END = datetime(2026, 5, 31)
 STRATEGY_ID = "ashare_csi1000_strict_index_enhanced"
 TITLE = "中证1000严格指数增强"
-INITIAL_CASH = 10_000.0
+INITIAL_CASH = 2_000_000.0
 INDEX_CODE = "000852.SH"
 BENCHMARK_SYMBOL = "000852"
 WEIGHT_DB = Path("quant/infrastructure/var/duckdb/live/cn_index_weight.duckdb")
 SOURCE_URLS = [
+    "https://bigquant.com/wiki/doc/GpphcQ6EdE",
+    "https://bigquant.com/codesharev3/3ba06108-4edd-4020-b5ae-b0f79289fcaa",
     "https://tushare.pro/document/2?doc_id=96",
     "https://www.csindex.com.cn/#/indices/family/detail?indexCode=000852",
 ]
@@ -173,17 +175,17 @@ def _hypothesis_row(
         "thesis": "严格中证1000指数增强必须只在历史成分股内部做权重调整；本策略以 point-in-time index_weight 为基准权重，用多因子分数做有限主动偏离。",
         "status": status,
         "stage": "full_research",
-        "source": "tushare_index_weight_and_csi_methodology",
+        "source": "bigquant_csi1000_index_enhancement_plus_tushare_index_weight",
         "source_url": SOURCE_URLS[0],
         "decision_reason": _decision_reason(strict_report, walkforward),
         "metrics": metrics,
         "evidence": {
-            "source": "Tushare index_weight 000852.SH historical constituent weights",
+            "source": "BigQuant CSI1000 index-enhancement idea plus Tushare index_weight 000852.SH historical constituent weights",
             "source_urls": SOURCE_URLS,
             "local_strategy": True,
             "discovery_quality": {
                 "score": 0.84,
-                "source_type": "official_index_methodology_plus_pit_index_weight_data",
+                "source_type": "public_forum_replication_plus_official_index_methodology_and_pit_index_weight_data",
                 "matched_terms": ["中证1000", "指数增强", "成分股", "指数权重", "active weight"],
                 "risk_flags": [
                     "industry_neutral_optimizer_not_implemented",
@@ -207,6 +209,10 @@ def _hypothesis_row(
                 "rebalance_frequency": f"every {STRATEGY_PARAMS['holding_days']} trading days",
                 "required_fields": AShareCsi1000StrictIndexEnhancedStrategy(symbols=[]).required_fields,
                 "parameters": STRATEGY_PARAMS,
+                "research_capital": {
+                    "initial_cash": INITIAL_CASH,
+                    "rationale": "Matches the cited BigQuant replication scale and avoids mechanical zero-trade lot rounding for a 120-name CN stock basket.",
+                },
                 "parameter_explanations": _parameter_explanations(),
                 "strategy_logic": _strategy_logic(symbols, start, end),
                 "source_report_urls": SOURCE_URLS,
@@ -280,6 +286,7 @@ def _parameter_explanations() -> Dict[str, str]:
         "holding_days": "20 个交易日近似月度调仓，降低换手同时保留因子更新。",
         "max_positions": "最多持有中证1000成分股数量；在可交易性和分散度之间折中。",
         "target_exposure": "目标股票权益暴露；保留少量现金应对手数和拒单。",
+        "research_initial_cash": "专用复核 runner 使用 2,000,000 初始资金，匹配 BigQuant 公开来源，并避免 120 只 A 股篮子在 100 股整手约束下机械性零交易。",
         "active_tilt": "围绕指数权重的主动偏离强度；越高 alpha/TE 都会升高。",
         "min_weight_multiplier": "低分成分最低保留的指数权重倍数。",
         "max_weight_multiplier": "高分成分最高允许的指数权重倍数。",

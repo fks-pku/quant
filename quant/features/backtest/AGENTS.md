@@ -12,6 +12,8 @@
 | `entities.py` | 纯数据结构：BacktestResult, BacktestDiagnostics, CommissionConfig, Exporter, Context |
 | `market_rules.py` | 市场规则注册：市场识别、手数、涨跌停、T+1 结算、停牌判定、FIFO 切片 |
 | `commission.py` | Shared commission compatibility entrypoint; re-exports `quant.runtime.execution_commission` so backtest and paper use one fee model |
+| `quant/runtime/execution_market_rules.py` | Shared implementation behind `market_rules.py`; backtest keeps compatibility imports only |
+| `quant/runtime/execution_simulator.py` | Shared pre-fill matching kernel used by backtest `order_executor.py` and infrastructure `PaperBroker` |
 | `order_executor.py` | 订单执行管线：成交价解析（MARKET/LIMIT）→手数→成交量→冲击成本→佣金→资金校验→成交 |
 | `dividend_processor.py` | 除权除息：现金/送股、CN 红利税 |
 | `portfolio_factory.py` | 组合/风控创建：单 Portfolio 和 SubPortfolio 模式 |
@@ -101,6 +103,7 @@ while current_date ≤ end:
 ## Known Pitfalls
 
 - Backtest signal generation after daily order-manager prep must call runtime `run_daily_snapshots()`; do not split D-close feed, portfolio close-price marking, and `after_trading` into a separate backtest-only path.
+- Backtest `execute_order()` must delegate deterministic pre-fill matching to `quant.runtime.execution_simulator`; keep Trade construction and Portfolio mutation in backtest, but do not fork price-limit, marketability, lot, volume, impact, cash, settlement, or commission decisions from PaperBroker.
 - CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. The default backtest/paper CN config is `{"type": "cn_realistic"}` with the realistic minimum; research scripts may explicitly override fund rates/minimums, but PaperBroker and backtest must consume the same shared runtime commission model for the same config.
 - BUY liquidity control is a global execution invariant: after market impact is applied, final BUY notional must still be `<= max_participation_rate * ADV value` (default research gate 5% ADV). Do not implement per-strategy sizing that assumes this cap can be bypassed.
 - `prev_close_bars` 在 Step ② 中必须在 `prev_bars` 更新之前捕获，否则涨跌停检查会用今日数据

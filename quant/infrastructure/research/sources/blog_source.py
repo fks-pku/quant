@@ -13,13 +13,14 @@ _DEFAULT_FEEDS = (
 
 
 class BlogSource(ResearchSource):
-    def __init__(self, feeds=None, timeout: float = 20.0):
+    def __init__(self, feeds=None, timeout: float = 20.0, source_name: str = "blog"):
         self._feeds = list(feeds or _DEFAULT_FEEDS)
         self._timeout = timeout
+        self._source_name = source_name
 
     @property
     def source_name(self) -> str:
-        return "blog"
+        return self._source_name
 
     def search(self, query: Dict[str, Any], max_results: int = 10) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
@@ -58,11 +59,11 @@ class BlogSource(ResearchSource):
             results.append({
                 "title": title,
                 "description": self._clean_html(description)[:800],
-                "source": "blog",
+                "source": self._source_name,
                 "source_url": link or feed_url,
                 "authors": self._find_text(item, ("author", "creator", "{http://www.w3.org/2005/Atom}author")),
                 "published_date": self._find_text(item, ("pubDate", "published", "{http://www.w3.org/2005/Atom}published")),
-                "metadata": {"feed_url": feed_url},
+                "metadata": {"feed_url": feed_url, "source_family": "blog"},
             })
             if len(results) >= max_results:
                 break
@@ -88,3 +89,48 @@ class BlogSource(ResearchSource):
     def _clean_html(self, value: str) -> str:
         import re
         return " ".join(re.sub(r"<[^>]+>", " ", value or "").split())
+
+
+class QuantocracySource(BlogSource):
+    def __init__(self, timeout: float = 20.0):
+        super().__init__(
+            feeds=("https://quantocracy.com/feed/",),
+            timeout=timeout,
+            source_name="quantocracy",
+        )
+
+
+class HudsonThamesSource(BlogSource):
+    def __init__(self, timeout: float = 20.0):
+        super().__init__(
+            feeds=("https://hudsonthames.org/feed/",),
+            timeout=timeout,
+            source_name="hudson_thames",
+        )
+
+
+class PortfolioOptimizerSource(BlogSource):
+    def __init__(self, timeout: float = 20.0):
+        super().__init__(
+            feeds=("https://portfoliooptimizer.io/feed.xml",),
+            timeout=timeout,
+            source_name="portfolio_optimizer",
+        )
+
+
+class AlphaArchitectSource(BlogSource):
+    def __init__(self, timeout: float = 20.0):
+        super().__init__(
+            feeds=("https://alphaarchitect.com/feed/",),
+            timeout=timeout,
+            source_name="alpha_architect",
+        )
+
+
+class QuantpediaSource(BlogSource):
+    def __init__(self, timeout: float = 20.0):
+        super().__init__(
+            feeds=("https://quantpedia.com/feed/",),
+            timeout=timeout,
+            source_name="quantpedia",
+        )

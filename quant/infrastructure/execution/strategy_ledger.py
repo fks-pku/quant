@@ -243,6 +243,7 @@ def sync_broker_trade_history(
 
     existing = _existing_fill_keys(recorder)
     filled_order_ids = _existing_fill_order_ids(recorder)
+    local_orders = _existing_order_rows(recorder)
     imported = 0
     skipped = 0
     unresolved = 0
@@ -256,7 +257,12 @@ def sync_broker_trade_history(
             skipped += 1
             continue
         order_id = trade["order_id"]
-        strategy_name = _strategy_for_recovered_order(tracker, order_id, fallback=trade.get("strategy_name"))
+        local_order = local_orders.get(order_id, {})
+        strategy_name = _strategy_for_recovered_order(
+            tracker,
+            order_id,
+            fallback=trade.get("strategy_name") or local_order.get("strategy_name"),
+        )
         if not strategy_name or strategy_name == "default":
             strategy_name = "default"
             unresolved += 1
@@ -297,7 +303,6 @@ def sync_broker_trade_history(
             orders = order_history_getter(start_date=start_date, end_date=end_date)
         except TypeError:
             orders = order_history_getter()
-        local_orders = _existing_order_rows(recorder)
         for raw in orders or []:
             order = _normalize_filled_order(raw, local_orders=local_orders, broker=broker)
             if not order:
@@ -370,14 +375,8 @@ def _existing_fill_keys(recorder: Any) -> set[Tuple[str, str, str, str, str, str
     if store is None:
         return set()
     keys = set()
-    all_signals = store.get_signals(strategy_name="default", mode=mode, limit=50000)
-    for signal in all_signals:
-        if signal.get("fill_quantity", 0) > 0:
-            keys.add(_fill_key(signal))
-    strategy_signals = store.get_recent_signals(mode=mode, days=365)
-    for signal in strategy_signals:
-        if signal.get("fill_quantity", 0) > 0:
-            keys.add(_fill_key(signal))
+    for fill in store.get_recent_fills(mode=mode, days=365):
+        keys.add(_fill_key(fill))
     return keys
 
 
@@ -387,10 +386,9 @@ def _existing_fill_order_ids(recorder: Any) -> set[str]:
     if store is None:
         return set()
     ids = set()
-    strategy_signals = store.get_recent_signals(mode=mode, days=365)
-    for signal in strategy_signals:
-        if signal.get("fill_quantity", 0) > 0:
-            order_id = str(signal.get("order_id") or "")
+    for fill in store.get_recent_fills(mode=mode, days=365):
+        for key in ("order_id", "broker_order_id"):
+            order_id = str(fill.get(key) or "")
             if order_id:
                 ids.add(order_id)
     return ids
@@ -402,13 +400,11 @@ def _existing_order_rows(recorder: Any) -> Dict[str, Dict[str, Any]]:
     if store is None:
         return {}
     rows: Dict[str, Dict[str, Any]] = {}
-    strategy_signals = store.get_recent_signals(mode=mode, days=365)
-    for signal in strategy_signals:
-        if signal.get("order_id"):
-            for key in ("order_id", "broker_order_id"):
-                order_id = str(signal.get(key) or "")
-                if order_id:
-                    rows[order_id] = _signal_to_order_jsonl(signal)
+    for order in store.get_recent_orders(mode=mode, days=365):
+        for key in ("order_id", "broker_order_id"):
+            order_id = str(order.get(key) or "")
+            if order_id:
+                rows[order_id] = _signal_to_order_jsonl(order)
     return rows
 
 
@@ -422,7 +418,7 @@ def _signal_to_order_jsonl(signal: Dict[str, Any]) -> Dict[str, Any]:
         "side": signal.get("side", ""),
         "quantity": signal.get("quantity", 0.0),
         "order_type": signal.get("order_type", ""),
-        "price": signal.get("reference_price", 0.0),
+        "price": signal.get("limit_price", signal.get("reference_price", 0.0)),
         "status": signal.get("status", ""),
         "reason": signal.get("failure_reason", ""),
     }
@@ -507,7 +503,7 @@ def _strategy_for_recovered_order(tracker: Any, order_id: str, *, fallback: Any 
     strategy_getter = getattr(tracker, "get_strategy_for_order", None)
     if callable(strategy_getter):
         strategy_name = strategy_getter(order_id)
-        if strategy_name:
+        if strategy_name and strategy_name != "default":
             return str(strategy_name)
     return str(fallback or "")
 

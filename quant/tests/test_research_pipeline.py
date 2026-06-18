@@ -3270,14 +3270,40 @@ def test_api_make_strategy_scout_uses_infrastructure_sources():
     from quant.api import research_bp as research_module
 
     scout = research_module._make_strategy_scout(
-        ResearchConfig(sources=["ssrn", "bigquant", "jointquant"], scout_config={"rank_results": True})
+        ResearchConfig(
+            sources=[
+                "ssrn",
+                "bigquant",
+                "jointquant",
+                "quantocracy",
+                "hudson_thames",
+                "portfolio_optimizer",
+                "alpha_architect",
+                "quantpedia",
+            ],
+            scout_config={"rank_results": True},
+        )
     )
 
     assert scout._source_hub is not None
-    assert scout._hub_sources == ["ssrn", "bigquant", "jointquant"]
+    assert scout._hub_sources == [
+        "ssrn",
+        "bigquant",
+        "jointquant",
+        "quantocracy",
+        "hudson_thames",
+        "portfolio_optimizer",
+        "alpha_architect",
+        "quantpedia",
+    ]
     assert scout._source_hub._sources["ssrn"].__class__.__name__ == "SSRNSource"
     assert scout._source_hub._sources["bigquant"].__class__.__name__ == "BigQuantSource"
     assert scout._source_hub._sources["jointquant"].__class__.__name__ == "JoinQuantSource"
+    assert scout._source_hub._sources["quantocracy"].__class__.__name__ == "QuantocracySource"
+    assert scout._source_hub._sources["hudson_thames"].__class__.__name__ == "HudsonThamesSource"
+    assert scout._source_hub._sources["portfolio_optimizer"].__class__.__name__ == "PortfolioOptimizerSource"
+    assert scout._source_hub._sources["alpha_architect"].__class__.__name__ == "AlphaArchitectSource"
+    assert scout._source_hub._sources["quantpedia"].__class__.__name__ == "QuantpediaSource"
 
 
 def test_api_load_research_config_reads_feature_yaml():
@@ -3285,12 +3311,26 @@ def test_api_load_research_config_reads_feature_yaml():
 
     cfg = research_module._load_research_config()
 
-    assert cfg.sources == ["ssrn", "bigquant", "jointquant"]
+    assert cfg.sources == [
+        "ssrn",
+        "bigquant",
+        "jointquant",
+        "quantocracy",
+        "hudson_thames",
+        "portfolio_optimizer",
+        "alpha_architect",
+        "quantpedia",
+    ]
     assert cfg.default_backtest_start == "2016-01-01"
     assert cfg.default_backtest_end == "2026-05-31"
     assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
     assert cfg.scout_config["query_plan"]["bigquant"][0]["query"] == "行业 轮动"
     assert cfg.scout_config["query_plan"]["jointquant"][0]["query"] == "小市值"
+    assert cfg.scout_config["query_plan"]["quantocracy"][0]["query"] == "daily factor momentum mean reversion"
+    assert cfg.scout_config["query_plan"]["hudson_thames"][0]["query"] == "daily mean reversion momentum portfolio optimization"
+    assert cfg.scout_config["query_plan"]["portfolio_optimizer"][0]["query"] == "portfolio optimization daily allocation risk"
+    assert cfg.scout_config["query_plan"]["alpha_architect"][0]["query"] == "factor investing momentum value quality"
+    assert cfg.scout_config["query_plan"]["quantpedia"][0]["query"] == "daily equity factor momentum seasonality"
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
     assert cfg.production_gate_config["max_drawdown_cagr_10_15"] == 0.25
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
@@ -4019,12 +4059,25 @@ def test_cli_make_strategy_scout_uses_configured_source_hub():
     from quant.scripts import run_research as cli
 
     cfg = ResearchConfig(
-        sources=["bigquant", "jointquant"],
+        sources=[
+            "bigquant",
+            "jointquant",
+            "quantocracy",
+            "hudson_thames",
+            "portfolio_optimizer",
+            "alpha_architect",
+            "quantpedia",
+        ],
         scout_config={
             "rank_results": True,
             "query_plan": {
                 "bigquant": [{"query": "行业 轮动"}],
                 "jointquant": [{"query": "小市值"}],
+                "quantocracy": [{"query": "daily factor"}],
+                "hudson_thames": [{"query": "mean reversion"}],
+                "portfolio_optimizer": [{"query": "portfolio optimization"}],
+                "alpha_architect": [{"query": "factor investing"}],
+                "quantpedia": [{"query": "momentum"}],
             },
         },
     )
@@ -4032,9 +4085,22 @@ def test_cli_make_strategy_scout_uses_configured_source_hub():
     scout = cli._create_configured_scout(cfg)
 
     assert scout._source_hub is not None
-    assert scout._hub_sources == ["bigquant", "jointquant"]
+    assert scout._hub_sources == [
+        "bigquant",
+        "jointquant",
+        "quantocracy",
+        "hudson_thames",
+        "portfolio_optimizer",
+        "alpha_architect",
+        "quantpedia",
+    ]
     assert scout._source_hub._sources["bigquant"].__class__.__name__ == "BigQuantSource"
     assert scout._source_hub._sources["jointquant"].__class__.__name__ == "JoinQuantSource"
+    assert scout._source_hub._sources["quantocracy"].__class__.__name__ == "QuantocracySource"
+    assert scout._source_hub._sources["hudson_thames"].__class__.__name__ == "HudsonThamesSource"
+    assert scout._source_hub._sources["portfolio_optimizer"].__class__.__name__ == "PortfolioOptimizerSource"
+    assert scout._source_hub._sources["alpha_architect"].__class__.__name__ == "AlphaArchitectSource"
+    assert scout._source_hub._sources["quantpedia"].__class__.__name__ == "QuantpediaSource"
 
 
 def test_cli_select_top_idea_ids_for_scout_formal_uses_discovery_score(tmp_path):

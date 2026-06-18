@@ -788,8 +788,8 @@
         const paperControl = strategy.paper.control || {};
         const liveStateClass = pillClass(liveControl.live_state);
         const paperStateClass = pillClass(paperControl.live_state);
-        const paper = strategy.paper.configured ? (paperControl.live_state || 'running') : 'no paper';
-        const live = strategy.live.configured ? (liveControl.live_state || 'running') : 'no live';
+        const paper = strategy.manual ? 'manual' : (strategy.paper.configured ? (paperControl.live_state || 'running') : 'no paper');
+        const live = strategy.manual ? 'manual' : (strategy.live.configured ? (liveControl.live_state || 'running') : 'no live');
         return `
           <button class="strategy-row ${active}" data-name="${escapeHtml(strategy.name)}">
             <div class="strategy-name">${escapeHtml(strategy.display_name)}</div>
@@ -815,14 +815,17 @@
         return;
       }
       document.getElementById('pageTitle').textContent = strategy.display_name;
-      const mode = state.mode === 'paper' ? 'paper' : 'live';
+      const mode = strategy.manual ? 'live' : (state.mode === 'paper' ? 'paper' : 'live');
+      const subtitle = strategy.manual
+        ? 'Manual broker holdings that are not attributed to managed strategies. This page is read-only.'
+        : `${modeLabel(mode)} strategy operations page. Controls, ledger, records, and performance use the same component contract in both modes.`;
       el.innerHTML = `
         <section class="stack">
           <section class="hero">
             <div class="hero-head">
               <div>
                 <h1>${escapeHtml(strategy.display_name)}</h1>
-                <p>${escapeHtml(modeLabel(mode))} strategy operations page. Controls, ledger, records, and performance use the same component contract in both modes.</p>
+                <p>${escapeHtml(subtitle)}</p>
               </div>
               <div class="hero-actions">
                 <span class="pill blue">Initial Cash ${initialCashText(modeInitialCash(strategy, mode))}</span>
@@ -840,14 +843,15 @@
     }
 
     function renderModeNavigation(strategy, activeMode) {
+      const modes = strategy.manual ? ['live'] : ['live', 'paper'];
       return `
         <div class="mode-tabs">
-          ${['live', 'paper'].map(mode => {
+          ${modes.map(mode => {
             const data = strategy[mode] || {};
             const control = data.control || {};
             const active = mode === activeMode ? 'active' : '';
-            const configured = data.configured ? 'configured' : 'not configured';
-            const status = data.configured ? (control.live_state || 'running') : 'off';
+            const configured = strategy.manual ? 'manual' : (data.configured ? 'configured' : 'not configured');
+            const status = strategy.manual ? 'manual' : (data.configured ? (control.live_state || 'running') : 'off');
             const initialCash = initialCashText(modeInitialCash(strategy, mode));
             return `
               <button class="mode-tab ${active}" data-mode-tab="${mode}" type="button">
@@ -863,6 +867,7 @@
     }
 
     function renderModePage(strategy, mode) {
+      if (strategy.manual) return renderManualModePage(strategy);
       const data = strategy[mode] || {};
       const records = data.records || {};
       const holdings = data.holdings || {};
@@ -1033,6 +1038,18 @@
       `;
     }
 
+    function renderManualModePage(strategy) {
+      const data = strategy.live || {};
+      const records = data.records || {};
+      const holdings = data.holdings || {};
+      const orders = records.orders || [];
+      return `
+        ${renderModeOverview(strategy, 'live')}
+        ${panel('Holdings', renderHoldingsTable(holdings.items || [], 'Manual'), `<span class="pill">${holdings.items?.length || 0} holdings / broker ${escapeHtml(holdings.broker_snapshot_status || '-')}</span>`)}
+        ${panel('Orders', renderOrdersTable(orders, 'Manual'), `<span class="pill">${todayRows(orders).length} today / ${orders.length} total</span>`)}
+      `;
+    }
+
     function renderRunDetailLine(key, detail) {
       const status = runStatusClass(detail.status);
       const symbol = detail.symbol || '-';
@@ -1166,9 +1183,10 @@
       const samples = Number(perf.slippage_sample_count || 0);
       const pendingCount = (data.records?.pending_orders || []).length;
       const initialCash = modeInitialCash(strategy, mode);
+      const modeState = strategy.manual ? 'manual' : (data.configured ? (control.live_state || 'running') : 'not configured');
       return `
         <div class="overview">
-          ${tile('Mode', modeLabel(mode), data.configured ? (control.live_state || 'running') : 'not configured')}
+          ${tile('Mode', modeLabel(mode), modeState)}
           ${tile('Initial Cash', initialCashText(initialCash), 'strategy allocation')}
           ${tile('Total NAV', money(perf.total_nav), navSourceText(perf, mode))}
           ${tile('Cash', money(perf.cash), `available ${modeLabel(mode)} cash`)}
@@ -1647,7 +1665,14 @@
     }
 
     function statusPill(value) {
-      return `<span class="pill ${pillClass(value)}">${escapeHtml(value || '')}</span>`;
+      return `<span class="pill ${pillClass(value)}">${escapeHtml(statusLabel(value))}</span>`;
+    }
+
+    function statusLabel(value) {
+      const text = String(value || '');
+      if (text === 'no_fill') return 'no fill';
+      if (text === 'pending_submit') return 'pending submit';
+      return text;
     }
 
     function money(value) {
@@ -1691,6 +1716,7 @@
     }
 
     function modeInitialCash(strategy, mode) {
+      if (strategy?.manual) return 0;
       const data = strategy?.[mode] || {};
       const explicit = Number(data.initial_cash);
       if (Number.isFinite(explicit) && explicit > 0) return explicit;

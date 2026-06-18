@@ -1,5 +1,6 @@
-"""Strategy dashboard state store — 5 DuckDB tables: states, positions, signals, capital_events, snapshots."""
+"""Strategy dashboard state store for control state, positions, ledgers, and snapshots."""
 
+import hashlib
 import json
 import threading
 from datetime import datetime
@@ -74,7 +75,51 @@ class StrategyStateStore:
                     failure_reason text not null default '',
                     submit_date text not null default '',
                     cost_bps double,
-                    record_date text not null
+                    record_date text not null,
+                    execution_reference_price double
+                )
+            """)
+            con.execute("""
+                create table if not exists strategy_orders (
+                    order_row_id text primary key,
+                    signal_id text not null default '',
+                    strategy_name text not null,
+                    mode text not null,
+                    timestamp text not null,
+                    signal_date text not null default '',
+                    submit_date text not null default '',
+                    record_date text not null,
+                    symbol text not null,
+                    side text not null,
+                    quantity double not null default 0.0,
+                    order_type text not null default '',
+                    limit_price double,
+                    status text not null default 'submitted',
+                    order_id text not null default '',
+                    broker_order_id text not null default '',
+                    failure_reason text not null default '',
+                    cost_bps double,
+                    execution_reference_price double
+                )
+            """)
+            con.execute("""
+                create table if not exists strategy_fills (
+                    fill_id text primary key,
+                    order_row_id text not null default '',
+                    signal_id text not null default '',
+                    strategy_name text not null,
+                    mode text not null,
+                    timestamp text not null,
+                    signal_date text not null default '',
+                    record_date text not null,
+                    symbol text not null,
+                    side text not null,
+                    quantity double not null default 0.0,
+                    price double not null default 0.0,
+                    commission double not null default 0.0,
+                    order_id text not null default '',
+                    broker_order_id text not null default '',
+                    source text not null default ''
                 )
             """)
             con.execute("""
@@ -82,6 +127,9 @@ class StrategyStateStore:
             """)
             con.execute("""
                 alter table strategy_signals add column if not exists cost_bps double
+            """)
+            con.execute("""
+                alter table strategy_signals add column if not exists execution_reference_price double
             """)
             con.execute("""
                 create index if not exists idx_states_strategy_mode
@@ -94,6 +142,26 @@ class StrategyStateStore:
             con.execute("""
                 create index if not exists idx_signals_record_date
                 on strategy_signals (record_date)
+            """)
+            con.execute("""
+                create index if not exists idx_orders_strategy_mode
+                on strategy_orders (strategy_name, mode, record_date)
+            """)
+            con.execute("""
+                create index if not exists idx_orders_order_id
+                on strategy_orders (mode, order_id, record_date)
+            """)
+            con.execute("""
+                create index if not exists idx_orders_broker_order_id
+                on strategy_orders (mode, broker_order_id, record_date)
+            """)
+            con.execute("""
+                create index if not exists idx_fills_strategy_mode
+                on strategy_fills (strategy_name, mode, record_date)
+            """)
+            con.execute("""
+                create index if not exists idx_fills_order_id
+                on strategy_fills (mode, order_id, record_date)
             """)
             con.execute("""
                 create table if not exists strategy_capital_events (
@@ -134,8 +202,81 @@ class StrategyStateStore:
                 create index if not exists idx_snapshots_strategy_mode_date
                 on strategy_snapshots (strategy_name, mode, snapshot_date)
             """)
+            self._backfill_split_ledgers(con)
         finally:
             con.close()
+
+    def _backfill_split_ledgers(self, con: Any) -> None:
+        con.execute("""
+            insert into strategy_orders
+            (order_row_id, signal_id, strategy_name, mode, timestamp, signal_date,
+             submit_date, record_date, symbol, side, quantity, order_type,
+             limit_price, status, order_id, broker_order_id, failure_reason,
+             cost_bps, execution_reference_price)
+            select
+                'ord:' || signal_id,
+                signal_id,
+                strategy_name,
+                mode,
+                timestamp,
+                signal_date,
+                submit_date,
+                coalesce(nullif(submit_date, ''), nullif(record_date, ''), signal_date),
+                symbol,
+                side,
+                quantity,
+                order_type,
+                reference_price,
+                status,
+                order_id,
+                broker_order_id,
+                failure_reason,
+                cost_bps,
+                execution_reference_price
+            from strategy_signals s
+            where (
+                coalesce(broker_order_id, '') <> ''
+                or lower(coalesce(status, '')) in (
+                    'submitted', 'filled', 'partial', 'cancelled', 'canceled',
+                    'rejected', 'failed', 'error', 'dropped', 'expired'
+                )
+            )
+            and not exists (
+                select 1 from strategy_orders o where o.order_row_id = 'ord:' || s.signal_id
+            )
+        """)
+        con.execute("""
+            insert into strategy_fills
+            (fill_id, order_row_id, signal_id, strategy_name, mode, timestamp,
+             signal_date, record_date, symbol, side, quantity, price, commission,
+             order_id, broker_order_id, source)
+            select
+                'fill:' || signal_id,
+                case
+                    when coalesce(order_id, '') <> '' or coalesce(broker_order_id, '') <> ''
+                    then 'ord:' || signal_id
+                    else ''
+                end,
+                signal_id,
+                strategy_name,
+                mode,
+                coalesce(nullif(fill_time, ''), timestamp),
+                signal_date,
+                coalesce(nullif(substr(fill_time, 1, 10), ''), nullif(submit_date, ''), nullif(record_date, ''), signal_date),
+                symbol,
+                side,
+                fill_quantity,
+                coalesce(fill_price, 0.0),
+                commission,
+                order_id,
+                broker_order_id,
+                'legacy_strategy_signals'
+            from strategy_signals s
+            where coalesce(fill_quantity, 0.0) > 0
+            and not exists (
+                select 1 from strategy_fills f where f.fill_id = 'fill:' || s.signal_id
+            )
+        """)
 
     def record_state(
         self,
@@ -264,15 +405,22 @@ class StrategyStateStore:
             return []
         con = self._connect(read_only=True)
         try:
-            rows = con.execute("""
-                select distinct strategy_name from (
-                    select strategy_name from strategy_states
-                    union
-                    select strategy_name from strategy_signals
-                    union
-                    select strategy_name from strategy_positions
-                ) order by strategy_name
-            """).fetchall()
+            tables = [
+                table for table in (
+                    "strategy_states",
+                    "strategy_signals",
+                    "strategy_orders",
+                    "strategy_fills",
+                    "strategy_positions",
+                )
+                if _table_exists(con, table)
+            ]
+            if not tables:
+                return []
+            union_sql = "\nunion\n".join(f"select strategy_name from {table}" for table in tables)
+            rows = con.execute(
+                f"select distinct strategy_name from ({union_sql}) order by strategy_name"
+            ).fetchall()
         finally:
             con.close()
         return [str(row[0]) for row in rows if row and row[0]]
@@ -495,17 +643,19 @@ class StrategyStateStore:
             "submit_date": str(signal.get("submit_date") or "")[:10],
             "cost_bps": _nullable_float(signal.get("cost_bps") or signal.get("execution_cost_bps")),
             "record_date": str(signal.get("record_date") or signal.get("signal_date") or "")[:10],
+            "execution_reference_price": _nullable_float(signal.get("execution_reference_price")),
         }
         with self._lock:
             con = self._connect()
             try:
+                row = self._reuse_open_pending_signal_identity(con, row)
                 con.execute(
                     """insert or replace into strategy_signals
                     (signal_id, strategy_name, mode, timestamp, signal_date, symbol, side,
                      quantity, order_type, reference_price, status, order_id, broker_order_id,
                      fill_quantity, fill_price, commission, fill_time, failure_reason,
-                     submit_date, cost_bps, record_date)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     submit_date, cost_bps, record_date, execution_reference_price)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     [
                         row["signal_id"], row["strategy_name"], row["mode"],
                         row["timestamp"], row["signal_date"], row["symbol"], row["side"],
@@ -514,11 +664,42 @@ class StrategyStateStore:
                         row["fill_quantity"], row["fill_price"], row["commission"],
                         row["fill_time"], row["failure_reason"],
                         row["submit_date"], row["cost_bps"], row["record_date"],
+                        row["execution_reference_price"],
                     ],
                 )
+                self._backfill_split_ledgers(con)
             finally:
                 con.close()
         return row
+
+    def _reuse_open_pending_signal_identity(self, con: Any, row: Dict[str, Any]) -> Dict[str, Any]:
+        status = str(row.get("status") or "").lower()
+        if status not in {"accepted", "pending", "queued", "pending_submit"}:
+            return row
+        if not str(row.get("submit_date") or ""):
+            return row
+        if str(row.get("broker_order_id") or "") or float(row.get("fill_quantity") or 0.0) > 0:
+            return row
+        existing = con.execute(
+            """select signal_id, order_id from strategy_signals
+            where mode = ? and strategy_name = ? and signal_date = ? and submit_date = ?
+              and symbol = ? and upper(side) = upper(?) and abs(quantity - ?) < 0.0000001
+              and upper(order_type) = upper(?)
+              and lower(status) in ('accepted', 'pending', 'queued', 'pending_submit')
+              and coalesce(broker_order_id, '') = '' and coalesce(fill_quantity, 0) <= 0
+            order by timestamp asc limit 1""",
+            [
+                row["mode"], row["strategy_name"], row["signal_date"], row["submit_date"],
+                row["symbol"], row["side"], float(row["quantity"]), row["order_type"],
+            ],
+        ).fetchone()
+        if existing is None:
+            return row
+        reused = dict(row)
+        reused["signal_id"] = str(existing[0] or row["signal_id"])
+        if existing[1]:
+            reused["order_id"] = str(existing[1])
+        return reused
 
     def get_signal(self, *, signal_id: str) -> Optional[Dict[str, Any]]:
         if not self.db_path.exists():
@@ -584,6 +765,370 @@ class StrategyStateStore:
             con.close()
         return [_row_to_dict(row, _signal_columns()) for row in rows]
 
+    def upsert_order(self, *, order: Dict[str, Any]) -> Dict[str, Any]:
+        self.ensure_schema()
+        record_date = str(
+            order.get("record_date")
+            or order.get("submit_date")
+            or order.get("execution_date")
+            or order.get("timestamp")
+            or datetime.now().isoformat()
+        )[:10]
+        row = {
+            "signal_id": str(order.get("signal_id") or ""),
+            "strategy_name": str(order.get("strategy_name") or ""),
+            "mode": _mode(order.get("mode") or "live"),
+            "timestamp": str(order.get("timestamp") or ""),
+            "signal_date": str(order.get("signal_date") or "")[:10],
+            "submit_date": str(order.get("submit_date") or order.get("execution_date") or record_date)[:10],
+            "record_date": record_date,
+            "symbol": str(order.get("symbol") or ""),
+            "side": str(order.get("side") or ""),
+            "quantity": float(order.get("quantity", 0.0)),
+            "order_type": str(order.get("order_type") or ""),
+            "limit_price": _nullable_float(
+                order.get("limit_price")
+                if "limit_price" in order
+                else order.get("price", order.get("reference_price"))
+            ),
+            "status": str(order.get("status") or "submitted"),
+            "order_id": str(order.get("order_id") or ""),
+            "broker_order_id": str(order.get("broker_order_id") or ""),
+            "failure_reason": str(order.get("failure_reason") or order.get("reason") or ""),
+            "cost_bps": _nullable_float(order.get("cost_bps") or order.get("execution_cost_bps")),
+            "execution_reference_price": _nullable_float(order.get("execution_reference_price")),
+        }
+        if not row["signal_date"] and row["signal_id"]:
+            signal = self.get_signal(signal_id=row["signal_id"])
+            row["signal_date"] = str((signal or {}).get("signal_date") or "")[:10]
+        row["order_row_id"] = str(order.get("order_row_id") or _make_order_row_id(row))
+        with self._lock:
+            con = self._connect()
+            try:
+                con.execute(
+                    """insert or replace into strategy_orders
+                    (order_row_id, signal_id, strategy_name, mode, timestamp,
+                     signal_date, submit_date, record_date, symbol, side, quantity,
+                     order_type, limit_price, status, order_id, broker_order_id,
+                     failure_reason, cost_bps, execution_reference_price)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        row["order_row_id"], row["signal_id"], row["strategy_name"], row["mode"],
+                        row["timestamp"], row["signal_date"], row["submit_date"], row["record_date"],
+                        row["symbol"], row["side"], row["quantity"], row["order_type"],
+                        row["limit_price"], row["status"], row["order_id"], row["broker_order_id"],
+                        row["failure_reason"], row["cost_bps"], row["execution_reference_price"],
+                    ],
+                )
+            finally:
+                con.close()
+        return row
+
+    def get_orders(
+        self,
+        *,
+        strategy_name: str,
+        mode: str,
+        limit: int = 200,
+        after_date: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_orders"):
+                return self._legacy_orders(con, strategy_name=strategy_name, mode=mode, limit=limit, after_date=after_date)
+            if after_date:
+                rows = con.execute(
+                    """select * from strategy_orders
+                    where strategy_name = ? and mode = ? and record_date >= ?
+                    order by timestamp desc limit ?""",
+                    [strategy_name, mode, str(after_date)[:10], limit],
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    """select * from strategy_orders
+                    where strategy_name = ? and mode = ?
+                    order by timestamp desc limit ?""",
+                    [strategy_name, mode, limit],
+                ).fetchall()
+        finally:
+            con.close()
+        return [_row_to_dict(row, _order_columns()) for row in reversed(rows)]
+
+    def get_recent_orders(self, *, mode: str, days: int = 30) -> List[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        mode = _mode(mode)
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_orders"):
+                return self._legacy_recent_orders(con, mode=mode, cutoff=cutoff)
+            rows = con.execute(
+                """select * from strategy_orders
+                where mode = ? and record_date >= ?
+                order by timestamp desc""",
+                [mode, cutoff],
+            ).fetchall()
+        finally:
+            con.close()
+        return [_row_to_dict(row, _order_columns()) for row in rows]
+
+    def get_order_by_order_id(
+        self,
+        *,
+        mode: str,
+        order_id: str,
+        record_date: str = "",
+        strategy_name: str = "",
+        symbol: str = "",
+        side: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        if not self.db_path.exists() or not order_id:
+            return None
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_orders"):
+                return None
+            filters = ["mode = ?", "(order_id = ? or broker_order_id = ?)"]
+            params: List[Any] = [mode, order_id, order_id]
+            if record_date:
+                filters.append("record_date = ?")
+                params.append(str(record_date)[:10])
+            if strategy_name:
+                filters.append("strategy_name = ?")
+                params.append(strategy_name)
+            if symbol:
+                filters.append("symbol = ?")
+                params.append(symbol)
+            if side:
+                filters.append("upper(side) = upper(?)")
+                params.append(side)
+            row = con.execute(
+                f"""select * from strategy_orders
+                where {' and '.join(filters)}
+                order by timestamp desc limit 1""",
+                params,
+            ).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            return None
+        return _row_to_dict(row, _order_columns())
+
+    def upsert_fill(self, *, fill: Dict[str, Any]) -> Dict[str, Any]:
+        self.ensure_schema()
+        record_date = str(fill.get("record_date") or fill.get("timestamp") or datetime.now().isoformat())[:10]
+        row = {
+            "order_row_id": str(fill.get("order_row_id") or ""),
+            "signal_id": str(fill.get("signal_id") or ""),
+            "strategy_name": str(fill.get("strategy_name") or ""),
+            "mode": _mode(fill.get("mode") or "live"),
+            "timestamp": str(fill.get("timestamp") or ""),
+            "signal_date": str(fill.get("signal_date") or "")[:10],
+            "record_date": record_date,
+            "symbol": str(fill.get("symbol") or ""),
+            "side": str(fill.get("side") or ""),
+            "quantity": float(fill.get("quantity", fill.get("fill_quantity", 0.0))),
+            "price": float(fill.get("price", fill.get("fill_price", 0.0))),
+            "commission": float(fill.get("commission", 0.0)),
+            "order_id": str(fill.get("order_id") or ""),
+            "broker_order_id": str(fill.get("broker_order_id") or ""),
+            "source": str(fill.get("source") or ""),
+        }
+        row["fill_id"] = str(fill.get("fill_id") or _make_fill_id(row))
+        with self._lock:
+            con = self._connect()
+            try:
+                con.execute(
+                    """insert or replace into strategy_fills
+                    (fill_id, order_row_id, signal_id, strategy_name, mode, timestamp,
+                     signal_date, record_date, symbol, side, quantity, price,
+                     commission, order_id, broker_order_id, source)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        row["fill_id"], row["order_row_id"], row["signal_id"],
+                        row["strategy_name"], row["mode"], row["timestamp"],
+                        row["signal_date"], row["record_date"], row["symbol"],
+                        row["side"], row["quantity"], row["price"], row["commission"],
+                        row["order_id"], row["broker_order_id"], row["source"],
+                    ],
+                )
+            finally:
+                con.close()
+        return row
+
+    def get_fills(
+        self,
+        *,
+        strategy_name: str,
+        mode: str,
+        limit: int = 200,
+        after_date: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_fills"):
+                return self._legacy_fills(con, strategy_name=strategy_name, mode=mode, limit=limit, after_date=after_date)
+            if after_date:
+                rows = con.execute(
+                    """select * from strategy_fills
+                    where strategy_name = ? and mode = ? and record_date >= ?
+                    order by timestamp desc limit ?""",
+                    [strategy_name, mode, str(after_date)[:10], limit],
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    """select * from strategy_fills
+                    where strategy_name = ? and mode = ?
+                    order by timestamp desc limit ?""",
+                    [strategy_name, mode, limit],
+                ).fetchall()
+        finally:
+            con.close()
+        return [_row_to_dict(row, _fill_columns()) for row in reversed(rows)]
+
+    def get_recent_fills(self, *, mode: str, days: int = 30) -> List[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        mode = _mode(mode)
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_fills"):
+                return self._legacy_recent_fills(con, mode=mode, cutoff=cutoff)
+            rows = con.execute(
+                """select * from strategy_fills
+                where mode = ? and record_date >= ?
+                order by timestamp desc""",
+                [mode, cutoff],
+            ).fetchall()
+        finally:
+            con.close()
+        return [_row_to_dict(row, _fill_columns()) for row in rows]
+
+    def get_signal_for_submission(
+        self,
+        *,
+        mode: str,
+        strategy_name: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        submit_date: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return None
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            row = con.execute(
+                """select * from strategy_signals
+                where mode = ? and strategy_name = ? and symbol = ?
+                  and upper(side) = upper(?) and abs(quantity - ?) < 0.01
+                  and submit_date = ?
+                order by timestamp desc limit 1""",
+                [
+                    mode, strategy_name, symbol, side,
+                    float(quantity), str(submit_date)[:10],
+                ],
+            ).fetchone()
+            if row is None:
+                row = con.execute(
+                    """select * from strategy_signals
+                    where mode = ? and strategy_name = ? and symbol = ?
+                      and upper(side) = upper(?) and abs(quantity - ?) < 0.01
+                      and signal_date = ?
+                    order by timestamp desc limit 1""",
+                    [
+                        mode, strategy_name, symbol, side,
+                        float(quantity), str(submit_date)[:10],
+                    ],
+                ).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            return None
+        return _row_to_dict(row, _signal_columns())
+
+    def _legacy_orders(
+        self,
+        con: Any,
+        *,
+        strategy_name: str,
+        mode: str,
+        limit: int,
+        after_date: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        if after_date:
+            rows = con.execute(
+                """select * from strategy_signals
+                where strategy_name = ? and mode = ? and record_date >= ?
+                  and order_id <> ''
+                order by timestamp desc limit ?""",
+                [strategy_name, mode, str(after_date)[:10], limit],
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """select * from strategy_signals
+                where strategy_name = ? and mode = ? and order_id <> ''
+                order by timestamp desc limit ?""",
+                [strategy_name, mode, limit],
+            ).fetchall()
+        return [_legacy_order_from_signal(_row_to_dict(row, _signal_columns())) for row in reversed(rows)]
+
+    def _legacy_recent_orders(self, con: Any, *, mode: str, cutoff: str) -> List[Dict[str, Any]]:
+        rows = con.execute(
+            """select * from strategy_signals
+            where mode = ? and record_date >= ? and order_id <> ''
+            order by timestamp desc""",
+            [mode, cutoff],
+        ).fetchall()
+        return [_legacy_order_from_signal(_row_to_dict(row, _signal_columns())) for row in rows]
+
+    def _legacy_fills(
+        self,
+        con: Any,
+        *,
+        strategy_name: str,
+        mode: str,
+        limit: int,
+        after_date: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        if after_date:
+            rows = con.execute(
+                """select * from strategy_signals
+                where strategy_name = ? and mode = ? and record_date >= ?
+                  and fill_quantity > 0
+                order by timestamp desc limit ?""",
+                [strategy_name, mode, str(after_date)[:10], limit],
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """select * from strategy_signals
+                where strategy_name = ? and mode = ? and fill_quantity > 0
+                order by timestamp desc limit ?""",
+                [strategy_name, mode, limit],
+            ).fetchall()
+        return [_legacy_fill_from_signal(_row_to_dict(row, _signal_columns())) for row in reversed(rows)]
+
+    def _legacy_recent_fills(self, con: Any, *, mode: str, cutoff: str) -> List[Dict[str, Any]]:
+        rows = con.execute(
+            """select * from strategy_signals
+            where mode = ? and record_date >= ? and fill_quantity > 0
+            order by timestamp desc""",
+            [mode, cutoff],
+        ).fetchall()
+        return [_legacy_fill_from_signal(_row_to_dict(row, _signal_columns())) for row in rows]
+
     def delete_signals_for_orders(
         self,
         *,
@@ -595,6 +1140,7 @@ class StrategyStateStore:
         if not ids or not self.db_path.exists():
             return 0
         mode = _mode(mode)
+        self.ensure_schema()
         placeholders = ", ".join("?" for _ in ids)
         where_date = " and signal_date = ?" if signal_date else ""
         params = [mode, *ids, *ids]
@@ -613,9 +1159,33 @@ class StrategyStateStore:
                     where mode = ? and (order_id in ({placeholders}) or broker_order_id in ({placeholders})){where_date}""",
                     params,
                 )
+                order_where_date = " and (signal_date = ? or record_date = ?)" if signal_date else ""
+                order_params = [mode, *ids, *ids]
+                if signal_date:
+                    order_params.extend([str(signal_date)[:10], str(signal_date)[:10]])
+                order_count = con.execute(
+                    f"""select count(*) from strategy_orders
+                    where mode = ? and (order_id in ({placeholders}) or broker_order_id in ({placeholders})){order_where_date}""",
+                    order_params,
+                ).fetchone()
+                con.execute(
+                    f"""delete from strategy_orders
+                    where mode = ? and (order_id in ({placeholders}) or broker_order_id in ({placeholders})){order_where_date}""",
+                    order_params,
+                )
+                fill_count = con.execute(
+                    f"""select count(*) from strategy_fills
+                    where mode = ? and (order_id in ({placeholders}) or broker_order_id in ({placeholders})){order_where_date}""",
+                    order_params,
+                ).fetchone()
+                con.execute(
+                    f"""delete from strategy_fills
+                    where mode = ? and (order_id in ({placeholders}) or broker_order_id in ({placeholders})){order_where_date}""",
+                    order_params,
+                )
             finally:
                 con.close()
-        return int((count or [0])[0])
+        return int((count or [0])[0]) + int((order_count or [0])[0]) + int((fill_count or [0])[0])
 
     def get_all_controls(self) -> List[Dict[str, Any]]:
         if not self.db_path.exists():
@@ -637,6 +1207,8 @@ class StrategyStateStore:
     def update_signal_order(
         self, *, signal_id: str, order_id: str, broker_order_id: str = "",
         status: str = "submitted", failure_reason: str = "",
+        execution_reference_price: Optional[float] = None,
+        cost_bps: Optional[float] = None,
     ) -> None:
         if not self.db_path.exists():
             return
@@ -646,9 +1218,16 @@ class StrategyStateStore:
             try:
                 con.execute(
                     """update strategy_signals
-                    set order_id = ?, broker_order_id = ?, status = ?, failure_reason = ?
+                    set order_id = ?, broker_order_id = ?, status = ?, failure_reason = ?,
+                        execution_reference_price = coalesce(?, execution_reference_price),
+                        cost_bps = coalesce(?, cost_bps)
                     where signal_id = ?""",
-                    [order_id, broker_order_id, status, failure_reason, signal_id],
+                    [
+                        order_id, broker_order_id, status, failure_reason,
+                        _nullable_float(execution_reference_price),
+                        _nullable_float(cost_bps),
+                        signal_id,
+                    ],
                 )
             finally:
                 con.close()
@@ -686,26 +1265,65 @@ class StrategyStateStore:
             finally:
                 con.close()
 
-    def get_signal_by_order(self, *, mode: str, order_id: str, signal_date: str = "") -> Optional[Dict[str, Any]]:
+    def get_signal_by_order(
+        self,
+        *,
+        mode: str,
+        order_id: str,
+        signal_date: str = "",
+        strategy_name: str = "",
+        symbol: str = "",
+        side: str = "",
+    ) -> Optional[Dict[str, Any]]:
         if not self.db_path.exists() or not order_id:
             return None
         mode = _mode(mode)
+        order = self.get_order_by_order_id(
+            mode=mode,
+            order_id=order_id,
+            record_date=signal_date,
+            strategy_name=strategy_name,
+            symbol=symbol,
+            side=side,
+        )
+        if order and order.get("signal_id"):
+            signal = self.get_signal(signal_id=str(order.get("signal_id") or ""))
+            if signal:
+                merged = dict(signal)
+                merged["order_id"] = order.get("order_id", "")
+                merged["broker_order_id"] = order.get("broker_order_id", "")
+                merged["status"] = order.get("status", merged.get("status", ""))
+                merged["failure_reason"] = order.get("failure_reason", "")
+                merged["submit_date"] = order.get("submit_date", merged.get("submit_date", ""))
+                merged["record_date"] = order.get("record_date", merged.get("record_date", ""))
+                merged["execution_reference_price"] = order.get(
+                    "execution_reference_price",
+                    merged.get("execution_reference_price"),
+                )
+                return merged
+        filters = ["mode = ?", "order_id = ?"]
+        params: List[Any] = [mode, order_id]
+        if signal_date:
+            filters.append("signal_date = ?")
+            params.append(str(signal_date)[:10])
+        if strategy_name:
+            filters.append("strategy_name = ?")
+            params.append(strategy_name)
+        if symbol:
+            filters.append("symbol = ?")
+            params.append(symbol)
+        if side:
+            filters.append("upper(side) = upper(?)")
+            params.append(side)
+        where_clause = " and ".join(filters)
         con = self._connect(read_only=True)
         try:
-            if signal_date:
-                row = con.execute(
-                    """select * from strategy_signals
-                    where mode = ? and order_id = ? and signal_date = ?
-                    order by timestamp desc limit 1""",
-                    [mode, order_id, str(signal_date)[:10]],
-                ).fetchone()
-            else:
-                row = con.execute(
-                    """select * from strategy_signals
-                    where mode = ? and order_id = ?
-                    order by timestamp desc limit 1""",
-                    [mode, order_id],
-                ).fetchone()
+            row = con.execute(
+                f"""select * from strategy_signals
+                where {where_clause}
+                order by timestamp desc limit 1""",
+                params,
+            ).fetchone()
         finally:
             con.close()
         if row is None:
@@ -1054,8 +1672,116 @@ def _signal_columns() -> List[str]:
         "symbol", "side", "quantity", "order_type", "reference_price",
         "status", "order_id", "broker_order_id", "fill_quantity",
         "fill_price", "commission", "fill_time", "failure_reason",
-        "submit_date", "cost_bps", "record_date",
+        "submit_date", "cost_bps", "record_date", "execution_reference_price",
     ]
+
+
+def _order_columns() -> List[str]:
+    return [
+        "order_row_id", "signal_id", "strategy_name", "mode", "timestamp",
+        "signal_date", "submit_date", "record_date", "symbol", "side",
+        "quantity", "order_type", "limit_price", "status", "order_id",
+        "broker_order_id", "failure_reason", "cost_bps",
+        "execution_reference_price",
+    ]
+
+
+def _fill_columns() -> List[str]:
+    return [
+        "fill_id", "order_row_id", "signal_id", "strategy_name", "mode",
+        "timestamp", "signal_date", "record_date", "symbol", "side",
+        "quantity", "price", "commission", "order_id", "broker_order_id",
+        "source",
+    ]
+
+
+def _table_exists(con: Any, table_name: str) -> bool:
+    row = con.execute(
+        "select count(*) from information_schema.tables where table_name = ?",
+        [table_name],
+    ).fetchone()
+    return bool(row and int(row[0] or 0) > 0)
+
+
+def _make_order_row_id(row: Dict[str, Any]) -> str:
+    parts = [
+        row.get("strategy_name", ""),
+        row.get("mode", ""),
+        row.get("signal_id", ""),
+        row.get("record_date", ""),
+        row.get("symbol", ""),
+        row.get("side", ""),
+        row.get("quantity", ""),
+        row.get("order_id", ""),
+        row.get("broker_order_id", ""),
+        row.get("timestamp", ""),
+    ]
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True)
+    return f"ord:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _make_fill_id(row: Dict[str, Any]) -> str:
+    parts = [
+        row.get("strategy_name", ""),
+        row.get("mode", ""),
+        row.get("order_row_id", ""),
+        row.get("signal_id", ""),
+        row.get("record_date", ""),
+        row.get("symbol", ""),
+        row.get("side", ""),
+        row.get("quantity", ""),
+        row.get("price", ""),
+        row.get("order_id", ""),
+        row.get("broker_order_id", ""),
+        row.get("timestamp", ""),
+    ]
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True)
+    return f"fill:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _legacy_order_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "order_row_id": f"ord:{signal.get('signal_id', '')}",
+        "signal_id": signal.get("signal_id", ""),
+        "strategy_name": signal.get("strategy_name", ""),
+        "mode": signal.get("mode", ""),
+        "timestamp": signal.get("timestamp", ""),
+        "signal_date": signal.get("signal_date", ""),
+        "submit_date": signal.get("submit_date", ""),
+        "record_date": signal.get("submit_date") or signal.get("record_date") or signal.get("signal_date", ""),
+        "symbol": signal.get("symbol", ""),
+        "side": signal.get("side", ""),
+        "quantity": signal.get("quantity", 0.0),
+        "order_type": signal.get("order_type", ""),
+        "limit_price": signal.get("reference_price"),
+        "status": signal.get("status", ""),
+        "order_id": signal.get("order_id", ""),
+        "broker_order_id": signal.get("broker_order_id", ""),
+        "failure_reason": signal.get("failure_reason", ""),
+        "cost_bps": signal.get("cost_bps"),
+        "execution_reference_price": signal.get("execution_reference_price"),
+    }
+
+
+def _legacy_fill_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "fill_id": f"fill:{signal.get('signal_id', '')}",
+        "order_row_id": f"ord:{signal.get('signal_id', '')}" if signal.get("order_id") else "",
+        "signal_id": signal.get("signal_id", ""),
+        "strategy_name": signal.get("strategy_name", ""),
+        "mode": signal.get("mode", ""),
+        "timestamp": signal.get("fill_time") or signal.get("timestamp", ""),
+        "signal_date": signal.get("signal_date", ""),
+        "record_date": str(signal.get("fill_time") or signal.get("submit_date") or signal.get("record_date") or signal.get("signal_date", ""))[:10],
+        "symbol": signal.get("symbol", ""),
+        "side": signal.get("side", ""),
+        "quantity": signal.get("fill_quantity", 0.0),
+        "price": signal.get("fill_price", 0.0),
+        "commission": signal.get("commission", 0.0),
+        "order_id": signal.get("order_id", ""),
+        "broker_order_id": signal.get("broker_order_id", ""),
+        "source": "legacy_strategy_signals",
+    }
 
 
 def _nullable_float(value: Any) -> Optional[float]:

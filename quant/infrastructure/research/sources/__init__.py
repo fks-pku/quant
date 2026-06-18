@@ -6,7 +6,14 @@ from quant.infrastructure.research.sources.ashare_public_forum_source import (
 )
 from quant.infrastructure.research.sources.nber_source import NBERSource
 from quant.infrastructure.research.sources.ssrn_source import SSRNSource
-from quant.infrastructure.research.sources.blog_source import BlogSource
+from quant.infrastructure.research.sources.blog_source import (
+    AlphaArchitectSource,
+    BlogSource,
+    HudsonThamesSource,
+    PortfolioOptimizerSource,
+    QuantocracySource,
+    QuantpediaSource,
+)
 
 __all__ = [
     "ArxivSource",
@@ -16,4 +23,9 @@ __all__ = [
     "NBERSource",
     "SSRNSource",
     "BlogSource",
+    "QuantocracySource",
+    "HudsonThamesSource",
+    "PortfolioOptimizerSource",
+    "AlphaArchitectSource",
+    "QuantpediaSource",
 ]

@@ -45,9 +45,66 @@ def test_trading_invariants_describe_strategy_dashboard_lifecycle():
         "Live and paper share the signal-generation contract, diverge only at execution adapters",
         "pause/stop/liquidating states must block D+1 execution for that mode",
         "record_pending_only",
+        "idempotent by DB economic signature",
+        "must reuse the existing pending order id",
         "must not require D+1 bars",
         "must not call broker `submit_order`",
+        "business stage, not wall-clock run date",
+        "execution_date market-open timestamp",
+        "manual replay run after midnight",
+        "QMT real-open duplicate-submit guards",
+        "A prior execution row whose signal_date equals the current D-close signal_date must not block",
+        "`strategy_signals` is strategy intent only",
+        "`strategy_orders` is submit attempts only",
+        "`strategy_fills` is fill facts only",
+        "must not require order_id, broker_order_id, fill_quantity, fill_price, commission, or fill_time to be written back into `strategy_signals`",
+        "must not open a new QMT/xtquant connection on every dashboard refresh",
+        "below the configured free-space guard",
         "legacy JSONL is migration input only",
+        "actual simulated/broker fill price",
+        "marketability is checked against open/close but fill_price is the submitted limit price",
+        "quant.runtime.execution_simulator",
+    ]
+
+    missing = [fragment for fragment in expected_fragments if fragment not in text]
+
+    assert missing == []
+
+
+def test_trading_invariants_describe_live_backtest_equivalence_boundary():
+    text = (REPO_ROOT / "quant/features/trading/docs/trading-invariants.md").read_text(
+        encoding="utf-8"
+    )
+    expected_fragments = [
+        "### Live/Backtest Equivalence",
+        "Live and backtest must share strategy signal generation",
+        "Allowed live-only differences are DB-backed state bridging and QMT real order submission/fill reports",
+        "QMT fill price, quantity, commission, rejection, partial fill, and broker order IDs are external facts",
+        "No other strategy lifecycle, risk gate, signal filtering, cost-budget, cash attribution, or dashboard status semantics may diverge",
+    ]
+
+    missing = [fragment for fragment in expected_fragments if fragment not in text]
+
+    assert missing == []
+
+
+def test_trading_invariants_describe_dashboard_read_model_boundary():
+    text = (REPO_ROOT / "quant/features/trading/docs/trading-invariants.md").read_text(
+        encoding="utf-8"
+    )
+    expected_fragments = [
+        "### Strategy Dashboard Read Model",
+        "separate fact collection from read-model projection",
+        "quant.features.trading.dashboard_projection",
+        "projected submit dates, signal close prices, and order-date open prices",
+        "visible-signal, pending-action",
+        "order-display, fill-display, commission, slippage",
+        "display_status=no_fill",
+        "Projection functions are pure",
+        "pending-action, visible-signal, order-display, fill-display, commission, and slippage DTOs",
+        "without reading files, connecting brokers, mutating DB state, or importing infrastructure adapters",
+        "current execution state separate from EOD equity curve",
+        "T13-32",
     ]
 
     missing = [fragment for fragment in expected_fragments if fragment not in text]

@@ -2,11 +2,16 @@
 """Local strategy operations dashboard server."""
 
 import argparse
+import copy
 import math
 import re
+import shutil
+import subprocess
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from threading import RLock
 from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
@@ -17,14 +22,14 @@ sys.path.insert(0, str(ROOT))
 DISPLAY_NAMES = {
     "ashare_gold_equity_barbell_timing": "A股黄金权益杠铃择时",
     "xueqiu_small_cap_financial_filter": "雪球小市值财务过滤",
-    "default": "未归属持仓",
+    "default": "Default / Manual Orders",
 }
-RUN_STATUS_STEPS = [
-    {"key": "DATA_READY", "label": "数据OK", "expected": "Market data covers the trading date."},
-    {"key": "SIGNAL_READY", "label": "策略信号", "expected": "Strategy emits zero or more signal decisions."},
-    {"key": "ORDER_SUBMITTED", "label": "订单提交", "expected": "For due signals, submitted and filled quantities are reconciled."},
-]
 DASHBOARD_HTML = ROOT / ".codex" / "strategy_dashboard.html"
+BROKER_POSITION_SNAPSHOT_TTL_SECONDS = 1800
+BROKER_POSITION_SNAPSHOT_FAILURE_TTL_SECONDS = 300
+BROKER_POSITION_SNAPSHOT_MIN_FREE_BYTES = 1024 * 1024 * 1024
+_BROKER_POSITION_SNAPSHOT_CACHE: Dict[str, Dict[str, Any]] = {}
+_BROKER_POSITION_SNAPSHOT_CACHE_LOCK = RLock()
 
 from quant.infrastructure.execution.live_recorder import LiveTradingRecorder
 from quant.infrastructure.execution.strategy_controls import (
@@ -44,7 +49,17 @@ from quant.infrastructure.execution.strategy_ledger import (
     create_liquidation_plan,
     read_liquidation_plan,
 )
-from quant.runtime.execution_commission import total_commission
+from quant.features.trading.dashboard_projection import (
+    RUN_STATUS_STEPS,
+    project_execution_summary,
+    project_fill_rows,
+    project_holdings,
+    project_order_rows,
+    project_performance,
+    project_pending_orders,
+    project_run_status_bar,
+    project_signal_rows,
+)
 
 
 def create_app(root: Path = ROOT) -> Flask:
@@ -178,6 +193,7 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
 
     all_positions_grouped = state_store.get_all_positions_grouped()
     symbol_set = state_store.get_all_position_symbols()
+    broker_position_snapshot = _live_broker_position_snapshot(root)
     db_strategy_names = set(state_store.get_all_known_strategy_names())
     strategy_names = _discover_strategy_names(
         live_config=live_config,
@@ -187,6 +203,11 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
     benchmark = _benchmark_curve(root)
     all_position_symbols = _position_symbols(all_positions_grouped)
     all_position_symbols.update(symbol_set)
+    all_position_symbols.update(
+        str(item.get("symbol") or "")
+        for item in broker_position_snapshot.get("positions", [])
+        if item.get("symbol")
+    )
     latest_prices = _latest_close_prices(root, all_position_symbols)
     latest_market_data_date = _latest_market_data_date(root) or _latest_price_date(latest_prices)
     if latest_market_data_date and "__market__" not in latest_prices:
@@ -196,16 +217,24 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             "source": "market_calendar",
         }
     default_strategy_cash = _default_strategy_initial_cash(root)
+    manual_default_holdings = _manual_default_holdings(
+        broker_position_snapshot,
+        all_positions_grouped,
+        latest_prices,
+    )
+    if manual_default_holdings.get("items") and "default" not in strategy_names:
+        strategy_names.append("default")
 
     strategies = []
     for strategy_name in strategy_names:
-        live_configured = bool(live_config.get(strategy_name, {}).get("enabled", False))
-        paper_configured = bool(paper_config.get(strategy_name, {}).get("enabled", False))
-        live_initial_cash = _configured_strategy_initial_cash(
+        manual_default = strategy_name == "default"
+        live_configured = bool(live_config.get(strategy_name, {}).get("enabled", False)) and not manual_default
+        paper_configured = bool(paper_config.get(strategy_name, {}).get("enabled", False)) and not manual_default
+        live_initial_cash = 0.0 if manual_default else _configured_strategy_initial_cash(
             live_config.get(strategy_name),
             default_cash=default_strategy_cash,
         )
-        paper_initial_cash = _configured_strategy_initial_cash(
+        paper_initial_cash = 0.0 if manual_default else _configured_strategy_initial_cash(
             paper_config.get(strategy_name),
             default_cash=default_strategy_cash,
         )
@@ -253,28 +282,42 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             mode="paper",
             store=state_store,
         )
-        live_holdings = _holdings_for_strategy(
-            all_positions_grouped,
-            strategy_name,
-            "live",
-            live_records["fills"],
-            latest_prices,
-            live_records["orders"],
-            live_initial_cash,
-            state_store.get_capital_events(strategy_name=strategy_name, mode="live"),
+        live_holdings = (
+            manual_default_holdings
+            if manual_default and manual_default_holdings.get("items")
+            else project_holdings(
+                stored_positions=all_positions_grouped.get(strategy_name, {}).get("live", {}) or {},
+                fills=live_records["fills"],
+                latest_prices=latest_prices,
+                order_rows=live_records["orders"],
+                initial_cash=live_initial_cash,
+                capital_events=state_store.get_capital_events(strategy_name=strategy_name, mode="live"),
+            )
         )
-        paper_holdings = _holdings_for_strategy(
-            all_positions_grouped,
-            strategy_name,
-            "paper",
-            paper_records["fills"],
-            latest_prices,
-            paper_records["orders"],
-            paper_initial_cash,
-            state_store.get_capital_events(strategy_name=strategy_name, mode="paper"),
+        paper_holdings = project_holdings(
+            stored_positions=all_positions_grouped.get(strategy_name, {}).get("paper", {}) or {},
+            fills=paper_records["fills"],
+            latest_prices=latest_prices,
+            order_rows=paper_records["orders"],
+            initial_cash=paper_initial_cash,
+            capital_events=state_store.get_capital_events(strategy_name=strategy_name, mode="paper"),
         )
-        live_performance = _performance(root, live_records_dir, strategy_name, live_holdings, live_records)
-        paper_performance = _performance(root, paper_records_dir, strategy_name, paper_holdings, paper_records)
+        live_performance = _performance(
+            root,
+            live_records_dir,
+            strategy_name,
+            live_holdings,
+            live_records,
+            latest_market_data_date=latest_market_data_date,
+        )
+        paper_performance = _performance(
+            root,
+            paper_records_dir,
+            strategy_name,
+            paper_holdings,
+            paper_records,
+            latest_market_data_date=latest_market_data_date,
+        )
         _apply_execution_summary(live_performance, live_records["execution_summary"])
         _apply_execution_summary(paper_performance, paper_records["execution_summary"])
         report_path = _report_path(root, strategy_name)
@@ -311,7 +354,6 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             configured=live_configured,
             control=live_control,
             records=live_records,
-            positions_data=live_positions_data,
             latest_market_data_date=latest_market_data_date,
         )
         paper_run_status_bar = _run_status_bar(
@@ -319,19 +361,19 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
             configured=paper_configured,
             control=paper_control,
             records=paper_records,
-            positions_data=paper_positions_data,
             latest_market_data_date=latest_market_data_date,
         )
 
         strategies.append({
             "name": strategy_name,
             "display_name": DISPLAY_NAMES.get(strategy_name, _humanize_strategy_name(strategy_name)),
+            "manual": manual_default,
             "report_url": f"/reports/{strategy_name}" if report_path else None,
             "report_path": str(report_path) if report_path else None,
             "initial_cash": {
                 "live": live_initial_cash,
                 "paper": paper_initial_cash,
-                "default": default_strategy_cash,
+                "default": 0.0 if manual_default else default_strategy_cash,
             },
             "live": {
                 "configured": live_configured,
@@ -399,6 +441,417 @@ def _freshness_status(
         "latest_market_data_date": latest_market_data_date,
         "market_data_stale": _date_before(latest_market_data_date, expected),
     }
+
+
+def _live_broker_position_snapshot(root: Path) -> Dict[str, Any]:
+    cfg_path = root / "quant" / "infrastructure" / "var" / "qmt_live_config" / "brokers.yaml"
+    cfg = (_read_yaml(cfg_path).get("qmt", {}) or {})
+    if not isinstance(cfg, dict) or not (cfg.get("userdata_mini_path") or cfg.get("mini_qmt_path")):
+        return {
+            "status": "unconfigured",
+            "source": "qmt",
+            "positions": [],
+            "generated_at": datetime.now().isoformat(),
+            "error": "qmt broker config is missing",
+        }
+    cache_key = _broker_position_snapshot_cache_key(root, cfg_path)
+    cached = _broker_position_snapshot_from_cache(cache_key)
+    if cached is not None:
+        return cached
+    low_disk_error = _qmt_userdata_low_disk_error(cfg)
+    if low_disk_error:
+        payload = {
+            "status": "unavailable",
+            "source": "qmt",
+            "positions": [],
+            "generated_at": datetime.now().isoformat(),
+            "error": low_disk_error,
+        }
+        _store_broker_position_snapshot_cache(cache_key, payload)
+        return copy.deepcopy(payload)
+    payload = _live_broker_position_snapshot_uncached(root, cfg)
+    _store_broker_position_snapshot_cache(cache_key, payload)
+    return copy.deepcopy(payload)
+
+
+def _live_broker_position_snapshot_uncached(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    subprocess_snapshot = _live_broker_position_snapshot_subprocess(root)
+    if subprocess_snapshot is not None:
+        return subprocess_snapshot
+    broker = None
+    try:
+        from quant.infrastructure.execution.brokers.qmt import QMTBroker
+
+        broker = QMTBroker(
+            host=cfg.get("host", "127.0.0.1"),
+            port=cfg.get("port", 58610),
+            account=cfg.get("account", ""),
+            account_type=cfg.get("account_type", "STOCK"),
+            password=cfg.get("password", ""),
+            trade_mode=cfg.get("trade_mode", "SIMULATE"),
+            userdata_mini_path=cfg.get("userdata_mini_path", ""),
+            xtquant_path=cfg.get("xtquant_path", ""),
+            mini_qmt_path=cfg.get("mini_qmt_path", ""),
+        )
+        broker.connect()
+        positions = [_broker_position_row(position) for position in broker.get_positions()]
+        positions = [position for position in positions if position.get("symbol") and _float(position.get("quantity")) > 0]
+        return {
+            "status": "ok",
+            "source": "qmt",
+            "positions": positions,
+            "generated_at": datetime.now().isoformat(),
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "qmt",
+            "positions": [],
+            "generated_at": datetime.now().isoformat(),
+            "error": str(exc),
+        }
+    finally:
+        if broker is not None:
+            try:
+                broker.disconnect()
+            except Exception:
+                pass
+
+
+def _broker_position_snapshot_cache_key(root: Path, cfg_path: Path) -> str:
+    try:
+        root_key = str(root.resolve())
+    except Exception:
+        root_key = str(root)
+    try:
+        stat = cfg_path.stat()
+        cfg_sig = f"{stat.st_mtime_ns}:{stat.st_size}"
+    except OSError:
+        cfg_sig = "missing"
+    return f"{root_key}|{cfg_sig}"
+
+
+def _broker_position_snapshot_from_cache(cache_key: str) -> Optional[Dict[str, Any]]:
+    now = time.monotonic()
+    with _BROKER_POSITION_SNAPSHOT_CACHE_LOCK:
+        entry = _BROKER_POSITION_SNAPSHOT_CACHE.get(cache_key)
+        if not entry:
+            return None
+        payload = entry.get("payload") or {}
+        status = str(payload.get("status") or "")
+        ttl = (
+            BROKER_POSITION_SNAPSHOT_TTL_SECONDS
+            if status == "ok"
+            else BROKER_POSITION_SNAPSHOT_FAILURE_TTL_SECONDS
+        )
+        if now - _float(entry.get("cached_monotonic")) > ttl:
+            _BROKER_POSITION_SNAPSHOT_CACHE.pop(cache_key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+def _store_broker_position_snapshot_cache(cache_key: str, payload: Dict[str, Any]) -> None:
+    with _BROKER_POSITION_SNAPSHOT_CACHE_LOCK:
+        _BROKER_POSITION_SNAPSHOT_CACHE[cache_key] = {
+            "cached_monotonic": time.monotonic(),
+            "payload": copy.deepcopy(payload),
+        }
+
+
+def _qmt_userdata_low_disk_error(cfg: Dict[str, Any]) -> str:
+    anchor = _existing_disk_usage_anchor(
+        str(cfg.get("userdata_mini_path") or cfg.get("mini_qmt_path") or "")
+    )
+    if anchor is None:
+        return ""
+    try:
+        usage = shutil.disk_usage(str(anchor))
+    except OSError:
+        return ""
+    if usage.free >= BROKER_POSITION_SNAPSHOT_MIN_FREE_BYTES:
+        return ""
+    free_mb = usage.free / (1024 * 1024)
+    min_mb = BROKER_POSITION_SNAPSHOT_MIN_FREE_BYTES / (1024 * 1024)
+    return f"qmt broker snapshot skipped: free disk {free_mb:.1f} MB below {min_mb:.0f} MB guard"
+
+
+def _existing_disk_usage_anchor(path_text: str) -> Optional[Path]:
+    if not path_text:
+        return None
+    path = Path(path_text)
+    for candidate in [path, *path.parents]:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _live_broker_position_snapshot_subprocess(root: Path) -> Optional[Dict[str, Any]]:
+    python_exe = root / ".venv-qmt" / "Scripts" / "python.exe"
+    if not python_exe.exists():
+        return None
+    marker = "__QMT_POSITION_SNAPSHOT__"
+    script = r"""
+from pathlib import Path
+import json
+import sys
+root = Path.cwd()
+sys.path.insert(0, str(root))
+from quant.infrastructure.execution.brokers.qmt import QMTBroker
+from quant.shared.utils.config_loader import ConfigLoader
+cfg = ConfigLoader(str(root / "quant" / "infrastructure" / "var" / "qmt_live_config")).load("brokers.yaml").get("qmt", {})
+broker = QMTBroker(
+    host=cfg.get("host", "127.0.0.1"),
+    port=cfg.get("port", 58610),
+    account=cfg.get("account", ""),
+    account_type=cfg.get("account_type", "STOCK"),
+    password=cfg.get("password", ""),
+    trade_mode=cfg.get("trade_mode", "SIMULATE"),
+    userdata_mini_path=cfg.get("userdata_mini_path", ""),
+    xtquant_path=cfg.get("xtquant_path", ""),
+    mini_qmt_path=cfg.get("mini_qmt_path", ""),
+)
+try:
+    broker.connect()
+    rows = []
+    for position in broker.get_positions():
+        rows.append({
+            "symbol": getattr(position, "symbol", ""),
+            "quantity": float(getattr(position, "quantity", 0.0) or 0.0),
+            "avg_cost": float(getattr(position, "avg_cost", 0.0) or 0.0),
+            "market_value": float(getattr(position, "market_value", 0.0) or 0.0),
+            "unrealized_pnl": float(getattr(position, "unrealized_pnl", 0.0) or 0.0),
+        })
+    payload = {"ok": True, "positions": rows}
+except Exception as exc:
+    payload = {"ok": False, "error": str(exc), "positions": []}
+finally:
+    try:
+        broker.disconnect()
+    except Exception:
+        pass
+print("__QMT_POSITION_SNAPSHOT__" + json.dumps(payload, ensure_ascii=False))
+"""
+    try:
+        completed = subprocess.run(
+            [str(python_exe), "-c", script],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "qmt",
+            "positions": [],
+            "generated_at": datetime.now().isoformat(),
+            "error": str(exc),
+        }
+    output = "\n".join([completed.stdout or "", completed.stderr or ""])
+    payload_line = ""
+    for line in output.splitlines():
+        if marker in line:
+            payload_line = line.split(marker, 1)[1]
+    if not payload_line:
+        error = (completed.stderr or completed.stdout or "qmt snapshot subprocess produced no json").strip()
+        return {
+            "status": "unavailable",
+            "source": "qmt",
+            "positions": [],
+            "generated_at": datetime.now().isoformat(),
+            "error": error[-240:],
+        }
+    try:
+        payload = yaml.safe_load(payload_line) or {}
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "qmt",
+            "positions": [],
+            "generated_at": datetime.now().isoformat(),
+            "error": f"qmt snapshot json parse failed: {exc}",
+        }
+    positions = [_broker_position_row(position) for position in payload.get("positions", []) or []]
+    positions = [position for position in positions if position.get("symbol") and _float(position.get("quantity")) > 0]
+    return {
+        "status": "ok" if payload.get("ok") else "unavailable",
+        "source": "qmt",
+        "positions": positions if payload.get("ok") else [],
+        "generated_at": datetime.now().isoformat(),
+        "error": "" if payload.get("ok") else str(payload.get("error") or "qmt snapshot failed"),
+    }
+
+
+def _broker_position_row(position: Any) -> Dict[str, Any]:
+    if isinstance(position, dict):
+        getter = position.get
+    else:
+        getter = lambda key, default=None: getattr(position, key, default)
+    symbol = _base_symbol(str(getter("symbol", "")))
+    quantity = _float(getter("quantity", getter("qty", 0.0)))
+    avg_cost = _float(getter("avg_cost", 0.0))
+    market_value = _float(getter("market_value", 0.0))
+    return {
+        "symbol": symbol,
+        "quantity": quantity,
+        "avg_cost": avg_cost,
+        "market_value": market_value,
+        "unrealized_pnl": _float(getter("unrealized_pnl", 0.0)),
+    }
+
+
+def _unassigned_broker_holdings(
+    broker_snapshot: Dict[str, Any],
+    positions_grouped: Dict[str, Dict[str, Dict[str, Any]]],
+    latest_prices: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    assigned = _live_strategy_position_totals(positions_grouped)
+    rows: List[Dict[str, Any]] = []
+    over_assigned = 0
+    for position in broker_snapshot.get("positions", []) or []:
+        symbol = _base_symbol(str(position.get("symbol") or ""))
+        broker_qty = _float(position.get("quantity"))
+        if not symbol or broker_qty <= 0:
+            continue
+        assigned_row = assigned.get(symbol, {})
+        assigned_qty = _float(assigned_row.get("quantity"))
+        gap_qty = broker_qty - assigned_qty
+        if gap_qty < -1e-9:
+            over_assigned += 1
+            continue
+        if gap_qty <= 1e-9:
+            continue
+        broker_avg_cost = _float(position.get("avg_cost"))
+        broker_market_value = _float(position.get("market_value"))
+        latest_price_row = latest_prices.get(symbol, {})
+        current_price = broker_market_value / broker_qty if broker_market_value > 0 else _float(latest_price_row.get("price"))
+        market_value = gap_qty * current_price if current_price > 0 else 0.0
+        rows.append({
+            "symbol": symbol,
+            "unassigned_qty": gap_qty,
+            "broker_qty": broker_qty,
+            "assigned_qty": assigned_qty,
+            "assigned_avg_cost": _safe_avg_cost(assigned_qty, _float(assigned_row.get("cost"))),
+            "broker_avg_cost": broker_avg_cost,
+            "current_price": current_price,
+            "market_value": market_value,
+            "cost_basis": gap_qty * broker_avg_cost,
+            "price_source": "broker_market_value" if broker_market_value > 0 else str(latest_price_row.get("source") or ""),
+            "price_date": str(latest_price_row.get("date") or ""),
+            "assigned_strategies": assigned_row.get("strategies", []),
+        })
+    rows.sort(key=lambda item: (-_float(item.get("market_value")), str(item.get("symbol") or "")))
+    return {
+        "status": broker_snapshot.get("status", "unavailable"),
+        "source": broker_snapshot.get("source", "qmt"),
+        "generated_at": broker_snapshot.get("generated_at", ""),
+        "error": broker_snapshot.get("error", ""),
+        "items": rows,
+        "total_market_value": sum(_float(row.get("market_value")) for row in rows),
+        "total_cost_basis": sum(_float(row.get("cost_basis")) for row in rows),
+        "unassigned_count": len(rows),
+        "broker_position_count": len(broker_snapshot.get("positions", []) or []),
+        "assigned_symbol_count": len(assigned),
+        "over_assigned_count": over_assigned,
+    }
+
+
+def _manual_default_holdings(
+    broker_snapshot: Dict[str, Any],
+    positions_grouped: Dict[str, Dict[str, Dict[str, Any]]],
+    latest_prices: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    gap = _unassigned_broker_holdings(broker_snapshot, positions_grouped, latest_prices)
+    items = []
+    price_dates = []
+    total_market_value = 0.0
+    total_cost = 0.0
+    total_unrealized = 0.0
+    for row in gap.get("items", []):
+        qty = _float(row.get("unassigned_qty"))
+        avg_cost = _float(row.get("broker_avg_cost"))
+        current_price = _float(row.get("current_price"))
+        market_value = _float(row.get("market_value"))
+        cost_basis = _float(row.get("cost_basis"))
+        unrealized = market_value - cost_basis
+        if row.get("price_date"):
+            price_dates.append(str(row.get("price_date")))
+        total_market_value += market_value
+        total_cost += cost_basis
+        total_unrealized += unrealized
+        items.append({
+            "symbol": str(row.get("symbol") or ""),
+            "qty": qty,
+            "current_price": current_price,
+            "price_date": str(row.get("price_date") or ""),
+            "price_source": str(row.get("price_source") or "broker_market_value"),
+            "valuation_status": "manual_broker_holding",
+            "avg_cost": avg_cost,
+            "market_value": market_value,
+            "unrealized_pnl": unrealized,
+            "return_pct": (unrealized / cost_basis) if cost_basis > 0 else 0.0,
+            "broker_qty": _float(row.get("broker_qty")),
+            "assigned_qty": _float(row.get("assigned_qty")),
+        })
+    return {
+        "items": items,
+        "total_market_value": total_market_value,
+        "total_cost": total_cost,
+        "unrealized_pnl": total_unrealized,
+        "realized_pnl": 0.0,
+        "total_pnl": total_unrealized,
+        "initial_cash": 0.0,
+        "cash": 0.0,
+        "cash_source": None,
+        "nav": total_market_value,
+        "price_date": sorted(price_dates)[-1] if price_dates else None,
+        "latest_activity_date": "",
+        "capital_delta": 0.0,
+        "broker_snapshot_status": gap.get("status", "unavailable"),
+        "broker_snapshot_error": gap.get("error", ""),
+        "broker_snapshot_at": gap.get("generated_at", ""),
+        "over_assigned_count": gap.get("over_assigned_count", 0),
+    }
+
+
+def _live_strategy_position_totals(
+    positions_grouped: Dict[str, Dict[str, Dict[str, Any]]],
+) -> Dict[str, Dict[str, Any]]:
+    totals: Dict[str, Dict[str, Any]] = {}
+    for strategy_name, modes in positions_grouped.items():
+        if str(strategy_name) == "default":
+            continue
+        for symbol, position in (modes.get("live", {}) or {}).items():
+            base_symbol = _base_symbol(symbol)
+            quantity = _float(position.get("qty", position.get("quantity", 0.0)))
+            if not base_symbol or quantity <= 0:
+                continue
+            avg_cost = _float(position.get("avg_cost"))
+            row = totals.setdefault(base_symbol, {"quantity": 0.0, "cost": 0.0, "strategies": []})
+            row["quantity"] = _float(row.get("quantity")) + quantity
+            row["cost"] = _float(row.get("cost")) + quantity * avg_cost
+            row["strategies"].append({
+                "strategy_name": str(strategy_name),
+                "quantity": quantity,
+                "avg_cost": avg_cost,
+            })
+    return totals
+
+
+def _safe_avg_cost(quantity: float, cost: float) -> float:
+    return cost / quantity if quantity > 0 else 0.0
+
+
+def _base_symbol(symbol: Any) -> str:
+    text = str(symbol or "").strip()
+    if "." in text and text[:6].isdigit():
+        return text[:6]
+    if "." in text and text[-6:].isdigit():
+        return text[-6:]
+    return text
 
 
 def _expected_market_data_date(now: Optional[datetime] = None, root: Path = ROOT) -> str:
@@ -617,22 +1070,33 @@ def _read_mode_records(
 ) -> Dict[str, Any]:
     state_store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
     all_signals = state_store.get_signals(strategy_name=strategy_name, mode=mode, limit=5000)
-    signals = all_signals
-    orders = [s for s in all_signals if s.get("order_id") and str(s.get("status", "")).lower() not in _pending_signal_statuses()]
-    fills_raw = [s for s in all_signals if s.get("fill_quantity", 0) > 0]
+    all_orders = state_store.get_orders(strategy_name=strategy_name, mode=mode, limit=5000)
+    all_fills = state_store.get_fills(strategy_name=strategy_name, mode=mode, limit=5000)
+    signals = _signals_with_projection_inputs(root, all_signals)
+    orders = [
+        order for order in all_orders
+        if str(order.get("status", "")).lower() not in _pending_signal_statuses()
+    ]
 
-    order_records = [_signal_to_order_record(s) for s in orders]
-    fill_records = [_signal_to_fill_record(s) for s in fills_raw]
+    order_records = [_order_to_order_record(order) for order in orders]
+    fill_records = [_fill_to_fill_record(fill) for fill in all_fills]
 
-    display_fills = _dashboard_fill_rows(mode, order_records, fill_records, commission_config=commission_config)
-    order_rows = _dashboard_order_rows(
-        mode,
-        order_records,
-        display_fills,
-        _open_prices_for_orders(root, order_records),
+    display_fills = project_fill_rows(
+        mode=mode,
+        orders=order_records,
+        fills=fill_records,
         commission_config=commission_config,
     )
-    signal_rows = _dashboard_signal_rows(root, signals, order_records, display_fills)
+    order_rows = project_order_rows(
+        mode=mode,
+        orders=order_records,
+        fills=display_fills,
+        signals=signals,
+        open_prices=_open_prices_for_orders(root, order_records),
+        as_of_date=latest_market_data_date if mode == "paper" else None,
+        commission_config=commission_config,
+    )
+    signal_rows = project_signal_rows(signals=signals, orders=order_records, fills=display_fills)
     snapshots = state_store.get_snapshots(strategy_name=strategy_name, mode=mode, limit=365)
     snapshot_rows = _dashboard_snapshot_rows(snapshots, latest_market_data_date)
     return {
@@ -649,9 +1113,60 @@ def _read_mode_records(
         "positions": [],
         "watermarks": [],
         "reconciliations": [],
-        "pending_orders": _pending_submit_orders(root, signals, order_records, display_fills, as_of_date=date.today().isoformat()),
-        "execution_summary": _dashboard_execution_summary(order_rows, display_fills),
+        "pending_orders": project_pending_orders(
+            signals=signals,
+            orders=order_records,
+            fills=display_fills,
+            as_of_date=date.today().isoformat(),
+        ),
+        "execution_summary": project_execution_summary(order_rows, display_fills),
         "latest_watermark": {},
+    }
+
+
+def _order_to_order_record(order: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "timestamp": order.get("timestamp", ""),
+        "order_id": order.get("order_id", ""),
+        "broker_order_id": order.get("broker_order_id", ""),
+        "order_row_id": order.get("order_row_id", ""),
+        "signal_id": order.get("signal_id", ""),
+        "strategy_name": order.get("strategy_name", ""),
+        "symbol": order.get("symbol", ""),
+        "side": order.get("side", ""),
+        "quantity": order.get("quantity", 0.0),
+        "order_type": order.get("order_type", ""),
+        "price": order.get("limit_price", order.get("price", 0.0)),
+        "status": order.get("status", "submitted"),
+        "reason": order.get("failure_reason", order.get("reason", "")),
+        "record_date": order.get("record_date") or order.get("submit_date", ""),
+        "signal_date": order.get("signal_date", ""),
+        "submit_date": order.get("submit_date", ""),
+        "cost_bps": order.get("cost_bps"),
+        "execution_cost_bps": order.get("execution_cost_bps", order.get("cost_bps")),
+        "execution_reference_price": order.get("execution_reference_price"),
+    }
+
+
+def _fill_to_fill_record(fill: Dict[str, Any]) -> Dict[str, Any]:
+    quantity = float(fill.get("quantity", fill.get("fill_quantity", 0.0)) or 0.0)
+    price = float(fill.get("price", fill.get("fill_price", 0.0)) or 0.0)
+    return {
+        "timestamp": fill.get("timestamp", fill.get("fill_time", "")),
+        "fill_id": fill.get("fill_id", ""),
+        "order_id": fill.get("order_id", ""),
+        "broker_order_id": fill.get("broker_order_id", ""),
+        "order_row_id": fill.get("order_row_id", ""),
+        "signal_id": fill.get("signal_id", ""),
+        "strategy_name": fill.get("strategy_name", ""),
+        "symbol": fill.get("symbol", ""),
+        "side": fill.get("side", ""),
+        "quantity": quantity,
+        "price": price,
+        "commission": fill.get("commission", 0.0),
+        "value": quantity * price,
+        "record_date": fill.get("record_date") or fill.get("signal_date", ""),
+        "signal_date": fill.get("signal_date", ""),
     }
 
 
@@ -668,7 +1183,12 @@ def _signal_to_order_record(signal: Dict[str, Any]) -> Dict[str, Any]:
         "price": signal.get("reference_price", 0.0),
         "status": signal.get("status", "submitted"),
         "reason": signal.get("failure_reason", ""),
-        "record_date": signal.get("signal_date", ""),
+        "record_date": signal.get("record_date") or signal.get("signal_date", ""),
+        "signal_date": signal.get("signal_date", ""),
+        "submit_date": signal.get("submit_date", ""),
+        "cost_bps": signal.get("cost_bps"),
+        "execution_cost_bps": signal.get("execution_cost_bps"),
+        "execution_reference_price": signal.get("execution_reference_price"),
     }
 
 
@@ -797,38 +1317,58 @@ def _run_status_bar(
     configured: bool,
     control: Dict[str, Any],
     records: Dict[str, Any],
-    positions_data: Dict[str, Any],
     latest_market_data_date: Optional[str],
 ) -> Dict[str, Any]:
     anchor = latest_market_data_date or _records_latest_date(records) or date.today().isoformat()
     dates = _recent_run_dates(root, anchor, count=3)
-    timeline = _run_status_timeline(
-        root=root,
+    return project_run_status_bar(
         dates=dates,
         configured=configured,
         control=control,
-        records=records,
-        positions_data=positions_data,
+        records=_records_with_projected_submit_dates(records, root=root),
         latest_market_data_date=latest_market_data_date,
+        steps=RUN_STATUS_STEPS,
     )
-    return {
-        "steps": RUN_STATUS_STEPS,
-        "dates": dates,
-        "status": _aggregate_run_status(timeline),
-        "timeline": timeline,
-        "days": [
-            _run_status_day(
-                root=root,
-                trading_date=trading_date,
-                configured=configured,
-                control=control,
-                records=records,
-                positions_data=positions_data,
-                latest_market_data_date=latest_market_data_date,
-            )
-            for trading_date in dates
-        ],
-    }
+
+
+def _records_with_projected_submit_dates(records: Dict[str, Any], *, root: Path) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key, value in records.items():
+        if not isinstance(value, list):
+            result[key] = value
+            continue
+        if key in {"signals", "signal_ledger"}:
+            result[key] = _signals_with_projection_inputs(root, value)
+            continue
+        rows = []
+        for row in value:
+            if not isinstance(row, dict):
+                rows.append(row)
+                continue
+            rows.append(dict(row))
+        result[key] = rows
+    return result
+
+
+def _signals_with_projection_inputs(root: Path, signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    close_prices = _signal_close_prices(root, signals)
+    rows: List[Dict[str, Any]] = []
+    for signal in signals:
+        if not isinstance(signal, dict):
+            rows.append(signal)
+            continue
+        enriched = dict(signal)
+        status = str(enriched.get("status") or "").lower()
+        enriched["projected_submit_date"] = _signal_submit_date(
+            enriched,
+            root=root,
+            failed=status in _failed_signal_statuses(),
+        )
+        close_price = close_prices.get(_signal_close_key(enriched))
+        if close_price is not None:
+            enriched["signal_close_price"] = close_price
+        rows.append(enriched)
+    return rows
 
 
 def _recent_run_dates(root: Path, anchor: str, *, count: int) -> List[str]:
@@ -849,684 +1389,6 @@ def _recent_run_dates(root: Path, anchor: str, *, count: int) -> List[str]:
             current = _previous_weekday_before(days[-1])
         days.append(current)
     return [day.isoformat() for day in reversed(days)]
-
-
-def _run_status_timeline(
-    *,
-    root: Path,
-    dates: List[str],
-    configured: bool,
-    control: Dict[str, Any],
-    records: Dict[str, Any],
-    positions_data: Dict[str, Any],
-    latest_market_data_date: Optional[str],
-) -> List[Dict[str, Any]]:
-    if not dates:
-        return []
-    timeline: List[Dict[str, Any]] = []
-    first_date = dates[0]
-    timeline.append(_timeline_checkpoint(
-        _evaluate_run_checkpoint(
-            key="DATA_READY",
-            root=root,
-            trading_date=first_date,
-            configured=configured,
-            control=control,
-            grouped=_grouped_run_records(records, first_date),
-            positions_data=positions_data,
-            latest_market_data_date=latest_market_data_date,
-            context={},
-        ),
-        date=first_date,
-    ))
-    timeline.append(_timeline_checkpoint(
-        _evaluate_run_checkpoint(
-            key="SIGNAL_READY",
-            root=root,
-            trading_date=first_date,
-            configured=configured,
-            control=control,
-            grouped=_grouped_run_records(records, first_date),
-            positions_data=positions_data,
-            latest_market_data_date=latest_market_data_date,
-            context={},
-        ),
-        date=first_date,
-    ))
-    for index in range(1, len(dates)):
-        signal_date = dates[index - 1]
-        submit_date = dates[index]
-        timeline.append(_timeline_checkpoint(
-            _evaluate_run_checkpoint(
-                key="ORDER_SUBMITTED",
-                root=root,
-                trading_date=submit_date,
-                configured=configured,
-                control=control,
-                grouped=_grouped_submit_records(records, signal_date=signal_date, submit_date=submit_date),
-                positions_data=positions_data,
-                latest_market_data_date=latest_market_data_date,
-                context={},
-            ),
-            date=submit_date,
-            signal_date=signal_date,
-            submit_date=submit_date,
-        ))
-        timeline.append(_timeline_checkpoint(
-            _evaluate_run_checkpoint(
-                key="DATA_READY",
-                root=root,
-                trading_date=submit_date,
-                configured=configured,
-                control=control,
-                grouped=_grouped_run_records(records, submit_date),
-                positions_data=positions_data,
-                latest_market_data_date=latest_market_data_date,
-                context={},
-            ),
-            date=submit_date,
-        ))
-        timeline.append(_timeline_checkpoint(
-            _evaluate_run_checkpoint(
-                key="SIGNAL_READY",
-                root=root,
-                trading_date=submit_date,
-                configured=configured,
-                control=control,
-                grouped=_grouped_run_records(records, submit_date),
-                positions_data=positions_data,
-                latest_market_data_date=latest_market_data_date,
-                context={},
-            ),
-            date=submit_date,
-        ))
-    return timeline
-
-
-def _timeline_checkpoint(
-    checkpoint: Dict[str, Any],
-    *,
-    date: str,
-    signal_date: Optional[str] = None,
-    submit_date: Optional[str] = None,
-) -> Dict[str, Any]:
-    item = dict(checkpoint)
-    item["date"] = date
-    item["label"] = f"{date[5:]} {_timeline_step_label(str(item.get('key') or ''))}"
-    item["id"] = ":".join(part for part in [date, str(item.get("key") or ""), signal_date or ""] if part)
-    if signal_date:
-        item["signal_date"] = signal_date
-    if submit_date:
-        item["submit_date"] = submit_date
-    return item
-
-
-def _timeline_step_label(key: str) -> str:
-    if key == "DATA_READY":
-        return "数据OK"
-    if key == "SIGNAL_READY":
-        return "策略信号"
-    if key == "ORDER_SUBMITTED":
-        return "提交订单"
-    return key
-
-
-def _aggregate_run_status(items: List[Dict[str, Any]]) -> str:
-    statuses = [str(item.get("status") or "pending").lower() for item in items]
-    if any(status in {"blocked", "failed"} for status in statuses):
-        return "blocked"
-    if any(status == "warning" for status in statuses):
-        return "warning"
-    if any(status == "pending" for status in statuses):
-        return "pending"
-    return "ok"
-
-
-def _grouped_run_records(records: Dict[str, Any], trading_date: str) -> Dict[str, List[Dict[str, Any]]]:
-    return {
-        "signals": [
-            record for record in records.get("signals", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "signal_ledger": [
-            record for record in records.get("signal_ledger", records.get("signals", []))
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "orders": [
-            record for record in records.get("orders", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "fills": [
-            record for record in records.get("fills", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "snapshots": [
-            record for record in records.get("snapshots", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-    }
-
-
-def _grouped_submit_records(
-    records: Dict[str, Any],
-    *,
-    signal_date: str,
-    submit_date: str,
-) -> Dict[str, List[Dict[str, Any]]]:
-    return {
-        "signals": [
-            record for record in records.get("signals", [])
-            if _checkpoint_record_date(record) == signal_date
-        ],
-        "signal_ledger": [
-            record for record in records.get("signals", [])
-            if _checkpoint_record_date(record) == signal_date
-        ],
-        "orders": [
-            record for record in records.get("orders", [])
-            if _checkpoint_record_date(record) == submit_date
-        ],
-        "fills": [
-            record for record in records.get("fills", [])
-            if _checkpoint_record_date(record) == submit_date
-        ],
-        "snapshots": [],
-    }
-
-
-def _run_status_day(
-    *,
-    root: Path,
-    trading_date: str,
-    configured: bool,
-    control: Dict[str, Any],
-    records: Dict[str, Any],
-    positions_data: Dict[str, Any],
-    latest_market_data_date: Optional[str],
-) -> Dict[str, Any]:
-    grouped = {
-        "signals": [
-            record for record in records.get("signals", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "signal_ledger": [
-            record for record in records.get("signal_ledger", records.get("signals", []))
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "orders": [
-            record for record in records.get("orders", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "fills": [
-            record for record in records.get("fills", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-        "snapshots": [
-            record for record in records.get("snapshots", [])
-            if _checkpoint_record_date(record) == trading_date
-        ],
-    }
-    checkpoints = []
-    blocked = False
-    waiting = False
-    context: Dict[str, Any] = {}
-    for step in RUN_STATUS_STEPS:
-        key = step["key"]
-        if (blocked or waiting) and key != "SNAPSHOT_WRITTEN":
-            checkpoints.append(_checkpoint(
-                key,
-                "pending",
-                "waiting for prior checkpoint",
-                observed="prior checkpoint blocked" if blocked else "prior checkpoint pending",
-                decision="pending: waiting for prior checkpoint",
-            ))
-            continue
-        status = _evaluate_run_checkpoint(
-            key=key,
-            root=root,
-            trading_date=trading_date,
-            configured=configured,
-            control=control,
-            grouped=grouped,
-            positions_data=positions_data,
-            latest_market_data_date=latest_market_data_date,
-            context=context,
-        )
-        checkpoints.append(status)
-        if status["status"] in {"blocked", "failed"}:
-            blocked = True
-        elif status["status"] == "pending" and key != "SNAPSHOT_WRITTEN":
-            waiting = True
-    day_status = "ok" if all(item["status"] == "ok" for item in checkpoints) else next(
-        (item["status"] for item in checkpoints if item["status"] != "ok"),
-        "pending",
-    )
-    return {
-        "date": trading_date,
-        "status": day_status,
-        "checkpoints": checkpoints,
-    }
-
-
-def _evaluate_run_checkpoint(
-    *,
-    key: str,
-    root: Path,
-    trading_date: str,
-    configured: bool,
-    control: Dict[str, Any],
-    grouped: Dict[str, List[Dict[str, Any]]],
-    positions_data: Dict[str, Any],
-    latest_market_data_date: Optional[str],
-    context: Dict[str, Any],
-) -> Dict[str, Any]:
-    if key == "DATA_READY":
-        observed = f"latest_market_data_date={str(latest_market_data_date or '-')[:10]} target={trading_date}"
-        if latest_market_data_date and trading_date <= str(latest_market_data_date)[:10]:
-            return _checkpoint(key, "ok", "market data ready", observed=observed, decision="ok: market data ready")
-        return _checkpoint(key, "blocked", "market data missing", observed=observed, decision="blocked: market data missing")
-    if not configured:
-        return _checkpoint(key, "pending", "mode not configured", observed="mode not configured", decision="pending: mode not configured")
-    if key == "SIGNAL_READY":
-        signals = grouped["signals"]
-        context["signals"] = signals
-        signal_details = _run_signal_details(signals, root=root)
-        pending_signals = [
-            signal for signal in signals
-            if str(signal.get("status") or "").lower() in _pending_signal_statuses()
-        ]
-        context["pending_signals"] = pending_signals
-        if not signals:
-            context["no_signal"] = True
-            return _checkpoint(key, "ok", "no signal", observed="0 signal row(s)", decision="ok no-op: no signal emitted", details=[])
-        if any(str(signal.get("status") or "").lower() in _failed_signal_statuses() for signal in signals):
-            return _checkpoint(
-                key,
-                "blocked",
-                "signal failed",
-                observed=f"{len(signals)} signal row(s): {_format_status_counts(signals)}",
-                decision="blocked: failed signal status present",
-                details=signal_details,
-            )
-        return _checkpoint(
-            key,
-            "ok",
-            f"{len(signals)} signal(s)",
-            observed=f"{len(signals)} signal row(s): {_format_status_counts(signals)}",
-            decision="ok: signal decision recorded",
-            details=signal_details,
-        )
-    if key == "ORDER_SUBMITTED":
-        orders = grouped["orders"]
-        context["orders"] = orders
-        ledger_signals = grouped.get("signal_ledger", grouped.get("signals", []))
-        pending_signals = [
-            signal for signal in ledger_signals
-            if str(signal.get("status") or "").lower() in _pending_signal_statuses()
-        ]
-        if not pending_signals and not orders:
-            return _checkpoint(key, "ok", "no order needed", observed="0 pending signal(s), 0 order row(s)", decision="ok no-op: no order required", details=[])
-        submit_dates = [
-            _signal_submit_date(signal, root=root)
-            for signal in pending_signals
-        ]
-        due_signals = [
-            signal for signal, submit_date in zip(pending_signals, submit_dates)
-            if not submit_date or submit_date <= trading_date
-        ]
-        future_submit_dates = sorted({submit_date for submit_date in submit_dates if submit_date and submit_date > trading_date})
-        if pending_signals and not due_signals and not orders:
-            next_submit = future_submit_dates[0] if future_submit_dates else "-"
-            details = _run_order_details(pending_signals, orders, root=root, trading_date=trading_date)
-            return _checkpoint(
-                key,
-                "pending",
-                "waiting submit date",
-                observed=f"{len(pending_signals)} pending signal(s), next submit_date={next_submit}",
-                decision="pending: submit date not reached",
-                details=details,
-            )
-        required_signals = due_signals or pending_signals
-        detail_signals = due_signals
-        order_details = _run_order_details(detail_signals, orders, root=root, trading_date=trading_date)
-        if not _control_accepts_signals(control):
-            observed = (
-                f"{len(due_signals or pending_signals)} pending signal(s), "
-                f"control state={control.get('live_state', 'stopped')}, "
-                f"signal_enabled={bool(control.get('live_enabled'))}, "
-                f"liquidation_requested={bool(control.get('liquidation_requested'))}"
-            )
-            return _checkpoint(
-                key,
-                "blocked",
-                "submit disabled",
-                observed=observed,
-                decision="blocked: submit disabled while signals pending",
-                details=order_details,
-            )
-        if any(str(order.get("status") or "").lower() in _failed_signal_statuses() for order in orders):
-            return _checkpoint(
-                key,
-                "blocked",
-                "order failed",
-                observed=f"{len(orders)} order row(s): {_format_status_counts(orders)}",
-                decision="blocked: failed order status present",
-                details=order_details,
-            )
-        signal_count = len(order_details)
-        submitted_qty = sum(_float(item.get("submitted_quantity")) for item in order_details)
-        filled_qty = sum(_float(item.get("filled_quantity")) for item in order_details)
-        signal_qty = sum(_float(item.get("signal_quantity")) for item in order_details)
-        observed = (
-            f"submitted={_format_quantity(submitted_qty)} "
-            f"filled={_format_quantity(filled_qty)} "
-            f"for {signal_count} signal(s)"
-        )
-        if signal_count and filled_qty <= 0:
-            return _checkpoint(
-                key,
-                "blocked",
-                "no fill",
-                observed=observed,
-                decision="blocked: no fills for due signals",
-                details=order_details,
-            )
-        if signal_count and signal_qty > 0 and filled_qty + 1e-9 < signal_qty:
-            return _checkpoint(
-                key,
-                "warning",
-                "partial fill",
-                observed=observed,
-                decision="warning: partially filled due signals",
-                details=order_details,
-            )
-        return _checkpoint(
-            key,
-            "ok",
-            "all filled" if signal_count else f"{len(orders)} order(s)",
-            observed=observed if signal_count else f"{len(orders)} order row(s): {_format_status_counts(orders)}",
-            decision="ok: all due signals filled" if signal_count else "ok: order records present",
-            details=order_details,
-        )
-    if key == "EXECUTION_CONFIRMED":
-        fills = grouped["fills"]
-        context["fills"] = fills
-        if not context.get("orders") and not fills:
-            return _checkpoint(key, "ok", "no execution needed", observed="0 order row(s), 0 fill row(s)", decision="ok no-op: no execution required")
-        if not fills:
-            return _checkpoint(
-                key,
-                "blocked",
-                "fill missing",
-                observed=f"{len(context.get('orders', []))} order row(s), 0 fill row(s)",
-                decision="blocked: fill missing",
-            )
-        statuses = {str(order.get("display_status") or order.get("status") or "").lower() for order in context.get("orders", [])}
-        if any(status in {"partial", "no_fill"} for status in statuses):
-            return _checkpoint(
-                key,
-                "blocked",
-                "execution incomplete",
-                observed=f"{len(fills)} fill row(s), order statuses={', '.join(sorted(statuses))}",
-                decision="blocked: partial/no_fill execution status",
-            )
-        missing = [
-            str(fill.get("symbol") or "")
-            for fill in fills
-            if str(fill.get("side") or "").upper() == "BUY"
-            and _float((positions_data.get(str(fill.get("symbol") or "")) or {}).get("qty")) <= 0
-        ]
-        if missing:
-            symbols = ", ".join(sorted({item for item in missing if item})[:3])
-            return _checkpoint(
-                key,
-                "blocked",
-                f"position missing: {symbols}",
-                observed=f"missing tracked position(s): {symbols}",
-                decision="blocked: position not synced",
-            )
-        return _checkpoint(
-            key,
-            "ok",
-            f"{len(fills)} fill(s)",
-            observed=f"{len(fills)} fill row(s)",
-            decision="ok: execution confirmed",
-        )
-    if key == "SNAPSHOT_WRITTEN":
-        snapshots = grouped["snapshots"]
-        if not snapshots:
-            return _checkpoint(key, "blocked", "snapshot missing", observed="0 snapshot row(s)", decision="blocked: snapshot missing")
-        return _checkpoint(
-            key,
-            "ok",
-            f"{len(snapshots)} snapshot(s)",
-            observed=f"{len(snapshots)} snapshot row(s)",
-            decision="ok: snapshot written",
-        )
-    return _checkpoint(key, "pending", "unknown checkpoint", observed="unknown checkpoint", decision="pending: unknown checkpoint")
-
-
-def _run_signal_details(signals: List[Dict[str, Any]], *, root: Path) -> List[Dict[str, Any]]:
-    details: List[Dict[str, Any]] = []
-    for signal in signals:
-        details.append({
-            "timestamp": str(signal.get("timestamp") or ""),
-            "signal_date": _checkpoint_record_date(signal),
-            "submit_date": _signal_submit_date(signal, root=root),
-            "symbol": str(signal.get("symbol") or ""),
-            "side": str(signal.get("side") or "").upper(),
-            "quantity": _float(signal.get("quantity")),
-            "order_type": str(signal.get("order_type") or ""),
-            "reference_price": _float(signal.get("reference_price", signal.get("price"))),
-            "status": str(signal.get("display_status") or signal.get("status") or "unknown").lower(),
-            "order_id": str(signal.get("order_id") or ""),
-        })
-    return details
-
-
-def _run_order_details(
-    signals: List[Dict[str, Any]],
-    orders: List[Dict[str, Any]],
-    *,
-    root: Path,
-    trading_date: str,
-) -> List[Dict[str, Any]]:
-    if not signals and orders:
-        return [_run_order_detail_from_order(order) for order in orders]
-    details: List[Optional[Dict[str, Any]]] = [None] * len(signals)
-    assigned_orders: set[int] = set()
-    fallback_signal_indexes: List[int] = []
-    indexed_orders = list(enumerate(orders))
-    for signal_index, signal in enumerate(signals):
-        signal_ids = set(_record_identifiers(signal))
-        exact_matches = [
-            (order_index, order) for order_index, order in indexed_orders
-            if order_index not in assigned_orders
-            and signal_ids
-            and signal_ids.intersection(_record_identifiers(order))
-        ]
-        if exact_matches:
-            assigned_orders.update(order_index for order_index, _ in exact_matches)
-            submitted_qty = sum(_effective_submitted_quantity(order) for _, order in exact_matches)
-            filled_qty = sum(_float(order.get("filled_qty")) for _, order in exact_matches)
-            details[signal_index] = _run_order_detail_for_signal(
-                signal,
-                root=root,
-                trading_date=trading_date,
-                submitted_qty=submitted_qty,
-                filled_qty=filled_qty,
-            )
-        else:
-            fallback_signal_indexes.append(signal_index)
-
-    fallback_orders: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
-    for order_index, order in indexed_orders:
-        if order_index in assigned_orders:
-            continue
-        fallback_orders.setdefault(_run_order_record_match_key(order), []).append(order)
-    fallback_signals: Dict[tuple[str, str, str], List[int]] = {}
-    for signal_index in fallback_signal_indexes:
-        fallback_signals.setdefault(_run_signal_submit_match_key(signals[signal_index], root=root), []).append(signal_index)
-    for key, signal_indexes in fallback_signals.items():
-        group_orders = fallback_orders.get(key, [])
-        submitted_remaining = sum(_effective_submitted_quantity(order) for order in group_orders)
-        filled_remaining = sum(_float(order.get("filled_qty")) for order in group_orders)
-        for signal_index in sorted(signal_indexes, key=lambda idx: str(signals[idx].get("timestamp") or "")):
-            signal_qty = _float(signals[signal_index].get("quantity"))
-            submitted_qty = min(signal_qty, submitted_remaining) if submitted_remaining > 0 else 0.0
-            filled_qty = min(signal_qty, filled_remaining) if filled_remaining > 0 else 0.0
-            submitted_remaining = max(0.0, submitted_remaining - submitted_qty)
-            filled_remaining = max(0.0, filled_remaining - filled_qty)
-            details[signal_index] = _run_order_detail_for_signal(
-                signals[signal_index],
-                root=root,
-                trading_date=trading_date,
-                submitted_qty=submitted_qty,
-                filled_qty=filled_qty,
-            )
-    return [detail for detail in details if detail is not None]
-
-
-def _run_order_detail_for_signal(
-    signal: Dict[str, Any],
-    *,
-    root: Path,
-    trading_date: str,
-    submitted_qty: float,
-    filled_qty: float,
-) -> Dict[str, Any]:
-    signal_qty = _float(signal.get("quantity"))
-    submit_date = _signal_submit_date(signal, root=root)
-    submitted_qty = min(signal_qty, submitted_qty) if signal_qty > 0 else submitted_qty
-    filled_qty = min(signal_qty, filled_qty) if signal_qty > 0 else filled_qty
-    if submit_date and submit_date > trading_date and submitted_qty <= 0:
-        status = "pending_submit"
-    elif filled_qty + 1e-9 >= signal_qty and signal_qty > 0:
-        status = "filled"
-    elif filled_qty > 0:
-        status = "partial"
-    elif submitted_qty > 0:
-        status = "no_fill"
-    else:
-        status = "missing"
-    return {
-        "timestamp": str(signal.get("timestamp") or ""),
-        "signal_date": _checkpoint_record_date(signal),
-        "submit_date": submit_date,
-        "symbol": str(signal.get("symbol") or ""),
-        "side": str(signal.get("side") or "").upper(),
-        "signal_quantity": signal_qty,
-        "submitted_quantity": submitted_qty,
-        "filled_quantity": filled_qty,
-        "status": status,
-        "order_id": str(signal.get("order_id") or ""),
-    }
-
-
-def _run_order_record_match_key(record: Dict[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(record.get("symbol") or "").split(".")[0],
-        str(record.get("side") or "").upper(),
-        _checkpoint_record_date(record),
-    )
-
-
-def _run_signal_submit_match_key(signal: Dict[str, Any], *, root: Path) -> tuple[str, str, str]:
-    return (
-        str(signal.get("symbol") or "").split(".")[0],
-        str(signal.get("side") or "").upper(),
-        _signal_submit_date(signal, root=root),
-    )
-
-
-def _effective_submitted_quantity(order: Dict[str, Any]) -> float:
-    return max(_float(order.get("quantity")), _float(order.get("filled_qty")))
-
-
-def _run_order_detail_from_order(order: Dict[str, Any]) -> Dict[str, Any]:
-    submitted_qty = _float(order.get("quantity"))
-    filled_qty = _float(order.get("filled_qty"))
-    if filled_qty + 1e-9 >= submitted_qty and submitted_qty > 0:
-        status = "filled"
-    elif filled_qty > 0:
-        status = "partial"
-    else:
-        status = "no_fill"
-    return {
-        "timestamp": str(order.get("timestamp") or ""),
-        "signal_date": _checkpoint_record_date(order),
-        "submit_date": _checkpoint_record_date(order),
-        "symbol": str(order.get("symbol") or ""),
-        "side": str(order.get("side") or "").upper(),
-        "signal_quantity": submitted_qty,
-        "submitted_quantity": submitted_qty,
-        "filled_quantity": filled_qty,
-        "status": status,
-        "order_id": str(order.get("order_id") or ""),
-    }
-
-
-def _orders_for_signal(signal: Dict[str, Any], orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    signal_ids = set(_record_identifiers(signal))
-    if signal_ids:
-        matches = [
-            order for order in orders
-            if signal_ids.intersection(_record_identifiers(order))
-        ]
-        if matches:
-            return matches
-    signal_symbol = str(signal.get("symbol") or "").split(".")[0]
-    signal_side = str(signal.get("side") or "").upper()
-    signal_qty = _float(signal.get("quantity"))
-    return [
-        order for order in orders
-        if str(order.get("symbol") or "").split(".")[0] == signal_symbol
-        and str(order.get("side") or "").upper() == signal_side
-        and abs(_float(order.get("quantity")) - signal_qty) <= 1e-9
-    ]
-
-
-def _format_quantity(value: float) -> str:
-    if abs(value - round(value)) <= 1e-9:
-        return str(int(round(value)))
-    return f"{value:.4f}".rstrip("0").rstrip(".")
-
-
-def _checkpoint(
-    key: str,
-    status: str,
-    message: str,
-    *,
-    observed: Optional[str] = None,
-    decision: Optional[str] = None,
-    details: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    payload = {
-        "key": key,
-        "status": status,
-        "message": message,
-        "expected": _run_status_expected(key),
-        "observed": observed or message,
-        "decision": decision or message,
-    }
-    if details is not None:
-        payload["details"] = details
-    return payload
-
-
-def _run_status_expected(key: str) -> str:
-    for step in RUN_STATUS_STEPS:
-        if step["key"] == key:
-            return str(step.get("expected") or "")
-    return ""
-
-
-def _format_status_counts(records: List[Dict[str, Any]]) -> str:
-    counts: Dict[str, int] = {}
-    for record in records:
-        status = str(record.get("display_status") or record.get("status") or "unknown").lower() or "unknown"
-        counts[status] = counts.get(status, 0) + 1
-    return ", ".join(f"{status}={counts[status]}" for status in sorted(counts)) or "none"
 
 
 def _checkpoint_record_date(record: Dict[str, Any]) -> str:
@@ -1551,149 +1413,6 @@ def _previous_weekday_before(value: date) -> date:
     while current.weekday() >= 5:
         current -= timedelta(days=1)
     return current
-
-
-def _dashboard_order_rows(
-    mode: str,
-    orders: List[Dict[str, Any]],
-    fills: List[Dict[str, Any]],
-    open_prices: Optional[Dict[tuple[str, str], float]] = None,
-    *,
-    commission_config: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
-    open_prices = open_prices or {}
-    fill_totals: Dict[tuple[str, str], Dict[str, float]] = {}
-    for fill in fills:
-        identifiers = _record_identifiers(fill)
-        fill_date = _record_date(fill)
-        if not identifiers or not fill_date:
-            continue
-        qty = _float(fill.get("quantity"))
-        price = _float(fill.get("price"))
-        commission = _float(fill.get("commission"))
-        for identifier in identifiers:
-            totals = fill_totals.setdefault(
-                (identifier, fill_date),
-                {"quantity": 0.0, "value": 0.0, "commission": 0.0},
-            )
-            totals["quantity"] += qty
-            totals["value"] += qty * price
-            totals["commission"] += commission
-
-    rows = []
-    for order in sorted(orders, key=lambda item: item.get("timestamp", "")):
-        row = dict(order)
-        totals = _fill_totals_for_order(fill_totals, order)
-        filled_qty = totals["quantity"]
-        limit_price = _float(order.get("price"))
-        raw_fill_price = totals["value"] / filled_qty if filled_qty > 0 else None
-        display_fill_price = _display_fill_price(mode, limit_price, raw_fill_price, filled_qty)
-        commission = _display_commission(
-            mode,
-            order,
-            filled_qty,
-            raw_fill_price,
-            totals["commission"],
-            commission_config,
-        )
-        open_price = open_prices.get(_order_open_key(order))
-        row["limit_price"] = limit_price
-        row["open_price"] = open_price
-        row["filled_qty"] = filled_qty
-        row["raw_fill_price"] = raw_fill_price
-        row["fill_price"] = display_fill_price
-        row["commission"] = commission
-        row["slippage_bps"] = _order_slippage_bps(open_price, display_fill_price, filled_qty)
-        row["display_contract"] = "paper_limit_fill" if mode == "paper" else "live_actual_fill"
-        order_qty = _float(order.get("quantity"))
-        if filled_qty <= 0:
-            row["display_status"] = "no_fill"
-        elif filled_qty + 1e-9 >= order_qty:
-            row["display_status"] = "filled"
-        else:
-            row["display_status"] = "partial"
-        rows.append(row)
-    return rows
-
-
-def _dashboard_fill_rows(
-    mode: str,
-    orders: List[Dict[str, Any]],
-    fills: List[Dict[str, Any]],
-    *,
-    commission_config: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
-    if mode != "paper":
-        return [dict(fill) for fill in fills]
-    order_dates = {
-        (identifier, _record_date(order))
-        for order in orders
-        for identifier in _record_identifiers(order)
-        if _record_date(order)
-    }
-    grouped: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
-    passthrough: List[Dict[str, Any]] = []
-    for fill in fills:
-        row = dict(fill)
-        keys = [
-            (identifier, _record_date(row))
-            for identifier in _record_identifiers(row)
-            if _record_date(row)
-        ]
-        matching_keys = [key for key in keys if key in order_dates] or keys
-        if not matching_keys:
-            passthrough.append(row)
-            continue
-        grouped.setdefault(matching_keys[0], []).append(row)
-    result = passthrough
-    for group_rows in grouped.values():
-        recorded_total = sum(_float(row.get("commission")) for row in group_rows)
-        if recorded_total > 0:
-            result.extend(group_rows)
-            continue
-        qty = sum(_float(row.get("quantity")) for row in group_rows)
-        value = sum(_float(row.get("quantity")) * _float(row.get("price")) for row in group_rows)
-        symbol = str((group_rows[0].get("symbol") if group_rows else "") or "").split(".")[0]
-        side = str((group_rows[0].get("side") if group_rows else "") or "").upper()
-        estimated = 0.0
-        if qty > 0 and value > 0 and symbol and side in {"BUY", "SELL"}:
-            try:
-                estimated = round(float(total_commission(symbol, value / qty, qty, side, commission_config or {})), 6)
-            except Exception:
-                estimated = 0.0
-        for row in group_rows:
-            item = dict(row)
-            if estimated > 0:
-                row_value = _float(row.get("quantity")) * _float(row.get("price"))
-                item["commission"] = round(estimated * row_value / value, 6) if value > 0 else estimated / len(group_rows)
-                item["commission_source"] = "estimated_paper_shared_model"
-            result.append(item)
-    return sorted(result, key=lambda item: item.get("timestamp", ""))
-
-
-def _display_commission(
-    mode: str,
-    order: Dict[str, Any],
-    filled_qty: float,
-    raw_fill_price: Optional[float],
-    recorded_commission: float,
-    commission_config: Optional[Dict[str, Any]],
-) -> float:
-    if recorded_commission > 0 or mode != "paper" or filled_qty <= 0:
-        return recorded_commission
-    price = _float(raw_fill_price)
-    if price <= 0:
-        price = _float(order.get("avg_fill_price")) or _float(order.get("price"))
-    if price <= 0:
-        return recorded_commission
-    symbol = str(order.get("symbol") or "").split(".")[0]
-    side = str(order.get("side") or "").upper()
-    if not symbol or side not in {"BUY", "SELL"}:
-        return recorded_commission
-    try:
-        return round(float(total_commission(symbol, price, filled_qty, side, commission_config or {})), 6)
-    except Exception:
-        return recorded_commission
 
 
 def _open_prices_for_orders(root: Path, orders: List[Dict[str, Any]]) -> Dict[tuple[str, str], float]:
@@ -1740,175 +1459,11 @@ def _order_open_key(order: Dict[str, Any]) -> tuple[str, str]:
     return (symbol, _record_date(order))
 
 
-def _fill_totals_for_order(
-    fill_totals: Dict[tuple[str, str], Dict[str, float]],
-    order: Dict[str, Any],
-) -> Dict[str, float]:
-    order_date = _record_date(order)
-    keys = [(identifier, order_date) for identifier in _record_identifiers(order) if order_date]
-    for key in keys:
-        if key in fill_totals:
-            return fill_totals[key]
-    identifiers = _record_identifiers(order)
-    matches = [
-        totals for (identifier, _), totals in fill_totals.items()
-        if identifier in identifiers
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    return {"quantity": 0.0, "value": 0.0, "commission": 0.0}
-
-
-def _record_identifiers(record: Dict[str, Any]) -> List[str]:
-    identifiers: List[str] = []
-    for key in ("order_id", "broker_order_id"):
-        value = str(record.get(key) or "")
-        if value and value not in identifiers:
-            identifiers.append(value)
-    return identifiers
-
-
-def _display_fill_price(
-    mode: str,
-    limit_price: float,
-    raw_fill_price: Optional[float],
-    filled_qty: float,
-) -> Optional[float]:
-    if filled_qty <= 0:
-        return None
-    if mode == "paper" and limit_price > 0:
-        return limit_price
-    return raw_fill_price
-
-
-def _order_slippage_bps(
-    open_price: Optional[float],
-    fill_price: Optional[float],
-    filled_qty: float,
-) -> Optional[float]:
-    if filled_qty <= 0 or open_price is None or open_price <= 0 or fill_price is None or fill_price <= 0:
-        return None
-    return round((fill_price / open_price - 1.0) * 10000.0, 6)
-
-
-def _dashboard_execution_summary(order_rows: List[Dict[str, Any]], fills: List[Dict[str, Any]]) -> Dict[str, Any]:
-    samples = [
-        _float(row.get("slippage_bps"))
-        for row in order_rows
-        if row.get("slippage_bps") is not None
-    ]
-    weighted_sum = 0.0
-    weight_total = 0.0
-    for row in order_rows:
-        slippage_bps = row.get("slippage_bps")
-        fill_price = row.get("fill_price")
-        filled_qty = _float(row.get("filled_qty"))
-        if slippage_bps is None or fill_price is None or filled_qty <= 0:
-            continue
-        weight = abs(filled_qty * _float(fill_price))
-        if weight > 0:
-            weighted_sum += _float(slippage_bps) * weight
-            weight_total += weight
-    return {
-        "total_commission": round(sum(_float(row.get("commission")) for row in order_rows), 6),
-        "median_slippage_bps": round(_median(samples), 6) if samples else None,
-        "weighted_avg_slippage_bps": round(weighted_sum / weight_total, 6) if weight_total > 0 else None,
-        "slippage_sample_count": len(samples),
-    }
-
-
-def _dashboard_signal_rows(
-    root: Path,
-    signals: List[Dict[str, Any]],
-    orders: List[Dict[str, Any]],
-    fills: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    submitted_ids = _submitted_order_ids(orders, fills)
-    submitted_signatures = [
-        (_order_signature(record), _order_action_signature(record), _record_date(record), _timestamp_text(record))
-        for record in orders
-        if _is_submitted_order(record)
-    ]
-    rows = []
-    filled_order_ids = {str(f.get("order_id") or "") for f in fills if f.get("order_id")}
-    for signal in sorted(signals, key=lambda item: item.get("timestamp", "")):
-        status = str(signal.get("status") or "").lower()
-        if status not in _pending_signal_statuses() and status not in _failed_signal_statuses():
-            continue
-        if _is_dashboard_submit_attempt_signal(signal, root, submitted_ids, submitted_signatures):
-            continue
-        if float(signal.get("fill_quantity", 0.0)) > 0:
-            continue
-        if str(signal.get("order_id") or "") in filled_order_ids:
-            continue
-        rows.append(signal)
-    return rows
-
-
-def _is_dashboard_submit_attempt_signal(
-    signal: Dict[str, Any],
-    root: Path,
-    submitted_ids: set[str],
-    submitted_signatures: List[tuple[Optional[tuple[Any, ...]], Optional[tuple[Any, ...]], str, str]],
-) -> bool:
-    status = str(signal.get("status", "")).lower()
-    if status in _failed_signal_statuses():
-        return True
-    if status not in _pending_signal_statuses():
-        return False
-    if not _is_intraday_signal(signal):
-        return False
-    submit_date = _signal_submit_date(signal, root=root, failed=False)
-    return _signal_is_submitted(signal, submitted_ids, submitted_signatures, submit_date)
-
-
 def _apply_execution_summary(performance: Dict[str, Any], summary: Dict[str, Any]) -> None:
     performance["total_commission"] = summary.get("total_commission", 0.0)
     performance["slippage_sample_count"] = summary.get("slippage_sample_count", 0)
     performance["median_slippage_bps"] = summary.get("median_slippage_bps")
     performance["weighted_avg_slippage_bps"] = summary.get("weighted_avg_slippage_bps")
-
-
-def _pending_submit_orders(
-    root: Path,
-    signals: List[Dict[str, Any]],
-    orders: List[Dict[str, Any]],
-    fills: List[Dict[str, Any]],
-    *,
-    as_of_date: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    submitted_ids = _submitted_order_ids(orders, fills)
-    submitted_signatures = [
-        (_order_signature(record), _order_action_signature(record), _record_date(record), _timestamp_text(record))
-        for record in orders
-        if _is_submitted_order(record)
-    ]
-    close_prices = _signal_close_prices(root, signals)
-    pending = []
-    for signal in sorted(signals, key=lambda item: item.get("timestamp", "")):
-        status = str(signal.get("status", "")).lower()
-        if status not in _pending_signal_statuses() and status not in _failed_signal_statuses():
-            continue
-        failed = status in _failed_signal_statuses()
-        submit_date = _signal_submit_date(signal, root=root, failed=failed)
-        if not failed and _signal_is_submitted(signal, submitted_ids, submitted_signatures, submit_date):
-            continue
-        signal_date = _record_date(signal)
-        row = dict(signal)
-        row["signal_date"] = signal_date
-        row["submit_date"] = submit_date
-        if _date_before(row["submit_date"], as_of_date):
-            continue
-        cost_bps = _pending_submit_cost_bps(
-            row,
-            close_prices.get(_signal_close_key(row)),
-        )
-        if cost_bps is not None:
-            row["cost_bps"] = cost_bps
-            row["cost_bps_display"] = f"+{cost_bps:.1f} bps"
-        row["display_status"] = "failed" if failed else "pending_submit"
-        pending.append(row)
-    return pending
 
 
 def _pending_signal_statuses() -> set[str]:
@@ -1917,10 +1472,6 @@ def _pending_signal_statuses() -> set[str]:
 
 def _failed_signal_statuses() -> set[str]:
     return {"rejected", "failed", "error", "dropped", "cancelled", "canceled", "expired"}
-
-
-def _is_submitted_order(record: Dict[str, Any]) -> bool:
-    return str(record.get("status") or "").lower() not in _failed_signal_statuses()
 
 
 def _signal_submit_date(signal: Dict[str, Any], *, root: Path, failed: bool = False) -> str:
@@ -1939,32 +1490,6 @@ def _is_intraday_signal(signal: Dict[str, Any]) -> bool:
         return False
     time_text = timestamp.split("T", 1)[1][:8]
     return bool(time_text) and time_text < "15:00:00"
-
-
-def _pending_submit_cost_bps(row: Dict[str, Any], signal_close: Optional[float]) -> Optional[float]:
-    cost_bps = _optional_float(row.get("execution_cost_bps"))
-    if cost_bps is None:
-        cost_bps = _optional_float(row.get("cost_bps"))
-    if cost_bps is not None:
-        return cost_bps
-
-    limit_price = _optional_float(row.get("price"))
-    reference_price = _optional_float(row.get("reference_price"))
-    if reference_price is None:
-        reference_price = signal_close
-    if limit_price is None or limit_price <= 0 or reference_price is None or reference_price <= 0:
-        return None
-
-    side = str(row.get("side") or "").upper()
-    if side == "BUY":
-        inferred = (limit_price / reference_price - 1.0) * 10000.0
-    elif side == "SELL":
-        inferred = (1.0 - limit_price / reference_price) * 10000.0
-    else:
-        return None
-    if not math.isfinite(inferred) or inferred < -1e-6:
-        return None
-    return max(0.0, inferred)
 
 
 def _signal_close_prices(root: Path, signals: List[Dict[str, Any]]) -> Dict[tuple[str, str], float]:
@@ -2011,94 +1536,6 @@ def _signal_close_key(signal: Dict[str, Any]) -> tuple[str, str]:
     return (symbol, _record_date(signal))
 
 
-def _submitted_order_ids(
-    orders: List[Dict[str, Any]],
-    fills: List[Dict[str, Any]],
-) -> set[str]:
-    ids: set[str] = set()
-    for record in [record for record in orders if _is_submitted_order(record)] + fills:
-        for key in ("order_id", "broker_order_id"):
-            value = str(record.get(key) or "")
-            if value:
-                ids.add(value)
-    return ids
-
-
-def _signal_is_submitted(
-    signal: Dict[str, Any],
-    submitted_ids: set[str],
-    submitted_signatures: List[tuple[Optional[tuple[Any, ...]], Optional[tuple[Any, ...]], str, str]],
-    submit_date: str,
-) -> bool:
-    order_id = str(signal.get("order_id") or "")
-    if order_id and order_id in submitted_ids:
-        return True
-    signature = _order_signature(signal)
-    action_signature = _order_action_signature(signal)
-    if signature is None and action_signature is None:
-        return False
-    signal_time = _timestamp_text(signal)
-    for submitted_signature, submitted_action_signature, submitted_date, submitted_time in submitted_signatures:
-        if signature is not None and submitted_signature == signature:
-            if not signal_time or not submitted_time or submitted_time >= signal_time:
-                return True
-            if _timestamps_near(submitted_time, signal_time):
-                return True
-        if action_signature is not None and submitted_action_signature == action_signature:
-            if submit_date and submitted_date == submit_date:
-                return True
-            if submitted_time and signal_time and _timestamps_near(submitted_time, signal_time):
-                return True
-    return False
-
-
-def _order_signature(record: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
-    strategy_name = str(record.get("strategy_name") or "default")
-    symbol = str(record.get("symbol") or "")
-    side = str(record.get("side") or "").upper()
-    order_type = str(record.get("order_type") or "").upper()
-    quantity = _float(record.get("quantity"))
-    price = _float(record.get("price"))
-    if not symbol or not side or quantity <= 0:
-        return None
-    return (
-        strategy_name,
-        symbol,
-        side,
-        order_type,
-        round(quantity, 6),
-        round(price, 6),
-    )
-
-
-def _order_action_signature(record: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
-    strategy_name = str(record.get("strategy_name") or "default")
-    symbol = str(record.get("symbol") or "").split(".")[0]
-    side = str(record.get("side") or "").upper()
-    quantity = _float(record.get("quantity"))
-    if not symbol or not side or quantity <= 0:
-        return None
-    return (
-        strategy_name,
-        symbol,
-        side,
-        round(quantity, 6),
-    )
-
-
-def _timestamp_text(record: Dict[str, Any]) -> str:
-    return str(record.get("timestamp") or record.get("record_date") or "")
-
-
-def _timestamps_near(left: str, right: str, tolerance_seconds: float = 1.0) -> bool:
-    try:
-        left_dt = datetime.fromisoformat(left[:26])
-        right_dt = datetime.fromisoformat(right[:26])
-    except ValueError:
-        return False
-    return abs((left_dt - right_dt).total_seconds()) <= tolerance_seconds
-
-
 def _record_date(record: Dict[str, Any]) -> str:
     timestamp = str(record.get("timestamp") or "")
     if len(timestamp) >= 10:
@@ -2119,15 +1556,6 @@ def _next_trading_date(value: str, *, root: Path) -> Optional[str]:
         duckdb_dir=root / "quant" / "infrastructure" / "var" / "duckdb" / "live",
         allow_refresh=False,
     ).isoformat()
-
-
-def _date_before(left: str, right: Optional[str]) -> bool:
-    if not left or not right:
-        return False
-    try:
-        return datetime.fromisoformat(left[:10]).date() < datetime.fromisoformat(right[:10]).date()
-    except ValueError:
-        return False
 
 
 def _position_symbols(positions_grouped: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]]) -> set[str]:
@@ -2198,294 +1626,24 @@ def _latest_market_data_date(root: Path) -> Optional[str]:
         return None
 
 
-def _holdings_for_strategy(
-    all_positions_grouped: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]],
-    strategy_name: str,
-    mode: str,
-    fills: List[Dict[str, Any]],
-    latest_prices: Optional[Dict[str, Dict[str, Any]]] = None,
-    order_rows: Optional[List[Dict[str, Any]]] = None,
-    initial_cash: float = 0.0,
-    capital_events: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    stored_positions = all_positions_grouped.get(strategy_name, {}).get(mode, {}) or {}
-    contract_state = _contract_position_state(order_rows or [])
-    contract_positions = contract_state["positions"]
-    contract_activity_dates = contract_state.get("symbol_activity_dates", {})
-    has_contract_activity = bool(contract_state["has_activity"])
-    realized = (
-        contract_state["realized_pnl"]
-        if has_contract_activity
-        else sum(_float(p.get("realized_pnl", 0.0)) for p in stored_positions.values())
-    )
-    last_contract_prices = _latest_order_fill_prices(order_rows or [])
-    last_fill_prices = _latest_fill_prices(fills)
-    latest_prices = latest_prices or {}
-    holdings = []
-    total_market_value = 0.0
-    total_cost = 0.0
-    total_unrealized = 0.0
-    price_dates = []
-    for symbol in sorted(set(stored_positions) | set(contract_positions)):
-        raw = stored_positions.get(symbol, {}) or {}
-        contract_position = contract_positions.get(symbol)
-        if contract_position:
-            qty = _float(contract_position.get("qty"))
-            avg_cost = _float(contract_position.get("avg_cost"))
-            cost_value = _float(contract_position.get("cost_value"))
-        else:
-            qty = _float(raw.get("qty"))
-            avg_cost = _float(raw.get("avg_cost"))
-            cost_value = avg_cost * qty
-        if qty <= 0:
-            continue
-        stored_market_value = _float(raw.get("market_value"))
-        close_price = latest_prices.get(str(symbol).split(".")[0], {})
-        stale_after_activity = False
-        symbol_activity_date = str(contract_activity_dates.get(symbol) or "")
-        if close_price and contract_position:
-            close_date = str(close_price.get("date", ""))[:10]
-            stale_after_activity = bool(symbol_activity_date and close_date and close_date < symbol_activity_date)
-        if close_price and not stale_after_activity:
-            current_price = _float(close_price.get("price"))
-            price_date = str(close_price.get("date", ""))
-            price_source = str(close_price.get("source", "duckdb"))
-            valuation_status = "marked"
-        elif contract_position and stale_after_activity:
-            current_price = _float(contract_position.get("unmarked_price")) or avg_cost
-            price_date = ""
-            price_source = "unmarked_fill_after_activity"
-            valuation_status = "unmarked_after_activity"
-        elif qty > 0 and stored_market_value > 0:
-            current_price = stored_market_value / qty
-            price_date = ""
-            price_source = "position_market_value"
-            valuation_status = "stored_position_mark"
-        else:
-            current_price = last_contract_prices.get(symbol, last_fill_prices.get(symbol, avg_cost))
-            price_date = ""
-            price_source = "display_contract_fill" if symbol in last_contract_prices else "last_fill"
-            valuation_status = "unmarked_after_activity" if contract_position else "fallback_mark"
-        market_value = current_price * qty
-        unrealized = market_value - cost_value
-        if price_date:
-            price_dates.append(price_date)
-        total_market_value += market_value
-        total_cost += cost_value
-        total_unrealized += unrealized
-        holdings.append({
-            "symbol": symbol,
-            "qty": qty,
-            "current_price": current_price,
-            "price_date": price_date,
-            "price_source": price_source,
-            "valuation_status": valuation_status,
-            "avg_cost": avg_cost,
-            "market_value": market_value,
-            "unrealized_pnl": unrealized,
-            "return_pct": (unrealized / cost_value) if cost_value > 0 else 0.0,
-        })
-    capital_delta = _capital_cash_delta(capital_events or [])
-    cash_source = None
-    cash = 0.0
-    nav = total_market_value
-    if has_contract_activity and initial_cash > 0:
-        cash = initial_cash + _float(contract_state["cash_delta"]) + capital_delta
-        cash_source = "order_contract"
-        nav = cash + total_market_value
-    elif holdings and initial_cash > 0:
-        cash = initial_cash - total_market_value + capital_delta
-        cash_source = "position_baseline"
-        nav = cash + total_market_value
-    elif not holdings and initial_cash > 0:
-        cash = initial_cash + capital_delta
-        cash_source = "initial_cash"
-        nav = max(0.0, cash)
-        if not price_dates:
-            price_date = _latest_price_date(latest_prices)
-            if price_date:
-                price_dates.append(price_date)
-    total_pnl = nav - initial_cash if cash_source in ("order_contract", "initial_cash", "position_baseline") else realized + total_unrealized
-    if cash_source == "initial_cash" and capital_delta == 0.0:
-        total_pnl = 0.0
-    return {
-        "items": holdings,
-        "total_market_value": total_market_value,
-        "total_cost": total_cost,
-        "unrealized_pnl": total_unrealized,
-        "realized_pnl": realized,
-        "total_pnl": total_pnl,
-        "initial_cash": initial_cash,
-        "cash": cash,
-        "cash_source": cash_source,
-        "nav": nav,
-        "price_date": sorted(price_dates)[-1] if price_dates else None,
-        "latest_activity_date": contract_state.get("latest_activity_date"),
-        "capital_delta": capital_delta,
-    }
-
-
-def _capital_cash_delta(events: List[Dict[str, Any]]) -> float:
-    delta = 0.0
-    for evt in events:
-        etype = str(evt.get("event_type") or "").upper()
-        if etype in ("DEPOSIT", "DIVIDEND_CASH"):
-            delta += _float(evt.get("amount"))
-        elif etype == "WITHDRAW":
-            delta -= _float(evt.get("amount"))
-    return delta
-
-
-def _contract_position_state(order_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    lots: Dict[str, List[Dict[str, float]]] = {}
-    realized_pnl = 0.0
-    cash_delta = 0.0
-    has_activity = False
-    latest_activity_date = ""
-    symbol_activity_dates: Dict[str, str] = {}
-    for row in sorted(order_rows, key=lambda item: item.get("timestamp", "")):
-        symbol = str(row.get("symbol") or "")
-        side = str(row.get("side") or "").upper()
-        qty = _float(row.get("filled_qty"))
-        fill_price = _float(row.get("fill_price"))
-        commission = _float(row.get("commission"))
-        if not symbol or qty <= 0 or fill_price <= 0:
-            continue
-        has_activity = True
-        row_date = _record_date(row)
-        if row_date and row_date > latest_activity_date:
-            latest_activity_date = row_date
-        if row_date and (symbol not in symbol_activity_dates or row_date > symbol_activity_dates[symbol]):
-            symbol_activity_dates[symbol] = row_date
-        notional = qty * fill_price
-        if side == "BUY":
-            unit_cost = (notional + commission) / qty
-            lots.setdefault(symbol, []).append({"qty": qty, "unit_cost": unit_cost, "unit_price": fill_price})
-            cash_delta -= notional + commission
-        elif side == "SELL":
-            removed_cost = 0.0
-            remaining = qty
-            for lot in lots.get(symbol, []):
-                if remaining <= 0:
-                    break
-                take = min(_float(lot.get("qty")), remaining)
-                if take <= 0:
-                    continue
-                removed_cost += take * _float(lot.get("unit_cost"))
-                lot["qty"] = _float(lot.get("qty")) - take
-                remaining -= take
-            if remaining > 1e-9:
-                removed_cost += remaining * fill_price
-            lots[symbol] = [lot for lot in lots.get(symbol, []) if _float(lot.get("qty")) > 1e-9]
-            realized_pnl += notional - commission - removed_cost
-            cash_delta += notional - commission
-    positions = {}
-    for symbol, symbol_lots in lots.items():
-        qty = sum(_float(lot.get("qty")) for lot in symbol_lots)
-        cost_value = sum(_float(lot.get("qty")) * _float(lot.get("unit_cost")) for lot in symbol_lots)
-        unmarked_value = sum(_float(lot.get("qty")) * _float(lot.get("unit_price")) for lot in symbol_lots)
-        if qty <= 1e-9:
-            continue
-        positions[symbol] = {
-            "qty": qty,
-            "avg_cost": cost_value / qty,
-            "cost_value": cost_value,
-            "unmarked_price": unmarked_value / qty if unmarked_value > 0 else cost_value / qty,
-        }
-    return {
-        "positions": positions,
-        "realized_pnl": realized_pnl,
-        "cash_delta": cash_delta,
-        "has_activity": has_activity,
-        "latest_activity_date": latest_activity_date,
-        "symbol_activity_dates": symbol_activity_dates,
-    }
-
-
-def _latest_order_fill_prices(order_rows: List[Dict[str, Any]]) -> Dict[str, float]:
-    prices: Dict[str, float] = {}
-    for row in sorted(order_rows, key=lambda item: item.get("timestamp", "")):
-        symbol = str(row.get("symbol", ""))
-        price = _float(row.get("fill_price"))
-        qty = _float(row.get("filled_qty"))
-        if symbol and qty > 0 and price > 0:
-            prices[symbol] = price
-    return prices
-
-
-def _latest_fill_prices(fills: List[Dict[str, Any]]) -> Dict[str, float]:
-    prices: Dict[str, float] = {}
-    for fill in sorted(fills, key=lambda item: item.get("timestamp", "")):
-        symbol = str(fill.get("symbol", ""))
-        price = _float(fill.get("price"))
-        if symbol and price > 0:
-            prices[symbol] = price
-    return prices
-
-
 def _performance(
     root: Path,
     base_dir: Path,
     strategy_name: str,
     holdings: Dict[str, Any],
     records: Optional[Dict[str, Any]] = None,
+    latest_market_data_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
         performance = LiveTradingRecorder(base_dir).get_strategy_performance_from_records(strategy_name, records or {})
     except Exception:
         performance = {}
-    curve = performance.get("pnl_curve") or []
-    initial_cash = _float(holdings.get("initial_cash"))
-    latest_snapshot = _snapshot_from_holdings(strategy_name, holdings)
-    if latest_snapshot is not None:
-        snapshot_date = latest_snapshot["date"]
-        if not any((snapshot.get("date") or str(snapshot.get("timestamp", ""))[:10]) == snapshot_date for snapshot in curve):
-            curve.append(latest_snapshot)
-            curve = sorted(curve, key=lambda item: item.get("date") or str(item.get("timestamp", ""))[:10])
-    performance.setdefault("strategy_name", strategy_name)
-    performance.setdefault("total_trades", 0)
-    performance.setdefault("win_rate", 0.0)
-    performance.setdefault("profit_factor", 0.0)
-    performance.setdefault("max_drawdown", 0.0)
-    performance.setdefault("sharpe_ratio", 0.0)
-    performance.setdefault("sortino_ratio", 0.0)
-    performance.setdefault("calmar_ratio", 0.0)
-    performance.setdefault("cash", 0.0)
-    performance.setdefault("median_slippage_bps", None)
-    performance.setdefault("weighted_avg_slippage_bps", None)
-    performance.setdefault("slippage_sample_count", 0)
-    performance["total_pnl"] = holdings.get("total_pnl", 0.0)
-    performance["realized_pnl"] = holdings.get("realized_pnl", 0.0)
-    performance["unrealized_pnl"] = holdings.get("unrealized_pnl", 0.0)
-    performance["total_pnl_pct"] = (
-        holdings.get("total_pnl", 0.0) / initial_cash
-        if initial_cash > 0
-        else 0.0
+    return project_performance(
+        strategy_name=strategy_name,
+        raw_performance=performance,
+        holdings=holdings,
+        latest_market_data_date=latest_market_data_date,
     )
-    total_cost = holdings.get("total_cost", 0.0)
-    denominator = initial_cash if holdings.get("cash_source") in {"order_contract", "initial_cash", "position_baseline"} and initial_cash > 0 else total_cost
-    performance["total_return"] = (
-        holdings.get("total_pnl", 0.0) / denominator
-        if denominator and denominator > 0
-        else performance.get("total_return", 0.0)
-    )
-    if holdings.get("cash_source") in {"order_contract", "initial_cash", "position_baseline"}:
-        performance["total_nav"] = holdings.get("nav", 0.0)
-        performance["cash"] = holdings.get("cash", 0.0)
-        performance["total_nav_source"] = (
-            "current_execution_state"
-            if holdings.get("cash_source") == "order_contract"
-            else holdings.get("cash_source")
-        )
-    if latest_snapshot is not None:
-        performance["latest_snapshot"] = latest_snapshot
-        if holdings.get("cash_source") not in {"order_contract", "initial_cash", "position_baseline"} and _float(performance.get("total_nav")) <= 0:
-            performance["total_nav"] = latest_snapshot.get("nav", 0.0)
-            performance["total_nav_source"] = "latest_snapshot"
-    performance.setdefault("total_nav", 0.0)
-    performance.setdefault("total_nav_source", "latest_snapshot")
-    performance["pnl_curve"] = curve
-    return performance
 
 
 def _curve_from_order_rows(
@@ -2653,33 +1811,6 @@ def _weighted_avg_lot_cost(lots: List[Dict[str, float]]) -> float:
     return sum(_float(lot.get("qty")) * _float(lot.get("unit_cost")) for lot in lots) / qty
 
 
-def _snapshot_from_holdings(strategy_name: str, holdings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    market_value = _float(holdings.get("total_market_value"))
-    total_cost = _float(holdings.get("total_cost"))
-    if market_value <= 0 and total_cost <= 0 and holdings.get("cash_source") != "initial_cash":
-        return None
-    cash = _float(holdings.get("cash")) if holdings.get("cash_source") in {"order_contract", "initial_cash", "position_baseline"} else 0.0
-    nav = _float(holdings.get("nav")) if holdings.get("cash_source") in {"order_contract", "initial_cash", "position_baseline"} else market_value
-    snapshot_date = str(holdings.get("price_date") or "")
-    if holdings.get("cash_source") == "order_contract":
-        latest_activity_date = str(holdings.get("latest_activity_date") or "")[:10]
-        if not snapshot_date or (latest_activity_date and snapshot_date < latest_activity_date):
-            return None
-    if not snapshot_date:
-        snapshot_date = date.today().isoformat()
-    return {
-        "date": snapshot_date,
-        "timestamp": datetime.now().isoformat(),
-        "strategy_name": strategy_name,
-        "nav": nav,
-        "market_value": market_value,
-        "cash": cash,
-        "realized_pnl": holdings.get("realized_pnl", 0.0),
-        "unrealized_pnl": holdings.get("unrealized_pnl", 0.0),
-        "total_pnl": holdings.get("total_pnl", 0.0),
-    }
-
-
 def _benchmark_curve(root: Path, max_points: int = 180) -> Dict[str, Any]:
     db_path = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_index_ohlcv.duckdb"
     if not db_path.exists():
@@ -2731,15 +1862,6 @@ def _optional_float(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) else None
-
-
-def _median(values: List[float]) -> float:
-    ordered = sorted(values)
-    count = len(ordered)
-    middle = count // 2
-    if count % 2:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
 def _json_safe(value: Any) -> Any:

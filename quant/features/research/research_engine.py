@@ -1002,7 +1002,7 @@ class ResearchEngine:
     @classmethod
     def _repo_relative_path(cls, path: Path) -> str:
         try:
-            return str(path.resolve().relative_to(cls._repo_root()))
+            return path.resolve().relative_to(cls._repo_root()).as_posix()
         except ValueError:
             return str(path)
 

@@ -52,7 +52,7 @@ REPORT_ROOT = Path("quant/infrastructure/var/research/reports")
 COMMISSION_CFG = {
     "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
     "HK": {"type": "hk_realistic"},
-    "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0},
+    "CN": {"type": "cn_realistic"},
 }
 
 

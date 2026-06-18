@@ -11,7 +11,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - `ParquetLakeStorage` — writes day-partitioned lake datasets under `var/parquet_lake/`; use it when Parquet/OSS is the source of truth and DuckDB is only the query engine/cache
 - `TushareProvider`, `AkshareProvider`, `YfinanceProvider`, `DuckDBProvider` — implement `DataFeed` port
 - `PaperBroker`, `FutuProvider`, `QMTBroker` — implement `BrokerAdapter` port
-- `LiveTradingRecorder` — writes daily JSONL live records and dual-writes signals/positions to DuckDB (`var/strategy_dashboard.duckdb`) for dashboard queries; performance views are derived with `quant.analytics`
+- `LiveTradingRecorder` — writes strategy signals, orders, fills, positions, and snapshots to DuckDB (`var/strategy_dashboard.duckdb`) for dashboard queries; legacy JSONL is migration input only; performance views are derived with `quant.analytics`
 - `strategy_controls.py` — persists per-strategy live control state in DuckDB `strategy_states` table (`var/strategy_dashboard.duckdb`); dashboard actions update this table and never submit broker orders directly
 - `LiveExecutionManager` — converts live target signals into cost-bounded LIMIT orders and drops unfilled orders after the configured intraday deadline
 
@@ -48,7 +48,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - QMT trade callbacks must include commission; when MiniQMT does not provide a fee field, estimate CN A-share/ETF commission with the configured rate and a CNY 5 minimum so live strategy costs match broker cost basis.
 - QMT `trade_mode=SIMULATE` is not a verified sandbox order route and must refuse `submit_order()`; paper trading should use `PaperBroker`, while QMT order submission is reserved for confirmed `REAL` live runs.
 - QMT `FIX_PRICE` orders must be quantized at the broker boundary to the exchange tick; BUY rounds down and SELL rounds up so cost-bounded limits stay bounded.
-- `PaperBroker` is the only paper-trading execution adapter; it consumes local execution-date bars, applies backtest-style open/LIMIT fill rules, computes commission through `quant.runtime.execution_commission`, debits paper cash/cost basis with that commission, and emits local trade callbacks for the shared fill recorder.
+- `PaperBroker` is the only paper-trading execution adapter; it consumes local execution-date and previous bars, delegates deterministic matching to `quant.runtime.execution_simulator` (including marketable LIMIT fill-at-limit semantics), computes commission through `quant.runtime.execution_commission`, and emits local trade callbacks for the shared fill recorder without importing `features/`.
 - Live execution adapters must stay feature-agnostic: strategy-level risk/portfolio ownership is supplied by injected resolvers from the composition root, not by importing `features/`.
 - Cost-bounded live execution must preserve explicit LIMIT prices; only strategy `MARKET + reference price` signals are converted to bounded LIMIT orders.
 - Bare 6-digit CN codes can be ambiguous between stocks and indices (for example `000001`, `000016`, `000905`). Default provider/storage routing treats them as stocks; index ingestion must use `TushareProvider.fetch_index_daily_with_hfq()` and `DuckDBStorage.save_cn_index_bars()`.
@@ -92,7 +92,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 - `execution/strategy_controls.py` persists per-strategy and per-mode control state in DuckDB `strategy_states` table; dashboard control actions record state transitions and must not submit broker orders directly.
 - `execution/strategy_ledger.py` owns strategy operations ledgers, dashboard audit JSONL, mode-scoped liquidation plans, and optional broker-history reconciliation after a live restart.
-- `execution/strategy_state_store.py` owns the simplified DuckDB dashboard state store (`var/strategy_dashboard.duckdb`) with 3 tables: `strategy_states` (control state transitions), `strategy_positions` (current holdings per strategy×mode×symbol), and `strategy_signals` (signal-to-fill lifecycle records).
+- `execution/strategy_state_store.py` owns the DuckDB dashboard state store (`var/strategy_dashboard.duckdb`) with separate ledgers: `strategy_signals` (strategy intent), `strategy_orders` (submit attempts), `strategy_fills` (fill facts), plus `strategy_states`, `strategy_positions`, `strategy_capital_events`, and `strategy_snapshots`.
 - `execution/strategy_mode_records.py` is DEPRECATED — legacy append-only JSONL records, kept for backward compatibility only.
 - `execution/cn_trading_calendar.py` owns CN trading-calendar resolution for live/paper schedulers, combining Tushare `trade_cal` cache with local DuckDB market/status dates.
 - Broker adapters may expose `get_trade_history(start_date=None, end_date=None)` and `get_order_history(start_date=None, end_date=None)` for restart reconciliation. Implementations must return normalized dict-like records without importing `features/`.

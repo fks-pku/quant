@@ -34,6 +34,7 @@ from quant.runtime.execution_cost import (
     model_slippage_bps as _shared_model_slippage_bps,
     safe_positive_number,
 )
+from quant.runtime.execution_simulator import RuntimeOrder, simulate_order_execution
 
 logger = logging.getLogger(__name__)
 
@@ -249,186 +250,67 @@ def execute_order(
     execution_cost_model: Optional[Dict[str, Any]] = None,
     ignore_settlement: bool = False,
 ) -> List[Trade]:
-    if bar is None:
-        raise OrderRejectedError(OrderRejectionReason.BAR_UNAVAILABLE, symbol)
-    price_field = execution_price_field(order)
-    raw_execution_price = _positive_finite_float(bar.get(price_field), symbol, price_field)
-
-    signal_date = order.signal_date
-    fill_ts = bar.get('timestamp', datetime.now())
-    if not isinstance(fill_ts, datetime):
-        fill_ts = pd.Timestamp(fill_ts).to_pydatetime()
-
-    market = get_market(symbol)
-
-    if market == "CN":
-        prev_close = prev_bar.get('close', 0) if prev_bar else 0
-        fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-        limit_direction = get_price_limit_direction(
+    runtime_order = RuntimeOrder(
+        symbol=order.symbol,
+        quantity=order.quantity,
+        side=order.side,
+        order_type=order.order_type,
+        price=order.price,
+        strategy=order.strategy,
+        signal_date=order.signal_date,
+        risk_check_price=order.risk_check_price,
+        execution_timing=order.execution_timing,
+        execution_cost_reference_price=order.execution_cost_reference_price,
+        execution_cost_bps=order.execution_cost_bps,
+        execution_slippage_bps=order.execution_slippage_bps,
+        execution_impact_bps=order.execution_impact_bps,
+    )
+    try:
+        simulation = simulate_order_execution(
+            runtime_order,
+            portfolio,
             symbol,
-            raw_execution_price,
-            prev_close,
-            fill_date_val,
-            ipo_dates,
-            bar.get("up_limit"),
-            bar.get("down_limit"),
-            bar.get("is_st", False),
-        )
-        if (
-            (limit_direction == "UP" and order.side == "BUY")
-            or (limit_direction == "DOWN" and order.side == "SELL")
-        ):
-            diag.limit_rejected_orders += 1
-            raise OrderRejectedError(OrderRejectionReason.PRICE_AT_LIMIT, symbol)
-
-    order_type = (order.order_type or "MARKET").upper()
-    cost_protection_limit = _execution_day_cost_limit_price(order, raw_execution_price, order_type)
-    execution_order = replace(order, price=cost_protection_limit) if cost_protection_limit is not None else order
-    protected_slippage_bps = _optional_non_negative_float(
-        getattr(order, "execution_slippage_bps", None),
-        symbol,
-        "execution_slippage_bps",
-    )
-    effective_slippage_bps = (
-        protected_slippage_bps
-        if protected_slippage_bps is not None
-        else _model_slippage_bps(raw_execution_price, slippage_bps, market, execution_cost_model)
-    )
-    fill_price = resolve_base_fill_price(
-        execution_order,
-        raw_execution_price,
-        order_type,
-        effective_slippage_bps,
-        price_field,
-    )
-    fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
-
-    risk_price = order.risk_check_price
-    if order_type != "LIMIT" and risk_price > 0 and abs(fill_price - risk_price) / risk_price > risk_price_deviation_limit:
-        raise OrderRejectedError(OrderRejectionReason.PRICE_DEVIATION, symbol)
-
-    qty = order.quantity
-    effective_lot_sizes = lot_sizes or {}
-    lot_size = get_lot_size(symbol, effective_lot_sizes)
-
-    quantity, lot_adjusted = apply_lot_rounding(qty, lot_size, order.side, market)
-    if quantity is None:
-        raise OrderRejectedError(OrderRejectionReason.LOT_IMPOSSIBLE, symbol)
-    if lot_adjusted:
-        diag.lot_adjusted_trades += 1
-
-    bar_volume = _execution_bar_volume(bar, fill_price, market)
-    participation_limit = _model_participation_limit(VOLUME_PARTICIPATION_LIMIT, market, execution_cost_model)
-    max_liquidity_qty = _liquidity_quantity_cap(bar, fill_price, bar_volume, participation_limit)
-    if max_liquidity_qty is not None and quantity > max_liquidity_qty:
-        max_qty = max(1, int(max_liquidity_qty))
-        if market == "HK" or (market == "CN" and order.side == "BUY"):
-            max_qty = (max_qty // lot_size) * lot_size
-        if max_qty <= 0:
-            raise OrderRejectedError(OrderRejectionReason.VOLUME_ZERO, symbol)
-        quantity = float(max_qty)
-        diag.volume_limited_trades += 1
-
-    base_fill_price = fill_price
-    protected_impact_bps = _optional_non_negative_float(
-        getattr(order, "execution_impact_bps", None),
-        symbol,
-        "execution_impact_bps",
-    )
-    impact_bps = (
-        protected_impact_bps
-        if protected_impact_bps is not None
-        else compute_execution_impact(
-            quantity,
-            base_fill_price,
             bar,
-            market,
-            execution_cost_model,
-            bar_volume,
-            market_impact_factor,
+            lot_sizes=lot_sizes,
+            ipo_dates=ipo_dates,
+            slippage_bps=slippage_bps,
+            commission_config=commission_config,
+            prev_bar=prev_bar,
+            risk_price_deviation_limit=risk_price_deviation_limit,
+            market_impact_factor=market_impact_factor,
+            execution_cost_model=execution_cost_model,
+            ignore_settlement=ignore_settlement,
         )
-    )
-    fill_price = apply_market_impact(base_fill_price, order.side, impact_bps)
-    fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
-    enforce_limit_after_impact(execution_order, fill_price, order_type)
+    except OrderRejectedError as exc:
+        if exc.reason == OrderRejectionReason.PRICE_AT_LIMIT:
+            diag.limit_rejected_orders += 1
+        elif exc.reason == OrderRejectionReason.T1_SETTLEMENT and get_market(symbol) == "CN":
+            diag.t1_rejected_sells += 1
+        raise
 
-    adv_value = _execution_adv_value(bar, fill_price)
-    if order.side == "BUY":
-        final_adv_qty = _final_buy_adv_quantity_cap(
-            quantity,
-            fill_price,
-            adv_value,
-            participation_limit,
-            market,
-            lot_size,
-        )
-        if final_adv_qty is None:
-            raise OrderRejectedError(OrderRejectionReason.VOLUME_ZERO, symbol)
-        if final_adv_qty < quantity:
-            quantity = final_adv_qty
-            diag.volume_limited_trades += 1
-            impact_bps = (
-                protected_impact_bps
-                if protected_impact_bps is not None
-                else compute_execution_impact(
-                    quantity,
-                    base_fill_price,
-                    bar,
-                    market,
-                    execution_cost_model,
-                    bar_volume,
-                    market_impact_factor,
-                )
-            )
-            fill_price = apply_market_impact(base_fill_price, order.side, impact_bps)
-            fill_price = _positive_finite_float(fill_price, symbol, "fill_price")
-            enforce_limit_after_impact(execution_order, fill_price, order_type)
-            adv_value = _execution_adv_value(bar, fill_price)
-
-    adv_quantity = _execution_adv_quantity(bar, fill_price)
-    observation = {
-        "symbol": symbol,
-        "side": order.side,
-        "date": fill_ts.date().isoformat() if hasattr(fill_ts, "date") else str(fill_ts)[:10],
-        "quantity": float(quantity),
-        "fill_price": float(fill_price),
-        "notional": float(abs(quantity * fill_price)),
-        "bar_volume": float(bar_volume or 0.0),
-        "adv_value": float(adv_value or 0.0),
-        "adv_volume": float(adv_quantity or 0.0),
-        "volume_participation": float(abs(quantity) / bar_volume) if bar_volume and bar_volume > 0 else 0.0,
-        "adv_participation": float(abs(quantity * fill_price) / adv_value) if adv_value and adv_value > 0 else 0.0,
-        "adv_volume_participation": float(abs(quantity) / adv_quantity) if adv_quantity and adv_quantity > 0 else 0.0,
-        "participation_limit": float(participation_limit or 0.0),
-        "impact_bps": float(impact_bps or 0.0),
-        "slippage_bps": float(effective_slippage_bps or 0.0),
-        "execution_timing": order.execution_timing,
-        "execution_price_field": price_field,
-    }
-    if cost_protection_limit is not None:
-        observation.update({
-            "cost_protection_bps": float(order.execution_cost_bps or 0.0),
-            "cost_protection_limit": float(cost_protection_limit),
-            "cost_protection_reference_price": float(raw_execution_price),
-            "cost_reference_price": float(order.execution_cost_reference_price or 0.0),
-        })
+    if simulation.lot_adjusted:
+        diag.lot_adjusted_trades += 1
+    diag.volume_limited_trades += simulation.volume_limited_count
+    if simulation.truncated_sell:
+        diag.truncated_sells += 1
+        logger.warning("SELL %s truncated: requested %d, settled %d", symbol, order.quantity, simulation.quantity)
 
     if order.side == 'BUY':
         trades = _execute_buy(
-            order, portfolio, symbol, fill_ts, fill_price, quantity,
-            signal_date, market, entry_times, entry_prices, diag, commission_config,
+            order, portfolio, symbol, simulation.fill_time, simulation.fill_price, simulation.quantity,
+            order.signal_date, simulation.market, entry_times, entry_prices, diag, commission_config,
         )
     elif order.side == 'SELL':
         trades = _execute_sell(
-            order, portfolio, symbol, fill_ts, fill_price, quantity,
-            signal_date, market, entry_times, entry_prices, diag, commission_config,
+            order, portfolio, symbol, simulation.fill_time, simulation.fill_price, simulation.quantity,
+            order.signal_date, simulation.market, entry_times, entry_prices, diag, commission_config,
             ignore_settlement,
         )
     else:
         raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, symbol,
                                  f"side={order.side!r}")
 
-    diag.record_execution_observation(observation)
+    diag.record_execution_observation(simulation.observation)
     return trades
 
 
@@ -458,7 +340,7 @@ def resolve_base_fill_price(
     if order.side == "SELL" and raw_price < limit_price:
         raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
                                  f"{price_field}={raw_price} < limit={limit_price}")
-    return float(raw_price)
+    return float(limit_price)
 
 
 def enforce_limit_after_impact(order: "DeferredOrder", fill_price: float, order_type: str) -> None:

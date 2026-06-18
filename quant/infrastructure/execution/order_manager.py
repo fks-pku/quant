@@ -3,6 +3,8 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
+import hashlib
+import json
 import threading
 import time
 import uuid
@@ -55,6 +57,8 @@ class OrderManager:
         self._record_pending_only = bool(execution_config.get("record_pending_only", False))
         self._signal_timestamp: Optional[datetime] = None
         self._signal_submit_date: Optional[str] = None
+        self._execution_timestamp: Optional[datetime] = None
+        self._order_signal_metadata: Dict[str, Dict[str, Any]] = {}
         self.logger = setup_logger("OrderManager")
 
     def register_broker(self, name: str, broker: BrokerAdapter, symbols: Optional[List[str]] = None) -> None:
@@ -102,15 +106,52 @@ class OrderManager:
                 price = check_price
 
         if self._record_pending_only:
-            order_id = str(uuid.uuid4())[:12].upper()
+            with self._lock:
+                signal_timestamp = self._signal_timestamp or datetime.now()
+                submit_date = self._signal_submit_date
+            existing_order_id = self._existing_pending_live_signal_order_id(
+                symbol=symbol,
+                quantity=quantity,
+                side=side,
+                order_type=order_type,
+                strategy_name=strategy_name,
+                signal_timestamp=signal_timestamp,
+                submit_date=submit_date,
+            )
+            if existing_order_id:
+                with self._lock:
+                    self._orders[existing_order_id] = Order(
+                        symbol=symbol, quantity=quantity,
+                        side=OrderSide(side), order_type=OrderType(order_type),
+                        order_id=existing_order_id, status=OrderStatus.PENDING,
+                        price=price, timestamp=signal_timestamp,
+                        strategy_name=strategy_name,
+                    )
+                    self._remember_order_signal_metadata(existing_order_id, signal_metadata)
+                self._record_strategy(existing_order_id, strategy_name)
+                self.logger.info(
+                    f"Order signal skipped as already pending: {existing_order_id} {symbol} {side} {quantity}"
+                )
+                return existing_order_id
+
+            order_id = _make_pending_signal_order_id(
+                strategy_name=strategy_name,
+                symbol=symbol,
+                quantity=quantity,
+                side=side,
+                order_type=order_type,
+                signal_timestamp=signal_timestamp,
+                submit_date=submit_date,
+            )
             with self._lock:
                 self._orders[order_id] = Order(
                     symbol=symbol, quantity=quantity,
                     side=OrderSide(side), order_type=OrderType(order_type),
                     order_id=order_id, status=OrderStatus.PENDING,
-                    price=price, timestamp=datetime.now(),
+                    price=price, timestamp=signal_timestamp,
                     strategy_name=strategy_name,
                 )
+                self._remember_order_signal_metadata(order_id, signal_metadata)
             self._record_signal(
                 symbol=symbol,
                 quantity=quantity,
@@ -166,6 +207,7 @@ class OrderManager:
             return None
 
         order_id = str(uuid.uuid4())[:12].upper()
+        order_timestamp = self._order_timestamp()
 
         order = Order(
             symbol=symbol,
@@ -175,12 +217,13 @@ class OrderManager:
             order_id=order_id,
             status=OrderStatus.PENDING,
             price=price,
-            timestamp=datetime.now(),
+            timestamp=order_timestamp,
             strategy_name=strategy_name,
         )
 
         with self._lock:
             self._orders[order_id] = order
+            self._remember_order_signal_metadata(order_id, signal_metadata)
 
         self._record_signal(
             symbol=symbol,
@@ -213,6 +256,13 @@ class OrderManager:
     def clear_signal_submit_date(self) -> None:
         self.set_signal_submit_date(None)
 
+    def set_execution_timestamp(self, timestamp: Optional[datetime]) -> None:
+        with self._lock:
+            self._execution_timestamp = timestamp
+
+    def clear_execution_timestamp(self) -> None:
+        self.set_execution_timestamp(None)
+
     def _submit_to_broker(self, order: Order) -> None:
         """Submit order to broker with retry logic."""
         existing_order_id = self._existing_submitted_live_order_id(order)
@@ -241,7 +291,9 @@ class OrderManager:
 
                 self.logger.info(f"Order submitted: {broker_order_id} {order.symbol} {order.side} {order.quantity}")
                 self._record_strategy(broker_order_id, order.strategy_name)
-                self._record_order(updated, broker_order_id, "submitted")
+                metadata = self._metadata_for_order(order.order_id)
+                self._remember_order_signal_metadata(broker_order_id, metadata)
+                self._record_order(updated, broker_order_id, "submitted", metadata=metadata)
 
                 self.event_bus.publish_nowait(
                     EventType.ORDER_SUBMITTED,
@@ -264,7 +316,13 @@ class OrderManager:
         rejected = replace(order, status=OrderStatus.REJECTED)
         with self._lock:
             self._orders[order.order_id] = rejected
-        self._record_order(rejected, None, "rejected", reason="broker_submission_failed")
+        self._record_order(
+            rejected,
+            None,
+            "rejected",
+            reason="broker_submission_failed",
+            metadata=self._metadata_for_order(order.order_id),
+        )
         self.logger.error(f"Order rejected after {self._max_retries} attempts: {order.symbol}")
 
     def cancel_order(self, order_id: str) -> bool:
@@ -280,7 +338,12 @@ class OrderManager:
                 success = broker.cancel_order(order.order_id or order_id)
                 if success:
                     self._orders[order_id] = replace(order, status=OrderStatus.CANCELLED)
-                    self._record_order(self._orders[order_id], order.order_id or order_id, "cancelled")
+                    self._record_order(
+                        self._orders[order_id],
+                        order.order_id or order_id,
+                        "cancelled",
+                        metadata=self._metadata_for_order(order_id) or self._metadata_for_order(order.order_id),
+                    )
                     self.logger.info(f"Order cancelled: {order_id}")
                     return True
             except Exception as e:
@@ -385,6 +448,22 @@ class OrderManager:
         except Exception:
             pass
 
+    def _remember_order_signal_metadata(
+        self,
+        order_id: Optional[str],
+        signal_metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        if not order_id or not signal_metadata:
+            return
+        with self._lock:
+            self._order_signal_metadata[str(order_id)] = dict(signal_metadata)
+
+    def _metadata_for_order(self, order_id: Optional[str]) -> Dict[str, Any]:
+        if not order_id:
+            return {}
+        with self._lock:
+            return dict(self._order_signal_metadata.get(str(order_id), {}))
+
     def _record_signal(
         self,
         symbol: str,
@@ -402,7 +481,7 @@ class OrderManager:
             return
         try:
             with self._lock:
-                timestamp = self._signal_timestamp or datetime.now()
+                timestamp = self._signal_timestamp or self._execution_timestamp or datetime.now()
                 submit_date = self._signal_submit_date
             metadata = dict(signal_metadata or {})
             if submit_date and not metadata.get("submit_date") and not metadata.get("execution_date"):
@@ -429,13 +508,18 @@ class OrderManager:
         broker_order_id: Optional[str],
         status: str,
         reason: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         if self._live_recorder is None:
             return
         try:
-            self._live_recorder.record_order(order, broker_order_id, status, reason=reason)
+            self._live_recorder.record_order(order, broker_order_id, status, reason=reason, metadata=metadata)
         except Exception as e:
             self.logger.error(f"Failed to record order: {e}")
+
+    def _order_timestamp(self) -> datetime:
+        with self._lock:
+            return self._execution_timestamp or datetime.now()
 
     def _existing_submitted_live_order_id(self, order: Order) -> Optional[str]:
         if self._live_recorder is None:
@@ -468,3 +552,83 @@ class OrderManager:
                 continue
             return str(row.get("broker_order_id") or row.get("order_id") or "") or None
         return None
+
+    def _existing_pending_live_signal_order_id(
+        self,
+        *,
+        symbol: str,
+        quantity: float,
+        side: str,
+        order_type: str,
+        strategy_name: Optional[str],
+        signal_timestamp: datetime,
+        submit_date: Optional[str],
+    ) -> Optional[str]:
+        if self._live_recorder is None:
+            return None
+        read_day = getattr(self._live_recorder, "read_day", None)
+        if read_day is None:
+            return None
+        owner = strategy_name or "default"
+        try:
+            rows = read_day("signals", signal_timestamp.date().isoformat(), strategy_name=owner)
+        except Exception:
+            return None
+        expected_side = str(side or "").upper()
+        expected_order_type = str(order_type or "").upper()
+        expected_submit_date = str(submit_date or "")[:10]
+        for row in reversed(rows):
+            status = str(row.get("status") or "").lower()
+            if status not in {"accepted", "pending", "queued", "pending_submit"}:
+                continue
+            if str(row.get("symbol") or "") != symbol:
+                continue
+            if str(row.get("side") or "").upper() != expected_side:
+                continue
+            if str(row.get("order_type") or "").upper() != expected_order_type:
+                continue
+            if expected_submit_date and str(row.get("submit_date") or "")[:10] != expected_submit_date:
+                continue
+            if row.get("broker_order_id") or float(row.get("fill_quantity") or 0.0) > 0:
+                continue
+            try:
+                if abs(float(row.get("quantity") or 0.0) - float(quantity)) > 1e-9:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            order_id = str(row.get("order_id") or "")
+            if order_id:
+                return order_id
+            return _make_pending_signal_order_id(
+                strategy_name=strategy_name,
+                symbol=symbol,
+                quantity=quantity,
+                side=side,
+                order_type=order_type,
+                signal_timestamp=signal_timestamp,
+                submit_date=submit_date,
+            )
+        return None
+
+
+def _make_pending_signal_order_id(
+    *,
+    strategy_name: Optional[str],
+    symbol: str,
+    quantity: float,
+    side: str,
+    order_type: str,
+    signal_timestamp: datetime,
+    submit_date: Optional[str],
+) -> str:
+    parts = [
+        strategy_name or "default",
+        signal_timestamp.date().isoformat(),
+        str(submit_date or "")[:10],
+        symbol,
+        str(side or "").upper(),
+        str(float(quantity)),
+        str(order_type or "").upper(),
+    ]
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True)
+    return f"PEND-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8].upper()}"

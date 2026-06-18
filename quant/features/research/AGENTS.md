@@ -9,7 +9,7 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 - `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - orchestrates discovery, evaluation, validation, integration, backtest, ledger, lineage manifest, promotion dossier, and scorecard writing. Backtest, validation, rigor, ensemble, store, and artifact dependencies are injected by composition roots.
 - `StrategyScout` - strategy discovery coordinator. It can use direct adapters or a `SourceHub`, scores discoveries with `discovery/quality.py`, deduplicates, ranks, and optionally filters by `scout_config.min_discovery_score`.
 - `discovery/source_hub.py` - fan-out source adapter hub. It supports per-source query plans and normalizes raw source dictionaries into `RawStrategy`.
-- `config/research.yaml` discovery `sources` currently route through SSRN, BigQuant public seeds, and JoinQuant public seeds (`jointquant` is accepted as the configured JoinQuant alias).
+- `config/research.yaml` discovery `sources` currently route through SSRN, BigQuant public seeds, JoinQuant public seeds (`jointquant` is accepted as the configured JoinQuant alias), Quantocracy, Hudson & Thames, Portfolio Optimizer, Alpha Architect, and Quantpedia.
 - `discovery/quality.py` - deterministic idea provenance, source quality, recency, daily-data feasibility, implementation-readiness, and risk-flag scoring. Every discovered `RawStrategy` should carry `metadata.discovery_quality` before evaluation.
 - `StrategyEvaluator` - LLM-backed evaluator with deterministic professional fallback. It applies `evaluation_rubric.py` to all LLM or heuristic reports.
 - `evaluation_rubric.py` - admission-score rubric. It haircuts optimistic LLM output, provides no-LLM heuristic triage, and emits `required_data_fields`, `validation_tests`, `signal_quality_score`, and `research_confidence_score`.
@@ -73,9 +73,11 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 - Archived ETF category strategies must let resolved category maps override stale persisted fixed symbol lists for strict backtest, walk-forward, and report rendering. Promoted ETF representative-bucket strategies should use `audited_stable_etf_registry` by default: categories and symbols come only from the user-approved registry, while each rebalance still filters by current bar, NAV/size, liquidity, and lookback evidence. New ETF categories require explicit audit and registry update before use. ETF reports must include an ETF metadata survivorship audit when fund metadata lacks delist markers or bar-only symbols exist.
 - A-share low-price/small-cap generated strategies must include the delisting risk guard in both fast validation eligibility and strict strategy execution: price floor, liquidity floor, ST/suspension/list-status filters, and daily risk exits for held positions.
 - Formal A-share research defaults to strict backtests from `2016-01-01` through `2026-05-31` with `default_initial_cash=10000`, and reports must include a yearly strategy-return calendar from structured strict Backtester equity results.
+- Dedicated public-source replication runners may override `default_initial_cash` only when the cited source specifies capital or CN lot-size plus basket-width constraints would otherwise force a mechanical zero-trade run. The override must be documented in the runner, strategy README, report evidence, and tests, and must not mutate `config/research.yaml`.
 - Full reports must include a lightweight PnL attribution bridge from structured validation outputs to show where signal-only returns degrade before strict Backtester execution.
 - Purged walk-forward splits may run in parallel through `rigor_config.purged_walkforward.parallel_workers`; split results must remain date-ordered and each split runner must use isolated state. Composition roots may enable `prefetch_data` so split runners reuse one full-window market-data load and only slice OOS windows in memory.
 - Current research scope is A-share only. Strategy discovery, admission, StrategySpec universe, validation, reports, generated strategy defaults, and research CLI/API defaults must use A-share symbols such as `000300`, `000905`, `600519`, `000001`, and `510300`; do not emit US symbols such as `AAPL`, `MSFT`, `SPY`, or `QQQ` in research artifacts until US-market research is explicitly added.
+- `docs/research-pipeline.md` is the canonical short description of the research pipeline. Any change to stage order, mode behavior, gate thresholds, artifact paths, status transitions, strategy placement, or report contract must update this Markdown file and `.agents/skills/quant-research-fks/SKILL.md` in the same change.
 
 ## Modification Rules
 
@@ -93,7 +95,8 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 | Production online-readiness gate | `production_gate.py`, `research_engine.py`, `config/research.yaml` |
 | Candidate lifecycle | `pool.py` |
 | Scheduling | `scheduler.py` |
-| Pipeline orchestration/artifacts | `research_engine.py` |
+| Pipeline orchestration/artifacts | `research_engine.py`, `docs/research-pipeline.md`, `.agents/skills/quant-research-fks/SKILL.md` |
+| Research mode, gate, status, strategy-placement, or report-contract changes | `docs/research-pipeline.md`, `.agents/skills/quant-research-fks/SKILL.md`, relevant implementation/tests |
 
 ## Known Pitfalls
 

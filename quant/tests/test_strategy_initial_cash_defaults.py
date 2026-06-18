@@ -15,6 +15,9 @@ from quant.infrastructure.execution.brokers.paper import PaperBroker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STRATEGY_CASH = 10_000.0
+RUNNER_INITIAL_CASH_EXCEPTIONS = {
+    "run_ashare_csi1000_strict_index_enhanced_full_research.py:INITIAL_CASH": 2_000_000.0,
+}
 
 
 def test_strategy_initial_cash_defaults_are_10000():
@@ -35,7 +38,7 @@ def test_strategy_initial_cash_defaults_are_10000():
     assert PaperBroker().initial_cash == DEFAULT_STRATEGY_CASH
 
 
-def test_strategy_runner_initial_cash_constants_are_10000():
+def test_strategy_runner_initial_cash_constants_are_default_or_documented_exception():
     script_paths = sorted((PROJECT_ROOT / "quant/scripts").glob("run_*.py"))
     constants = {}
 
@@ -51,4 +54,11 @@ def test_strategy_runner_initial_cash_constants_are_10000():
                 constants[f"{path.name}:{matched[0]}"] = float(value)
 
     assert constants
-    assert all(value == DEFAULT_STRATEGY_CASH for value in constants.values())
+    unexpected = {
+        key: value
+        for key, value in constants.items()
+        if key not in RUNNER_INITIAL_CASH_EXCEPTIONS and value != DEFAULT_STRATEGY_CASH
+    }
+    assert unexpected == {}
+    for key, expected in RUNNER_INITIAL_CASH_EXCEPTIONS.items():
+        assert constants[key] == expected

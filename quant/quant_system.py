@@ -160,13 +160,27 @@ class QuantSystem:
         self._assert_broker_adapter_allowed(broker_name)
         if broker_name == "paper":
             initial_cash = self.config.get("system", {}).get("initial_cash", 10000)
-            slippage_bps = self.config.get("execution", {}).get("slippage_bps", 5)
-            commission_config = self.config.get("execution", {}).get("commission", {})
+            execution_config = self.config.get("execution", {})
+            backtest_config = self.config.get("backtest", {})
+            slippage_bps = execution_config.get("slippage_bps", 5)
+            commission_config = execution_config.get("commission", {})
+            execution_cost_model = execution_config.get("cost_model") or backtest_config.get("execution_cost_model")
+            risk_price_deviation_limit = backtest_config.get(
+                "risk_price_deviation_limit",
+                execution_config.get("risk_price_deviation_limit", 0.15),
+            )
+            market_impact_factor = backtest_config.get(
+                "market_impact_factor",
+                execution_config.get("market_impact_factor", 0.0),
+            )
             broker = PaperBroker(
                 initial_cash,
                 slippage_bps,
                 data_provider=self.engine.data_providers.get("default"),
                 commission_config=commission_config,
+                execution_cost_model=execution_cost_model,
+                risk_price_deviation_limit=risk_price_deviation_limit,
+                market_impact_factor=market_impact_factor,
             )
             broker.set_portfolio(self.engine.portfolio)
             broker.connect()
@@ -753,6 +767,7 @@ class QuantSystem:
             self._prepare_paper_execution_context(provider, symbols, execution_day)
         signal_timestamp_set = False
         signal_submit_date_set = False
+        execution_timestamp_set = False
         if pending_only and hasattr(order_manager, "set_signal_timestamp"):
             signal_timestamp = datetime.combine(signal_day, datetime.min.time()).replace(hour=15)
             order_manager.set_signal_timestamp(signal_timestamp)
@@ -760,6 +775,17 @@ class QuantSystem:
         if pending_only and hasattr(order_manager, "set_signal_submit_date"):
             order_manager.set_signal_submit_date(execution_day.isoformat())
             signal_submit_date_set = True
+        if not pending_only and hasattr(order_manager, "set_execution_timestamp"):
+            market = str(self.config.get("system", {}).get("market", "CN") or "CN")
+            market_config = self.config.get("markets", {}).get(market, {})
+            open_hour = int(market_config.get("open_hour", 9) or 9)
+            open_minute = int(market_config.get("open_minute", 30) or 30)
+            execution_timestamp = datetime.combine(execution_day, datetime.min.time()).replace(
+                hour=open_hour,
+                minute=open_minute,
+            )
+            order_manager.set_execution_timestamp(execution_timestamp)
+            execution_timestamp_set = True
         try:
             results = self.engine.inject_daily_snapshot(signal_day, bars, execution_day)
         finally:
@@ -767,6 +793,8 @@ class QuantSystem:
                 order_manager.clear_signal_timestamp()
             if signal_submit_date_set and hasattr(order_manager, "clear_signal_submit_date"):
                 order_manager.clear_signal_submit_date()
+            if execution_timestamp_set and hasattr(order_manager, "clear_execution_timestamp"):
+                order_manager.clear_execution_timestamp()
         if pending_only:
             self._record_live_strategy_snapshots(
                 timestamp=datetime.combine(signal_day, datetime.min.time()).replace(hour=15),
@@ -800,7 +828,25 @@ class QuantSystem:
                 f"Paper daily snapshot requires execution-date bars for {execution_day}; "
                 "run it after daily data is updated."
             )
+        if hasattr(broker, "set_previous_execution_bars"):
+            previous_bars = self._latest_bars_before(provider, symbols, execution_day)
+            broker.set_previous_execution_bars(previous_bars)
         broker.set_execution_bars(execution_bars, trading_date=execution_day)
+
+    def _latest_bars_before(self, provider: Any, symbols: list, execution_day: date) -> list:
+        start = execution_day - timedelta(days=10)
+        end = execution_day - timedelta(days=1)
+        records = self._load_snapshot_bars(provider, symbols, start, end)
+        latest: dict[str, tuple[date, Any]] = {}
+        for bar in records:
+            bar_day = self._bar_date(bar)
+            symbol = self._bar_symbol(bar)
+            if bar_day is None or symbol is None or bar_day >= execution_day:
+                continue
+            current = latest.get(symbol)
+            if current is None or bar_day > current[0]:
+                latest[symbol] = (bar_day, bar)
+        return [item for _, item in latest.values()]
 
     def _select_snapshot_provider(self, provider_name: Optional[str]) -> Any:
         if not self.engine:
@@ -871,6 +917,13 @@ class QuantSystem:
         if value is None:
             return None
         return self._coerce_date(value)
+
+    def _bar_symbol(self, bar: Any) -> Optional[str]:
+        for key in ("symbol", "ts_code", "code", "ticker"):
+            value = bar.get(key) if isinstance(bar, dict) else getattr(bar, key, None)
+            if value:
+                return str(value)
+        return None
 
     def disconnect_adapters(self) -> None:
         if not self.engine:

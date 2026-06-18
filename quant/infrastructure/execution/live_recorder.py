@@ -81,11 +81,12 @@ class LiveTradingRecorder:
         status: str,
         reason: str = "",
         timestamp: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         ts = timestamp or order.timestamp or datetime.now()
         side = order.side.value if hasattr(order.side, "value") else str(order.side)
         order_type = order.order_type.value if hasattr(order.order_type, "value") else str(order.order_type)
-        self._append("orders", ts, {
+        payload = {
             "timestamp": ts,
             "order_id": order.order_id,
             "broker_order_id": broker_order_id,
@@ -97,7 +98,9 @@ class LiveTradingRecorder:
             "price": order.price,
             "status": status,
             "reason": reason,
-        })
+        }
+        payload.update(_order_execution_metadata(metadata))
+        self._append("orders", ts, payload)
 
     def record_fill(
         self,
@@ -262,16 +265,22 @@ class LiveTradingRecorder:
                 result = [s for s in result if s.get("strategy_name") == strategy_name]
             return _sort_records(_public_signal_record(record) for record in result)
         if kind == "orders":
+            all_orders = self._state_store.get_orders(strategy_name=name, mode=self._mode, limit=10000)
+            if strategy_name is None:
+                all_orders = self._state_store.get_recent_orders(mode=self._mode, days=365)
             return _sort_records(
                 _public_order_record(record)
-                for record in all_signals
-                if record.get("order_id") and str(record.get("signal_date", ""))[:10] == date_str
+                for record in all_orders
+                if str(record.get("record_date", ""))[:10] == date_str
             )
         if kind == "fills":
+            all_fills = self._state_store.get_fills(strategy_name=name, mode=self._mode, limit=10000)
+            if strategy_name is None:
+                all_fills = self._state_store.get_recent_fills(mode=self._mode, days=365)
             return _sort_records(
                 _public_fill_record(record)
-                for record in all_signals
-                if record.get("fill_quantity", 0) > 0 and str(record.get("signal_date", ""))[:10] == date_str
+                for record in all_fills
+                if str(record.get("record_date", ""))[:10] == date_str
             )
         return []
 
@@ -367,115 +376,105 @@ class LiveTradingRecorder:
                     "order_type": str(payload.get("order_type") or ""),
                         "reference_price": payload.get("reference_price") if payload.get("reference_price") is not None else payload.get("price"),
                     "status": str(payload.get("status") or "generated"),
-                    "order_id": str(payload.get("order_id") or ""),
                     "failure_reason": str(payload.get("reason") or ""),
                     "submit_date": submit_date,
                     "record_date": signal_date,
                     "cost_bps": _nullable_float(payload.get("cost_bps") or payload.get("execution_cost_bps")),
+                    "execution_reference_price": _nullable_float(payload.get("execution_reference_price")),
                 })
             elif kind == "orders":
                 order_id = str(payload.get("order_id") or "")
                 broker_order_id = str(payload.get("broker_order_id") or "")
+                order_date = str(payload.get("timestamp") or timestamp.isoformat())[:10]
                 signal = self._state_store.get_signal_by_order(
-                    mode=self._mode, order_id=order_id, signal_date=signal_date,
+                    mode=self._mode,
+                    order_id=order_id,
+                    strategy_name=strategy_name,
+                    symbol=str(payload.get("symbol") or ""),
+                    side=str(payload.get("side") or ""),
                 )
                 if not signal and broker_order_id:
                     signal = self._state_store.get_signal_by_order(
-                        mode=self._mode, order_id=broker_order_id, signal_date=signal_date,
+                        mode=self._mode,
+                        order_id=broker_order_id,
+                        signal_date=signal_date,
+                        strategy_name=strategy_name,
+                        symbol=str(payload.get("symbol") or ""),
+                        side=str(payload.get("side") or ""),
                     )
-                if not signal and not order_id and not broker_order_id:
-                    signal = self._state_store.get_signal_by_signature(
+                if not signal:
+                    signal = self._state_store.get_signal_for_submission(
                         mode=self._mode,
                         strategy_name=strategy_name,
                         symbol=str(payload.get("symbol") or ""),
                         side=str(payload.get("side") or ""),
                         quantity=float(payload.get("quantity", 0.0)),
-                        signal_date=signal_date,
-                        order_type=str(payload.get("order_type") or ""),
+                        submit_date=order_date,
                     )
-                if not signal:
-                    signal_id = _make_signal_id_from_order(payload, self._mode)
-                    submit_date = str(payload.get("submit_date") or payload.get("execution_date") or "")[:10]
-                    self._state_store.upsert_signal(signal={
-                        "signal_id": signal_id,
-                        "strategy_name": strategy_name,
-                        "mode": self._mode,
-                        "timestamp": _ts(payload.get("timestamp")),
-                        "signal_date": signal_date,
-                        "symbol": str(payload.get("symbol") or ""),
-                        "side": str(payload.get("side") or ""),
-                        "quantity": float(payload.get("quantity", 0.0)),
-                        "order_type": str(payload.get("order_type") or ""),
-                        "reference_price": payload.get("reference_price") if payload.get("reference_price") is not None else payload.get("price"),
-                        "status": str(payload.get("status") or "submitted"),
-                        "order_id": order_id,
-                        "broker_order_id": broker_order_id,
-                        "failure_reason": str(payload.get("reason") or ""),
-                        "submit_date": submit_date,
-                        "record_date": signal_date,
-                        "cost_bps": _nullable_float(payload.get("cost_bps") or payload.get("execution_cost_bps")),
-                    })
-                else:
-                    self._state_store.update_signal_order(
-                        signal_id=str(signal.get("signal_id") or ""),
-                        order_id=order_id,
-                        broker_order_id=broker_order_id,
-                        status=str(payload.get("status") or "submitted"),
-                        failure_reason=str(payload.get("reason") or ""),
-                    )
+                self._state_store.upsert_order(order={
+                    "signal_id": str((signal or {}).get("signal_id") or ""),
+                    "strategy_name": strategy_name,
+                    "mode": self._mode,
+                    "timestamp": _ts(payload.get("timestamp")),
+                    "signal_date": str((signal or {}).get("signal_date") or ""),
+                    "submit_date": order_date,
+                    "record_date": order_date,
+                    "symbol": str(payload.get("symbol") or ""),
+                    "side": str(payload.get("side") or ""),
+                    "quantity": float(payload.get("quantity", 0.0)),
+                    "order_type": str(payload.get("order_type") or ""),
+                    "price": payload.get("price"),
+                    "status": str(payload.get("status") or "submitted"),
+                    "order_id": order_id,
+                    "broker_order_id": broker_order_id,
+                    "failure_reason": str(payload.get("reason") or ""),
+                    "cost_bps": _nullable_float(payload.get("cost_bps") or payload.get("execution_cost_bps")),
+                    "execution_reference_price": _nullable_float(payload.get("execution_reference_price")),
+                })
             elif kind == "fills":
                 order_id = str(payload.get("order_id") or "")
-                signal = self._state_store.get_signal_by_order(
-                    mode=self._mode, order_id=order_id, signal_date=signal_date,
+                fill_date = str(payload.get("timestamp") or timestamp.isoformat())[:10]
+                order = self._state_store.get_order_by_order_id(
+                    mode=self._mode,
+                    order_id=order_id,
+                    strategy_name=strategy_name,
+                    symbol=str(payload.get("symbol") or ""),
+                    side=str(payload.get("side") or ""),
                 )
+                signal = None
+                if order and order.get("signal_id"):
+                    signal = self._state_store.get_signal(signal_id=str(order.get("signal_id") or ""))
                 if not signal:
-                    signal = self._state_store.get_signal_by_signature(
+                    signal = self._state_store.get_signal_for_submission(
                         mode=self._mode,
                         strategy_name=strategy_name,
                         symbol=str(payload.get("symbol") or ""),
                         side=str(payload.get("side") or ""),
                         quantity=float(payload.get("quantity", 0.0)),
-                        signal_date=signal_date,
+                        submit_date=fill_date,
                     )
                 fill_qty = float(payload.get("quantity", 0.0))
                 fill_price = float(payload.get("price", 0.0))
                 commission = float(payload.get("commission", 0.0))
                 fill_time = _ts(payload.get("timestamp"))
-                fill_date = str(payload.get("timestamp"))[:10] if isinstance(payload.get("timestamp"), datetime) else signal_date
-                if signal:
-                    self._state_store.update_signal_fill(
-                        signal_id=str(signal.get("signal_id") or ""),
-                        fill_quantity=fill_qty,
-                        fill_price=fill_price,
-                        commission=commission,
-                        fill_time=fill_time,
-                        status="filled",
-                    )
-                else:
-                    signal_id = _make_signal_id_from_order(payload, self._mode)
-                    self._state_store.upsert_signal(signal={
-                        "signal_id": signal_id,
-                        "strategy_name": strategy_name,
-                        "mode": self._mode,
-                        "timestamp": _ts(payload.get("timestamp")),
-                        "signal_date": signal_date,
-                        "symbol": str(payload.get("symbol") or ""),
-                        "side": str(payload.get("side") or "").upper(),
-                        "quantity": fill_qty,
-                        "order_type": "",
-                        "reference_price": fill_price,
-                        "status": "filled",
-                        "order_id": order_id,
-                        "broker_order_id": "",
-                        "fill_quantity": fill_qty,
-                        "fill_price": fill_price,
-                        "commission": commission,
-                        "fill_time": fill_time,
-                        "failure_reason": "",
-                        "submit_date": fill_date[:10],
-                        "record_date": signal_date,
-                        "cost_bps": None,
-                    })
+                self._state_store.upsert_fill(fill={
+                    "fill_id": str(payload.get("fill_id") or ""),
+                    "order_row_id": str((order or {}).get("order_row_id") or ""),
+                    "signal_id": str((signal or {}).get("signal_id") or (order or {}).get("signal_id") or ""),
+                    "strategy_name": strategy_name,
+                    "mode": self._mode,
+                    "timestamp": fill_time,
+                    "signal_date": str((signal or {}).get("signal_date") or (order or {}).get("signal_date") or ""),
+                    "record_date": fill_date,
+                    "symbol": str(payload.get("symbol") or ""),
+                    "side": str(payload.get("side") or "").upper(),
+                    "quantity": fill_qty,
+                    "price": fill_price,
+                    "commission": commission,
+                    "order_id": order_id,
+                    "broker_order_id": str((order or {}).get("broker_order_id") or ""),
+                    "source": self._mode,
+                })
                 symbol = str(payload.get("symbol") or "")
                 side = str(payload.get("side") or "").upper()
                 self._update_position(
@@ -511,14 +510,18 @@ class LiveTradingRecorder:
             return self._state_store.get_snapshots(strategy_name=name, mode=self._mode, limit=days)
         if strategy_name is None:
             base_signals = self._state_store.get_recent_signals(mode=self._mode, days=days)
+            base_orders = self._state_store.get_recent_orders(mode=self._mode, days=days)
+            base_fills = self._state_store.get_recent_fills(mode=self._mode, days=days)
         else:
             base_signals = self._state_store.get_signals(strategy_name=name, mode=self._mode, limit=max(days * 10, 100))
+            base_orders = self._state_store.get_orders(strategy_name=name, mode=self._mode, limit=max(days * 10, 100))
+            base_fills = self._state_store.get_fills(strategy_name=name, mode=self._mode, limit=max(days * 10, 100))
         if kind == "signals":
             return base_signals
         if kind == "orders":
-            return [s for s in base_signals if s.get("order_id")]
+            return [_public_order_record(record) for record in base_orders]
         if kind == "fills":
-            return [s for s in base_signals if s.get("fill_quantity", 0) > 0]
+            return [_public_fill_record(record) for record in base_fills]
         return []
 
     def _closed_trades(self, fills: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -666,7 +669,11 @@ class LiveTradingRecorder:
 
     def _add_reference_prices(self, references: Dict[str, float], records: Iterable[Dict[str, Any]]) -> None:
         for record in records:
-            price = self._positive_float(record.get("reference_price") or record.get("price"))
+            price = self._positive_float(
+                record.get("execution_reference_price")
+                or record.get("reference_price")
+                or record.get("price")
+            )
             if price is None:
                 continue
             for key in ("order_id", "broker_order_id"):
@@ -801,26 +808,49 @@ def _public_signal_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
 def _public_order_record(record: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(record)
-    row.setdefault("price", row.get("reference_price"))
-    row.setdefault("record_date", row.get("signal_date"))
+    row.setdefault("price", row.get("limit_price", row.get("reference_price")))
+    row.setdefault("reference_price", row.get("price"))
+    row.setdefault("reason", row.get("failure_reason", ""))
+    row.setdefault("record_date", row.get("submit_date") or row.get("signal_date"))
+    row.setdefault("fill_quantity", 0.0)
+    row.setdefault("fill_price", None)
     return row
 
 
 def _public_fill_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    quantity = record.get("fill_quantity", record.get("quantity", 0.0))
+    price = record.get("fill_price", record.get("price", 0.0))
     return {
         **record,
         "timestamp": record.get("fill_time") or record.get("timestamp", ""),
+        "fill_time": record.get("fill_time") or record.get("timestamp", ""),
         "fill_id": record.get("fill_id", ""),
         "order_id": record.get("order_id", ""),
+        "broker_order_id": record.get("broker_order_id", ""),
+        "order_row_id": record.get("order_row_id", ""),
+        "signal_id": record.get("signal_id", ""),
         "strategy_name": record.get("strategy_name", ""),
         "symbol": record.get("symbol", ""),
         "side": record.get("side", ""),
-        "quantity": record.get("fill_quantity", 0.0),
-        "price": record.get("fill_price", 0.0),
+        "quantity": quantity,
+        "price": price,
+        "fill_quantity": quantity,
+        "fill_price": price,
         "commission": record.get("commission", 0.0),
-        "value": float(record.get("fill_quantity", 0.0) or 0.0) * float(record.get("fill_price", 0.0) or 0.0),
-        "record_date": record.get("signal_date", ""),
+        "value": float(quantity or 0.0) * float(price or 0.0),
+        "record_date": record.get("record_date") or record.get("signal_date", ""),
     }
+
+
+def _order_execution_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not metadata:
+        return {}
+    payload: Dict[str, Any] = {}
+    for key in ("execution_reference_price", "execution_cost_bps", "cost_bps", "submit_date", "execution_date"):
+        value = metadata.get(key)
+        if value is not None and value != "":
+            payload[key] = value
+    return payload
 
 
 def _make_signal_id(payload: Dict[str, Any], mode: str, signal_date: str) -> str:

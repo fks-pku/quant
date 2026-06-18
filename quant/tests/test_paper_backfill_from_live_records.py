@@ -8,7 +8,7 @@ from quant.infrastructure.execution.strategy_state_store import StrategyStateSto
 from quant.scripts.backfill_paper_from_live_records import backfill_paper_from_live_records
 
 
-def test_backfill_paper_from_live_signals_uses_execution_open_and_skips_manual_orders(tmp_path):
+def test_backfill_paper_from_live_signals_uses_limit_fill_and_skips_manual_orders(tmp_path):
     root = tmp_path
     live_dir = root / "quant" / "infrastructure" / "var" / "live_trading"
     etf_db = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb"
@@ -55,8 +55,11 @@ def test_backfill_paper_from_live_signals_uses_execution_open_and_skips_manual_o
     paper_fills = paper_recorder.read_day("fills", trading_date)
     assert result["signals"] == 2
     assert result["filled"] == 2
-    assert [order["order_id"] for order in paper_orders] == ["PAPER-SIG-1", "PAPER-SIG-2"]
-    assert [fill["price"] for fill in paper_fills] == pytest.approx([1.995, 9.28])
+    live_signal_ids = [signal["signal_id"] for signal in live_recorder.read_day("signals", trading_date)]
+    assert [order["order_id"] for order in paper_orders] == [
+        f"PAPER-{signal_id.replace(':', '-')}" for signal_id in live_signal_ids
+    ]
+    assert [fill["price"] for fill in paper_fills] == pytest.approx([2.000985, 9.30784])
     assert "MANUAL-RETRY" not in {order["order_id"] for order in paper_orders}
 
     paper_day = root / "quant" / "infrastructure" / "var" / "paper_trading" / trading_date

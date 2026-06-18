@@ -331,6 +331,58 @@ def test_sync_broker_trade_history_imports_filled_order_history_when_trades_empt
     assert positions["510300"]["avg_cost"] == pytest.approx((300 * 4.769 + 5.0) / 300)
 
 
+def test_sync_broker_trade_history_recovers_strategy_from_persisted_order_row(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live_trading")
+    store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")
+    tracker = StrategyPositionTracker(store=store, mode="live")
+    recorder.record_order(
+        Order(
+            symbol="510880",
+            quantity=200,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            order_id="BRK-PERSISTED",
+            price=3.243,
+            timestamp=datetime(2026, 6, 16, 9, 30, 6),
+            strategy_name="DemoStrategy",
+        ),
+        broker_order_id="BRK-PERSISTED",
+        status="submitted",
+        timestamp=datetime(2026, 6, 16, 9, 30, 6),
+    )
+    restarted_tracker = StrategyPositionTracker(store=store, mode="live")
+    broker = HistoryBroker([
+        {
+            "order_id": "BRK-PERSISTED",
+            "trade_id": "FILL-PERSISTED",
+            "timestamp": datetime(2026, 6, 16, 9, 30, 6),
+            "symbol": "510880",
+            "side": "BUY",
+            "quantity": 200,
+            "price": 3.243,
+            "commission": 5.0,
+        }
+    ])
+
+    result = sync_broker_trade_history(
+        broker=broker,
+        recorder=recorder,
+        tracker=restarted_tracker,
+        mode="live",
+        start_date=date(2026, 6, 16),
+        end_date=date(2026, 6, 16),
+    )
+
+    assert result["imported_count"] == 1
+    assert result["unresolved_count"] == 0
+    fills = recorder.read_day("fills", "2026-06-16", strategy_name="DemoStrategy")
+    assert fills[0]["order_id"] == "BRK-PERSISTED"
+    positions = restarted_tracker.get_positions_for_strategy("DemoStrategy")
+    assert positions["510880"]["qty"] == 200
+    assert positions["510880"]["avg_cost"] == pytest.approx((200 * 3.243 + 5.0) / 200)
+    assert restarted_tracker.get_positions_for_strategy("default") == {}
+
+
 def test_sync_broker_trade_history_marks_unknown_order_attribution(tmp_path):
     recorder = LiveTradingRecorder(tmp_path / "live_trading")
     store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")

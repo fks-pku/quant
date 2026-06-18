@@ -19,6 +19,7 @@ from quant.features.backtest.commission import (
     HK_MIN_COMMISSION,
     HK_TRADING_SYSTEM_FEE,
     CN_COMMISSION_RATE,
+    CN_FUND_MIN_COMMISSION,
     CN_STAMP_DUTY_RATE,
     CN_TRANSFER_FEE_RATE,
     CN_REGULATOR_FEE_RATE,
@@ -171,10 +172,10 @@ class TestCalculateCommissionBySymbol:
         assert breakdown["transfer_fee"] == 0.0
         assert breakdown["regulator_fee"] == 0.0
 
-    def test_cn_fund_commission_can_be_configured(self):
+    def test_cn_fund_commission_keeps_live_minimum_when_configured_lower(self):
         cfg = CommissionConfig(CN={"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0})
         breakdown = calculate_commission("510300", 10.0, 1000, "BUY", cfg)
-        assert breakdown["commission"] == pytest.approx(1.0, rel=1e-4)
+        assert breakdown["commission"] == pytest.approx(CN_FUND_MIN_COMMISSION, rel=1e-4)
 
     def test_default_cn_fund_commission_uses_realistic_minimum(self):
         cfg = CommissionConfig()

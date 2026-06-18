@@ -1308,13 +1308,13 @@ C28-03  final_nav == initial_cash
 
 ## CASE-29: LIMIT 订单可成交性
 
-验证 LIMIT 不再被当作 MARKET 单成交。
+验证 LIMIT 不再被当作 MARKET 单成交。执行日 open/close price field 只用于 marketability 判断；可成交的 LIMIT 订单按自身 limit price 成交，使成本保护/模拟滑点真实进入 fill price。
 
 ### 断言
 
-    C29-01  BUY LIMIT 120, next open 110 -> 成交价 110
+    C29-01  BUY LIMIT 120, next open 110 -> 成交价 120
     C29-02  BUY LIMIT 100, next open 110 -> LIMIT_NOT_MARKETABLE
-    C29-03  SELL LIMIT 105, next open 110 -> 成交价 110
+    C29-03  SELL LIMIT 105, next open 110 -> 成交价 105
     C29-04  SELL LIMIT 120, next open 110 -> LIMIT_NOT_MARKETABLE
     C29-05  市场冲击后的成交价不得穿越 limit
 
@@ -1322,7 +1322,7 @@ C28-03  final_nav == initial_cash
 
 ## CASE-30: CN 涨跌停方向性
 
-验证涨跌停规则只约束无法成交的方向。
+验证涨跌停规则只约束无法成交的方向。该方向性规则由 `quant.runtime.execution_market_rules` 和 `quant.runtime.execution_simulator` 提供，backtest 与 PaperBroker 必须一致。
 
 ### 断言
 
@@ -1668,7 +1668,7 @@ D+1 ADV/volatility fields must not recompute or widen the frozen cost budget.
     C40-01  D close MARKET BUY becomes DeferredOrder(order_type="LIMIT").
     C40-02  DeferredOrder.price is None and execution_cost_bps/slippage/impact are frozen from D data.
     C40-03  risk_check_price remains the D reference price, not the cost-protection limit.
-    C40-04  D+1 execution reference anchors the concrete LIMIT as open/reference ± frozen bps.
+    C40-04  D+1 execution reference anchors the concrete LIMIT as open/reference ± frozen bps, and a marketable LIMIT fills at that concrete limit.
     C40-05  SELL cost-protection LIMIT uses execution_reference * (1 - bps / 10000).
 
 ### Tests
@@ -1708,6 +1708,26 @@ C41-04  CN SAME_CLOSE BUY 后 D+1 open SELL 不触发 T1_SETTLEMENT
 
 `test_case41_01_same_close_buy_and_generated_next_open_sell_use_expected_prices`,
 `test_case41_02_cn_same_close_buy_can_sell_next_open_under_t1`
+in `test_backtest_invariants.py`.
+
+---
+
+## CASE-42: CN ETF live-aligned minimum commission
+
+CN ETF/LOF/fund orders share the QMT live commission floor. A research or backtest config may still pass legacy `fund_min_per_order=0.0`, but the executable commission path must not charge below the live CNY 5 per-order minimum. ETF/LOF/fund symbols remain exempt from stock stamp duty, transfer fee, and regulator fee.
+
+### Assertions
+
+```
+    C42-01  CN ETF BUY with fund_min_per_order=0.0 charges CNY 5 commission.
+    C42-02  CN ETF SELL with fund_min_per_order=0.0 charges CNY 5 commission.
+    C42-03  ETF stock fee components remain 0.0.
+    C42-04  diagnostics.total_commission matches the trade commission sum.
+```
+
+### Tests
+
+`TestCase42CNEtfLiveCommissionMinimum`
 in `test_backtest_invariants.py`.
 
 ---

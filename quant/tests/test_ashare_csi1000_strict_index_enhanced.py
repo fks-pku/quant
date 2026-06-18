@@ -9,12 +9,13 @@ from quant.runtime.daily_strategy_runner import run_daily_snapshot
 
 
 class _Portfolio:
-    nav = 1_000_000.0
+    def __init__(self, nav=1_000_000.0):
+        self.nav = nav
 
 
 class _Context:
-    def __init__(self):
-        self.portfolio = _Portfolio()
+    def __init__(self, nav=1_000_000.0):
+        self.portfolio = _Portfolio(nav)
         self.orders = []
 
     def submit_order(self, symbol, quantity, side, order_type, price, strategy_name):
@@ -132,3 +133,42 @@ def test_csi1000_strict_index_enhanced_uses_csi1000_factor_profile():
         ("index_weight", 0.04, True),
     ]
     assert abs(sum(weight for _, weight, _ in strategy.score_specs) - 1.0) < 0.000001
+
+
+def test_csi1000_strict_index_enhanced_needs_source_scale_cash_for_round_lot_basket():
+    symbols = [f"60{index:04d}" for index in range(1, 121)]
+    weights = [{"trade_date": "2026-05-31", "symbol": symbol, "weight": 1.0} for symbol in symbols]
+
+    small_cash_strategy = AShareCsi1000StrictIndexEnhancedStrategy(
+        symbols=[*symbols, "000852"],
+        index_weights=weights,
+        max_positions=120,
+        min_turnover=0.0,
+    )
+    small_cash_context = _Context(nav=10_000.0)
+    small_cash_strategy.on_start(small_cash_context)
+    for symbol in symbols:
+        small_cash_strategy.on_data(None, _bar(symbol, close=10.0))
+    small_cash_strategy.on_data(None, _bar("000852", close=10.0))
+
+    small_cash_strategy.on_after_trading(small_cash_context, date(2026, 6, 1))
+
+    assert [order for order in small_cash_context.orders if order["side"] == "BUY"] == []
+
+    source_cash_strategy = AShareCsi1000StrictIndexEnhancedStrategy(
+        symbols=[*symbols, "000852"],
+        index_weights=weights,
+        max_positions=120,
+        min_turnover=0.0,
+    )
+    source_cash_context = _Context(nav=2_000_000.0)
+    source_cash_strategy.on_start(source_cash_context)
+    for symbol in symbols:
+        source_cash_strategy.on_data(None, _bar(symbol, close=10.0))
+    source_cash_strategy.on_data(None, _bar("000852", close=10.0))
+
+    source_cash_strategy.on_after_trading(source_cash_context, date(2026, 6, 1))
+
+    buys = [order for order in source_cash_context.orders if order["side"] == "BUY"]
+    assert buys
+    assert all(order["quantity"] % 100 == 0 for order in buys)

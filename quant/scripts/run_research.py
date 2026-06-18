@@ -231,11 +231,16 @@ def _create_configured_scout(config):
     from quant.features.research.scout import StrategyScout
     from quant.infrastructure.research.sources import (
         ASharePublicForumSource,
+        AlphaArchitectSource,
         ArxivSource,
         BigQuantSource,
         BlogSource,
+        HudsonThamesSource,
         JoinQuantSource,
         NBERSource,
+        PortfolioOptimizerSource,
+        QuantocracySource,
+        QuantpediaSource,
         SSRNSource,
     )
 
@@ -250,6 +255,11 @@ def _create_configured_scout(config):
             "bigquant": BigQuantSource(),
             "joinquant": JoinQuantSource(),
             "jointquant": JoinQuantSource(source_name="jointquant"),
+            "quantocracy": QuantocracySource(),
+            "hudson_thames": HudsonThamesSource(),
+            "portfolio_optimizer": PortfolioOptimizerSource(),
+            "alpha_architect": AlphaArchitectSource(),
+            "quantpedia": QuantpediaSource(),
             "ashare_structural": AShareStructuralSource(),
         },
         query_plan=scout_cfg.get("query_plan"),
@@ -391,7 +401,11 @@ def main():
         choices=["full", "discover", "formal", "fast", "strict", "walkforward", "scout_formal", "scout-formal"],
         help="Pipeline mode",
     )
-    parser.add_argument("--source", default="config", help="Source (config, all, ssrn, bigquant, jointquant, joinquant, or comma list)")
+    parser.add_argument(
+        "--source",
+        default="config",
+        help="Source (config, all, ssrn, bigquant, jointquant, joinquant, quantocracy, hudson_thames, portfolio_optimizer, alpha_architect, quantpedia, or comma list)",
+    )
     parser.add_argument("--max", type=int, default=5, dest="max_results", help="Max results per source")
     parser.add_argument("--max-ideas", type=int, default=None, help="Max local ideas to research in formal mode")
     parser.add_argument("--idea-id", action="append", dest="idea_ids", help="Specific idea_bank id to research in formal mode")

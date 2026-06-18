@@ -1,7 +1,10 @@
 """Migrate historical JSONL/JSON records into DuckDB strategy_dashboard tables.
 
 Migrations:
-  signals/orders/fills/snapshots JSONL -> strategy_signals, strategy_snapshots
+  signals JSONL                    -> strategy_signals
+  orders JSONL                     -> strategy_orders
+  fills JSONL                      -> strategy_fills
+  snapshots JSONL                  -> strategy_snapshots
   strategy_controls.json              -> strategy_states
   strategy_positions.json (live/paper)-> strategy_positions
 """
@@ -91,34 +94,35 @@ def migrate_jsonl_to_duckdb(base_dir: Path, mode: str, store: StrategyStateStore
                     signal_date=order_date,
                     order_type=str(order_data.get("order_type") or ""),
                 )
-            if signal:
-                store.update_signal_order(
-                    signal_id=str(signal.get("signal_id") or ""),
-                    order_id=order_id,
-                    broker_order_id=broker_order_id,
-                    status=str(order_data.get("status") or "submitted"),
-                    failure_reason=str(order_data.get("reason") or ""),
+            if not signal:
+                signal = store.get_signal_for_submission(
+                    mode=mode,
+                    strategy_name=strategy_name,
+                    symbol=str(order_data.get("symbol") or ""),
+                    side=str(order_data.get("side") or ""),
+                    quantity=float(order_data.get("quantity", 0.0)),
+                    submit_date=order_date,
                 )
-            else:
-                signal_id = _make_signal_id_from_order(order_data, mode)
-                store.upsert_signal(signal={
-                    "signal_id": signal_id,
-                    "strategy_name": strategy_name,
-                    "mode": mode,
-                    "timestamp": str(order_data.get("timestamp") or ""),
-                    "signal_date": order_date,
-                    "symbol": str(order_data.get("symbol") or ""),
-                    "side": str(order_data.get("side") or ""),
-                    "quantity": float(order_data.get("quantity", 0.0)),
-                    "order_type": str(order_data.get("order_type") or ""),
-                    "status": str(order_data.get("status") or "submitted"),
-                    "order_id": order_id,
-                    "broker_order_id": broker_order_id,
-                    "failure_reason": str(order_data.get("reason") or ""),
-                    "submit_date": str(order_data.get("submit_date") or order_data.get("execution_date") or "")[:10],
-                    "record_date": order_date,
-                })
-                counts["signals_created"] += 1
+            store.upsert_order(order={
+                "signal_id": str((signal or {}).get("signal_id") or ""),
+                "strategy_name": strategy_name,
+                "mode": mode,
+                "timestamp": str(order_data.get("timestamp") or ""),
+                "signal_date": str((signal or {}).get("signal_date") or ""),
+                "submit_date": str(order_data.get("submit_date") or order_data.get("execution_date") or order_date)[:10],
+                "record_date": order_date,
+                "symbol": str(order_data.get("symbol") or ""),
+                "side": str(order_data.get("side") or ""),
+                "quantity": float(order_data.get("quantity", 0.0)),
+                "order_type": str(order_data.get("order_type") or ""),
+                "price": order_data.get("price"),
+                "status": str(order_data.get("status") or "submitted"),
+                "order_id": order_id,
+                "broker_order_id": broker_order_id,
+                "failure_reason": str(order_data.get("reason") or ""),
+                "cost_bps": _nullable_float(order_data.get("cost_bps") or order_data.get("execution_cost_bps")),
+                "execution_reference_price": _nullable_float(order_data.get("execution_reference_price")),
+            })
 
         for fill_data in fills:
             order_id = str(fill_data.get("order_id") or "")
@@ -126,22 +130,39 @@ def migrate_jsonl_to_duckdb(base_dir: Path, mode: str, store: StrategyStateStore
             fill_date = str(fill_data.get("timestamp") or day_str)[:10]
             signal = store.get_signal_by_order(mode=mode, order_id=order_id, signal_date=fill_date)
             if not signal and not order_id:
-                signal = store.get_signal_by_signature(
+                signal = store.get_signal_for_submission(
                     mode=mode, strategy_name=strategy_name,
                     symbol=str(fill_data.get("symbol") or ""),
                     side=str(fill_data.get("side") or ""),
                     quantity=float(fill_data.get("quantity", 0.0)),
-                    signal_date=fill_date,
+                    submit_date=fill_date,
                 )
-            if signal:
-                store.update_signal_fill(
-                    signal_id=str(signal.get("signal_id") or ""),
-                    fill_quantity=float(fill_data.get("quantity", 0.0)),
-                    fill_price=float(fill_data.get("price", 0.0)),
-                    commission=float(fill_data.get("commission", 0.0)),
-                    fill_time=str(fill_data.get("timestamp") or ""),
-                    status="filled",
-                )
+            order = store.get_order_by_order_id(
+                mode=mode,
+                order_id=order_id,
+                record_date=fill_date,
+                strategy_name=strategy_name,
+                symbol=str(fill_data.get("symbol") or ""),
+                side=str(fill_data.get("side") or ""),
+            )
+            store.upsert_fill(fill={
+                "fill_id": str(fill_data.get("fill_id") or fill_data.get("trade_id") or ""),
+                "order_row_id": str((order or {}).get("order_row_id") or ""),
+                "signal_id": str((signal or {}).get("signal_id") or (order or {}).get("signal_id") or ""),
+                "strategy_name": strategy_name,
+                "mode": mode,
+                "timestamp": str(fill_data.get("timestamp") or ""),
+                "signal_date": str((signal or {}).get("signal_date") or (order or {}).get("signal_date") or ""),
+                "record_date": fill_date,
+                "symbol": str(fill_data.get("symbol") or ""),
+                "side": str(fill_data.get("side") or ""),
+                "quantity": float(fill_data.get("quantity", 0.0)),
+                "price": float(fill_data.get("price", 0.0)),
+                "commission": float(fill_data.get("commission", 0.0)),
+                "order_id": order_id,
+                "broker_order_id": str((order or {}).get("broker_order_id") or ""),
+                "source": "jsonl_migration",
+            })
 
         for snap_data in snapshots:
             strategy_name = str(snap_data.get("strategy_name") or "default")

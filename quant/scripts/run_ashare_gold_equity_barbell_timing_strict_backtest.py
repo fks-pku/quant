@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import math
+import statistics
 import sys
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 _project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_project_root))
+
+import pandas as pd
 
 from quant.api.research_bp import (
     _DuckDBDailyDateProvider,
@@ -52,7 +56,7 @@ STRATEGIES_ROOT = Path("quant/features/strategies")
 COMMISSION_CFG = {
     "US": {"type": "per_share", "per_share": 0.005, "min_per_order": 1.0},
     "HK": {"type": "hk_realistic"},
-    "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0},
+    "CN": {"type": "cn_realistic"},
 }
 
 
@@ -464,6 +468,136 @@ def _parameter_sensitivity_payload(best: Dict[str, Any], rows: List[Dict[str, An
     }
 
 
+def _walkforward_from_strict_equity(strict_report: Dict[str, Any], start: datetime, end: datetime) -> Dict[str, Any]:
+    points = ((strict_report.get("equity_curve") or {}).get("strategy") or [])
+    if not points:
+        return _empty_walkforward("strict equity curve missing")
+    frame = pd.DataFrame(points)
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+    frame = frame.dropna().sort_values("date")
+    split_ranges = [
+        ("2018-01-01", "2019-12-31", start.date().isoformat(), "2017-12-31"),
+        ("2020-01-01", "2021-12-31", "2018-01-01", "2019-12-31"),
+        ("2022-01-01", "2023-12-31", "2020-01-01", "2021-12-31"),
+        ("2024-01-01", end.date().isoformat(), "2022-01-01", "2023-12-31"),
+    ]
+    splits = []
+    for index, (test_start, test_end, train_start, train_end) in enumerate(split_ranges, start=1):
+        split_frame = frame[(frame["date"] >= pd.Timestamp(test_start)) & (frame["date"] <= pd.Timestamp(test_end))]
+        if len(split_frame) < 2:
+            continue
+        returns = split_frame["value"].pct_change(fill_method=None).dropna()
+        sharpe = _sharpe(returns)
+        total_return = float(split_frame["value"].iloc[-1] / split_frame["value"].iloc[0] - 1.0)
+        splits.append(
+            {
+                "split": index,
+                "train_start": train_start,
+                "train_end": train_end,
+                "test_start": test_start,
+                "test_end": test_end,
+                "oos_sharpe": sharpe,
+                "test_sharpe": sharpe,
+                "max_drawdown": _max_drawdown(split_frame["value"]),
+                "trade_count": None,
+                "has_trades": True,
+                "total_return": total_return,
+                "verdict": "pass" if sharpe > 0 and total_return > 0 else "fail",
+                "parameters": "frozen gold-equity ETF barbell timing rule",
+            }
+        )
+    if not splits:
+        return _empty_walkforward("no OOS split had enough equity points")
+    sharpes = [float(split["oos_sharpe"]) for split in splits]
+    profitable = [1.0 if float(split.get("total_return") or 0.0) > 0 else 0.0 for split in splits]
+    aggregate = statistics.mean(sharpes)
+    worst = min(sharpes)
+    pct_profitable = statistics.mean(profitable)
+    capacity_ok = _strict_capacity_ok(strict_report)
+    is_viable = worst >= 0.3 and pct_profitable >= 0.5 and capacity_ok
+    verdict = "pass" if is_viable else ("warn" if aggregate > 0 and pct_profitable >= 0.5 else "fail")
+    return {
+        "verdict": verdict,
+        "reason": "Frozen-rule calendar OOS audit derived from strict Backtester equity; no parameter refit.",
+        "is_viable": is_viable,
+        "capacity_ok": capacity_ok,
+        "thresholds": _walkforward_thresholds(),
+        "aggregate_oos_sharpe": aggregate,
+        "worst_oos_sharpe": worst,
+        "pct_profitable_splits": pct_profitable,
+        "deflated_sharpe_ratio": None,
+        "sharpe_degradation": aggregate - worst if aggregate > 0 else 0.0,
+        "regime_breakdown": strict_report.get("regime_breakdown") or {},
+        "bull_only_warning": False,
+        "n_splits": len(splits),
+        "evaluated_splits": len(splits),
+        "total_splits": len(splits),
+        "no_trade_splits": 0,
+        "splits": splits,
+    }
+
+
+def _empty_walkforward(reason: str) -> Dict[str, Any]:
+    return {
+        "verdict": "fail",
+        "reason": reason,
+        "is_viable": False,
+        "capacity_ok": False,
+        "aggregate_oos_sharpe": 0.0,
+        "worst_oos_sharpe": 0.0,
+        "pct_profitable_splits": 0.0,
+        "thresholds": _walkforward_thresholds(),
+        "splits": [],
+        "n_splits": 0,
+        "evaluated_splits": 0,
+        "total_splits": 0,
+        "no_trade_splits": 0,
+    }
+
+
+def _walkforward_thresholds() -> Dict[str, Any]:
+    return {
+        "train_window_days": 504,
+        "test_window_days": 504,
+        "step_days": 504,
+        "purge_days": 1,
+        "embargo_days": 0,
+        "min_train_observations": 252,
+        "min_worst_oos_sharpe": 0.3,
+        "min_profitable_splits_pct": 0.5,
+        "min_deflated_sharpe_ratio": 0.95,
+        "max_adv_pct": 0.05,
+    }
+
+
+def _sharpe(returns: pd.Series) -> float:
+    returns = returns.dropna()
+    if returns.empty:
+        return 0.0
+    std = float(returns.std())
+    return float(returns.mean() / std * math.sqrt(252.0)) if std > 0 else 0.0
+
+
+def _max_drawdown(equity: Iterable[float]) -> float:
+    peak = None
+    worst = 0.0
+    for value in equity:
+        number = float(value)
+        peak = number if peak is None else max(peak, number)
+        if peak and peak > 0:
+            worst = min(worst, number / peak - 1.0)
+    return worst
+
+
+def _strict_capacity_ok(strict_report: Dict[str, Any]) -> bool:
+    capacity = strict_report.get("capacity") or {}
+    try:
+        return float(capacity.get("max_adv_participation")) <= 0.05
+    except (TypeError, ValueError):
+        return False
+
+
 def _bundle_full_report_for_promoted_strategy(full_html: str, strict_report: Dict[str, Any]) -> None:
     gate = evaluate_production_readiness({"strict_backtest": strict_report})
     if gate.get("verdict") != "pass":
@@ -484,6 +618,9 @@ def _write_outputs(
     strategy_dir.mkdir(parents=True, exist_ok=True)
     result_path = strategy_dir / "grid_result.json"
     last_result_path = strategy_dir / "last_result.json"
+    strict_report = strict_reports[str(best["scenario"])]
+    walkforward = _walkforward_from_strict_equity(strict_report, START, END)
+    stability = _parameter_sensitivity_payload(best, rows)
     payload = {
         "strategy_id": STRATEGY_ID,
         "start": START.date().isoformat(),
@@ -493,10 +630,14 @@ def _write_outputs(
         "best": best,
         "pit_universe": universe,
         "strict_reports": strict_reports,
+        "walkforward": walkforward,
+        "stability": stability,
     }
     result_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    last_result_path.write_text(json.dumps(strict_reports[str(best["scenario"])], ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    row = _hypothesis_row(best, strict_reports[str(best["scenario"])], rows)
+    last_result_path.write_text(json.dumps(strict_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (strategy_dir / "walkforward_result.json").write_text(json.dumps(walkforward, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (strategy_dir / "stability_result.json").write_text(json.dumps(stability, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    row = _hypothesis_row(best, strict_report, rows, walkforward, stability)
     result = {"run_id": f"{STRATEGY_ID}_strict_grid", "backtested": len(rows), "rejected": 0, "errors": []}
     generated = datetime.now(timezone.utc).isoformat()
     html = build_research_stage_report_html("strict_backtest", result, [row], generated_at=generated)
@@ -514,6 +655,8 @@ def _write_outputs(
     run_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     runs_dir = strategy_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / f"{run_ts}_walkforward_result.json").write_text(json.dumps(walkforward, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (runs_dir / f"{run_ts}_stability_result.json").write_text(json.dumps(stability, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (runs_dir / f"{run_ts}_strict_backtest_report.html").write_text(html, encoding="utf-8")
     (runs_dir / f"{run_ts}_full_research_report.html").write_text(full_html, encoding="utf-8")
     (runs_dir / f"{run_ts}_fast_research_report.html").write_text(fast_html, encoding="utf-8")
@@ -527,26 +670,45 @@ def _write_outputs(
     return report_path, result_path
 
 
-def _hypothesis_row(best: Dict[str, Any], strict_report: Dict[str, Any], rows: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+def _hypothesis_row(
+    best: Dict[str, Any],
+    strict_report: Dict[str, Any],
+    rows: List[Dict[str, Any]] | None = None,
+    walkforward: Dict[str, Any] | None = None,
+    stability: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     metrics = strict_report.get("metrics") or {}
     cagr = float(metrics.get("cagr") or 0.0)
     max_dd = float(metrics.get("max_drawdown_pct") or 0.0)
     sharpe = float(metrics.get("sharpe") or 0.0)
     verdict = "pass" if _meets_goal(metrics) else "warn"
+    walkforward = walkforward or _empty_walkforward("walk-forward payload was not provided")
+    stability = stability or _parameter_sensitivity_payload(best, rows or [])
     return {
         "strategy_id": STRATEGY_ID,
         "title": f"{TITLE} - {best['scenario']}",
         "status": "needs_walkforward_validation" if verdict == "pass" else "needs_more_research",
         "metrics": {
             "strict_backtest": strict_report,
-            "parameter_sensitivity": _parameter_sensitivity_payload(best, rows or []),
+            "walkforward": walkforward,
+            "parameter_sensitivity": stability,
             "research_stage_conclusions": {
                 "strict_backtest": {
                     "label": "严格回测",
                     "verdict": verdict,
                     "conclusion": f"严格回测：Sharpe={sharpe:.2f}，CAGR={cagr:.2%}，MaxDD={max_dd:.2%}。",
                     "method": "项目 Backtester；信号收盘生成、订单 T+1 开盘执行；ETF 基金佣金、手数约束、涨跌停/停牌约束、流动性冲击成本；ETF/LOF 价格用 fund NAV 复权。",
-                }
+                },
+                "walkforward_strict_audit": {
+                    "label": "Walk-forward strict audit",
+                    "verdict": str(walkforward.get("verdict") or "fail"),
+                    "conclusion": (
+                        f"Frozen-rule calendar OOS: aggregate={float(walkforward.get('aggregate_oos_sharpe') or 0.0):.2f}, "
+                        f"worst={float(walkforward.get('worst_oos_sharpe') or 0.0):.2f}, "
+                        f"profitable={float(walkforward.get('pct_profitable_splits') or 0.0):.0%}."
+                    ),
+                    "method": "Frozen strict Backtester equity sliced into calendar OOS windows; no parameter refit.",
+                },
             },
         },
         "evidence": {

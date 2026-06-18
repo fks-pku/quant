@@ -8,7 +8,9 @@ import pytest
 import yaml
 
 from quant.scripts.migrate_jsonl_to_duckdb import migrate_all
-from quant.scripts.strategy_dashboard_server import _pending_submit_orders, build_dashboard_payload, create_app
+from quant.features.trading.dashboard_projection import project_pending_orders
+import quant.scripts.strategy_dashboard_server as dashboard_server
+from quant.scripts.strategy_dashboard_server import build_dashboard_payload, create_app
 from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.infrastructure.execution.strategy_controls import get_strategy_control
 
@@ -273,19 +275,158 @@ def test_strategy_dashboard_payload_reads_live_records_positions_and_controls(tm
     assert strategy["live"]["performance"]["weighted_avg_slippage_bps"] == 0.0
     assert strategy["paper"]["records"]["orders"][0]["display_status"] == "filled"
     assert strategy["paper"]["records"]["orders"][0]["limit_price"] == 10.02
-    assert strategy["paper"]["records"]["orders"][0]["fill_price"] == 10.02
+    assert strategy["paper"]["records"]["orders"][0]["fill_price"] == 9.99
     assert strategy["paper"]["records"]["orders"][0]["raw_fill_price"] == 9.99
     assert strategy["paper"]["records"]["orders"][0]["commission"] == 0.5
     assert strategy["paper"]["records"]["orders"][0]["open_price"] == 10.0
-    assert strategy["paper"]["records"]["orders"][0]["slippage_bps"] == pytest.approx(20.0)
-    assert strategy["paper"]["holdings"]["items"][0]["avg_cost"] == pytest.approx(10.025)
-    assert strategy["paper"]["holdings"]["total_pnl"] == pytest.approx(97.5)
-    assert strategy["paper"]["performance"]["total_pnl_pct"] == pytest.approx(97.5 / 30000.0)
-    assert strategy["paper"]["performance"]["total_return"] == pytest.approx(97.5 / 30000.0)
-    assert strategy["paper"]["performance"]["total_nav"] == pytest.approx(30097.5)
-    assert strategy["paper"]["performance"]["cash"] == pytest.approx(28997.5)
+    assert strategy["paper"]["records"]["orders"][0]["slippage_bps"] == pytest.approx(-10.0)
+    assert strategy["paper"]["holdings"]["items"][0]["avg_cost"] == pytest.approx(9.995)
+    assert strategy["paper"]["holdings"]["total_pnl"] == pytest.approx(100.5)
+    assert strategy["paper"]["performance"]["total_pnl_pct"] == pytest.approx(100.5 / 30000.0)
+    assert strategy["paper"]["performance"]["total_return"] == pytest.approx(100.5 / 30000.0)
+    assert strategy["paper"]["performance"]["total_nav"] == pytest.approx(30100.5)
+    assert strategy["paper"]["performance"]["cash"] == pytest.approx(29000.5)
     assert strategy["paper"]["performance"]["total_commission"] == 0.5
-    assert strategy["paper"]["performance"]["median_slippage_bps"] == pytest.approx(20.0)
+    assert strategy["paper"]["performance"]["median_slippage_bps"] == pytest.approx(-10.0)
+
+
+def test_strategy_dashboard_infers_live_slippage_before_daily_open_available(tmp_path):
+    root = tmp_path
+    strategy_name = "DemoStrategy"
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    strategy_dir = root / "quant" / "features" / "strategies" / strategy_name
+    live_config.mkdir(parents=True)
+    strategy_dir.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": strategy_name, "enabled": True, "allocation_cash": 10000}]}),
+        encoding="utf-8",
+    )
+    (strategy_dir / "full_research_report.html").write_text("<html>report</html>", encoding="utf-8")
+    _init_dashboard_state(root, strategy_name, live={"initial_cash": 10000.0})
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    store.upsert_signal(signal={
+        "signal_id": "sig:pending",
+        "strategy_name": strategy_name,
+        "mode": "live",
+        "timestamp": "2026-06-15T15:00:00",
+        "signal_date": "2026-06-15",
+        "record_date": "2026-06-15",
+        "submit_date": "2026-06-16",
+        "symbol": "510880",
+        "side": "BUY",
+        "quantity": 200,
+        "order_type": "LIMIT",
+        "reference_price": 10.0,
+        "cost_bps": 20.0,
+        "status": "accepted",
+        "order_id": "CLIENT-1",
+    })
+    store.upsert_signal(signal={
+        "signal_id": "sig:filled",
+        "strategy_name": strategy_name,
+        "mode": "live",
+        "timestamp": "2026-06-16T09:30:00",
+        "signal_date": "2026-06-16",
+        "record_date": "2026-06-16",
+        "symbol": "510880",
+        "side": "BUY",
+        "quantity": 200,
+        "order_type": "LIMIT",
+        "reference_price": 10.02,
+        "status": "filled",
+        "order_id": "BRK-1",
+        "broker_order_id": "BRK-1",
+        "fill_quantity": 200,
+        "fill_price": 10.01,
+        "commission": 5.0,
+        "fill_time": "2026-06-16T09:30:06",
+    })
+
+    payload = build_dashboard_payload(root)
+
+    strategy = next(item for item in payload["strategies"] if item["name"] == strategy_name)
+    order = next(row for row in strategy["live"]["records"]["orders"] if row["order_id"] == "BRK-1")
+    assert order["open_price"] == pytest.approx(10.0)
+    assert order["slippage_bps"] == pytest.approx(10.0)
+    assert strategy["live"]["performance"]["slippage_sample_count"] == 1
+    assert strategy["live"]["performance"]["median_slippage_bps"] == pytest.approx(10.0)
+
+
+def test_strategy_dashboard_reads_split_order_and_fill_ledgers(tmp_path):
+    root = tmp_path
+    strategy_name = "DemoStrategy"
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    strategy_dir = root / "quant" / "features" / "strategies" / strategy_name
+    live_config.mkdir(parents=True)
+    strategy_dir.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": strategy_name, "enabled": True, "allocation_cash": 10000}]}),
+        encoding="utf-8",
+    )
+    (strategy_dir / "full_research_report.html").write_text("<html>report</html>", encoding="utf-8")
+    _init_dashboard_state(root, strategy_name, live={"initial_cash": 10000.0})
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    signal = store.upsert_signal(signal={
+        "signal_id": "sig:split",
+        "strategy_name": strategy_name,
+        "mode": "live",
+        "timestamp": "2026-06-15T15:00:00",
+        "signal_date": "2026-06-15",
+        "record_date": "2026-06-15",
+        "submit_date": "2026-06-16",
+        "symbol": "510880",
+        "side": "BUY",
+        "quantity": 200,
+        "order_type": "MARKET",
+        "reference_price": 3.2,
+        "status": "accepted",
+    })
+    order = store.upsert_order(order={
+        "signal_id": signal["signal_id"],
+        "strategy_name": strategy_name,
+        "mode": "live",
+        "timestamp": "2026-06-16T09:30:00",
+        "signal_date": "2026-06-15",
+        "submit_date": "2026-06-16",
+        "record_date": "2026-06-16",
+        "symbol": "510880",
+        "side": "BUY",
+        "quantity": 200,
+        "order_type": "LIMIT",
+        "price": 3.21,
+        "status": "submitted",
+        "order_id": "CLIENT-1",
+        "broker_order_id": "BRK-1",
+        "execution_reference_price": 3.2,
+    })
+    store.upsert_fill(fill={
+        "fill_id": "FILL-1",
+        "order_row_id": order["order_row_id"],
+        "signal_id": signal["signal_id"],
+        "strategy_name": strategy_name,
+        "mode": "live",
+        "timestamp": "2026-06-16T09:31:00",
+        "signal_date": "2026-06-15",
+        "record_date": "2026-06-16",
+        "symbol": "510880",
+        "side": "BUY",
+        "quantity": 200,
+        "price": 3.205,
+        "commission": 5.0,
+        "order_id": "CLIENT-1",
+        "broker_order_id": "BRK-1",
+    })
+
+    payload = build_dashboard_payload(root)
+
+    strategy = next(item for item in payload["strategies"] if item["name"] == strategy_name)
+    live = strategy["live"]
+    assert live["records"]["signals"][0]["signal_id"] == "sig:split"
+    assert live["records"]["orders"][0]["order_id"] == "CLIENT-1"
+    assert live["records"]["orders"][0]["filled_qty"] == pytest.approx(200.0)
+    assert live["records"]["orders"][0]["fill_price"] == pytest.approx(3.205)
+    assert live["records"]["orders"][0]["slippage_bps"] == pytest.approx(15.625)
+    assert live["records"]["fills"][0]["fill_id"] == "FILL-1"
 
 
 @pytest.mark.skip(reason="materialization removed in simplified state store")
@@ -580,6 +721,262 @@ def test_strategy_dashboard_cash_from_initial_less_current_holdings_value(tmp_pa
     assert strategy["live"]["performance"]["total_nav"] == pytest.approx(10000.0)
 
 
+def test_strategy_dashboard_uses_db_position_qty_when_intraday_fill_exists(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    stock_db = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_ohlcv.duckdb"
+    live_config.mkdir(parents=True)
+    stock_db.parent.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "initial_cash": 20000.0}]}),
+        encoding="utf-8",
+    )
+    _write_daily_ohlc(stock_db, "159949", "2026-06-11", 1.84, 1.85)
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    store.upsert_position(
+        strategy_name="DemoStrategy",
+        mode="live",
+        symbol="159949",
+        quantity=5300.0,
+        avg_cost=1.8509,
+        updated_at="2026-06-12T11:19:29",
+    )
+    store.upsert_signal(signal={
+        "signal_id": "sig:accepted",
+        "strategy_name": "DemoStrategy",
+        "mode": "live",
+        "timestamp": "2026-06-12T11:19:29",
+        "signal_date": "2026-06-12",
+        "symbol": "159949",
+        "side": "BUY",
+        "quantity": 400.0,
+        "order_type": "LIMIT",
+        "reference_price": 1.902,
+        "status": "accepted",
+        "order_id": "CLIENT-1",
+        "record_date": "2026-06-12",
+    })
+    store.upsert_signal(signal={
+        "signal_id": "sig:filled",
+        "strategy_name": "DemoStrategy",
+        "mode": "live",
+        "timestamp": "2026-06-12T11:19:29",
+        "signal_date": "2026-06-12",
+        "symbol": "159949",
+        "side": "BUY",
+        "quantity": 400.0,
+        "order_type": "LIMIT",
+        "reference_price": 1.902,
+        "status": "filled",
+        "order_id": "1099356531",
+        "broker_order_id": "1099356531",
+        "fill_quantity": 400.0,
+        "fill_price": 1.874,
+        "commission": 5.0,
+        "fill_time": "2026-06-12T11:19:29",
+        "record_date": "2026-06-12",
+    })
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+    item = strategy["live"]["holdings"]["items"][0]
+
+    assert item["qty"] == pytest.approx(5300.0)
+    assert item["valuation_status"] == "unmarked_after_activity"
+    expected_cost = 5300.0 * 1.8509
+    expected_market_value = 5300.0 * 1.874
+    assert strategy["live"]["holdings"]["total_market_value"] == pytest.approx(expected_market_value)
+    assert strategy["live"]["holdings"]["cash"] == pytest.approx(20000.0 - expected_cost)
+    assert strategy["live"]["holdings"]["nav"] == pytest.approx(20000.0 - expected_cost + expected_market_value)
+    assert strategy["live"]["holdings"]["total_pnl"] == pytest.approx(expected_market_value - expected_cost)
+
+
+def test_strategy_dashboard_cash_uses_strategy_virtual_allocation_not_broker_total(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    stock_db = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_ohlcv.duckdb"
+    live_config.mkdir(parents=True)
+    stock_db.parent.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "initial_cash": 20000.0}]}),
+        encoding="utf-8",
+    )
+    _write_daily_ohlc(stock_db, "159949", "2026-06-11", 1.848, 1.848)
+    _write_daily_ohlc(stock_db, "518880", "2026-06-11", 8.506, 8.506)
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    base_159949_cost = 1494.0
+    fill_159949_cost = 400.0 * 1.874 + 5.0
+    qty_159949 = 1200.0
+    store.upsert_position(
+        strategy_name="DemoStrategy",
+        mode="live",
+        symbol="159949",
+        quantity=qty_159949,
+        avg_cost=(base_159949_cost + fill_159949_cost) / qty_159949,
+        updated_at="2026-06-12T11:19:29",
+    )
+    base_518880_cost = 1000.0 * 8.506
+    fill_518880_cost = 100.0 * 8.675 + 5.0
+    qty_518880 = 1100.0
+    store.upsert_position(
+        strategy_name="DemoStrategy",
+        mode="live",
+        symbol="518880",
+        quantity=qty_518880,
+        avg_cost=(base_518880_cost + fill_518880_cost) / qty_518880,
+        updated_at="2026-06-12T11:19:29",
+    )
+    for signal in [
+        {
+            "signal_id": "sig:159949",
+            "symbol": "159949",
+            "quantity": 400.0,
+            "reference_price": 1.902,
+            "order_id": "1099356531",
+            "broker_order_id": "1099356531",
+            "fill_quantity": 400.0,
+            "fill_price": 1.874,
+            "commission": 5.0,
+        },
+        {
+            "signal_id": "sig:518880",
+            "symbol": "518880",
+            "quantity": 100.0,
+            "reference_price": 8.675,
+            "order_id": "1099356538",
+            "broker_order_id": "1099356538",
+            "fill_quantity": 100.0,
+            "fill_price": 8.675,
+            "commission": 5.0,
+        },
+    ]:
+        store.upsert_signal(signal={
+            "strategy_name": "DemoStrategy",
+            "mode": "live",
+            "timestamp": "2026-06-12T11:19:29",
+            "signal_date": "2026-06-12",
+            "side": "BUY",
+            "order_type": "LIMIT",
+            "status": "filled",
+            "fill_time": "2026-06-12T11:19:29",
+            "record_date": "2026-06-12",
+            **signal,
+        })
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+    items = {item["symbol"]: item for item in strategy["live"]["holdings"]["items"]}
+    expected_market_value = 1200.0 * 1.874 + 1100.0 * 8.675
+    expected_cash = 20000.0 - (base_159949_cost + fill_159949_cost + base_518880_cost + fill_518880_cost)
+
+    assert items["159949"]["qty"] == pytest.approx(1200.0)
+    assert items["518880"]["qty"] == pytest.approx(1100.0)
+    assert strategy["live"]["holdings"]["total_market_value"] == pytest.approx(expected_market_value)
+    assert strategy["live"]["holdings"]["cash"] == pytest.approx(expected_cash)
+    assert strategy["live"]["performance"]["cash"] == pytest.approx(expected_cash)
+    assert strategy["live"]["holdings"]["nav"] == pytest.approx(expected_cash + expected_market_value)
+    assert strategy["live"]["performance"]["total_nav"] == pytest.approx(expected_cash + expected_market_value)
+
+
+def test_strategy_dashboard_surfaces_unassigned_broker_holdings_as_default_manual_strategy(tmp_path, monkeypatch):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    live_config.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 10000}]}),
+        encoding="utf-8",
+    )
+    _init_dashboard_state(
+        root,
+        "DemoStrategy",
+        live={"to_state": "running", "initial_cash": 10000.0},
+    )
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    store.upsert_position(
+        strategy_name="DemoStrategy", mode="live", symbol="600519",
+        quantity=100.0, avg_cost=10.0, updated_at="2026-06-12T09:30:00",
+    )
+    store.upsert_position(
+        strategy_name="default", mode="live", symbol="600519",
+        quantity=25.0, avg_cost=9.0, updated_at="2026-06-12T09:30:00",
+    )
+    store.upsert_position(
+        strategy_name="OtherStrategy", mode="live", symbol="000002",
+        quantity=100.0, avg_cost=5.0, updated_at="2026-06-12T09:30:00",
+    )
+    monkeypatch.setattr(
+        "quant.scripts.strategy_dashboard_server._live_broker_position_snapshot",
+        lambda _root: {
+            "status": "ok",
+            "source": "qmt",
+            "generated_at": "2026-06-12T15:00:00",
+            "error": "",
+            "positions": [
+                {"symbol": "600519", "quantity": 150.0, "avg_cost": 10.2, "market_value": 1800.0},
+                {"symbol": "000001", "quantity": 200.0, "avg_cost": 4.0, "market_value": 1000.0},
+                {"symbol": "000002", "quantity": 50.0, "avg_cost": 5.0, "market_value": 250.0},
+            ],
+        },
+    )
+
+    payload = build_dashboard_payload(root)
+
+    default = next(strategy for strategy in payload["strategies"] if strategy["name"] == "default")
+    by_symbol = {row["symbol"]: row for row in default["live"]["holdings"]["items"]}
+    assert default["manual"] is True
+    assert default["live"]["initial_cash"] == 0.0
+    assert default["paper"]["initial_cash"] == 0.0
+    assert set(by_symbol) == {"600519", "000001"}
+    assert by_symbol["600519"]["qty"] == pytest.approx(50.0)
+    assert by_symbol["600519"]["broker_qty"] == pytest.approx(150.0)
+    assert by_symbol["600519"]["assigned_qty"] == pytest.approx(100.0)
+    assert by_symbol["600519"]["market_value"] == pytest.approx(600.0)
+    assert by_symbol["600519"]["unrealized_pnl"] == pytest.approx(90.0)
+    assert by_symbol["000001"]["qty"] == pytest.approx(200.0)
+    assert default["live"]["holdings"]["total_market_value"] == pytest.approx(1600.0)
+    assert default["live"]["holdings"]["total_cost"] == pytest.approx(1310.0)
+    assert default["live"]["holdings"]["nav"] == pytest.approx(1600.0)
+    assert default["live"]["performance"]["total_nav"] == pytest.approx(1600.0)
+    assert default["live"]["performance"]["total_return"] == pytest.approx(290.0 / 1310.0)
+
+
+def test_live_broker_position_snapshot_uses_ttl_cache(tmp_path, monkeypatch):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    qmt_userdata = root / "qmt_userdata"
+    live_config.mkdir(parents=True)
+    qmt_userdata.mkdir(parents=True)
+    (live_config / "brokers.yaml").write_text(
+        yaml.safe_dump({"qmt": {"userdata_mini_path": str(qmt_userdata)}}),
+        encoding="utf-8",
+    )
+    cache = getattr(dashboard_server, "_BROKER_POSITION_SNAPSHOT_CACHE", None)
+    if cache is not None:
+        cache.clear()
+    calls = []
+
+    def fake_subprocess_snapshot(_root):
+        calls.append(_root)
+        return {
+            "status": "ok",
+            "source": "qmt",
+            "generated_at": f"call-{len(calls)}",
+            "error": "",
+            "positions": [{"symbol": "510880", "quantity": 200.0}],
+        }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "_live_broker_position_snapshot_subprocess",
+        fake_subprocess_snapshot,
+    )
+
+    first = dashboard_server._live_broker_position_snapshot(root)
+    second = dashboard_server._live_broker_position_snapshot(root)
+
+    assert len(calls) == 1
+    assert second == first
+    assert second["generated_at"] == "call-1"
+
+
 def test_strategy_dashboard_derives_live_curve_from_fills_when_snapshots_missing(tmp_path):
     root = tmp_path
     live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
@@ -785,6 +1182,101 @@ def test_strategy_dashboard_does_not_publish_live_nav_after_latest_market_data(t
     assert strategy["live"]["holdings"]["total_pnl"] == pytest.approx(
         strategy["live"]["holdings"]["nav"] - 10000.0
     )
+
+
+def test_strategy_dashboard_does_not_publish_position_baseline_curve_after_latest_market_data(tmp_path):
+    root = tmp_path
+    live_config = root / "quant" / "infrastructure" / "var" / "qmt_live_config"
+    stock_db = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb"
+    live_config.mkdir(parents=True)
+    stock_db.parent.mkdir(parents=True)
+    (live_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "GoldBarbell", "enabled": True, "allocation_cash": 20000}]}),
+        encoding="utf-8",
+    )
+    _write_daily_ohlc(stock_db, "159949", "2026-06-11", 1.84, 1.85)
+    _write_daily_ohlc(stock_db, "518880", "2026-06-11", 8.50, 8.50)
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    store.upsert_snapshot(
+        strategy_name="GoldBarbell",
+        mode="live",
+        snapshot_date="2026-06-11",
+        nav=20000.0,
+        cash=10000.0,
+        market_value=10000.0,
+        source="live",
+        recorded_at="2026-06-11T15:00:00",
+    )
+    store.upsert_position(
+        strategy_name="GoldBarbell",
+        mode="live",
+        symbol="159949",
+        quantity=1200.0,
+        avg_cost=1.8738333333,
+        updated_at="2026-06-12T14:34:25",
+    )
+    store.upsert_position(
+        strategy_name="GoldBarbell",
+        mode="live",
+        symbol="518880",
+        quantity=1100.0,
+        avg_cost=8.5259090909,
+        updated_at="2026-06-12T14:34:25",
+    )
+    store.upsert_signal(signal={
+        "signal_id": "sig:gold-159949-20260612",
+        "strategy_name": "GoldBarbell",
+        "mode": "live",
+        "timestamp": "2026-06-12T09:35:00",
+        "signal_date": "2026-06-12",
+        "record_date": "2026-06-12",
+        "submit_date": "2026-06-12",
+        "symbol": "159949",
+        "side": "BUY",
+        "quantity": 400.0,
+        "order_type": "LIMIT",
+        "reference_price": 1.874,
+        "status": "filled",
+        "order_id": "L-159949",
+        "broker_order_id": "1099356531",
+        "fill_quantity": 400.0,
+        "fill_price": 1.874,
+        "commission": 5.0,
+        "fill_time": "2026-06-12T09:35:30",
+    })
+    store.upsert_signal(signal={
+        "signal_id": "sig:gold-518880-20260612",
+        "strategy_name": "GoldBarbell",
+        "mode": "live",
+        "timestamp": "2026-06-12T09:36:00",
+        "signal_date": "2026-06-12",
+        "record_date": "2026-06-12",
+        "submit_date": "2026-06-12",
+        "symbol": "518880",
+        "side": "BUY",
+        "quantity": 100.0,
+        "order_type": "LIMIT",
+        "reference_price": 8.675,
+        "status": "filled",
+        "order_id": "L-518880",
+        "broker_order_id": "1099356538",
+        "fill_quantity": 100.0,
+        "fill_price": 8.675,
+        "commission": 5.0,
+        "fill_time": "2026-06-12T09:36:30",
+    })
+
+    payload = build_dashboard_payload(root)
+    strategy = payload["strategies"][0]
+    curve = strategy["live"]["performance"]["pnl_curve"]
+
+    assert payload["latest_market_data_date"] == "2026-06-11"
+    assert strategy["live"]["holdings"]["cash_source"] == "position_baseline"
+    assert strategy["live"]["holdings"]["price_date"] is None
+    assert strategy["live"]["holdings"]["latest_activity_date"] == "2026-06-12"
+    assert [point["date"] for point in curve] == ["2026-06-11"]
+    assert strategy["live"]["performance"]["latest_snapshot"]["date"] == "2026-06-11"
+    assert strategy["live"]["performance"]["total_nav"] == pytest.approx(strategy["live"]["holdings"]["nav"])
 
 
 def test_strategy_dashboard_submitted_orders_without_fills_keep_cash_unchanged(tmp_path):
@@ -1033,10 +1525,50 @@ def test_strategy_dashboard_does_not_mark_near_timestamp_order_as_pending(tmp_pa
     assert strategy["paper"]["records"]["pending_orders"] == []
 
 
+def test_strategy_dashboard_paper_due_signal_without_fill_displays_no_fill_order(tmp_path):
+    root = tmp_path
+    paper_config = root / "quant" / "infrastructure" / "var" / "paper_config"
+    stock_db = root / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb"
+    paper_config.mkdir(parents=True)
+    stock_db.parent.mkdir(parents=True)
+    (paper_config / "config.yaml").write_text(
+        yaml.safe_dump({"strategies": [{"name": "DemoStrategy", "enabled": True, "allocation_cash": 20000}]}),
+        encoding="utf-8",
+    )
+    _write_daily_ohlc(stock_db, "518880", "2026-06-12", 8.55, 8.60)
+
+    store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
+    store.upsert_signal(signal={
+        "signal_id": "sig:no-fill-paper",
+        "strategy_name": "DemoStrategy",
+        "mode": "paper",
+        "timestamp": "2026-06-11T15:00:00",
+        "signal_date": "2026-06-11",
+        "symbol": "518880",
+        "side": "BUY",
+        "quantity": 1100.0,
+        "order_type": "LIMIT",
+        "reference_price": 8.506,
+        "status": "accepted",
+        "order_id": "SIGNAL-1",
+        "submit_date": "2026-06-12",
+        "record_date": "2026-06-11",
+    })
+
+    strategy = build_dashboard_payload(root)["strategies"][0]
+
+    assert strategy["paper"]["records"]["pending_orders"] == []
+    assert len(strategy["paper"]["records"]["orders"]) == 1
+    order = strategy["paper"]["records"]["orders"][0]
+    assert order["symbol"] == "518880"
+    assert order["record_date"] == "2026-06-12"
+    assert order["display_status"] == "no_fill"
+    assert order["filled_qty"] == pytest.approx(0.0)
+
+
 def test_strategy_dashboard_does_not_keep_d_close_signal_pending_after_execution_order(tmp_path):
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+    pending = project_pending_orders(
+        signals=[{
             "order_id": "CLIENT-1",
             "order_type": "LIMIT",
             "price": 2.9060032716214454,
@@ -1046,8 +1578,9 @@ def test_strategy_dashboard_does_not_keep_d_close_signal_pending_after_execution
             "strategy_name": "DemoStrategy",
             "symbol": "510050",
             "timestamp": "2026-06-08T15:00:00",
+            "projected_submit_date": "2026-06-09",
         }],
-        [{
+        orders=[{
             "broker_order_id": "BROKER-1",
             "order_id": "BROKER-1",
             "order_type": "LIMIT",
@@ -1059,7 +1592,7 @@ def test_strategy_dashboard_does_not_keep_d_close_signal_pending_after_execution
             "symbol": "510050",
             "timestamp": "2026-06-09T09:39:47.176570",
         }],
-        [],
+        fills=[],
         as_of_date="2026-06-09",
     )
 
@@ -1067,9 +1600,8 @@ def test_strategy_dashboard_does_not_keep_d_close_signal_pending_after_execution
 
 
 def test_strategy_dashboard_does_not_keep_retry_signal_pending_after_earlier_order(tmp_path):
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+    pending = project_pending_orders(
+        signals=[{
             "order_id": "CLIENT-RETRY",
             "order_type": "LIMIT",
             "price": 4.7690324738177505,
@@ -1079,8 +1611,9 @@ def test_strategy_dashboard_does_not_keep_retry_signal_pending_after_earlier_ord
             "strategy_name": "DemoStrategy",
             "symbol": "510300",
             "timestamp": "2026-06-09T09:50:49.780552",
+            "projected_submit_date": "2026-06-09",
         }],
-        [{
+        orders=[{
             "broker_order_id": "BROKER-1",
             "order_id": "BROKER-1",
             "order_type": "LIMIT",
@@ -1092,7 +1625,7 @@ def test_strategy_dashboard_does_not_keep_retry_signal_pending_after_earlier_ord
             "symbol": "510300",
             "timestamp": "2026-06-09T09:39:47.208000",
         }],
-        [],
+        fills=[],
         as_of_date="2026-06-09",
     )
 
@@ -1100,9 +1633,8 @@ def test_strategy_dashboard_does_not_keep_retry_signal_pending_after_earlier_ord
 
 
 def test_strategy_dashboard_marks_submit_failure_in_pending_actions(tmp_path):
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+    pending = project_pending_orders(
+        signals=[{
             "order_id": None,
             "order_type": "LIMIT",
             "price": 1.887081939845566,
@@ -1114,8 +1646,8 @@ def test_strategy_dashboard_marks_submit_failure_in_pending_actions(tmp_path):
             "symbol": "159949",
             "timestamp": "2026-06-09T09:39:47.176570",
         }],
-        [],
-        [],
+        orders=[],
+        fills=[],
         as_of_date="2026-06-09",
     )
 
@@ -1125,9 +1657,8 @@ def test_strategy_dashboard_marks_submit_failure_in_pending_actions(tmp_path):
 
 
 def test_strategy_dashboard_expires_past_submit_date_from_pending_orders(tmp_path):
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+    pending = project_pending_orders(
+        signals=[{
             "order_id": "SIGNAL-1",
             "order_type": "LIMIT",
             "price": 2.011998811939597,
@@ -1137,19 +1668,19 @@ def test_strategy_dashboard_expires_past_submit_date_from_pending_orders(tmp_pat
             "strategy_name": "DemoStrategy",
             "symbol": "159949",
             "timestamp": "2026-06-03T15:00:00",
+            "projected_submit_date": "2026-06-04",
         }],
-        [],
-        [],
+        orders=[],
+        fills=[],
         as_of_date="2026-06-05",
     )
 
     assert pending == []
 
 
-def test_strategy_dashboard_pending_orders_default_to_next_trading_date(tmp_path):
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+def test_strategy_dashboard_pending_orders_use_projected_submit_date(tmp_path):
+    pending = project_pending_orders(
+        signals=[{
             "order_id": "SIGNAL-FRIDAY",
             "order_type": "LIMIT",
             "price": 10.0,
@@ -1159,9 +1690,10 @@ def test_strategy_dashboard_pending_orders_default_to_next_trading_date(tmp_path
             "strategy_name": "DemoStrategy",
             "symbol": "600000",
             "timestamp": "2026-06-05T15:00:00",
+            "projected_submit_date": "2026-06-08",
         }],
-        [],
-        [],
+        orders=[],
+        fills=[],
         as_of_date="2026-06-08",
     )
 
@@ -1170,9 +1702,8 @@ def test_strategy_dashboard_pending_orders_default_to_next_trading_date(tmp_path
 
 
 def test_strategy_dashboard_pending_orders_display_cost_bps_instead_of_limit(tmp_path):
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+    pending = project_pending_orders(
+        signals=[{
             "order_id": "SIGNAL-1",
             "order_type": "LIMIT",
             "price": None,
@@ -1184,9 +1715,10 @@ def test_strategy_dashboard_pending_orders_display_cost_bps_instead_of_limit(tmp
             "strategy_name": "DemoStrategy",
             "symbol": "600000",
             "timestamp": "2026-06-05T15:00:00",
+            "projected_submit_date": "2026-06-08",
         }],
-        [],
-        [],
+        orders=[],
+        fills=[],
         as_of_date="2026-06-08",
     )
 
@@ -1196,13 +1728,8 @@ def test_strategy_dashboard_pending_orders_display_cost_bps_instead_of_limit(tmp
 
 
 def test_strategy_dashboard_pending_orders_backfill_submit_bps_from_legacy_limit_price(tmp_path):
-    db_path = tmp_path / "quant" / "infrastructure" / "var" / "duckdb" / "live" / "cn_etf_ohlcv.duckdb"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_daily_ohlc(db_path, "510300", "2026-06-05", 9.9, 10.0)
-
-    pending = _pending_submit_orders(
-        tmp_path,
-        [{
+    pending = project_pending_orders(
+        signals=[{
             "order_id": "LEGACY-SIGNAL-1",
             "order_type": "LIMIT",
             "price": 10.025,
@@ -1212,9 +1739,11 @@ def test_strategy_dashboard_pending_orders_backfill_submit_bps_from_legacy_limit
             "strategy_name": "DemoStrategy",
             "symbol": "510300",
             "timestamp": "2026-06-05T15:00:00",
+            "projected_submit_date": "2026-06-08",
+            "signal_close_price": 10.0,
         }],
-        [],
-        [],
+        orders=[],
+        fills=[],
         as_of_date="2026-06-08",
     )
 
@@ -1942,9 +2471,9 @@ def test_strategy_dashboard_run_status_separates_signal_generation_from_executio
         _write_daily_ohlc(stock_db, "510050", trading_date, 2.9, 3.0)
         _write_daily_ohlc(stock_db, "510880", trading_date, 3.2, 3.3)
     store = StrategyStateStore(root / "quant" / "infrastructure" / "var" / "strategy_dashboard.duckdb")
-    for signal_id, timestamp, order_id in (
-        ("sig:client-a", "2026-06-09T09:30:00", "CLIENT-A"),
-        ("sig:client-b", "2026-06-09T09:31:00", "CLIENT-B"),
+    for signal_id, timestamp, order_id, quantity in (
+        ("sig:client-a", "2026-06-09T09:30:00", "CLIENT-A", 200.0),
+        ("sig:client-b", "2026-06-09T09:31:00", "CLIENT-B", 300.0),
     ):
         store.upsert_signal(signal={
             "signal_id": signal_id,
@@ -1954,7 +2483,7 @@ def test_strategy_dashboard_run_status_separates_signal_generation_from_executio
             "signal_date": "2026-06-09",
             "symbol": "510050",
             "side": "BUY",
-            "quantity": 200.0,
+            "quantity": quantity,
             "order_type": "LIMIT",
             "reference_price": 2.9,
             "status": "accepted",
@@ -1962,27 +2491,31 @@ def test_strategy_dashboard_run_status_separates_signal_generation_from_executio
             "submit_date": "2026-06-09",
             "record_date": "2026-06-09",
         })
-    store.upsert_signal(signal={
-        "signal_id": "sig:broker-filled",
-        "strategy_name": "DemoStrategy",
-        "mode": "live",
-        "timestamp": "2026-06-09T09:32:00",
-        "signal_date": "2026-06-09",
-        "symbol": "510050",
-        "side": "BUY",
-        "quantity": 200.0,
-        "order_type": "LIMIT",
-        "reference_price": 2.9,
-        "status": "filled",
-        "order_id": "BROKER-1",
-        "broker_order_id": "BROKER-1",
-        "fill_quantity": 400.0,
-        "fill_price": 2.9,
-        "commission": 1.0,
-        "fill_time": "2026-06-09T09:32:30",
-        "submit_date": "2026-06-09",
-        "record_date": "2026-06-09",
-    })
+    for signal_id, timestamp, order_id, quantity in (
+        ("sig:broker-filled-a", "2026-06-09T09:32:00", "BROKER-1", 200.0),
+        ("sig:broker-filled-b", "2026-06-09T09:32:30", "BROKER-2", 300.0),
+    ):
+        store.upsert_signal(signal={
+            "signal_id": signal_id,
+            "strategy_name": "DemoStrategy",
+            "mode": "live",
+            "timestamp": timestamp,
+            "signal_date": "2026-06-09",
+            "symbol": "510050",
+            "side": "BUY",
+            "quantity": quantity,
+            "order_type": "LIMIT",
+            "reference_price": 2.9,
+            "status": "filled",
+            "order_id": order_id,
+            "broker_order_id": order_id,
+            "fill_quantity": quantity,
+            "fill_price": 2.9,
+            "commission": 1.0,
+            "fill_time": timestamp,
+            "submit_date": "2026-06-09",
+            "record_date": "2026-06-09",
+        })
     store.upsert_signal(signal={
         "signal_id": "sig:close",
         "strategy_name": "DemoStrategy",
@@ -2030,13 +2563,13 @@ def test_strategy_dashboard_run_status_separates_signal_generation_from_executio
         "order_id": "CLIENT-CLOSE",
     }]
     assert order["status"] == "ok"
-    assert order["observed"] == "submitted=400 filled=400 for 2 signal(s)"
+    assert order["observed"] == "submitted=500 filled=500 for 2 signal(s)"
     assert [
         (item["order_id"], item["submitted_quantity"], item["filled_quantity"], item["status"])
         for item in order["details"]
     ] == [
         ("CLIENT-A", 200.0, 200.0, "filled"),
-        ("CLIENT-B", 200.0, 200.0, "filled"),
+        ("CLIENT-B", 300.0, 300.0, "filled"),
     ]
 
 
@@ -2309,6 +2842,7 @@ def _ensure_db_signal(path: Path, rows: List[Dict[str, Any]]) -> None:
                 "order_id": str(row.get("order_id", "")), "failure_reason": str(row.get("reason", "")),
                 "submit_date": str(row.get("submit_date") or row.get("execution_date") or "")[:10],
                 "cost_bps": row.get("execution_cost_bps"),
+                "execution_reference_price": row.get("execution_reference_price"),
                 "record_date": signal_date,
             })
         elif kind == "orders":
@@ -2319,19 +2853,53 @@ def _ensure_db_signal(path: Path, rows: List[Dict[str, Any]]) -> None:
                 sig = store.get_signal_by_order(mode=mode, order_id=boid, signal_date=signal_date)
             if not sig:
                 sig = store.get_signal_by_signature(mode=mode, strategy_name=strategy_name, symbol=str(row.get("symbol", "")), side=str(row.get("side", "")), quantity=float(row.get("quantity", 0.0)), signal_date=signal_date)
-            if sig:
-                store.update_signal_order(signal_id=str(sig.get("signal_id", "")), order_id=oid, broker_order_id=boid, status=str(row.get("status", "submitted")))
-            else:
-                parts_hash = [strategy_name, mode, str(row.get("symbol", "")), str(row.get("side", "")), str(row.get("quantity")), str(row.get("order_type", "")), oid, str(row.get("timestamp", ""))]
-                sid = f"sig:{_hl.sha1(json.dumps(parts_hash, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]}"
-                store.upsert_signal(signal={"signal_id": sid, "strategy_name": strategy_name, "mode": mode, "timestamp": str(row.get("timestamp", "")), "signal_date": signal_date, "symbol": str(row.get("symbol", "")), "side": str(row.get("side", "")), "quantity": float(row.get("quantity", 0.0)), "order_type": str(row.get("order_type", "")), "reference_price": row.get("price"), "status": str(row.get("status", "submitted")), "order_id": oid, "broker_order_id": boid, "submit_date": str(row.get("submit_date") or row.get("execution_date") or "")[:10], "record_date": signal_date})
+            if not sig:
+                sig = store.get_signal_for_submission(mode=mode, strategy_name=strategy_name, symbol=str(row.get("symbol", "")), side=str(row.get("side", "")), quantity=float(row.get("quantity", 0.0)), submit_date=signal_date)
+            store.upsert_order(order={
+                "signal_id": str((sig or {}).get("signal_id", "")),
+                "strategy_name": strategy_name,
+                "mode": mode,
+                "timestamp": str(row.get("timestamp", "")),
+                "signal_date": str((sig or {}).get("signal_date", "")),
+                "submit_date": str(row.get("submit_date") or row.get("execution_date") or signal_date)[:10],
+                "record_date": signal_date,
+                "symbol": str(row.get("symbol", "")),
+                "side": str(row.get("side", "")),
+                "quantity": float(row.get("quantity", 0.0)),
+                "order_type": str(row.get("order_type", "")),
+                "price": row.get("price"),
+                "status": str(row.get("status", "submitted")),
+                "order_id": oid,
+                "broker_order_id": boid,
+                "execution_reference_price": row.get("execution_reference_price"),
+                "cost_bps": row.get("execution_cost_bps"),
+            })
         elif kind == "fills":
             oid = str(row.get("order_id", ""))
             sig = store.get_signal_by_order(mode=mode, order_id=oid, signal_date=signal_date)
             if not sig:
                 sig = store.get_signal_by_signature(mode=mode, strategy_name=strategy_name, symbol=str(row.get("symbol", "")), side=str(row.get("side", "")), quantity=float(row.get("quantity", 0.0)), signal_date=signal_date)
-            if sig:
-                store.update_signal_fill(signal_id=str(sig.get("signal_id", "")), fill_quantity=float(row.get("quantity", 0.0)), fill_price=float(row.get("price", 0.0)), commission=float(row.get("commission", 0.0)), fill_time=str(row.get("timestamp", "")), status="filled")
+            if not sig:
+                sig = store.get_signal_for_submission(mode=mode, strategy_name=strategy_name, symbol=str(row.get("symbol", "")), side=str(row.get("side", "")), quantity=float(row.get("quantity", 0.0)), submit_date=signal_date)
+            order = store.get_order_by_order_id(mode=mode, order_id=oid, record_date=signal_date, strategy_name=strategy_name, symbol=str(row.get("symbol", "")), side=str(row.get("side", "")))
+            store.upsert_fill(fill={
+                "fill_id": str(row.get("fill_id") or row.get("trade_id") or ""),
+                "order_row_id": str((order or {}).get("order_row_id", "")),
+                "signal_id": str((sig or {}).get("signal_id", "") or (order or {}).get("signal_id", "")),
+                "strategy_name": strategy_name,
+                "mode": mode,
+                "timestamp": str(row.get("timestamp", "")),
+                "signal_date": str((sig or {}).get("signal_date", "") or (order or {}).get("signal_date", "")),
+                "record_date": signal_date,
+                "symbol": str(row.get("symbol", "")),
+                "side": str(row.get("side", "")),
+                "quantity": float(row.get("quantity", 0.0)),
+                "price": float(row.get("price", 0.0)),
+                "commission": float(row.get("commission", 0.0)),
+                "order_id": oid,
+                "broker_order_id": str((order or {}).get("broker_order_id", "")),
+                "source": "test_jsonl_helper",
+            })
             _upsert_position_from_fill(store, strategy_name, mode, str(row.get("symbol", "")), str(row.get("side", "")), float(row.get("quantity", 0.0)), float(row.get("price", 0.0)), float(row.get("commission", 0.0)), str(row.get("timestamp", "")))
         elif kind == "snapshots":
             store.upsert_snapshot(strategy_name=strategy_name, mode=mode, snapshot_date=signal_date, nav=float(row.get("nav", 0.0)), cash=float(row.get("cash", 0.0)), market_value=float(row.get("market_value", 0.0)), realized_pnl=float(row.get("realized_pnl", 0.0)), unrealized_pnl=float(row.get("unrealized_pnl", 0.0)), total_pnl=float(row.get("total_pnl", 0.0)), source=str(row.get("source", mode)))

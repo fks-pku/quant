@@ -62,6 +62,13 @@ def _get_market_config(commission_config: Any, market: str) -> Any:
     return None
 
 
+def _configured_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def calculate_commission(
     symbol: str,
     price: float,
@@ -151,7 +158,9 @@ def _calculate_cn_fund_commission(
     fund_min = cfg.get("fund_min_per_order")
     if fund_min is None:
         fund_min = cfg.get("min_per_order", CN_FUND_MIN_COMMISSION)
-    commission = max(trade_value * float(fund_rate), float(fund_min))
+    fund_rate = max(_configured_float(fund_rate, CN_FUND_COMMISSION_RATE), 0.0)
+    fund_min = max(_configured_float(fund_min, CN_FUND_MIN_COMMISSION), CN_FUND_MIN_COMMISSION)
+    commission = max(trade_value * fund_rate, fund_min)
     return {
         "commission": commission,
         "stamp_duty": 0.0,

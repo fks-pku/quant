@@ -393,7 +393,49 @@ def _write_reports(
     latest_dir.mkdir(parents=True, exist_ok=True)
     for filename, html in reports.items():
         (latest_dir / filename).write_text(html, encoding="utf-8")
+    (latest_dir / "last_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    metadata = _latest_report_metadata(output_root, strategy_dir, latest_dir, run_ts, generated)
+    (latest_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     return strategy_dir / "full_research_report.html", payload_path
+
+
+def _latest_report_metadata(
+    output_root: Path,
+    strategy_dir: Path,
+    latest_dir: Path,
+    run_ts: str,
+    generated_at: str,
+) -> Dict[str, Any]:
+    def rel(path: Path) -> str:
+        try:
+            return str(path.relative_to(output_root.parent))
+        except ValueError:
+            return str(path)
+
+    stage_filenames = {
+        "fast_research": "fast_research_report.html",
+        "strict_backtest": "strict_backtest_report.html",
+        "walkforward_strict_audit": "walkforward_audit_report.html",
+    }
+    return {
+        "report_id": STRATEGY_ID,
+        "run_name": run_ts,
+        "updated_at": generated_at,
+        "full_report": {
+            "available": True,
+            "path": rel(strategy_dir / "full_research_report.html"),
+            "latest_path": rel(latest_dir / "full_research_report.html"),
+            "filename": "full_research_report.html",
+        },
+        "stage_reports": {
+            stage: {
+                "path": rel(strategy_dir / filename),
+                "latest_path": rel(latest_dir / filename),
+                "filename": filename,
+            }
+            for stage, filename in stage_filenames.items()
+        },
+    }
 
 
 def _hypothesis_row(
@@ -565,6 +607,7 @@ def _walkforward_from_strict_equity(strict_report: Dict[str, Any]) -> Dict[str, 
         if len(split_frame) < 2:
             continue
         returns = split_frame["value"].pct_change(fill_method=None).dropna()
+        has_trades = bool(split_frame["value"].diff().abs().fillna(0.0).gt(1e-9).any())
         sharpe = _sharpe(returns)
         total_return = float(split_frame["value"].iloc[-1] / split_frame["value"].iloc[0] - 1.0)
         splits.append(
@@ -577,17 +620,38 @@ def _walkforward_from_strict_equity(strict_report: Dict[str, Any]) -> Dict[str, 
                 "oos_sharpe": sharpe,
                 "test_sharpe": sharpe,
                 "max_drawdown": _max_drawdown(split_frame["value"]),
-                "trade_count": None,
-                "has_trades": True,
+                "trade_count": None if has_trades else 0,
+                "has_trades": has_trades,
                 "total_return": total_return,
-                "verdict": "pass" if sharpe > 0 and total_return > 0 else "fail",
+                "verdict": "pass" if has_trades and sharpe > 0 and total_return > 0 else ("fail" if has_trades else "excluded_no_trade"),
                 "parameters": "frozen parameters",
             }
         )
     if not splits:
         return _empty_walkforward("no OOS split had enough equity points")
-    sharpes = [float(split["oos_sharpe"]) for split in splits]
-    profitable = [1.0 if float(split.get("total_return") or 0.0) > 0 else 0.0 for split in splits]
+    evaluated_splits = [split for split in splits if split.get("has_trades") is not False]
+    if not evaluated_splits:
+        return {
+            "verdict": "fail",
+            "reason": "no OOS split had equity movement; likely no executable trades in the audited windows",
+            "is_viable": False,
+            "capacity_ok": False,
+            "thresholds": _walkforward_thresholds(),
+            "aggregate_oos_sharpe": 0.0,
+            "worst_oos_sharpe": 0.0,
+            "pct_profitable_splits": 0.0,
+            "deflated_sharpe_ratio": None,
+            "sharpe_degradation": 0.0,
+            "regime_breakdown": {},
+            "bull_only_warning": False,
+            "n_splits": 0,
+            "evaluated_splits": 0,
+            "total_splits": len(splits),
+            "no_trade_splits": len(splits),
+            "splits": splits,
+        }
+    sharpes = [float(split["oos_sharpe"]) for split in evaluated_splits]
+    profitable = [1.0 if float(split.get("total_return") or 0.0) > 0 else 0.0 for split in evaluated_splits]
     aggregate = statistics.mean(sharpes)
     worst = min(sharpes)
     pct_profitable = statistics.mean(profitable)
@@ -607,10 +671,10 @@ def _walkforward_from_strict_equity(strict_report: Dict[str, Any]) -> Dict[str, 
         "sharpe_degradation": aggregate - worst if aggregate > 0 else 0.0,
         "regime_breakdown": {},
         "bull_only_warning": False,
-        "n_splits": len(splits),
-        "evaluated_splits": len(splits),
+        "n_splits": len(evaluated_splits),
+        "evaluated_splits": len(evaluated_splits),
         "total_splits": len(splits),
-        "no_trade_splits": 0,
+        "no_trade_splits": len(splits) - len(evaluated_splits),
         "splits": splits,
     }
 

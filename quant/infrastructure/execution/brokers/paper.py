@@ -8,9 +8,14 @@ from quant.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 from quant.domain.models.position import Position
 from quant.domain.models.account import AccountInfo
 from quant.domain.ports.broker import BrokerAdapter
+from quant.domain.exceptions import OrderRejectedError
 from quant.runtime.execution_commission import total_commission
+from quant.runtime.execution_simulator import (
+    DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
+    RuntimeOrder,
+    simulate_order_execution,
+)
 from quant.shared.utils.logger import setup_logger
-from quant.shared.utils.symbol_utils import is_cn_symbol as _is_cn_symbol
 
 
 class PaperBroker(BrokerAdapter):
@@ -22,19 +27,30 @@ class PaperBroker(BrokerAdapter):
         slippage_bps: float = 5,
         data_provider: Any = None,
         commission_config: Any = None,
+        execution_cost_model: Optional[Dict[str, Any]] = None,
+        risk_price_deviation_limit: float = DEFAULT_RISK_PRICE_DEVIATION_LIMIT,
+        market_impact_factor: float = 0.0,
+        lot_sizes: Optional[Dict[str, int]] = None,
+        ipo_dates: Optional[Dict[str, date]] = None,
     ):
         super().__init__("paper")
         self.initial_cash = initial_cash
         self.slippage_bps = slippage_bps
         self.data_provider = data_provider
         self.commission_config = commission_config or {}
+        self.execution_cost_model = execution_cost_model
+        self.risk_price_deviation_limit = risk_price_deviation_limit
+        self.market_impact_factor = market_impact_factor
+        self.lot_sizes = lot_sizes or {}
+        self.ipo_dates = ipo_dates or {}
         self._portfolio_ref: Any = None
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self._lock = threading.RLock()
         self._next_order_id = 1
         self._latest_prices: Dict[str, float] = {}
-        self._execution_bars: Dict[str, Dict[str, float]] = {}
+        self._execution_bars: Dict[str, Dict[str, Any]] = {}
+        self._previous_execution_bars: Dict[str, Dict[str, Any]] = {}
         self._trade_callbacks: List[Callable[..., None]] = []
         self._pending_trade_notifications: List[Dict[str, Any]] = []
         self.logger = setup_logger("PaperBroker")
@@ -66,13 +82,20 @@ class PaperBroker(BrokerAdapter):
                 symbol = self._bar_symbol(bar)
                 if not symbol:
                     continue
-                open_price = self._positive_float(self._bar_value(bar, "open", "open_price", "openPrice"))
-                close_price = self._positive_float(self._bar_value(bar, "close", "close_price", "closePrice"))
-                if open_price is not None:
-                    self._execution_bars[symbol] = {
-                        "open_price": open_price,
-                        "last_price": close_price if close_price is not None else open_price,
-                    }
+                normalized = self._normalize_execution_bar(bar, symbol, trading_date)
+                if normalized:
+                    self._execution_bars[symbol] = normalized
+
+    def set_previous_execution_bars(self, bars: Any, trading_date: Optional[Any] = None) -> None:
+        with self._lock:
+            self._previous_execution_bars = {}
+            for bar in self._records(bars):
+                symbol = self._bar_symbol(bar)
+                if not symbol:
+                    continue
+                normalized = self._normalize_execution_bar(bar, symbol, trading_date)
+                if normalized:
+                    self._previous_execution_bars[symbol] = normalized
 
     def get_execution_reference_price(self, symbol: str, side: Optional[str] = None) -> Optional[Dict[str, float]]:
         bar = self._execution_bars.get(symbol)
@@ -156,50 +179,52 @@ class PaperBroker(BrokerAdapter):
             return order
 
     def _simulate_fill(self, order: Order) -> Order:
-        current_price = self._get_current_price(order.symbol)
-
         side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
         order_type = order.order_type.value if isinstance(order.order_type, OrderType) else str(order.order_type)
+        runtime_order = RuntimeOrder(
+            symbol=order.symbol,
+            quantity=order.quantity,
+            side=str(side_value).upper(),
+            order_type=str(order_type).upper(),
+            price=order.price,
+            strategy=order.strategy_name,
+            signal_date=order.timestamp,
+        )
+        try:
+            simulation = simulate_order_execution(
+                runtime_order,
+                self._portfolio_ref,
+                order.symbol,
+                self._execution_bar_for_order(order.symbol),
+                lot_sizes=self.lot_sizes,
+                ipo_dates=self.ipo_dates,
+                slippage_bps=self.slippage_bps,
+                commission_config=self.commission_config,
+                prev_bar=self._previous_execution_bars.get(order.symbol),
+                risk_price_deviation_limit=self.risk_price_deviation_limit,
+                market_impact_factor=self.market_impact_factor,
+                execution_cost_model=self.execution_cost_model,
+            )
+        except OrderRejectedError as exc:
+            self.logger.warning(f"Paper order rejected: {exc}")
+            return self._set_order_attrs(order, {'status': OrderStatus.REJECTED})
 
-        if side_value == "SELL" and _is_cn_symbol(order.symbol):
-            positions = self._portfolio_positions()
-            pos = positions.get(order.symbol)
-            if pos and pos.quantity > 0:
-                today = date.today()
-                settled = pos.settled_quantity(today)
-                if order.quantity > settled:
-                    self.logger.warning(
-                        f"CN T+1 rejected: sell {order.quantity} {order.symbol}, "
-                        f"only {settled} settled (bought before today)"
-                    )
-                    return self._set_order_attrs(order, {
-                        'status': OrderStatus.REJECTED,
-                    })
-
-        if order_type == "LIMIT":
-            limit_price = self._positive_float(order.price)
-            if limit_price is None:
-                return self._set_order_attrs(order, {'status': OrderStatus.REJECTED})
-            if side_value == "BUY" and current_price > limit_price:
-                return self._set_order_attrs(order, {'status': OrderStatus.REJECTED})
-            if side_value == "SELL" and current_price < limit_price:
-                return self._set_order_attrs(order, {'status': OrderStatus.REJECTED})
-            fill_price = current_price
-        else:
-            slippage = current_price * (self.slippage_bps / 10000)
-            if side_value == "BUY":
-                fill_price = current_price + slippage
-            else:
-                fill_price = current_price - slippage
-
+        status = OrderStatus.FILLED
+        if simulation.quantity + 1e-9 < order.quantity:
+            status = OrderStatus.PARTIAL
         filled = self._set_order_attrs(order, {
-            'status': OrderStatus.FILLED,
-            'filled_quantity': order.quantity,
-            'avg_fill_price': fill_price,
+            'status': status,
+            'filled_quantity': simulation.quantity,
+            'avg_fill_price': simulation.fill_price,
         })
 
-        commission = self.estimate_commission(order.symbol, side_value, order.quantity, fill_price)
-        self._queue_trade_notification(filled, fill_price, commission)
+        self._queue_trade_notification(
+            filled,
+            simulation.fill_price,
+            simulation.commission,
+            fill_quantity=simulation.quantity,
+            timestamp=simulation.fill_time,
+        )
         return filled
 
     def _get_current_price(self, symbol: str) -> float:
@@ -234,28 +259,136 @@ class PaperBroker(BrokerAdapter):
         self.logger.warning(f"No price data for {symbol}, using fallback 100.0")
         return 100.0
 
-    def estimate_commission(self, symbol: str, side: str, quantity: float, price: float) -> float:
+    def estimate_commission(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        trade_date: Optional[date] = None,
+    ) -> float:
         try:
-            return float(total_commission(symbol, price, quantity, str(side).upper(), self.commission_config))
+            return float(total_commission(symbol, price, quantity, str(side).upper(), self.commission_config, trade_date))
         except Exception:
             return 0.0
 
-    def _queue_trade_notification(self, order: Order, fill_price: float, commission: float) -> None:
+    def _queue_trade_notification(
+        self,
+        order: Order,
+        fill_price: float,
+        commission: float,
+        fill_quantity: Optional[float] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
         side_value = order.side.value if isinstance(order.side, OrderSide) else str(order.side)
         self._pending_trade_notifications.append({
             "order_id": order.order_id,
             "symbol": order.symbol,
             "side": side_value,
-            "quantity": order.quantity,
+            "quantity": fill_quantity if fill_quantity is not None else order.quantity,
             "price": fill_price,
             "commission": commission,
-            "timestamp": order.timestamp or datetime.now(),
+            "timestamp": timestamp or order.timestamp or datetime.now(),
             "strategy_name": order.strategy_name,
         })
 
     def get_order(self, order_id: str) -> Optional[Order]:
         with self._lock:
             return self.orders.get(order_id)
+
+    def _execution_bar_for_order(self, symbol: str) -> Dict[str, Any]:
+        bar = self._execution_bars.get(symbol)
+        if bar:
+            return bar
+        price = self._get_current_price(symbol)
+        return {
+            "symbol": symbol,
+            "timestamp": datetime.now(),
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "open_price": price,
+            "last_price": price,
+            "volume": 0.0,
+        }
+
+    def _normalize_execution_bar(
+        self,
+        bar: Any,
+        symbol: str,
+        trading_date: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        open_price = self._positive_float(self._bar_value(bar, "open", "open_price", "openPrice"))
+        if open_price is None:
+            return None
+        close_price = self._positive_float(
+            self._bar_value(bar, "close", "close_price", "closePrice", "last_price", "price")
+        )
+        close_price = close_price if close_price is not None else open_price
+        normalized = self._dict_copy(bar)
+        normalized["symbol"] = symbol
+        normalized["open"] = open_price
+        normalized["open_price"] = open_price
+        normalized["close"] = close_price
+        normalized["last_price"] = close_price
+        for key, names in {
+            "high": ("high", "high_price", "highPrice"),
+            "low": ("low", "low_price", "lowPrice"),
+            "volume": ("volume", "vol", "turnover_volume"),
+            "turnover": ("turnover", "amount", "value"),
+            "adv20_value": ("adv20_value", "adv_value", "avg_turnover_20"),
+            "adv20_volume": ("adv20_volume", "adv_volume", "avg_volume_20"),
+            "volatility20": ("volatility20", "volatility_20d", "daily_volatility"),
+            "up_limit": ("up_limit", "limit_up"),
+            "down_limit": ("down_limit", "limit_down"),
+            "is_st": ("is_st",),
+            "tradable": ("tradable",),
+            "has_daily_bar": ("has_daily_bar",),
+            "_has_daily_bar": ("_has_daily_bar",),
+            "_suspended": ("_suspended",),
+        }.items():
+            value = self._bar_value(bar, *names)
+            if value is not None:
+                normalized[key] = value
+        normalized.setdefault("high", max(open_price, close_price))
+        normalized.setdefault("low", min(open_price, close_price))
+        timestamp = self._bar_value(bar, "timestamp", "datetime", "date", "trade_date")
+        normalized["timestamp"] = self._normalize_timestamp(timestamp, trading_date)
+        return normalized
+
+    def _dict_copy(self, item: Any) -> Dict[str, Any]:
+        if isinstance(item, dict):
+            return dict(item)
+        if hasattr(item, "to_dict"):
+            try:
+                value = item.to_dict()
+                if isinstance(value, dict):
+                    return dict(value)
+            except Exception:
+                pass
+        return {}
+
+    def _normalize_timestamp(self, value: Any, trading_date: Optional[Any]) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time())
+        if value is not None:
+            try:
+                return datetime.fromisoformat(str(value))
+            except ValueError:
+                pass
+        if isinstance(trading_date, datetime):
+            return trading_date
+        if isinstance(trading_date, date):
+            return datetime.combine(trading_date, datetime.min.time())
+        if trading_date is not None:
+            try:
+                return datetime.fromisoformat(str(trading_date))
+            except ValueError:
+                pass
+        return datetime.now()
 
     def _records(self, data: Any) -> List[Any]:
         if data is None:

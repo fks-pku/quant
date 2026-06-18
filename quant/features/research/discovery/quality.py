@@ -19,6 +19,9 @@ _SOURCE_PROFILE = {
     "joinquant_community": ("practitioner_community", 1.15),
     "alpha_architect": ("practitioner_research", 1.35),
     "quantocracy": ("curated_blog", 1.15),
+    "hudson_thames": ("practitioner_research", 1.30),
+    "portfolio_optimizer": ("practitioner_research", 1.25),
+    "quantpedia": ("strategy_database", 1.40),
     "blog": ("blog", 0.95),
 }
 

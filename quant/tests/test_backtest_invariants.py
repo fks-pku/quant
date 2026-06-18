@@ -2239,7 +2239,7 @@ def _execute_direct_order(order, symbol, bar, portfolio, prev_bar=None):
 
 
 class TestCase29LimitOrders:
-    def test_c29_01_buy_limit_above_open_fills_at_open(self):
+    def test_c29_01_buy_limit_above_open_fills_at_limit(self):
         from quant.features.backtest.schemas import DeferredOrder
         from quant.features.trading.portfolio import Portfolio
 
@@ -2254,7 +2254,7 @@ class TestCase29LimitOrders:
             {"symbol": "AAPL", "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 4)},
             pf,
         )
-        assert trades[0].fill_price == pytest.approx(110.0)
+        assert trades[0].fill_price == pytest.approx(120.0)
 
     def test_c29_02_buy_limit_below_open_rejected(self):
         from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
@@ -2275,7 +2275,7 @@ class TestCase29LimitOrders:
             )
         assert exc.value.reason == OrderRejectionReason.LIMIT_NOT_MARKETABLE
 
-    def test_c29_03_sell_limit_below_open_fills_at_open(self):
+    def test_c29_03_sell_limit_below_open_fills_at_limit(self):
         from quant.features.backtest.schemas import DeferredOrder
         from quant.features.trading.portfolio import Portfolio
 
@@ -2292,7 +2292,7 @@ class TestCase29LimitOrders:
             {"symbol": "AAPL", "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "volume": 1_000_000, "timestamp": datetime(2024, 6, 5)},
             pf,
         )
-        assert trades[0].fill_price == pytest.approx(110.0)
+        assert trades[0].fill_price == pytest.approx(105.0)
 
     def test_c29_04_sell_limit_above_open_rejected(self):
         from quant.domain.exceptions import OrderRejectedError, OrderRejectionReason
@@ -3398,11 +3398,12 @@ def test_case40_02_execution_day_open_anchors_cost_protection_limit():
     )
 
     assert len(result.trades) == 1
-    assert result.trades[0].fill_price == pytest.approx(10.0501906853)
+    assert result.trades[0].fill_price == pytest.approx(10.0552156853)
     assert result.diagnostics.rejection_counts.get("limit_not_marketable", 0) == 0
     observation = result.diagnostics.execution_observations[0]
     assert observation["cost_protection_bps"] == pytest.approx(5.1897366596)
     assert observation["cost_protection_limit"] == pytest.approx(10.0552156853)
+    assert observation["impact_bps"] == pytest.approx(0.1897366596)
 
 
 def test_case40_03_execution_day_open_anchors_sell_cost_protection_limit():
@@ -3461,7 +3462,7 @@ def test_case40_03_execution_day_open_anchors_sell_cost_protection_limit():
     )
 
     assert len(trades) == 1
-    assert trades[0].fill_price == pytest.approx(10.05)
+    assert trades[0].fill_price == pytest.approx(10.044975)
     observation = diag.execution_observations[0]
     assert observation["cost_protection_limit"] == pytest.approx(10.044975)
     assert observation["cost_protection_bps"] == pytest.approx(5.0)
@@ -3600,3 +3601,57 @@ def test_case41_02_cn_same_close_buy_can_sell_next_open_under_t1():
     assert result.trades[1].fill_price == pytest.approx(10.5)
     assert result.diagnostics.t1_rejected_sells == 0
     assert result.open_positions == []
+
+
+# ============================================================================
+# CASE-42: CN ETF live-aligned minimum commission
+# ============================================================================
+
+CASE42_CONFIG = {
+    "backtest": {"slippage_bps": 0},
+    "execution": {
+        "commission": {
+            "CN": {"type": "cn_realistic", "fund_percent": 0.0001, "fund_min_per_order": 0.0}
+        }
+    },
+    "risk": {"max_position_pct": 1.0, "max_daily_loss_pct": 1.0, "max_leverage": 999, "max_orders_minute": 999},
+}
+
+CASE42_BARS = [
+    (START, 10.00, 10.00, 10_000_000),
+    (START + timedelta(days=1), 10.00, 10.00, 10_000_000),
+    (START + timedelta(days=2), 10.50, 10.50, 10_000_000),
+    (START + timedelta(days=3), 11.00, 11.00, 10_000_000),
+]
+
+
+@pytest.fixture
+def case42_result():
+    data = _make_bars("510300", CASE42_BARS)
+    bt = make_backtester(CASE42_CONFIG)
+    provider = DataFrameProvider(data)
+    strat = _signal_strategy("Case42", "510300", buy_on={0}, sell_on={2}, qty=100)
+    return bt.run(
+        start=data["timestamp"].min(), end=data["timestamp"].max(),
+        strategies=[strat], initial_cash=100_000,
+        data_provider=provider, symbols=["510300"],
+    )
+
+
+class TestCase42CNEtfLiveCommissionMinimum:
+    def test_c42_01_configured_zero_fund_min_still_charges_live_minimum(self, case42_result):
+        buy, sell = case42_result.trades
+        assert buy.commission == pytest.approx(5.0)
+        assert sell.commission == pytest.approx(5.0)
+
+    def test_c42_02_etf_exempts_stock_fee_components(self, case42_result):
+        for trade in case42_result.trades:
+            assert trade.cost_breakdown["stamp_duty"] == pytest.approx(0.0)
+            assert trade.cost_breakdown["transfer_fee"] == pytest.approx(0.0)
+            assert trade.cost_breakdown["regulator_fee"] == pytest.approx(0.0)
+
+    def test_c42_03_diagnostics_total_commission_matches_trade_commissions(self, case42_result):
+        assert case42_result.diagnostics.total_commission == pytest.approx(10.0)
+        assert case42_result.diagnostics.total_commission == pytest.approx(
+            sum(trade.commission for trade in case42_result.trades)
+        )

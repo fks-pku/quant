@@ -3080,11 +3080,16 @@ def _make_strategy_scout(cfg: ResearchConfig):
     from quant.features.research.scout import StrategyScout
     from quant.infrastructure.research.sources import (
         ASharePublicForumSource,
+        AlphaArchitectSource,
         ArxivSource,
         BigQuantSource,
         BlogSource,
+        HudsonThamesSource,
         JoinQuantSource,
         NBERSource,
+        PortfolioOptimizerSource,
+        QuantocracySource,
+        QuantpediaSource,
         SSRNSource,
     )
 
@@ -3098,6 +3103,11 @@ def _make_strategy_scout(cfg: ResearchConfig):
         "bigquant": BigQuantSource(),
         "joinquant": JoinQuantSource(),
         "jointquant": JoinQuantSource(source_name="jointquant"),
+        "quantocracy": QuantocracySource(),
+        "hudson_thames": HudsonThamesSource(),
+        "portfolio_optimizer": PortfolioOptimizerSource(),
+        "alpha_architect": AlphaArchitectSource(),
+        "quantpedia": QuantpediaSource(),
         "ashare_structural": AShareStructuralSource(),
     }, query_plan=scout_cfg.get("query_plan"), quality_config=scout_cfg)
     return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None), config=scout_cfg)
