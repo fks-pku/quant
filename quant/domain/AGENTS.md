@@ -61,7 +61,8 @@ None. Domain has zero external dependencies — the most important invariant.
 
 ## Recent Additions
 
-- `ResearchStore` is the domain port for research persistence, including candidates, seen hashes, artifacts, and hypothesis ledger records. Feature code depends on this port only; file-backed and DuckDB implementations live in infrastructure.
+- `ResearchStore` is the domain port for research persistence, including candidates, seen hashes, artifacts, and hypothesis ledger records. It exposes read-only candidate listing for dashboards and feature code depends on this port only; file-backed and DuckDB implementations live in infrastructure.
+- `ResearchSourceCatalogEntry` and `research_source_catalog()` hold pure discovery source defaults: source names, adapter kinds, dashboard visibility/display names, query terms, RSS feeds/source filters, and source-quality priors. Infrastructure builds adapters from this catalog.
 - `ResearchMarketData.get_universe_symbols(market)` supports full-universe research validation while still returning dependency-free types.
 - `PITData` is the point-in-time research data port: `get_universe(as_of_date, market)` and `get_bars_pit(symbols, start, end, as_of_date)`.
 - `BrokerAdapter.get_trade_history(start_date=None, end_date=None)` and `get_order_history(start_date=None, end_date=None)` are optional restart-reconciliation hooks. Default implementations return `[]`; concrete brokers can override them with dependency-free list/dict payloads.

@@ -52,6 +52,12 @@ class FileResearchStore(ResearchStore):
         candidates = self._load_state().get("candidates", {}).values()
         return [dict(info) for info in candidates if info.get("status") == status]
 
+    def list_candidates(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        candidates = [dict(info) for info in self._load_state().get("candidates", {}).values()]
+        if status is None:
+            return candidates
+        return [info for info in candidates if info.get("status") == status]
+
     def update_status(self, strategy_id: str, status: str, reason: str = "") -> bool:
         state = self._load_state()
         candidates = state.setdefault("candidates", {})

@@ -376,6 +376,8 @@ Research capital exceptions: Formal A-share research default initial cash remain
 
 `public/local idea sources → idea_bank → daily A-share admission → StrategySpec → HFQ signal validation → candidate integration → strict Backtester → walk-forward audit → HTML reports and status transition`
 
+Discovery source defaults live in one place: `quant/domain/models/research_source_catalog.py`. It owns default source names, query plans, feed URLs/source filters, and source-quality priors. API/CLI composition roots create adapters through `quant.infrastructure.research.sources.build_research_sources()`. Add a normal RSS/public-source default in the catalog; add infrastructure adapter code only when introducing a new source `kind`.
+
 可单独运行的主要 mode：
 
 - `discover`：只做 source search、quality scoring、deduplication 和 idea-bank persistence。

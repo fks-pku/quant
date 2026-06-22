@@ -2225,6 +2225,9 @@ class _NullResearchStore(ResearchStore):
     def list_by_status(self, status: str) -> List[Dict[str, Any]]:
         return []
 
+    def list_candidates(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        return []
+
     def update_status(self, strategy_id: str, status: str, reason: str = "") -> bool:
         return False
 

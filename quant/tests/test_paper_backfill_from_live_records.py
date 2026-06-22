@@ -85,6 +85,8 @@ def test_scheduled_scripts_replay_paper_after_post_close_data_update():
     live_script = (root / "scripts" / "run_qmt_live_daily.ps1").read_text(encoding="utf-8")
     paper_script = (root / "scripts" / "run_paper_daily.ps1").read_text(encoding="utf-8")
     recovery_script = (root / "scripts" / "run_qmt_live_recovery.ps1").read_text(encoding="utf-8")
+    local_scheduler_root = root.parent / "local_scheduler"
+    local_recovery_poll = local_scheduler_root / "run_qmt_live_recovery_poll.ps1"
 
     assert "run_paper_daily.ps1" in update_script
     assert "paper replay command" in update_script
@@ -118,6 +120,17 @@ def test_scheduled_scripts_replay_paper_after_post_close_data_update():
     assert "--pending-only" not in recovery_script
     assert "qmt live recovery exit_code=" in recovery_script
     assert "dryrun_qmt_live_recovery" in recovery_script
+    assert "$CalendarPython" in recovery_script
+    assert "resolve_cn_trading_date.py" in recovery_script
+    assert '"is-open"' in recovery_script
+    assert "skip non-trading day" in recovery_script
+    if local_recovery_poll.exists():
+        local_poll_script = local_recovery_poll.read_text(encoding="utf-8")
+        assert "$CalendarPython" in local_poll_script
+        assert "resolve_cn_trading_date.py" in local_poll_script
+        assert '"is-open"' in local_poll_script
+        assert "skip non-trading day" in local_poll_script
+        assert "exit 0" in local_poll_script
 
 
 def _write_etf_bars(path: Path, rows):

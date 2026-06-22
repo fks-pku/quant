@@ -765,6 +765,60 @@ class StrategyStateStore:
             con.close()
         return [_row_to_dict(row, _signal_columns()) for row in rows]
 
+    def get_pending_signals_for_submit(
+        self,
+        *,
+        mode: str,
+        signal_date: str,
+        submit_date: str,
+    ) -> List[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            rows = con.execute(
+                """select * from strategy_signals s
+                where s.mode = ?
+                  and s.signal_date = ?
+                  and s.submit_date = ?
+                  and lower(s.status) in ('accepted', 'pending', 'queued', 'pending_submit')
+                  and not exists (
+                      select 1 from strategy_orders o
+                      where o.mode = s.mode
+                        and o.strategy_name = s.strategy_name
+                        and o.submit_date = ?
+                        and (
+                            (s.signal_id <> '' and o.signal_id = s.signal_id)
+                            or (
+                                o.symbol = s.symbol
+                                and upper(o.side) = upper(s.side)
+                                and abs(o.quantity - s.quantity) < 0.01
+                            )
+                        )
+                        and lower(o.status) in ('submitted', 'partial', 'filled', 'cancelled')
+                  )
+                  and not exists (
+                      select 1 from strategy_fills f
+                      where f.mode = s.mode
+                        and f.strategy_name = s.strategy_name
+                        and f.record_date = ?
+                        and (
+                            (s.signal_id <> '' and f.signal_id = s.signal_id)
+                            or (
+                                f.symbol = s.symbol
+                                and upper(f.side) = upper(s.side)
+                                and abs(f.quantity - s.quantity) < 0.01
+                            )
+                        )
+                  )
+                order by s.strategy_name, s.timestamp, s.symbol""",
+                [mode, str(signal_date)[:10], str(submit_date)[:10], str(submit_date)[:10], str(submit_date)[:10]],
+            ).fetchall()
+        finally:
+            con.close()
+        return [_row_to_dict(row, _signal_columns()) for row in rows]
+
     def upsert_order(self, *, order: Dict[str, Any]) -> Dict[str, Any]:
         self.ensure_schema()
         record_date = str(

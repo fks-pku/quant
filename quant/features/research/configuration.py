@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from quant.domain.models.research_source_catalog import (
+    default_research_query_plan,
+    default_research_source_names,
+    default_research_source_quality,
+)
+
 
 def research_config_kwargs_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
     source = dict(data or {})
@@ -30,6 +36,16 @@ def research_config_kwargs_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
     research_cfg.setdefault("llm_temperature", llm_cfg.get("temperature", 0.3))
     research_cfg.setdefault("llm_base_url", llm_cfg.get("base_url"))
     research_cfg.setdefault("llm_group_id", llm_cfg.get("group_id"))
+    research_cfg.setdefault("sources", default_research_source_names())
+
+    scout_cfg = dict(research_cfg.get("scout_config", {}) or {})
+    source_quality = default_research_source_quality()
+    source_quality.update(dict(scout_cfg.get("source_quality", {}) or {}))
+    scout_cfg["source_quality"] = source_quality
+    query_plan = default_research_query_plan()
+    query_plan.update(dict(scout_cfg.get("query_plan", {}) or {}))
+    scout_cfg["query_plan"] = query_plan
+    research_cfg["scout_config"] = scout_cfg
 
     sync_production_gate_thresholds(research_cfg)
     return research_cfg

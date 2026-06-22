@@ -2,27 +2,14 @@ import re
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, Optional
 
+from quant.domain.models.research_source_catalog import research_source_profile
 from quant.features.research.models import DiscoveryQualityReport, RawStrategy
 
 
-_SOURCE_PROFILE = {
-    "arxiv": ("academic", 1.75),
-    "ssrn": ("academic", 1.65),
-    "nber": ("institutional", 1.55),
+_SOURCE_PROFILE_FALLBACKS = {
     "aqr": ("practitioner_research", 1.45),
     "worldquant101": ("public_factor_library", 1.35),
-    "ashare_structural": ("local_structural_research", 1.55),
-    "ashare_public_forum": ("practitioner_community", 1.20),
-    "bigquant": ("practitioner_community", 1.20),
-    "joinquant": ("practitioner_community", 1.15),
-    "jointquant": ("practitioner_community", 1.15),
     "joinquant_community": ("practitioner_community", 1.15),
-    "alpha_architect": ("practitioner_research", 1.35),
-    "quantocracy": ("curated_blog", 1.15),
-    "hudson_thames": ("practitioner_research", 1.30),
-    "portfolio_optimizer": ("practitioner_research", 1.25),
-    "quantpedia": ("strategy_database", 1.40),
-    "blog": ("blog", 0.95),
 }
 
 _DAILY_TERMS = {
@@ -229,7 +216,8 @@ def discovery_quality(raw: RawStrategy) -> Dict[str, Any]:
 def _source_profile(source: str, config: Dict[str, Any]) -> tuple[str, float]:
     overrides = config.get("source_quality", {}) if isinstance(config, dict) else {}
     key = str(source or "").lower().strip()
-    source_type, score = _SOURCE_PROFILE.get(key, ("unknown", 0.8))
+    profile = research_source_profile(key)
+    source_type, score = profile or _SOURCE_PROFILE_FALLBACKS.get(key, ("unknown", 0.8))
     if isinstance(overrides, dict) and key in overrides:
         try:
             score = float(overrides[key])

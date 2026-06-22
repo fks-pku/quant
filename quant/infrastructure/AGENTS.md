@@ -56,11 +56,13 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 ## Research Adapters
 
-- `research/FileResearchStore` and `research/DuckDBResearchStore` implement the `ResearchStore` domain port, including hypothesis ledger upsert/list/get APIs.
+- `research/FileResearchStore` and `research/DuckDBResearchStore` implement the `ResearchStore` domain port, including candidate listing and hypothesis ledger upsert/list/get APIs.
 - `research/market_data/DuckDBResearchMarketData` reads market-aware daily tables and can consume optional `PITData`.
 - `research/factors` owns FF/CN factor cache and download/build adapters.
+- `research/sources/registry.py` builds all discovery source adapters from the pure domain source catalog; add ordinary RSS/public-source defaults and dashboard source visibility in `quant/domain/models/research_source_catalog.py` first.
 - `research/sources/SSRNSource` performs polite SSRN discovery and fails closed to `[]`.
 - `research/sources/ASharePublicForumSource` turns audited BigQuant/JoinQuant public strategy seeds into low-frequency research ideas and marks them for manual replication.
+- `research/sources/AShareStructuralSource` exposes local structural A-share daily ideas as an infrastructure source adapter.
 - `research/pit_duckdb.PITDuckDBData` implements point-in-time universe and bar access with read-only DuckDB.
 - Research feature code must receive it through dependency injection; infrastructure must not import from `features/`.
 

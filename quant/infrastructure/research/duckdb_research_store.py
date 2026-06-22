@@ -127,6 +127,19 @@ class DuckDBResearchStore(ResearchStore):
                 result.append(d)
         return result
 
+    def list_candidates(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        with duckdb.connect(self._db_path) as conn:
+            if status is None:
+                rows = conn.execute(
+                    "SELECT id, name, description, status, priority, source, source_url, research_meta, created_at, updated_at FROM candidates ORDER BY updated_at, id"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, name, description, status, priority, source, source_url, research_meta, created_at, updated_at FROM candidates WHERE status = ? ORDER BY updated_at, id",
+                    [status],
+                ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
     def update_status(self, strategy_id: str, status: str, reason: str = "") -> bool:
         existing = self._get_candidate_row(strategy_id)
         if existing is None:

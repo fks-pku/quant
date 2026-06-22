@@ -9,7 +9,7 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 - `ResearchEngine(config, scout, evaluator, integrator, pool, backtest_fn, strategies_dir, spec_builder, validator, rigor_hub, ensemble)` - orchestrates discovery, evaluation, validation, integration, backtest, ledger, lineage manifest, promotion dossier, and scorecard writing. Backtest, validation, rigor, ensemble, store, and artifact dependencies are injected by composition roots.
 - `StrategyScout` - strategy discovery coordinator. It can use direct adapters or a `SourceHub`, scores discoveries with `discovery/quality.py`, deduplicates, ranks, and optionally filters by `scout_config.min_discovery_score`.
 - `discovery/source_hub.py` - fan-out source adapter hub. It supports per-source query plans and normalizes raw source dictionaries into `RawStrategy`.
-- `config/research.yaml` discovery `sources` currently route through SSRN, BigQuant public seeds, JoinQuant public seeds (`jointquant` is accepted as the configured JoinQuant alias), Quantocracy, Hudson & Thames, Portfolio Optimizer, Alpha Architect, and Quantpedia.
+- `quant/domain/models/research_source_catalog.py` is the single maintenance point for default discovery source names, dashboard visibility/display names, query plans, feed URLs/source filters, and source-quality scores. API/CLI composition roots create adapters through `quant.infrastructure.research.sources.build_research_sources()`.
 - `discovery/quality.py` - deterministic idea provenance, source quality, recency, daily-data feasibility, implementation-readiness, and risk-flag scoring. Every discovered `RawStrategy` should carry `metadata.discovery_quality` before evaluation.
 - `StrategyEvaluator` - LLM-backed evaluator with deterministic professional fallback. It applies `evaluation_rubric.py` to all LLM or heuristic reports.
 - `evaluation_rubric.py` - admission-score rubric. It haircuts optimistic LLM output, provides no-LLM heuristic triage, and emits `required_data_fields`, `validation_tests`, `signal_quality_score`, and `research_confidence_score`.
@@ -84,8 +84,8 @@ Automatic quant strategy research. The module discovers strategy ideas from rese
 | Change | Files |
 |--------|-------|
 | Discovery orchestration | `scout.py` |
-| Source fan-out/query plans | `discovery/source_hub.py` |
-| Low-frequency public scout CLI | `quant/scripts/run_low_frequency_idea_scout.py`, `config/research.yaml` |
+| Source catalog/query plans/source quality | `quant/domain/models/research_source_catalog.py`, `quant/infrastructure/research/sources/registry.py`, `discovery/source_hub.py` |
+| Low-frequency public scout CLI | `quant/scripts/run_low_frequency_idea_scout.py`, `quant/domain/models/research_source_catalog.py` |
 | Scout + formal pre-full gate CLI | `quant/scripts/run_research.py --mode scout_formal` |
 | Idea/source quality scoring | `discovery/quality.py` |
 | Evaluation prompt/parsing | `evaluator.py` |

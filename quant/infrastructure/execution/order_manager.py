@@ -242,6 +242,85 @@ class OrderManager:
 
         return order_id
 
+    def submit_existing_signal(
+        self,
+        *,
+        symbol: str,
+        quantity: float,
+        side: str,
+        order_type: str = "LIMIT",
+        price: Optional[float] = None,
+        strategy_name: Optional[str] = None,
+        risk_price: Optional[float] = None,
+        signal_metadata: Optional[Dict[str, Any]] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Optional[str]:
+        check_price = price
+        if check_price is None:
+            if risk_price is not None:
+                check_price = risk_price
+            else:
+                check_price = self._get_last_price(symbol)
+                price = check_price
+
+        order_value = abs(quantity * check_price)
+        risk_engine = self._risk_engine_for(strategy_name)
+        approved, results = risk_engine.check_order(
+            symbol=symbol,
+            quantity=quantity,
+            price=check_price,
+            order_value=order_value,
+            side=side,
+        )
+        risk_engine.log_result(results)
+
+        order_id = str(client_order_id or uuid.uuid4())[:36].upper()
+        order_timestamp = self._order_timestamp()
+        order = Order(
+            symbol=symbol,
+            quantity=quantity,
+            side=OrderSide(side),
+            order_type=OrderType(order_type),
+            order_id=order_id,
+            status=OrderStatus.PENDING,
+            price=price,
+            timestamp=order_timestamp,
+            strategy_name=strategy_name,
+        )
+
+        if not approved:
+            rejected = replace(order, status=OrderStatus.REJECTED)
+            with self._lock:
+                self._orders[order_id] = rejected
+                self._remember_order_signal_metadata(order_id, signal_metadata)
+            self._record_order(
+                rejected,
+                None,
+                "rejected",
+                reason="risk_check_failed",
+                metadata=signal_metadata,
+            )
+            self.logger.warning(f"Existing signal order rejected by risk engine: {symbol} {side} {quantity}")
+            self.event_bus.publish_nowait(
+                EventType.ORDER_REJECTED,
+                {
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "side": side,
+                    "reason": "risk_check_failed",
+                },
+            )
+            return None
+
+        with self._lock:
+            self._orders[order_id] = order
+            self._remember_order_signal_metadata(order_id, signal_metadata)
+
+        self._record_strategy(order_id, strategy_name)
+        self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value)
+        self._submit_to_broker(order)
+        return order_id
+
     def set_signal_timestamp(self, timestamp: Optional[datetime]) -> None:
         with self._lock:
             self._signal_timestamp = timestamp

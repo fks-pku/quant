@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from quant.domain.models.research_source_catalog import default_research_source_names
+
 
 DEFAULT_A_SHARE_SYMBOLS = ["000300", "000905", "600519", "000001", "510300"]
 DEFAULT_RESEARCH_INITIAL_CASH = 10_000.0
@@ -105,18 +107,7 @@ class ResearchLogEntry:
 class ResearchConfig:
     auto_run: bool = False
     interval_days: int = 7
-    sources: List[str] = field(
-        default_factory=lambda: [
-            "ssrn",
-            "bigquant",
-            "jointquant",
-            "quantocracy",
-            "hudson_thames",
-            "portfolio_optimizer",
-            "alpha_architect",
-            "quantpedia",
-        ]
-    )
+    sources: List[str] = field(default_factory=default_research_source_names)
     max_results_per_source: int = 10
     evaluation_threshold: float = 0.0
     backtest_sharpe_threshold: float = 0.5

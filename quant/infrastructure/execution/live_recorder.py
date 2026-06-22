@@ -386,13 +386,18 @@ class LiveTradingRecorder:
                 order_id = str(payload.get("order_id") or "")
                 broker_order_id = str(payload.get("broker_order_id") or "")
                 order_date = str(payload.get("timestamp") or timestamp.isoformat())[:10]
-                signal = self._state_store.get_signal_by_order(
-                    mode=self._mode,
-                    order_id=order_id,
-                    strategy_name=strategy_name,
-                    symbol=str(payload.get("symbol") or ""),
-                    side=str(payload.get("side") or ""),
-                )
+                signal = None
+                payload_signal_id = str(payload.get("signal_id") or "")
+                if payload_signal_id:
+                    signal = self._state_store.get_signal(signal_id=payload_signal_id)
+                if not signal:
+                    signal = self._state_store.get_signal_by_order(
+                        mode=self._mode,
+                        order_id=order_id,
+                        strategy_name=strategy_name,
+                        symbol=str(payload.get("symbol") or ""),
+                        side=str(payload.get("side") or ""),
+                    )
                 if not signal and broker_order_id:
                     signal = self._state_store.get_signal_by_order(
                         mode=self._mode,
@@ -846,7 +851,7 @@ def _order_execution_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, A
     if not metadata:
         return {}
     payload: Dict[str, Any] = {}
-    for key in ("execution_reference_price", "execution_cost_bps", "cost_bps", "submit_date", "execution_date"):
+    for key in ("signal_id", "execution_reference_price", "execution_cost_bps", "cost_bps", "submit_date", "execution_date"):
         value = metadata.get(key)
         if value is not None and value != "":
             payload[key] = value

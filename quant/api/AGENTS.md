@@ -37,7 +37,7 @@ Blueprints:
 - Add route: add to appropriate `*_bp.py`
 - Change state management: edit `api/state/runtime.py`
 - Change research report access: edit `api/research_bp.py` helpers around the three stage reports.
-- Change local strategy dashboard behavior: edit `quant/scripts/strategy_dashboard_server.py`, not `api_server.py`.
+- Change local strategy/research dashboard behavior: edit `quant/scripts/strategy_dashboard_server.py`, not `api_server.py`.
 
 ## Known Pitfalls
 
@@ -57,3 +57,4 @@ Blueprints:
 - `/api/research/report` returns latest report metadata, including full-report and stage-report URLs.
 - `/api/research/report/latest` serves the latest `full_research_report.html` when available.
 - `/api/research/report/stage/<stage_key>` serves `fast_research`, `strict_backtest`, or `walkforward_strict_audit` stage HTML.
+- Local `/research` and `/api/research/dashboard` are served by `quant/scripts/strategy_dashboard_server.py` for source-grouped idea review.

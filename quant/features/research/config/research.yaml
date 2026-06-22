@@ -1,15 +1,6 @@
 research:
   auto_run: false
   interval_days: 7
-  sources:
-    - ssrn
-    - bigquant
-    - jointquant
-    - quantocracy
-    - hudson_thames
-    - portfolio_optimizer
-    - alpha_architect
-    - quantpedia
   max_results_per_source: 10
   backtest_sharpe_threshold: 0.5
   auto_backtest: true
@@ -53,61 +44,9 @@ research:
     required_match_terms: [daily_ohlcv]
     required_any_match_terms: [liquid_equity, factor, momentum, mean_reversion, breakout, regime, rank_ic, cost_aware]
     blocked_risk_flags: [high_frequency_not_daily, intraday_dependency, crypto_capacity_risk, non_equity_market, non_price_signal, alternative_data_required]
-    source_quality:
-      arxiv: 1.75
-      ssrn: 1.65
-      nber: 1.55
-      blog: 0.95
-      ashare_public_forum: 1.20
-      bigquant: 1.20
-      joinquant: 1.15
-      jointquant: 1.15
-      quantocracy: 1.15
-      hudson_thames: 1.30
-      portfolio_optimizer: 1.25
-      alpha_architect: 1.35
-      quantpedia: 1.40
-      ashare_structural: 1.55
-    query_plan:
-      ssrn:
-        - query: "daily trading strategy equity factor"
-        - query: "cross sectional momentum anomaly"
-        - query: "mean reversion equity strategy"
-      bigquant:
-        - query: "行业 轮动"
-        - query: "Alpha101"
-        - query: "景气度 趋势 拥挤度"
-      jointquant:
-        - query: "小市值"
-        - query: "多因子"
-      quantocracy:
-        - query: "daily factor momentum mean reversion"
-        - query: "quant trading strategy transaction costs"
-      hudson_thames:
-        - query: "daily mean reversion momentum portfolio optimization"
-        - query: "backtesting pitfalls daily equity strategy"
-      portfolio_optimizer:
-        - query: "portfolio optimization daily allocation risk"
-        - query: "risk parity momentum allocation"
-      alpha_architect:
-        - query: "factor investing momentum value quality"
-        - query: "daily equity factor strategy"
-      quantpedia:
-        - query: "daily equity factor momentum seasonality"
-        - query: "market timing asset allocation strategy"
   evaluation_config:
     target_market: cn
     default_symbols: ["000300", "000905", "600519", "000001", "510300"]
-    source_quality:
-      arxiv: 1.75
-      ssrn: 1.65
-      nber: 1.55
-      blog: 0.95
-      quantocracy: 1.15
-      hudson_thames: 1.30
-      portfolio_optimizer: 1.25
-      alpha_architect: 1.35
-      quantpedia: 1.40
 
 validation:
   sensitivity_enabled: false

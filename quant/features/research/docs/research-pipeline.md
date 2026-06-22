@@ -16,7 +16,7 @@ The pipeline is a gated funnel:
 - Research runner: `python quant/scripts/run_research.py --mode discover|scout_formal|formal|fast|strict|walkforward|full`
 - API runner: `POST /api/research/run`, defaulting to `mode=full`
 
-`config/research.yaml` owns the default sources, validation gate thresholds, backtest period, initial cash, production gate, and walk-forward worker defaults.
+`quant/domain/models/research_source_catalog.py` owns default discovery source names, query plans, feed URLs/source filters, and source-quality scores. `config/research.yaml` owns validation gate thresholds, discovery filters, backtest period, initial cash, production gate, and walk-forward worker defaults.
 
 ## Modes
 
@@ -36,7 +36,7 @@ Default new-strategy research uses `full` or `formal`. Single-stage `fast`, `str
 
 ### 1. Discovery
 
-`StrategyScout` coordinates direct adapters or `SourceHub`, deduplicates raw ideas, attaches `discovery_quality`, ranks results, and applies configured quality filters. Current configured sources route through SSRN, BigQuant, JoinQuant, Quantocracy, Hudson & Thames, Portfolio Optimizer, Alpha Architect, and Quantpedia by default; the source hub also supports arXiv, NBER, generic blogs, A-share public forum seeds, and local A-share structural ideas.
+`StrategyScout` coordinates direct adapters or `SourceHub`, deduplicates raw ideas, attaches `discovery_quality`, ranks results, and applies configured quality filters. API and CLI composition roots build discovery adapters through `quant.infrastructure.research.sources.build_research_sources()`, which reads the central source catalog. The current default catalog enables arXiv, BigQuant, JointQuant, and Quantocracy; the catalog also defines SSRN, NBER, generic blogs, A-share public forum seeds, Hudson & Thames, Portfolio Optimizer, Alpha Architect, Quantpedia, and local A-share structural ideas for explicit runs.
 
 Discovery writes stable assets under `quant/infrastructure/var/research/idea_bank/` and upserts ideas into the research store with status such as `discovered`.
 
@@ -124,7 +124,7 @@ Important statuses include `discovered`, `stage1_rejected`, `needs_manual_spec`,
 Any change to the following is a research pipeline contract change:
 
 - Stage order, mode behavior, or stage independence.
-- Source list, query plan, discovery quality filters, or A-share scope.
+- Source catalog, query plan, discovery quality filters, or A-share scope.
 - Admission, StrategySpec, validation, pre-full gate, or production gate thresholds.
 - Generated strategy placement, status transition, rejected-strategy archive behavior, or candidate activation semantics.
 - Strict Backtester wiring, execution-cost model selection, default period, default capital, or walk-forward configuration.

@@ -25,6 +25,9 @@ DISPLAY_NAMES = {
     "default": "Default / Manual Orders",
 }
 DASHBOARD_HTML = ROOT / ".codex" / "strategy_dashboard.html"
+RESEARCH_DASHBOARD_HTML = ROOT / ".codex" / "research_dashboard.html"
+RESEARCH_PASS_STATUSES = {"candidate", "validated", "paper_trading_candidate"}
+RESEARCH_FAIL_STATUSES = {"validation_failed", "rejected", "stage1_rejected", "error"}
 BROKER_POSITION_SNAPSHOT_TTL_SECONDS = 1800
 BROKER_POSITION_SNAPSHOT_FAILURE_TTL_SECONDS = 300
 BROKER_POSITION_SNAPSHOT_MIN_FREE_BYTES = 1024 * 1024 * 1024
@@ -60,6 +63,11 @@ from quant.features.trading.dashboard_projection import (
     project_run_status_bar,
     project_signal_rows,
 )
+from quant.infrastructure.research.repository import FileResearchStore
+from quant.infrastructure.research.sources import (
+    dashboard_research_source_names,
+    research_source_display_name as catalog_research_source_display_name,
+)
 
 
 def create_app(root: Path = ROOT) -> Flask:
@@ -73,6 +81,12 @@ def create_app(root: Path = ROOT) -> Flask:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
 
+    @app.get("/research")
+    def research_index():
+        response = send_file(str(root / ".codex" / "research_dashboard.html"))
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
+
     @app.get("/api/health")
     def health():
         return jsonify({"ok": True, "generated_at": datetime.now().isoformat()})
@@ -80,6 +94,10 @@ def create_app(root: Path = ROOT) -> Flask:
     @app.get("/api/dashboard")
     def dashboard():
         return jsonify(_json_safe(build_dashboard_payload(root)))
+
+    @app.get("/api/research/dashboard")
+    def research_dashboard():
+        return jsonify(_json_safe(build_research_dashboard_payload(root)))
 
     @app.post("/api/strategies/<strategy_name>/control")
     def control(strategy_name: str):
@@ -179,6 +197,13 @@ def create_app(root: Path = ROOT) -> Flask:
         if report_path is None:
             return jsonify({"ok": False, "error": "report not found"}), 404
         return send_file(str(report_path))
+
+    @app.get("/strategy-files/<strategy_name>")
+    def strategy_file(strategy_name: str):
+        path = _strategy_file_path(root, strategy_name)
+        if path is None:
+            return jsonify({"ok": False, "error": "strategy file not found"}), 404
+        return send_file(str(path), mimetype="text/x-python")
 
     return app
 
@@ -420,6 +445,171 @@ def build_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
     }
     payload["operations_health"] = build_operations_health(strategies)
     return payload
+
+
+def build_research_dashboard_payload(root: Path = ROOT) -> Dict[str, Any]:
+    store = FileResearchStore(root / "quant" / "infrastructure" / "var" / "research")
+    dashboard_sources = tuple(dashboard_research_source_names())
+    ideas = store.list_ideas()
+    candidates = store.list_candidates()
+    hypotheses = store.list_hypotheses()
+    candidate_by_key = _candidate_index(candidates)
+    hypothesis_by_key = _hypothesis_index(hypotheses)
+    rows = []
+    statuses = set()
+    for idea in ideas:
+        candidate = _match_research_row(idea, candidate_by_key)
+        hypothesis = _match_research_row(idea, hypothesis_by_key)
+        row = _research_idea_row(root, idea, candidate, hypothesis)
+        if row["source"] not in dashboard_sources:
+            continue
+        statuses.add(row["status"])
+        rows.append(row)
+    source_order = {name: idx for idx, name in enumerate(dashboard_sources)}
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["source"], []).append(row)
+    panels = []
+    for source in sorted(dashboard_sources, key=lambda name: (source_order.get(name, 999), name)):
+        source_rows = sorted(grouped.get(source, []), key=lambda item: (item.get("status", ""), item.get("updated_at", ""), item.get("title", "")))
+        counts: Dict[str, int] = {}
+        passed = 0
+        for row in source_rows:
+            status = row["status"]
+            counts[status] = counts.get(status, 0) + 1
+            if row["passed"] is True:
+                passed += 1
+        panels.append({
+            "source": source,
+            "display_name": _research_source_display_name(source),
+            "total": len(source_rows),
+            "passed": passed,
+            "counts": counts,
+            "ideas": source_rows,
+        })
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "total_ideas": len(rows),
+        "status_options": sorted(status for status in statuses if status),
+        "sources": panels,
+    }
+
+
+def _research_idea_row(
+    root: Path,
+    idea: Dict[str, Any],
+    candidate: Optional[Dict[str, Any]],
+    hypothesis: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    metadata = dict(idea.get("metadata") or {})
+    quality = dict(metadata.get("discovery_quality") or {})
+    candidate_meta = dict((candidate or {}).get("research_meta") or {})
+    candidate_quality = dict(candidate_meta.get("discovery_quality") or {})
+    source = str(
+        idea.get("source")
+        or candidate_meta.get("source")
+        or (candidate or {}).get("source")
+        or (hypothesis or {}).get("source")
+        or "unknown"
+    )
+    source_url = str(
+        idea.get("source_url")
+        or candidate_meta.get("source_url")
+        or (candidate or {}).get("source_url")
+        or (hypothesis or {}).get("source_url")
+        or ""
+    )
+    strategy_id = str(
+        (candidate or {}).get("id")
+        or (hypothesis or {}).get("strategy_id")
+        or (metadata.get("strategy_spec") or {}).get("strategy_id")
+        or ""
+    )
+    status = str(idea.get("status") or (candidate or {}).get("status") or (hypothesis or {}).get("status") or "unknown")
+    strategy_file = _strategy_file_path(root, strategy_id) if strategy_id else None
+    report_path = _report_path(root, strategy_id) if strategy_id else None
+    discovery_score = _optional_float(quality.get("score"))
+    if discovery_score is None:
+        discovery_score = _optional_float(candidate_quality.get("score")) or 0.0
+    return {
+        "idea_id": str(idea.get("idea_id") or ""),
+        "title": str(idea.get("title") or (candidate or {}).get("name") or (hypothesis or {}).get("title") or ""),
+        "description": str(idea.get("description") or (candidate or {}).get("description") or ""),
+        "source": source,
+        "source_display_name": _research_source_display_name(source),
+        "source_url": source_url,
+        "authors": str(idea.get("authors") or ""),
+        "published_date": str(idea.get("published_date") or ""),
+        "status": status,
+        "passed": _research_passed(status),
+        "reason": str((hypothesis or {}).get("decision_reason") or idea.get("reason") or candidate_meta.get("rejection_reason") or ""),
+        "stage": str((hypothesis or {}).get("stage") or ""),
+        "strategy_id": strategy_id,
+        "strategy_file_path": str(strategy_file) if strategy_file else str(candidate_meta.get("strategy_code_path") or ""),
+        "strategy_file_url": f"/strategy-files/{strategy_id}" if strategy_file else "",
+        "report_url": f"/reports/{strategy_id}" if report_path else "",
+        "discovery_score": float(discovery_score),
+        "matched_terms": list(quality.get("matched_terms") or candidate_quality.get("matched_terms") or []),
+        "risk_flags": list(quality.get("risk_flags") or candidate_quality.get("risk_flags") or []),
+        "updated_at": str(idea.get("updated_at") or (candidate or {}).get("updated_at") or (hypothesis or {}).get("updated_at") or ""),
+    }
+
+
+def _candidate_index(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        meta = row.get("research_meta") or {}
+        for value in (
+            row.get("id"),
+            row.get("name"),
+            row.get("source_url"),
+            meta.get("source_url") if isinstance(meta, dict) else "",
+        ):
+            key = _research_match_key(value)
+            if key:
+                index.setdefault(key, row)
+    return index
+
+
+def _hypothesis_index(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        for value in (row.get("strategy_id"), row.get("title"), row.get("source_url")):
+            key = _research_match_key(value)
+            if key:
+                index.setdefault(key, row)
+    return index
+
+
+def _match_research_row(row: Dict[str, Any], index: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for value in (
+        row.get("idea_id"),
+        row.get("title"),
+        row.get("source_url"),
+        ((row.get("metadata") or {}).get("strategy_spec") or {}).get("strategy_id"),
+    ):
+        key = _research_match_key(value)
+        if key and key in index:
+            return index[key]
+    return None
+
+
+def _research_match_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _research_passed(status: str) -> Optional[bool]:
+    key = str(status or "").strip()
+    if key in RESEARCH_PASS_STATUSES:
+        return True
+    if key in RESEARCH_FAIL_STATUSES:
+        return False
+    return None
+
+
+def _research_source_display_name(source: str) -> str:
+    display_name = catalog_research_source_display_name(source)
+    return display_name or _humanize_strategy_name(str(source or "unknown"))
 
 
 def _dashboard_asset_version(root: Path) -> str:
@@ -1840,8 +2030,29 @@ def _benchmark_curve(root: Path, max_points: int = 180) -> Dict[str, Any]:
 
 
 def _report_path(root: Path, strategy_name: str) -> Optional[Path]:
-    path = root / "quant" / "features" / "strategies" / strategy_name / "full_research_report.html"
-    return path if path.exists() else None
+    candidates = [
+        root / "quant" / "features" / "strategies" / strategy_name / "full_research_report.html",
+        root / "quant" / "features" / "strategies" / "reject" / strategy_name / "full_research_report.html",
+        root / "quant" / "features" / "rejected_strategy" / strategy_name / "full_research_report.html",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _strategy_file_path(root: Path, strategy_name: str) -> Optional[Path]:
+    if not strategy_name:
+        return None
+    candidates = [
+        root / "quant" / "features" / "strategies" / strategy_name / "strategy.py",
+        root / "quant" / "features" / "strategies" / "reject" / strategy_name / "strategy.py",
+        root / "quant" / "features" / "rejected_strategy" / strategy_name / "strategy.py",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def _humanize_strategy_name(strategy_name: str) -> str:

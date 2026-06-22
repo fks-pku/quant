@@ -10,7 +10,7 @@ import yaml
 from quant.scripts.migrate_jsonl_to_duckdb import migrate_all
 from quant.features.trading.dashboard_projection import project_pending_orders
 import quant.scripts.strategy_dashboard_server as dashboard_server
-from quant.scripts.strategy_dashboard_server import build_dashboard_payload, create_app
+from quant.scripts.strategy_dashboard_server import build_dashboard_payload, build_research_dashboard_payload, create_app
 from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
 from quant.infrastructure.execution.strategy_controls import get_strategy_control
 
@@ -288,6 +288,155 @@ def test_strategy_dashboard_payload_reads_live_records_positions_and_controls(tm
     assert strategy["paper"]["performance"]["cash"] == pytest.approx(29000.5)
     assert strategy["paper"]["performance"]["total_commission"] == 0.5
     assert strategy["paper"]["performance"]["median_slippage_bps"] == pytest.approx(-10.0)
+
+
+def test_research_dashboard_payload_groups_ideas_by_source_and_links_strategy_files(tmp_path):
+    root = tmp_path
+    research_root = root / "quant" / "infrastructure" / "var" / "research"
+    strategy_dir = root / "quant" / "features" / "strategies" / "demo_factor"
+    research_root.mkdir(parents=True)
+    strategy_dir.mkdir(parents=True)
+    (strategy_dir / "strategy.py").write_text("class DemoFactor: pass\n", encoding="utf-8")
+    (strategy_dir / "full_research_report.html").write_text("<html>report</html>", encoding="utf-8")
+    (research_root / "research_state.json").write_text(
+        json.dumps(
+            {
+                "ideas": {
+                    "idea-1": {
+                        "idea_id": "idea-1",
+                        "title": "Demo Factor",
+                        "description": "Rank daily A-share stocks by a test factor.",
+                        "source": "bigquant",
+                        "source_url": "https://example.test/paper",
+                        "authors": "Researcher",
+                        "published_date": "2026-06",
+                        "metadata": {
+                            "discovery_quality": {
+                                "score": 7.25,
+                                "matched_terms": ["daily_ohlcv", "factor"],
+                                "risk_flags": ["stale_source"],
+                            }
+                        },
+                        "status": "candidate",
+                        "reason": "passed fast gate",
+                        "updated_at": "2026-06-18T01:00:00Z",
+                    },
+                    "idea-2": {
+                        "idea_id": "idea-2",
+                        "title": "Rejected Rotation",
+                        "description": "A rejected public rotation idea.",
+                        "source": "quantocracy",
+                        "source_url": "https://example.test/blog",
+                        "metadata": {"discovery_quality": {"score": 4.5}},
+                        "status": "validation_failed",
+                        "reason": "low after-cost Sharpe",
+                        "updated_at": "2026-06-18T02:00:00Z",
+                    },
+                },
+                "candidates": {
+                    "demo_factor": {
+                        "id": "demo_factor",
+                        "name": "Demo Factor",
+                        "status": "candidate",
+                        "research_meta": {
+                            "source": "bigquant",
+                            "source_url": "https://example.test/paper",
+                            "strategy_code_path": str(strategy_dir / "strategy.py"),
+                            "discovery_quality": {"score": 7.5},
+                        },
+                    }
+                },
+                "hypotheses": {
+                    "h1": {
+                        "hypothesis_id": "h1",
+                        "strategy_id": "demo_factor",
+                        "title": "Demo Factor",
+                        "status": "candidate",
+                        "stage": "strict_backtest",
+                        "source": "bigquant",
+                        "source_url": "https://example.test/paper",
+                        "decision_reason": "passed gate",
+                        "metrics": {"rank_ic": 0.04},
+                        "evidence": {},
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_research_dashboard_payload(root)
+
+    assert payload["total_ideas"] == 2
+    assert "candidate" in payload["status_options"]
+    assert "validation_failed" in payload["status_options"]
+    assert [source["source"] for source in payload["sources"]] == ["arxiv", "bigquant", "jointquant", "quantocracy"]
+    bigquant = next(source for source in payload["sources"] if source["source"] == "bigquant")
+    assert bigquant["total"] == 1
+    assert bigquant["counts"]["candidate"] == 1
+    assert bigquant["passed"] == 1
+    idea = bigquant["ideas"][0]
+    assert idea["title"] == "Demo Factor"
+    assert idea["status"] == "candidate"
+    assert idea["passed"] is True
+    assert idea["strategy_id"] == "demo_factor"
+    assert idea["strategy_file_url"] == "/strategy-files/demo_factor"
+    assert idea["report_url"] == "/reports/demo_factor"
+    assert idea["discovery_score"] == pytest.approx(7.25)
+    assert idea["matched_terms"] == ["daily_ohlcv", "factor"]
+    assert idea["risk_flags"] == ["stale_source"]
+
+
+def test_research_dashboard_routes_serve_payload_page_and_strategy_file(tmp_path):
+    root = tmp_path
+    research_root = root / "quant" / "infrastructure" / "var" / "research"
+    strategy_dir = root / "quant" / "features" / "strategies" / "demo_factor"
+    asset_dir = root / ".codex"
+    research_root.mkdir(parents=True)
+    strategy_dir.mkdir(parents=True)
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "research_dashboard.html").write_text("<html>research dashboard</html>", encoding="utf-8")
+    (strategy_dir / "strategy.py").write_text("# strategy code\n", encoding="utf-8")
+    (research_root / "research_state.json").write_text(
+        json.dumps(
+            {
+                "ideas": {
+                    "idea-1": {
+                        "idea_id": "idea-1",
+                        "title": "Demo Factor",
+                        "source": "bigquant",
+                        "source_url": "https://example.test/paper",
+                        "status": "candidate",
+                    }
+                },
+                "candidates": {
+                    "demo_factor": {
+                        "id": "demo_factor",
+                        "name": "Demo Factor",
+                        "status": "candidate",
+                        "research_meta": {"source": "bigquant", "source_url": "https://example.test/paper"},
+                    }
+                },
+                "hypotheses": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    client = create_app(root).test_client()
+
+    page = client.get("/research")
+    assert page.status_code == 200
+    assert b"research dashboard" in page.data
+    body = client.get("/api/research/dashboard").get_json()
+    assert [source["source"] for source in body["sources"]] == ["arxiv", "bigquant", "jointquant", "quantocracy"]
+    assert next(source for source in body["sources"] if source["source"] == "bigquant")["total"] == 1
+    assert next(source for source in body["sources"] if source["source"] == "arxiv")["total"] == 0
+    source_file = client.get("/strategy-files/demo_factor")
+    assert source_file.status_code == 200
+    assert b"# strategy code" in source_file.data
 
 
 def test_strategy_dashboard_infers_live_slippage_before_daily_open_available(tmp_path):

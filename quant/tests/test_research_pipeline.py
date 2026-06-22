@@ -3266,8 +3266,37 @@ def test_api_yearly_returns_from_equity_uses_calendar_years():
     assert yearly["2013"] == pytest.approx(-0.10)
 
 
+def test_research_source_registry_centralizes_source_defaults():
+    from quant.infrastructure.research.sources import (
+        available_research_source_names,
+        build_research_sources,
+        dashboard_research_source_names,
+        default_research_query_plan,
+        default_research_source_names,
+        default_research_source_quality,
+        research_source_display_name,
+    )
+
+    sources = build_research_sources()
+
+    assert list(sources) == available_research_source_names()
+    assert default_research_source_names() == [
+        "arxiv",
+        "bigquant",
+        "jointquant",
+        "quantocracy",
+    ]
+    assert dashboard_research_source_names() == default_research_source_names()
+    assert research_source_display_name("jointquant") == "JointQuant"
+    assert set(default_research_source_names()).issubset(sources)
+    assert set(default_research_query_plan()).issubset(sources)
+    assert set(default_research_source_quality()).issubset(sources)
+    assert sources["portfolio_optimizer"].source_name == "portfolio_optimizer"
+
+
 def test_api_make_strategy_scout_uses_infrastructure_sources():
     from quant.api import research_bp as research_module
+    from quant.infrastructure.research.sources import available_research_source_names
 
     scout = research_module._make_strategy_scout(
         ResearchConfig(
@@ -3297,40 +3326,26 @@ def test_api_make_strategy_scout_uses_infrastructure_sources():
         "quantpedia",
     ]
     assert scout._source_hub._sources["ssrn"].__class__.__name__ == "SSRNSource"
-    assert scout._source_hub._sources["bigquant"].__class__.__name__ == "BigQuantSource"
-    assert scout._source_hub._sources["jointquant"].__class__.__name__ == "JoinQuantSource"
-    assert scout._source_hub._sources["quantocracy"].__class__.__name__ == "QuantocracySource"
-    assert scout._source_hub._sources["hudson_thames"].__class__.__name__ == "HudsonThamesSource"
-    assert scout._source_hub._sources["portfolio_optimizer"].__class__.__name__ == "PortfolioOptimizerSource"
-    assert scout._source_hub._sources["alpha_architect"].__class__.__name__ == "AlphaArchitectSource"
-    assert scout._source_hub._sources["quantpedia"].__class__.__name__ == "QuantpediaSource"
+    assert scout._source_hub._sources["bigquant"].source_name == "bigquant"
+    assert scout._source_hub._sources["jointquant"].source_name == "jointquant"
+    assert scout._source_hub._sources["quantocracy"].source_name == "quantocracy"
+    assert scout._source_hub._sources["hudson_thames"].source_name == "hudson_thames"
+    assert scout._source_hub._sources["portfolio_optimizer"].source_name == "portfolio_optimizer"
+    assert scout._source_hub._sources["alpha_architect"].source_name == "alpha_architect"
+    assert scout._source_hub._sources["quantpedia"].source_name == "quantpedia"
+    assert list(scout._source_hub._sources) == available_research_source_names()
 
 
 def test_api_load_research_config_reads_feature_yaml():
     from quant.api import research_bp as research_module
+    from quant.infrastructure.research.sources import default_research_query_plan, default_research_source_names
 
     cfg = research_module._load_research_config()
 
-    assert cfg.sources == [
-        "ssrn",
-        "bigquant",
-        "jointquant",
-        "quantocracy",
-        "hudson_thames",
-        "portfolio_optimizer",
-        "alpha_architect",
-        "quantpedia",
-    ]
+    assert cfg.sources == default_research_source_names()
     assert cfg.default_backtest_start == "2016-01-01"
     assert cfg.default_backtest_end == "2026-05-31"
-    assert cfg.scout_config["query_plan"]["ssrn"][0]["query"] == "daily trading strategy equity factor"
-    assert cfg.scout_config["query_plan"]["bigquant"][0]["query"] == "行业 轮动"
-    assert cfg.scout_config["query_plan"]["jointquant"][0]["query"] == "小市值"
-    assert cfg.scout_config["query_plan"]["quantocracy"][0]["query"] == "daily factor momentum mean reversion"
-    assert cfg.scout_config["query_plan"]["hudson_thames"][0]["query"] == "daily mean reversion momentum portfolio optimization"
-    assert cfg.scout_config["query_plan"]["portfolio_optimizer"][0]["query"] == "portfolio optimization daily allocation risk"
-    assert cfg.scout_config["query_plan"]["alpha_architect"][0]["query"] == "factor investing momentum value quality"
-    assert cfg.scout_config["query_plan"]["quantpedia"][0]["query"] == "daily equity factor momentum seasonality"
+    assert cfg.scout_config["query_plan"] == default_research_query_plan()
     assert cfg.scout_config["required_match_terms"] == ["daily_ohlcv"]
     assert cfg.production_gate_config["max_drawdown_cagr_10_15"] == 0.25
     assert cfg.rigor_config["cost_model"]["max_adv_pct"] == 0.05
@@ -4056,6 +4071,7 @@ def test_cli_load_research_config_reads_feature_yaml_and_syncs_thresholds():
 
 def test_cli_make_strategy_scout_uses_configured_source_hub():
     from quant.features.research.models import ResearchConfig
+    from quant.infrastructure.research.sources import available_research_source_names
     from quant.scripts import run_research as cli
 
     cfg = ResearchConfig(
@@ -4094,13 +4110,14 @@ def test_cli_make_strategy_scout_uses_configured_source_hub():
         "alpha_architect",
         "quantpedia",
     ]
-    assert scout._source_hub._sources["bigquant"].__class__.__name__ == "BigQuantSource"
-    assert scout._source_hub._sources["jointquant"].__class__.__name__ == "JoinQuantSource"
-    assert scout._source_hub._sources["quantocracy"].__class__.__name__ == "QuantocracySource"
-    assert scout._source_hub._sources["hudson_thames"].__class__.__name__ == "HudsonThamesSource"
-    assert scout._source_hub._sources["portfolio_optimizer"].__class__.__name__ == "PortfolioOptimizerSource"
-    assert scout._source_hub._sources["alpha_architect"].__class__.__name__ == "AlphaArchitectSource"
-    assert scout._source_hub._sources["quantpedia"].__class__.__name__ == "QuantpediaSource"
+    assert scout._source_hub._sources["bigquant"].source_name == "bigquant"
+    assert scout._source_hub._sources["jointquant"].source_name == "jointquant"
+    assert scout._source_hub._sources["quantocracy"].source_name == "quantocracy"
+    assert scout._source_hub._sources["hudson_thames"].source_name == "hudson_thames"
+    assert scout._source_hub._sources["portfolio_optimizer"].source_name == "portfolio_optimizer"
+    assert scout._source_hub._sources["alpha_architect"].source_name == "alpha_architect"
+    assert scout._source_hub._sources["quantpedia"].source_name == "quantpedia"
+    assert list(scout._source_hub._sources) == available_research_source_names()
 
 
 def test_cli_select_top_idea_ids_for_scout_formal_uses_discovery_score(tmp_path):

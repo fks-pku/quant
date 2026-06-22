@@ -3075,41 +3075,16 @@ def _make_rigor_hub(cfg: ResearchConfig, experiment_store=None):
 
 
 def _make_strategy_scout(cfg: ResearchConfig):
-    from quant.features.research.discovery.ashare_structural import AShareStructuralSource
     from quant.features.research.discovery.source_hub import SourceHub
     from quant.features.research.scout import StrategyScout
-    from quant.infrastructure.research.sources import (
-        ASharePublicForumSource,
-        AlphaArchitectSource,
-        ArxivSource,
-        BigQuantSource,
-        BlogSource,
-        HudsonThamesSource,
-        JoinQuantSource,
-        NBERSource,
-        PortfolioOptimizerSource,
-        QuantocracySource,
-        QuantpediaSource,
-        SSRNSource,
-    )
+    from quant.infrastructure.research.sources import build_research_sources
 
     scout_cfg = getattr(cfg, "scout_config", {}) or {}
-    source_hub = SourceHub({
-        "arxiv": ArxivSource(),
-        "ssrn": SSRNSource(),
-        "nber": NBERSource(),
-        "blog": BlogSource(),
-        "ashare_public_forum": ASharePublicForumSource(),
-        "bigquant": BigQuantSource(),
-        "joinquant": JoinQuantSource(),
-        "jointquant": JoinQuantSource(source_name="jointquant"),
-        "quantocracy": QuantocracySource(),
-        "hudson_thames": HudsonThamesSource(),
-        "portfolio_optimizer": PortfolioOptimizerSource(),
-        "alpha_architect": AlphaArchitectSource(),
-        "quantpedia": QuantpediaSource(),
-        "ashare_structural": AShareStructuralSource(),
-    }, query_plan=scout_cfg.get("query_plan"), quality_config=scout_cfg)
+    source_hub = SourceHub(
+        build_research_sources(),
+        query_plan=scout_cfg.get("query_plan"),
+        quality_config=scout_cfg,
+    )
     return StrategyScout.from_source_hub(source_hub, sources=getattr(cfg, "sources", None), config=scout_cfg)
 
 

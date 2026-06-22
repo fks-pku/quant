@@ -18,6 +18,10 @@ class ResearchStore(ABC):
         ...
 
     @abstractmethod
+    def list_candidates(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
     def update_status(self, strategy_id: str, status: str, reason: str = "") -> bool:
         ...
 

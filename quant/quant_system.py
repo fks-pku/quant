@@ -335,6 +335,15 @@ class QuantSystem:
         self._strategy_tracker = StrategyPositionTracker(store=store, mode=self._system_mode_text())
         return self._strategy_tracker
 
+    def _strategy_state_store(self) -> Any:
+        tracker = self._strategy_tracker_for_mode()
+        store = getattr(tracker, "_store", None)
+        if store is not None:
+            return store
+        from quant.infrastructure.execution.strategy_state_store import StrategyStateStore
+        db_path = Path(__file__).resolve().parent / "infrastructure" / "var" / "strategy_dashboard.duckdb"
+        return StrategyStateStore(db_path)
+
     def _record_dir_for_mode(self) -> Optional[Path]:
         live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
         configured = live_config.get("record_dir") if isinstance(live_config, dict) else None
@@ -401,9 +410,11 @@ class QuantSystem:
 
     def _on_fill(self, fill: Any) -> None:
         """Handle fill events from FillHandler."""
-        strategy_name = getattr(fill, "strategy_name", None)
+        strategy_name = str(getattr(fill, "strategy_name", "") or "")
+        if not strategy_name or strategy_name == "default":
+            return
         for strategy in self.engine.strategies:
-            if strategy_name and getattr(strategy, "name", None) != strategy_name:
+            if getattr(strategy, "name", None) != strategy_name:
                 continue
             if hasattr(strategy, "on_fill"):
                 strategy.on_fill(strategy.context, fill)
@@ -805,6 +816,120 @@ class QuantSystem:
             )
         return results
 
+    def submit_due_pending_signals_once(
+        self,
+        signal_date: Any,
+        execution_date: Any,
+    ) -> dict:
+        if not self.engine:
+            raise RuntimeError("System must be initialized before submitting pending signals")
+        if self._system_mode_text() != "live":
+            raise RuntimeError("submit_due_pending_signals_once is only allowed in live mode")
+        signal_day = self._coerce_date(signal_date)
+        execution_day = self._coerce_date(execution_date)
+        if signal_day is None or execution_day is None:
+            raise ValueError("signal_date and execution_date are required")
+        order_manager = getattr(self.engine, "order_manager", None)
+        if order_manager is None:
+            raise RuntimeError("OrderManager is required to submit pending signals")
+        execution_manager = getattr(self.engine, "execution_manager", None)
+        if execution_manager is None:
+            raise RuntimeError("LiveExecutionManager is required to submit pending signals")
+
+        store = self._strategy_state_store()
+        signals = store.get_pending_signals_for_submit(
+            mode="live",
+            signal_date=signal_day.isoformat(),
+            submit_date=execution_day.isoformat(),
+        )
+        market = str(self.config.get("system", {}).get("market", "CN") or "CN")
+        market_config = self.config.get("markets", {}).get(market, {})
+        execution_timestamp = datetime.combine(execution_day, datetime.min.time()).replace(
+            hour=int(market_config.get("open_hour", 9) or 9),
+            minute=int(market_config.get("open_minute", 30) or 30),
+        )
+        resolver = self.engine._make_execution_reference_resolver()
+        submitted = 0
+        rejected = 0
+        skipped = 0
+        order_manager.set_execution_timestamp(execution_timestamp)
+        try:
+            for signal in signals:
+                strategy_name = str(signal.get("strategy_name") or "default")
+                if not self._strategy_accepts_live_signals(strategy_name):
+                    skipped += 1
+                    self.logger.info(
+                        "Skip pending signal because strategy is not running: %s %s %s %s",
+                        strategy_name,
+                        signal.get("symbol"),
+                        signal.get("side"),
+                        signal.get("quantity"),
+                    )
+                    continue
+                symbol = str(signal.get("symbol") or "")
+                side = str(signal.get("side") or "").upper()
+                quantity = float(signal.get("quantity") or 0.0)
+                reference_price = float(signal.get("reference_price") or 0.0)
+                execution_reference = resolver.resolve(symbol, side)
+                if not symbol or side not in {"BUY", "SELL"} or quantity <= 0 or reference_price <= 0:
+                    skipped += 1
+                    self.logger.warning("Skip malformed pending signal: %s", signal)
+                    continue
+                if execution_reference is None:
+                    skipped += 1
+                    self.logger.warning("Skip pending signal without execution reference: %s %s", strategy_name, symbol)
+                    continue
+                cost_bps = self._pending_signal_cost_bps(signal)
+                limit_price = execution_manager._execution_limit_price(side, execution_reference.price, cost_bps)
+                metadata = {
+                    "signal_id": str(signal.get("signal_id") or ""),
+                    "submit_date": execution_day.isoformat(),
+                    "execution_date": execution_day.isoformat(),
+                    "cost_bps": cost_bps,
+                    "execution_cost_bps": cost_bps,
+                    "execution_reference_price": float(execution_reference.price),
+                }
+                order_id = order_manager.submit_existing_signal(
+                    symbol=symbol,
+                    quantity=quantity,
+                    side=side,
+                    order_type=str(signal.get("order_type") or "LIMIT").upper(),
+                    price=limit_price,
+                    strategy_name=strategy_name,
+                    risk_price=limit_price,
+                    signal_metadata=metadata,
+                    client_order_id=str(signal.get("order_id") or ""),
+                )
+                if order_id is None:
+                    rejected += 1
+                else:
+                    submitted += 1
+        finally:
+            if hasattr(order_manager, "clear_execution_timestamp"):
+                order_manager.clear_execution_timestamp()
+        return {
+            "signal_date": signal_day.isoformat(),
+            "execution_date": execution_day.isoformat(),
+            "pending_count": len(signals),
+            "submitted_count": submitted,
+            "rejected_count": rejected,
+            "skipped_count": skipped,
+        }
+
+    def _pending_signal_cost_bps(self, signal: dict) -> float:
+        for key in ("cost_bps", "execution_cost_bps"):
+            value = signal.get(key)
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                return number
+        live_config = self.config.get("live_trading", {}) if isinstance(self.config, dict) else {}
+        execution_config = live_config.get("execution", {}) if isinstance(live_config, dict) else {}
+        base_execution = self.config.get("execution", {}) if isinstance(self.config, dict) else {}
+        return float(execution_config.get("max_cost_bps", base_execution.get("max_cost_bps", 30)) or 30)
+
     def _assert_current_broker_safe_for_paper(self) -> None:
         mode = str(self.config.get("system", {}).get("mode", "paper")).lower()
         broker = self.engine.broker if self.engine else None
@@ -1041,6 +1166,11 @@ def main():
         help="Record D-day strategy signals for next-session submission without broker submission",
     )
     parser.add_argument(
+        "--submit-pending-only",
+        action="store_true",
+        help="Submit due DB pending strategy signals without running strategy signal generation",
+    )
+    parser.add_argument(
         "--recover-trades-only",
         action="store_true",
         help="Read live broker trade history into strategy ledgers without generating or submitting orders",
@@ -1062,6 +1192,14 @@ def main():
         raise SystemExit("--recover-trades-only cannot be combined with --simulate-daily")
     if args.recover_trades_only and mode != "live":
         raise SystemExit("--recover-trades-only requires --mode live")
+    if args.submit_pending_only and args.simulate_daily:
+        raise SystemExit("--submit-pending-only cannot be combined with --simulate-daily")
+    if args.submit_pending_only and args.pending_only:
+        raise SystemExit("--submit-pending-only cannot be combined with --pending-only")
+    if args.submit_pending_only and mode != "live":
+        raise SystemExit("--submit-pending-only requires --mode live")
+    if args.submit_pending_only and (not args.signal_date or not args.execution_date):
+        raise SystemExit("--submit-pending-only requires --signal-date and --execution-date")
     if args.pending_only and not args.simulate_daily:
         raise SystemExit("--pending-only requires --simulate-daily")
     if args.pending_only and mode not in {"live", "paper"}:
@@ -1081,7 +1219,21 @@ def main():
     if args.signal_date:
         system.config.setdefault("system", {})["daily_signal_date"] = args.signal_date
     system.initialize()
-    if args.simulate_daily:
+    if args.submit_pending_only:
+        try:
+            result = system.submit_due_pending_signals_once(args.signal_date, args.execution_date)
+            system.logger.info(
+                "Pending submit result signal_date=%s execution_date=%s pending=%s submitted=%s rejected=%s skipped=%s",
+                result["signal_date"],
+                result["execution_date"],
+                result["pending_count"],
+                result["submitted_count"],
+                result["rejected_count"],
+                result["skipped_count"],
+            )
+        finally:
+            system.disconnect_adapters()
+    elif args.simulate_daily:
         if not args.signal_date:
             raise SystemExit("--simulate-daily requires --signal-date")
         try:

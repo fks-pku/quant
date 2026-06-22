@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VK Quant 策略研究看板</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --page: #f5f5f7;
+      --panel: rgba(255, 255, 255, 0.88);
+      --line: rgba(60, 60, 67, 0.14);
+      --soft: rgba(118, 118, 128, 0.11);
+      --text: #1d1d1f;
+      --subtext: #515154;
+      --muted: #86868b;
+      --blue: #0071e3;
+      --green: #34c759;
+      --red: #ff3b30;
+      --amber: #ff9f0a;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        linear-gradient(180deg, #ffffff 0%, var(--page) 44%, #ececf1 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: 0;
+    }
+    a { color: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-rows: 64px minmax(0, 1fr); }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 28px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.12);
+      background: rgba(245, 245, 247, 0.78);
+      backdrop-filter: blur(22px) saturate(180%);
+    }
+    .brand { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+    .logo { font-size: 17px; font-weight: 780; white-space: nowrap; }
+    .logo span { color: var(--blue); }
+    .page-title { color: var(--subtext); font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 11px;
+      border: 1px solid rgba(60, 60, 67, 0.13);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.68);
+      color: var(--subtext);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+    main { width: min(1440px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 46px; }
+    .hero, .panel, .metric-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+    .hero { padding: 18px; margin-bottom: 18px; }
+    .hero-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; }
+    h1 { margin: 0; font-size: 28px; line-height: 1.14; font-weight: 780; }
+    .hero p { margin: 8px 0 0; color: var(--subtext); font-size: 13px; line-height: 1.52; }
+    .filters { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+    label { color: var(--muted); font-size: 12px; font-weight: 760; }
+    select {
+      min-height: 34px;
+      padding: 0 32px 0 12px;
+      border: 1px solid rgba(60, 60, 67, 0.16);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .metric-card { min-height: 86px; padding: 13px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.05); }
+    .metric-card span { display: block; margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 760; }
+    .metric-card b { display: block; font-size: 20px; line-height: 1.12; font-weight: 780; }
+    .metric-card small { display: block; margin-top: 5px; color: var(--subtext); font-size: 11px; line-height: 1.35; }
+    .stack { display: grid; gap: 16px; }
+    details.panel { overflow: hidden; }
+    summary {
+      min-height: 58px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 0 16px;
+      cursor: pointer;
+      list-style: none;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+      background: rgba(248, 248, 250, 0.92);
+    }
+    summary::-webkit-details-marker { display: none; }
+    .source-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .source-name h2 { margin: 0; font-size: 17px; line-height: 1.22; font-weight: 780; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chevron { color: var(--muted); font-size: 14px; transform: rotate(-90deg); transition: transform 0.18s ease; }
+    details[open] .chevron { transform: rotate(0deg); }
+    .source-stats { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--subtext);
+      font-size: 11px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+    .pill.green { background: rgba(52, 199, 89, 0.14); color: #1d7f38; }
+    .pill.amber { background: rgba(255, 159, 10, 0.16); color: #9a5b00; }
+    .pill.red { background: rgba(255, 59, 48, 0.13); color: #b42318; }
+    .pill.blue { background: rgba(0, 113, 227, 0.12); color: #0057b8; }
+    .panel-body { padding: 15px; }
+    .table-scroll {
+      overflow: auto;
+      border: 1px solid rgba(60, 60, 67, 0.10);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    table { width: 100%; min-width: 1120px; border-collapse: collapse; font-size: 12px; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      height: 38px;
+      padding: 0 10px;
+      background: rgba(248, 248, 250, 0.96);
+      color: var(--muted);
+      text-align: left;
+      font-size: 11px;
+      font-weight: 780;
+      white-space: nowrap;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+    }
+    td {
+      padding: 10px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.08);
+      vertical-align: top;
+      color: var(--subtext);
+      line-height: 1.42;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .title-cell { min-width: 210px; color: var(--text); font-weight: 760; }
+    .description-cell { min-width: 320px; max-width: 430px; }
+    .reason-cell { min-width: 220px; max-width: 320px; }
+    .link-cell { white-space: nowrap; }
+    .mini-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      margin: 0 6px 6px 0;
+      padding: 0 9px;
+      border: 1px solid rgba(0, 113, 227, 0.18);
+      border-radius: 8px;
+      background: rgba(0, 113, 227, 0.07);
+      color: #0057b8;
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 760;
+    }
+    .muted { color: var(--muted); }
+    .empty {
+      display: grid;
+      place-items: center;
+      min-height: 180px;
+      color: var(--muted);
+      font-size: 13px;
+      border: 1px dashed rgba(60, 60, 67, 0.18);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.54);
+    }
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      display: none;
+      max-width: min(380px, calc(100vw - 44px));
+      padding: 12px 14px;
+      border: 1px solid rgba(60, 60, 67, 0.12);
+      border-radius: 8px;
+      background: rgba(29, 29, 31, 0.88);
+      color: #fff;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      font-size: 12px;
+      font-weight: 720;
+    }
+    @media (max-width: 760px) {
+      .topbar { padding: 0 16px; }
+      .page-title { display: none; }
+      main { width: min(100% - 24px, 1440px); padding-top: 18px; }
+      .hero-head, summary { grid-template-columns: 1fr; }
+      .filters, .source-stats { justify-content: flex-start; }
+      h1 { font-size: 24px; }
+      .table-scroll { overflow: visible; }
+      table { display: block; min-width: 0; }
+      thead { display: none; }
+      tbody { display: grid; gap: 10px; }
+      tr {
+        display: block;
+        border-bottom: 1px solid rgba(60, 60, 67, 0.10);
+        padding: 10px 0;
+      }
+      tr:last-child { border-bottom: 0; }
+      td {
+        display: grid;
+        grid-template-columns: 82px minmax(0, 1fr);
+        gap: 10px;
+        width: 100%;
+        padding: 7px 12px;
+        border-bottom: 0;
+      }
+      td::before {
+        content: attr(data-label);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 780;
+      }
+      .title-cell, .description-cell, .reason-cell {
+        min-width: 0;
+        max-width: none;
+      }
+      .link-cell { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">VK <span>Quant</span></div>
+        <div class="page-title">策略研究看板</div>
+      </div>
+      <div class="top-actions">
+        <a class="nav-link" href="/">交易看板</a>
+      </div>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="hero-head">
+          <div>
+            <h1>Strategy Research Source Board</h1>
+            <p id="subtitle">正在加载研究 idea bank...</p>
+          </div>
+          <div class="filters">
+            <label for="statusFilter">状态过滤</label>
+            <select id="statusFilter">
+              <option value="all">全部状态</option>
+            </select>
+          </div>
+        </div>
+        <div class="overview" id="overview"></div>
+      </section>
+      <section class="stack" id="sources"></section>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script>
+    const state = { data: null, status: 'all' };
+
+    document.getElementById('statusFilter').addEventListener('change', event => {
+      state.status = event.target.value;
+      render();
+    });
+
+    async function loadResearchDashboard() {
+      const res = await fetch('/api/research/dashboard', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`research dashboard ${res.status}`);
+      state.data = await res.json();
+      renderStatusOptions();
+      render();
+    }
+
+    function renderStatusOptions() {
+      const select = document.getElementById('statusFilter');
+      const current = select.value || 'all';
+      const statuses = state.data?.status_options || [];
+      select.innerHTML = `<option value="all">全部状态</option>${statuses.map(status => `<option value="${escapeHtml(status)}">${escapeHtml(statusLabel(status))}</option>`).join('')}`;
+      select.value = statuses.includes(current) ? current : 'all';
+      state.status = select.value;
+    }
+
+    function render() {
+      const data = state.data || { sources: [], total_ideas: 0 };
+      const visibleSources = data.sources.map(source => ({ ...source, ideas: filteredIdeas(source.ideas || []) }));
+      const visibleIdeas = visibleSources.reduce((sum, source) => sum + source.ideas.length, 0);
+      document.getElementById('subtitle').textContent = `${visibleIdeas} / ${data.total_ideas || 0} ideas · generated ${fmtTime(data.generated_at) || '-'}`;
+      renderOverview(data, visibleSources, visibleIdeas);
+      document.getElementById('sources').innerHTML = visibleSources.length
+        ? visibleSources.map(renderSourcePanel).join('')
+        : `<div class="empty">暂无研究 idea。先运行 discovery 后这里会按 source 自动分组。</div>`;
+    }
+
+    function filteredIdeas(ideas) {
+      if (state.status === 'all') return ideas;
+      return ideas.filter(idea => idea.status === state.status);
+    }
+
+    function renderOverview(data, sources, visibleIdeas) {
+      const passed = sources.reduce((sum, source) => sum + source.ideas.filter(idea => idea.passed === true).length, 0);
+      const failed = sources.reduce((sum, source) => sum + source.ideas.filter(idea => idea.passed === false).length, 0);
+      const pending = Math.max(0, visibleIdeas - passed - failed);
+      document.getElementById('overview').innerHTML = [
+        metricCard('Sources', String(data.sources?.length || 0), `${sources.filter(source => source.ideas.length).length} with ideas`),
+        metricCard('Visible Ideas', String(visibleIdeas), state.status === 'all' ? 'all statuses' : statusLabel(state.status)),
+        metricCard('Passed', String(passed), 'candidate / validated'),
+        metricCard('Needs Work', String(failed), `${pending} pending`),
+      ].join('');
+    }
+
+    function metricCard(label, value, note) {
+      return `<div class="metric-card"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><small>${escapeHtml(note)}</small></div>`;
+    }
+
+    function renderSourcePanel(source) {
+      const hasVisible = source.ideas.length > 0;
+      const open = hasVisible ? ' open' : '';
+      return `
+        <details class="panel"${open}>
+          <summary>
+            <div class="source-name">
+              <span class="chevron">⌄</span>
+              <h2>${escapeHtml(source.display_name || source.source)}</h2>
+            </div>
+            <div class="source-stats">
+              <span class="pill blue">${source.ideas.length} visible</span>
+              <span class="pill green">${source.ideas.filter(idea => idea.passed === true).length} passed</span>
+              <span class="pill">${source.total || 0} total</span>
+            </div>
+          </summary>
+          <div class="panel-body">
+            ${hasVisible ? renderIdeaTable(source.ideas) : `<div class="empty">当前过滤条件下没有 ${escapeHtml(source.display_name || source.source)} idea。</div>`}
+          </div>
+        </details>
+      `;
+    }
+
+    function renderIdeaTable(ideas) {
+      const headers = ['Idea', '状态', '通过', '分数', '描述', '原因 / 阶段', '来源', '策略文件', '报告'];
+      const rows = ideas.map(idea => [
+        `<div class="title-cell">${escapeHtml(idea.title || '-')}<br><span class="pill">${escapeHtml(idea.strategy_id || idea.idea_id || '-')}</span></div>`,
+        statusPill(idea.status),
+        passPill(idea.passed),
+        num(idea.discovery_score, 2),
+        `<div class="description-cell">${escapeHtml(idea.description || '-')}</div>${tagLine(idea.matched_terms, idea.risk_flags)}`,
+        `<div class="reason-cell">${escapeHtml(idea.reason || idea.stage || '-')}</div>`,
+        linkCell(idea.source_url, 'Source'),
+        linkCell(idea.strategy_file_url, 'strategy.py'),
+        linkCell(idea.report_url, 'Report'),
+      ]);
+      return `<div class="table-scroll">${table(headers, rows)}</div>`;
+    }
+
+    function tagLine(terms, flags) {
+      const items = [...(terms || []).slice(0, 4), ...(flags || []).slice(0, 2)];
+      if (!items.length) return '';
+      return `<div style="margin-top:8px">${items.map(item => `<span class="pill">${escapeHtml(item)}</span>`).join(' ')}</div>`;
+    }
+
+    function linkCell(url, label) {
+      return url ? `<div class="link-cell"><a class="mini-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a></div>` : '<span class="muted">-</span>';
+    }
+
+    function table(headers, rows) {
+      return `
+        <table>
+          <thead><tr>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(row => `<tr>${row.map((cell, index) => `<td data-label="${escapeHtml(headers[index] || '')}">${cell}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      `;
+    }
+
+    function statusPill(value) {
+      return `<span class="pill ${statusClass(value)}">${escapeHtml(statusLabel(value))}</span>`;
+    }
+
+    function passPill(value) {
+      if (value === true) return '<span class="pill green">通过</span>';
+      if (value === false) return '<span class="pill red">未通过</span>';
+      return '<span class="pill amber">待定</span>';
+    }
+
+    function statusClass(value) {
+      if (['candidate', 'validated', 'paper_trading_candidate'].includes(value)) return 'green';
+      if (['validation_failed', 'rejected', 'stage1_rejected', 'error'].includes(value)) return 'red';
+      if (['needs_more_validation', 'needs_manual_spec', 'research_queue'].includes(value)) return 'amber';
+      return '';
+    }
+
+    function statusLabel(value) {
+      return String(value || 'unknown').replace(/_/g, ' ');
+    }
+
+    function fmtTime(value) {
+      if (!value) return '';
+      return String(value).replace('T', ' ').slice(0, 19);
+    }
+
+    function num(value, digits = 2) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toFixed(digits) : '-';
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
+
+    loadResearchDashboard().catch(err => {
+      document.getElementById('sources').innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    });
+    setInterval(() => loadResearchDashboard().catch(() => {}), 30000);
+  </script>
+</body>
+</html>
