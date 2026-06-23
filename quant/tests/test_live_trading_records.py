@@ -1692,6 +1692,93 @@ def test_quant_system_restores_strategy_runtime_positions_from_tracker(tmp_path)
     assert sub.settled_quantity("159949", date.today() + timedelta(days=1)) == pytest.approx(4900)
 
 
+def test_quant_system_records_and_restores_strategy_runtime_checkpoint(tmp_path):
+    from quant.features.strategies.daily_bar import DailyBarStrategy
+    from quant.quant_system import QuantSystem
+
+    class CheckpointStrategy(DailyBarStrategy):
+        def __init__(self):
+            super().__init__("DemoStrategy", ["510300"], holding_days=20)
+
+    store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {"system": {"mode": "paper"}}
+    quant._strategy_state_store = lambda: store
+    quant.logger = SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None)
+
+    strategy = CheckpointStrategy()
+    strategy._positions["510300"] = 300
+    strategy._last_rebalance_date = date(2026, 6, 17)
+    strategy._days_since_rebalance = 2
+
+    QuantSystem._record_strategy_runtime_checkpoint(
+        quant,
+        strategy,
+        "DemoStrategy",
+        as_of_date=date(2026, 6, 17),
+        stage="post_signal_close",
+    )
+    restored = CheckpointStrategy()
+    restored_ok = QuantSystem._restore_strategy_runtime_checkpoint(
+        quant,
+        restored,
+        "DemoStrategy",
+        before_date=date(2026, 6, 18),
+    )
+
+    row = store.get_latest_runtime_state(strategy_name="DemoStrategy", mode="paper")
+    assert restored_ok is True
+    assert row["stage"] == "post_signal_close"
+    assert row["state"]["daily_bar_state"]["days_since_rebalance"] == 2
+    assert restored.get_position("510300") == pytest.approx(300)
+    assert restored._last_rebalance_date == date(2026, 6, 17)
+    assert restored._days_since_rebalance == 2
+
+
+def test_quant_system_bootstraps_daily_gate_from_latest_signal_when_checkpoint_missing(tmp_path):
+    from quant.features.strategies.daily_bar import DailyBarStrategy
+    from quant.quant_system import QuantSystem
+
+    class CheckpointStrategy(DailyBarStrategy):
+        def __init__(self):
+            super().__init__("DemoStrategy", ["510300"], holding_days=20)
+
+    store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")
+    store.upsert_signal(signal={
+        "signal_id": "sig:demo:20260622",
+        "strategy_name": "DemoStrategy",
+        "mode": "live",
+        "timestamp": "2026-06-22T15:00:00",
+        "signal_date": "2026-06-22",
+        "record_date": "2026-06-22",
+        "submit_date": "2026-06-23",
+        "symbol": "510300",
+        "side": "BUY",
+        "quantity": 100,
+        "order_type": "LIMIT",
+        "reference_price": 4.0,
+        "status": "accepted",
+    })
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.config = {"system": {"mode": "live"}}
+    quant._strategy_state_store = lambda: store
+    quant.logger = SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None)
+
+    strategy = CheckpointStrategy()
+    restored_ok = QuantSystem._restore_strategy_runtime_checkpoint(
+        quant,
+        strategy,
+        "DemoStrategy",
+        before_date=date(2026, 6, 24),
+    )
+
+    assert restored_ok is True
+    assert strategy._last_rebalance_date == date(2026, 6, 22)
+    assert strategy._days_since_rebalance == 0
+    assert strategy._check_rebalance_gate(date(2026, 6, 24)) is False
+    assert strategy._days_since_rebalance == 1
+
+
 def test_quant_system_submit_due_pending_signals_does_not_run_daily_snapshot(tmp_path):
     from quant.quant_system import QuantSystem
 

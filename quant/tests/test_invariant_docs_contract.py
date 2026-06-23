@@ -39,9 +39,12 @@ def test_trading_invariants_describe_strategy_dashboard_lifecycle():
     )
     expected_fragments = [
         "### Strategy Dashboard Lifecycle",
-        "configure/start -> restore positions -> D close data/OSS -> "
+        "configure/start -> restore positions/runtime checkpoint -> D close data/OSS -> "
         "D pending-only signal generation -> D+1 order execution -> "
-        "fill/position/NAV sync -> next close snapshot",
+        "fill/position/checkpoint/NAV sync -> next close snapshot",
+        "strategy_runtime_states.state_json",
+        "fixed DuckDB envelope plus flexible JSON payload",
+        "bootstrap its holding gate",
         "Live and paper share the signal-generation contract, diverge only at execution adapters",
         "pause/stop/liquidating states must block D+1 execution for that mode",
         "record_pending_only",

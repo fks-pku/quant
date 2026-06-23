@@ -94,7 +94,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 
 - `execution/strategy_controls.py` persists per-strategy and per-mode control state in DuckDB `strategy_states` table; dashboard control actions record state transitions and must not submit broker orders directly.
 - `execution/strategy_ledger.py` owns strategy operations ledgers, dashboard audit JSONL, mode-scoped liquidation plans, and optional broker-history reconciliation after a live restart.
-- `execution/strategy_state_store.py` owns the DuckDB dashboard state store (`var/strategy_dashboard.duckdb`) with separate ledgers: `strategy_signals` (strategy intent), `strategy_orders` (submit attempts), `strategy_fills` (fill facts), plus `strategy_states`, `strategy_positions`, `strategy_capital_events`, and `strategy_snapshots`.
+- `execution/strategy_state_store.py` owns the DuckDB dashboard state store (`var/strategy_dashboard.duckdb`) with separate ledgers: `strategy_signals` (strategy intent), `strategy_orders` (submit attempts), `strategy_fills` (fill facts), plus `strategy_states`, `strategy_positions`, `strategy_runtime_states`, `strategy_capital_events`, and `strategy_snapshots`.
 - `execution/strategy_mode_records.py` is DEPRECATED — legacy append-only JSONL records, kept for backward compatibility only.
 - `execution/cn_trading_calendar.py` owns CN trading-calendar resolution for live/paper schedulers, combining Tushare `trade_cal` cache with local DuckDB market/status dates.
 - Broker adapters may expose `get_trade_history(start_date=None, end_date=None)` and `get_order_history(start_date=None, end_date=None)` for restart reconciliation. Implementations must return normalized dict-like records without importing `features/`.

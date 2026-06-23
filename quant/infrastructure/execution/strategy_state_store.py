@@ -202,6 +202,31 @@ class StrategyStateStore:
                 create index if not exists idx_snapshots_strategy_mode_date
                 on strategy_snapshots (strategy_name, mode, snapshot_date)
             """)
+            con.execute("""
+                create table if not exists strategy_runtime_states (
+                    state_id text primary key,
+                    strategy_name text not null,
+                    mode text not null,
+                    as_of_date text not null,
+                    stage text not null,
+                    strategy_class text not null default '',
+                    schema_version integer not null default 1,
+                    state_json text not null,
+                    state_hash text not null,
+                    previous_state_hash text not null default '',
+                    config_hash text not null default '',
+                    run_id text not null default '',
+                    recorded_at text not null
+                )
+            """)
+            con.execute("""
+                create index if not exists idx_runtime_states_strategy_mode_date
+                on strategy_runtime_states (strategy_name, mode, as_of_date, stage)
+            """)
+            con.execute("""
+                create index if not exists idx_runtime_states_latest
+                on strategy_runtime_states (strategy_name, mode, recorded_at)
+            """)
             self._backfill_split_ledgers(con)
         finally:
             con.close()
@@ -387,6 +412,142 @@ class StrategyStateStore:
             "initial_cash", "error_message", "note", "recorded_at",
         ]
         return [_row_to_dict(row, columns) for row in reversed(rows)]
+
+    def upsert_runtime_state(
+        self,
+        *,
+        strategy_name: str,
+        mode: str,
+        as_of_date: str,
+        stage: str,
+        state: Dict[str, Any],
+        strategy_class: str = "",
+        schema_version: int = 1,
+        previous_state_hash: str = "",
+        config_hash: str = "",
+        run_id: str = "",
+        recorded_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        mode = _mode(mode)
+        ts = recorded_at or datetime.now().isoformat()
+        state_json = _canonical_json(state or {})
+        state_hash = hashlib.sha256(state_json.encode("utf-8")).hexdigest()
+        row = {
+            "state_id": _make_runtime_state_id(
+                strategy_name=strategy_name,
+                mode=mode,
+                as_of_date=str(as_of_date)[:10],
+                stage=stage,
+                schema_version=schema_version,
+                state_hash=state_hash,
+            ),
+            "strategy_name": str(strategy_name or ""),
+            "mode": mode,
+            "as_of_date": str(as_of_date)[:10],
+            "stage": str(stage or ""),
+            "strategy_class": str(strategy_class or ""),
+            "schema_version": int(schema_version or 1),
+            "state_json": state_json,
+            "state": json.loads(state_json),
+            "state_hash": state_hash,
+            "previous_state_hash": str(previous_state_hash or ""),
+            "config_hash": str(config_hash or ""),
+            "run_id": str(run_id or ""),
+            "recorded_at": ts,
+        }
+        self.ensure_schema()
+        with self._lock:
+            con = self._connect()
+            try:
+                con.execute(
+                    """insert or replace into strategy_runtime_states
+                    (state_id, strategy_name, mode, as_of_date, stage, strategy_class,
+                     schema_version, state_json, state_hash, previous_state_hash,
+                     config_hash, run_id, recorded_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        row["state_id"], row["strategy_name"], row["mode"],
+                        row["as_of_date"], row["stage"], row["strategy_class"],
+                        row["schema_version"], row["state_json"], row["state_hash"],
+                        row["previous_state_hash"], row["config_hash"],
+                        row["run_id"], row["recorded_at"],
+                    ],
+                )
+            finally:
+                con.close()
+        return row
+
+    def get_latest_runtime_state(
+        self,
+        *,
+        strategy_name: str,
+        mode: str,
+        stage: Optional[str] = None,
+        as_of_date: Optional[str] = None,
+        before_date: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.db_path.exists():
+            return None
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_runtime_states"):
+                return None
+            where = ["strategy_name = ?", "mode = ?"]
+            params: List[Any] = [strategy_name, mode]
+            if stage:
+                where.append("stage = ?")
+                params.append(str(stage))
+            if as_of_date:
+                where.append("as_of_date = ?")
+                params.append(str(as_of_date)[:10])
+            if before_date:
+                where.append("as_of_date < ?")
+                params.append(str(before_date)[:10])
+            row = con.execute(
+                f"""select * from strategy_runtime_states
+                where {' and '.join(where)}
+                order by as_of_date desc, recorded_at desc
+                limit 1""",
+                params,
+            ).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            return None
+        return _decode_runtime_state_row(row)
+
+    def get_latest_signal_date(
+        self,
+        *,
+        strategy_name: str,
+        mode: str,
+        before_date: Optional[str] = None,
+    ) -> Optional[str]:
+        if not self.db_path.exists():
+            return None
+        mode = _mode(mode)
+        con = self._connect(read_only=True)
+        try:
+            if not _table_exists(con, "strategy_signals"):
+                return None
+            where = ["strategy_name = ?", "mode = ?", "signal_date <> ''"]
+            params: List[Any] = [strategy_name, mode]
+            if before_date:
+                where.append("signal_date < ?")
+                params.append(str(before_date)[:10])
+            row = con.execute(
+                f"""select signal_date from strategy_signals
+                where {' and '.join(where)}
+                order by signal_date desc, timestamp desc
+                limit 1""",
+                params,
+            ).fetchone()
+        finally:
+            con.close()
+        if row is None or not row[0]:
+            return None
+        return str(row[0])[:10]
 
     def get_all_strategy_names(self) -> List[str]:
         if not self.db_path.exists():
@@ -1749,6 +1910,24 @@ def _fill_columns() -> List[str]:
     ]
 
 
+def _runtime_state_columns() -> List[str]:
+    return [
+        "state_id", "strategy_name", "mode", "as_of_date", "stage",
+        "strategy_class", "schema_version", "state_json", "state_hash",
+        "previous_state_hash", "config_hash", "run_id", "recorded_at",
+    ]
+
+
+def _decode_runtime_state_row(row: tuple) -> Dict[str, Any]:
+    decoded = _row_to_dict(row, _runtime_state_columns())
+    state_json = str(decoded.get("state_json") or "{}")
+    try:
+        decoded["state"] = json.loads(state_json)
+    except json.JSONDecodeError:
+        decoded["state"] = {}
+    return decoded
+
+
 def _table_exists(con: Any, table_name: str) -> bool:
     row = con.execute(
         "select count(*) from information_schema.tables where table_name = ?",
@@ -1791,6 +1970,31 @@ def _make_fill_id(row: Dict[str, Any]) -> str:
     ]
     raw = json.dumps(parts, ensure_ascii=False, sort_keys=True)
     return f"fill:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _make_runtime_state_id(
+    *,
+    strategy_name: str,
+    mode: str,
+    as_of_date: str,
+    stage: str,
+    schema_version: int,
+    state_hash: str,
+) -> str:
+    parts = [
+        str(strategy_name or ""),
+        str(mode or ""),
+        str(as_of_date or "")[:10],
+        str(stage or ""),
+        int(schema_version or 1),
+        str(state_hash or ""),
+    ]
+    raw = _canonical_json(parts)
+    return f"state:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:20]}"
 
 
 def _legacy_order_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:

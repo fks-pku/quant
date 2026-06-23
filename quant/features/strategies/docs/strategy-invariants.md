@@ -156,3 +156,19 @@ S9-03  动态 PIT 个股 universe 中的全量候选集不得被 strict daily sn
 
 - 适用于默认面向普通股票账户执行的 A 股个股策略，例如小盘财务过滤策略。
 - 若用户明确提供已开通权限的账户配置，可通过策略参数覆盖该前缀列表，但默认研究和正式报告必须按普通账户可买股票池运行。
+
+## CASE-10: Daily strategy runtime checkpoint
+
+日线策略的运行时状态不能只存在于进程内存。`DailyBarStrategy` 的换仓 gate、策略内部持仓镜像，以及策略子类明确暴露的 checkpoint 字段，必须能序列化为 JSON-safe dict，并在 live/paper 新进程启动时恢复。DB 表结构保持固定，策略差异通过 `state_json` payload 表达，不允许用 pickle、`__dict__` 全量 dump 或回放历史订单来猜测状态。
+
+### 断言
+
+```
+S10-01  DailyBarStrategy checkpoint/restore 必须恢复 _positions、_last_rebalance_date 和 _days_since_rebalance；恢复后 holding_days gate 的下一次状态转移必须与未重启进程一致
+```
+
+### 适用范围
+
+- 适用于所有继承 `DailyBarStrategy` 且依赖 `holding_days`、risk regime、风险退出待处理集、目标权重缓存或其他跨日运行时变量的策略。
+- `checkpoint_state()` 只保存影响未来状态转移的策略运行时变量；历史 bar buffer 仍由 warmup/PIT 数据重建，不能作为 checkpoint 的唯一来源。
+- 策略子类如果新增会影响未来信号的变量，必须通过显式 hook 纳入 `state_json`，并补对应不变量或策略级回归测试。

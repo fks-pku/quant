@@ -8,7 +8,9 @@ Usage:
 """
 
 import argparse
+import hashlib
 import inspect
+import json
 import signal
 import sys
 import time
@@ -533,7 +535,13 @@ class QuantSystem:
                 allocation_pct = self._strategy_allocation_pct(strategy_cfg)
                 self.engine.add_strategy(strategy, allocation_pct=allocation_pct)
                 self._restore_strategy_runtime_positions(strategy, name)
+                if not self._defer_setup_runtime_checkpoint_restore():
+                    self._restore_strategy_runtime_checkpoint(strategy, name)
                 self.logger.info(f"Strategy {name} enabled")
+
+    def _defer_setup_runtime_checkpoint_restore(self) -> bool:
+        system_config = self.config.get("system", {}) if isinstance(self.config, dict) else {}
+        return bool(system_config.get("daily_signal_date"))
 
     def _restore_strategy_runtime_positions(self, strategy: Any, strategy_name: str) -> None:
         tracker = self._strategy_tracker_for_mode()
@@ -582,6 +590,151 @@ class QuantSystem:
                 portfolio.cash = max(initial_cash - total_cost, 0.0)
             except Exception:
                 pass
+
+    def _restore_strategy_runtime_checkpoint(
+        self,
+        strategy: Any,
+        strategy_name: str,
+        before_date: Optional[date] = None,
+    ) -> bool:
+        restore = getattr(strategy, "restore_checkpoint_state", None)
+        if not callable(restore):
+            return False
+        store = self._strategy_state_store()
+        mode = self._system_mode_text()
+        state_row = store.get_latest_runtime_state(
+            strategy_name=strategy_name,
+            mode=mode,
+            before_date=before_date.isoformat() if before_date is not None else None,
+        )
+        if state_row is not None:
+            restore(state_row.get("state") or {})
+            self.logger.info(
+                "Restored strategy runtime checkpoint strategy=%s mode=%s as_of=%s stage=%s hash=%s",
+                strategy_name,
+                mode,
+                state_row.get("as_of_date", ""),
+                state_row.get("stage", ""),
+                state_row.get("state_hash", ""),
+            )
+            return True
+        return self._bootstrap_daily_runtime_checkpoint_from_signals(
+            strategy,
+            strategy_name,
+            before_date=before_date,
+        )
+
+    def _restore_strategy_runtime_checkpoints_for_daily(
+        self,
+        signal_day: date,
+        *,
+        include_signal_day: bool,
+    ) -> None:
+        before_date = signal_day + timedelta(days=1) if include_signal_day else signal_day
+        for strategy in self.engine.strategies:
+            strategy_name = self._strategy_runtime_name(strategy)
+            self._restore_strategy_runtime_checkpoint(
+                strategy,
+                strategy_name,
+                before_date=before_date,
+            )
+
+    def _bootstrap_daily_runtime_checkpoint_from_signals(
+        self,
+        strategy: Any,
+        strategy_name: str,
+        *,
+        before_date: Optional[date],
+    ) -> bool:
+        if not hasattr(strategy, "_last_rebalance_date") or not hasattr(strategy, "_days_since_rebalance"):
+            return False
+        store = self._strategy_state_store()
+        latest_signal_date = store.get_latest_signal_date(
+            strategy_name=strategy_name,
+            mode=self._system_mode_text(),
+            before_date=before_date.isoformat() if before_date is not None else None,
+        )
+        if not latest_signal_date:
+            return False
+        signal_day = self._coerce_date(latest_signal_date)
+        state = {
+            "positions": getattr(strategy, "_positions", {}).copy()
+            if isinstance(getattr(strategy, "_positions", None), dict)
+            else {},
+            "daily_bar_state": {
+                "last_rebalance_date": signal_day.isoformat(),
+                "days_since_rebalance": 0,
+            },
+        }
+        strategy.restore_checkpoint_state(state)
+        self.logger.info(
+            "Bootstrapped strategy runtime checkpoint strategy=%s mode=%s from latest signal_date=%s",
+            strategy_name,
+            self._system_mode_text(),
+            signal_day.isoformat(),
+        )
+        return True
+
+    def _record_strategy_runtime_checkpoints(self, as_of_date: date, *, stage: str) -> None:
+        if not self.engine:
+            return
+        for strategy in self.engine.strategies:
+            strategy_name = self._strategy_runtime_name(strategy)
+            self._record_strategy_runtime_checkpoint(
+                strategy,
+                strategy_name,
+                as_of_date=as_of_date,
+                stage=stage,
+            )
+
+    def _record_strategy_runtime_checkpoint(
+        self,
+        strategy: Any,
+        strategy_name: str,
+        *,
+        as_of_date: date,
+        stage: str,
+    ) -> Optional[dict]:
+        checkpoint = getattr(strategy, "checkpoint_state", None)
+        if not callable(checkpoint):
+            return None
+        store = self._strategy_state_store()
+        mode = self._system_mode_text()
+        previous = store.get_latest_runtime_state(
+            strategy_name=strategy_name,
+            mode=mode,
+        )
+        row = store.upsert_runtime_state(
+            strategy_name=strategy_name,
+            mode=mode,
+            as_of_date=as_of_date.isoformat(),
+            stage=stage,
+            strategy_class=f"{strategy.__class__.__module__}.{strategy.__class__.__name__}",
+            state=checkpoint(),
+            schema_version=1,
+            previous_state_hash=str((previous or {}).get("state_hash") or ""),
+            config_hash=self._runtime_config_hash(),
+            run_id=str(self.config.get("system", {}).get("run_id", "")) if isinstance(self.config, dict) else "",
+        )
+        self.logger.info(
+            "Recorded strategy runtime checkpoint strategy=%s mode=%s as_of=%s stage=%s hash=%s",
+            strategy_name,
+            mode,
+            row.get("as_of_date", ""),
+            stage,
+            row.get("state_hash", ""),
+        )
+        return row
+
+    def _strategy_runtime_name(self, strategy: Any) -> str:
+        return str(getattr(strategy, "name", "") or strategy.__class__.__name__)
+
+    def _runtime_config_hash(self) -> str:
+        try:
+            raw = json.dumps(self.config, ensure_ascii=False, sort_keys=True, default=str)
+        except TypeError:
+            raw = str(self.config)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _strategy_allocation_pct(self, strategy_cfg: dict) -> Optional[float]:
         if "allocation_pct" in strategy_cfg:
@@ -765,15 +918,19 @@ class QuantSystem:
             if warmup_days is not None
             else self.config.get("live_trading", {}).get("daily_snapshot_warmup_days", 0)
         )
+        pending_only = bool(self.config.get("execution", {}).get("record_pending_only", False))
         for strategy in self.engine.strategies:
             start_strategy(strategy)
+        self._restore_strategy_runtime_checkpoints_for_daily(
+            signal_day,
+            include_signal_day=pending_only,
+        )
         if warmup_count > 0:
             self._warmup_daily_strategies(provider, symbols, signal_day, warmup_count)
         bars = self._load_snapshot_bars(provider, symbols, signal_day)
         if not bars:
             raise RuntimeError(f"No daily bars loaded for {signal_day}")
         order_manager = getattr(self.engine, "order_manager", None)
-        pending_only = bool(self.config.get("execution", {}).get("record_pending_only", False))
         if not pending_only:
             self._prepare_paper_execution_context(provider, symbols, execution_day)
         signal_timestamp_set = False
@@ -810,9 +967,17 @@ class QuantSystem:
             self._record_live_strategy_snapshots(
                 timestamp=datetime.combine(signal_day, datetime.min.time()).replace(hour=15),
             )
+            self._record_strategy_runtime_checkpoints(
+                signal_day,
+                stage="post_signal_close",
+            )
         else:
             self._record_live_strategy_snapshots(
                 timestamp=datetime.combine(execution_day, datetime.min.time()).replace(hour=15),
+            )
+            self._record_strategy_runtime_checkpoints(
+                execution_day,
+                stage="post_execution",
             )
         return results
 

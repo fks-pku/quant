@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import date
+import math
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 if TYPE_CHECKING:
@@ -124,6 +125,50 @@ class Strategy(ABC):
     def get_all_positions(self) -> Dict[str, float]:
         """Get all current positions."""
         return self._positions.copy()
+
+    def checkpoint_state(self) -> Dict[str, Any]:
+        state = {"positions": self._checkpoint_positions()}
+        state.update(self._get_checkpoint_state_fields())
+        return state
+
+    def restore_checkpoint_state(self, state: Dict[str, Any]) -> None:
+        if not isinstance(state, dict):
+            return
+        positions = state.get("positions")
+        if isinstance(positions, dict):
+            self._positions = self._coerce_checkpoint_positions(positions)
+        self._restore_checkpoint_state_fields(state)
+
+    def _get_checkpoint_state_fields(self) -> Dict[str, Any]:
+        return {}
+
+    def _restore_checkpoint_state_fields(self, state: Dict[str, Any]) -> None:
+        pass
+
+    def _checkpoint_positions(self) -> Dict[str, float]:
+        positions = {}
+        for symbol, quantity in self._positions.items():
+            value = self._checkpoint_quantity(quantity)
+            if value != 0.0:
+                positions[str(symbol)] = value
+        return positions
+
+    @staticmethod
+    def _coerce_checkpoint_positions(raw_positions: Dict[str, Any]) -> Dict[str, float]:
+        positions = {}
+        for symbol, quantity in raw_positions.items():
+            value = Strategy._checkpoint_quantity(quantity)
+            if value != 0.0:
+                positions[str(symbol)] = value
+        return positions
+
+    @staticmethod
+    def _checkpoint_quantity(quantity: Any) -> float:
+        try:
+            value = float(quantity or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return value if math.isfinite(value) else 0.0
 
     @staticmethod
     def _adj(bar, field: str = "close", default: float = 0.0) -> float:

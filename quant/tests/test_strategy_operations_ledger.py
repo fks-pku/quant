@@ -78,6 +78,42 @@ def test_strategy_mode_record_store_reads_utf8_sig_jsonl(tmp_path):
     assert rows[0]["nav"] == 20000
 
 
+def test_strategy_state_store_persists_flexible_runtime_checkpoint(tmp_path):
+    store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")
+
+    row = store.upsert_runtime_state(
+        strategy_name="DemoStrategy",
+        mode="paper",
+        as_of_date="2026-06-17",
+        stage="post_signal_close",
+        strategy_class="DemoStrategy",
+        state={
+            "positions": {"510300": 300.0},
+            "daily_bar_state": {
+                "last_rebalance_date": "2026-06-17",
+                "days_since_rebalance": 0,
+            },
+            "strategy_specific": {"branch": "risk_on", "weights": {"510300": 0.6}},
+        },
+        schema_version=1,
+        config_hash="cfg-a",
+        run_id="run-a",
+        recorded_at="2026-06-17T15:00:00",
+    )
+
+    restored = store.get_latest_runtime_state(
+        strategy_name="DemoStrategy",
+        mode="paper",
+    )
+
+    assert restored is not None
+    assert restored["state_id"] == row["state_id"]
+    assert restored["state_hash"] == row["state_hash"]
+    assert restored["state"]["strategy_specific"]["weights"]["510300"] == pytest.approx(0.6)
+    assert restored["config_hash"] == "cfg-a"
+    assert restored["run_id"] == "run-a"
+
+
 @pytest.mark.skip(reason="JSONL mode_records removed in simplified state store")
 def test_strategy_control_action_writes_mode_operation(tmp_path):
     control_file = tmp_path / "var" / "strategy_controls.json"

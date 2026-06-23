@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from quant.features.strategies.base import Strategy
+from quant.features.strategies.daily_bar import DailyBarStrategy
 from quant.features.strategies.reject.ashare_alpha158_factor_composite.strategy import (
     AShareAlpha158FactorCompositeStrategy,
 )
@@ -191,6 +192,32 @@ class TestCase4OnFill:
         s.on_fill(None, FillBuy())
         s.on_fill(None, FillSell())
         assert s.get_position("AAPL") == 60
+
+
+# ---------------------------------------------------------------------------
+# CASE-10: Daily strategy runtime checkpoint
+# ---------------------------------------------------------------------------
+
+
+class TestCase10DailyStrategyCheckpoint:
+    def test_s10_01_checkpoint_restores_rebalance_gate_and_positions(self):
+        class CheckpointStrategy(DailyBarStrategy):
+            def __init__(self):
+                super().__init__("checkpoint", ["510300"], holding_days=20)
+
+        strategy = CheckpointStrategy()
+        strategy._positions["510300"] = 300
+        strategy._last_rebalance_date = date(2026, 6, 17)
+        strategy._days_since_rebalance = 3
+
+        restored = CheckpointStrategy()
+        restored.restore_checkpoint_state(strategy.checkpoint_state())
+
+        assert restored.get_position("510300") == pytest.approx(300)
+        assert restored._last_rebalance_date == date(2026, 6, 17)
+        assert restored._days_since_rebalance == 3
+        assert restored._check_rebalance_gate(date(2026, 6, 18)) is False
+        assert restored._days_since_rebalance == 4
 
 
 # ---------------------------------------------------------------------------

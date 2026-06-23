@@ -155,7 +155,61 @@ class DailyBarStrategy(Strategy):
         """Override to return extra state fields for serialization."""
         return {}
 
+    def _get_checkpoint_state_fields(self) -> Dict[str, Any]:
+        state = {
+            "daily_bar_state": {
+                "last_rebalance_date": (
+                    self._last_rebalance_date.isoformat()
+                    if self._last_rebalance_date is not None
+                    else ""
+                ),
+                "days_since_rebalance": int(self._days_since_rebalance),
+                "holding_days": int(self.holding_days),
+            }
+        }
+        strategy_state = self._get_strategy_checkpoint_fields()
+        if strategy_state:
+            state["strategy_state"] = strategy_state
+        return state
+
+    def _restore_checkpoint_state_fields(self, state: Dict[str, Any]) -> None:
+        daily_state = state.get("daily_bar_state")
+        if isinstance(daily_state, dict):
+            self._last_rebalance_date = _parse_checkpoint_date(
+                daily_state.get("last_rebalance_date")
+            )
+            self._days_since_rebalance = _checkpoint_int(
+                daily_state.get("days_since_rebalance")
+            )
+        strategy_state = state.get("strategy_state")
+        if isinstance(strategy_state, dict):
+            self._restore_strategy_checkpoint_fields(strategy_state)
+
+    def _get_strategy_checkpoint_fields(self) -> Dict[str, Any]:
+        return {}
+
+    def _restore_strategy_checkpoint_fields(self, state: Dict[str, Any]) -> None:
+        pass
+
 
 def _get_state_extra(strat: "DailyBarStrategy") -> Dict[str, Any]:
     """Internal: extract extra state fields without breaking get_state override."""
     return strat._get_state_fields()
+
+
+def _parse_checkpoint_date(value: Any) -> Optional[date]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _checkpoint_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
