@@ -16,7 +16,7 @@ The pipeline is a gated funnel:
 - Research runner: `python quant/scripts/run_research.py --mode discover|scout_formal|formal|fast|strict|walkforward|full`
 - API runner: `POST /api/research/run`, defaulting to `mode=full`
 
-`quant/domain/models/research_source_catalog.py` owns default discovery source names, query plans, feed URLs/source filters, and source-quality scores. `config/research.yaml` owns validation gate thresholds, discovery filters, backtest period, initial cash, production gate, and walk-forward worker defaults.
+`quant/domain/models/research_source_catalog.json` owns discovery source names, adapter kinds, default/dashboard enablement, query plans, feed URLs/source filters, and source-quality scores. `quant/domain/models/research_source_catalog.py` loads that config and exposes compatibility helpers. `config/research.yaml` owns validation gate thresholds, discovery filters, backtest period, initial cash, production gate, and walk-forward worker defaults.
 
 ## Modes
 
@@ -36,7 +36,7 @@ Default new-strategy research uses `full` or `formal`. Single-stage `fast`, `str
 
 ### 1. Discovery
 
-`StrategyScout` coordinates direct adapters or `SourceHub`, deduplicates raw ideas, attaches `discovery_quality`, ranks results, and applies configured quality filters. API and CLI composition roots build discovery adapters through `quant.infrastructure.research.sources.build_research_sources()`, which reads the central source catalog. The current default catalog enables arXiv, BigQuant, JointQuant, and Quantocracy; the catalog also defines SSRN, NBER, generic blogs, A-share public forum seeds, Hudson & Thames, Portfolio Optimizer, Alpha Architect, Quantpedia, and local A-share structural ideas for explicit runs.
+`StrategyScout` coordinates direct adapters or `SourceHub`, deduplicates raw ideas, attaches `discovery_quality`, ranks results, and applies configured quality filters. API and CLI composition roots build discovery adapters through `quant.infrastructure.research.sources.build_research_sources()`, which reads the central source config. The current source config contains and enables only BigQuant.
 
 Discovery writes stable assets under `quant/infrastructure/var/research/idea_bank/` and upserts ideas into the research store with status such as `discovered`.
 

@@ -376,7 +376,7 @@ Research capital exceptions: Formal A-share research default initial cash remain
 
 `public/local idea sources → idea_bank → daily A-share admission → StrategySpec → HFQ signal validation → candidate integration → strict Backtester → walk-forward audit → HTML reports and status transition`
 
-Discovery source defaults live in one place: `quant/domain/models/research_source_catalog.py`. It owns default source names, query plans, feed URLs/source filters, and source-quality priors. API/CLI composition roots create adapters through `quant.infrastructure.research.sources.build_research_sources()`. Add a normal RSS/public-source default in the catalog; add infrastructure adapter code only when introducing a new source `kind`.
+Discovery source defaults live in one config file: `quant/domain/models/research_source_catalog.json`. It owns source names, adapter kinds, default/dashboard enablement, query plans, feed URLs/source filters, and source-quality priors. `quant/domain/models/research_source_catalog.py` loads that config and exposes helper APIs. API/CLI composition roots create adapters through `quant.infrastructure.research.sources.build_research_sources()`. Add a normal RSS/public-source default in the JSON catalog; add infrastructure adapter code only when introducing a new source `kind`.
 
 可单独运行的主要 mode：
 
@@ -416,32 +416,13 @@ Discovery source defaults live in one place: `quant/domain/models/research_sourc
 
 ### 阶段 1：策略搜索 (Strategy Discovery)
 
-从以下信息源搜索最新的日线量化策略：
-
-**学术论文**
-- arXiv Quantitative Finance (q-fin)：https://arxiv.org/list/q-fin/recent
-- SSRN：https://www.ssrn.com/index.cfm/en/
-- Google Scholar 搜索关键词：`daily trading strategy`, `equity factor`, `momentum reversal`, `mean reversion daily`, `cross-sectional anomaly`
-
-**量化社区与论坛**
-- Quantocracy：https://quantocracy.com/
-- Hudson & Thames：https://hudsonthames.org/research/
-- Portfolio Optimizer：https://portfoliooptimizer.io/blog/
-- QuantConnect Forum：https://www.quantconnect.com/forum
-- Reddit r/algotrading：https://www.reddit.com/r/algotrading/
-
-**研究机构**
-- Alpha Architect Blog：https://alphaarchitect.com/blog/
-- Quantpedia Blog：https://quantpedia.com/blog/
-- AQR Research：https://www.aqr.com/Insights/Research
-- NBER Working Papers (Finance)
+当前工程默认只从 BigQuant 搜索最新的日线量化策略。可用 source 以 `quant/domain/models/research_source_catalog.json` 为准；当前配置只保留 `bigquant`。
 
 **搜索要求：**
-1. 使用 `exa_web_search_exa` 或 `web-search-prime_web_search_prime` 搜索上述来源
-2. 使用 `web-reader_webReader` 抓取具体页面获取策略细节
-3. 每次搜索至少覆盖 3 个不同类型的信息源
-4. 优先关注近 6 个月内发布的策略
-5. 筛选标准：策略必须可用日线 OHLCV 数据实现，逻辑清晰，有初步实证或理论支撑
+1. 通过当前 research source catalog 中的 `bigquant` adapter 搜索策略来源
+2. 抓取或读取 BigQuant 页面/seed idea 获取策略细节
+3. 优先关注 A 股日线、可用 OHLCV/常见日频字段实现的策略
+4. 筛选标准：策略必须可用日线 OHLCV 数据实现，逻辑清晰，有初步实证或理论支撑
 
 将找到的策略沉淀到 `quant/infrastructure/var/research/idea_bank/`，发现摘要可作为 Markdown 索引，但不能写回旧的 research 根目录散文件：
 

@@ -325,7 +325,7 @@ def test_research_dashboard_payload_groups_ideas_by_source_and_links_strategy_fi
                         "idea_id": "idea-2",
                         "title": "Rejected Rotation",
                         "description": "A rejected public rotation idea.",
-                        "source": "quantocracy",
+                    "source": "bigquant",
                         "source_url": "https://example.test/blog",
                         "metadata": {"discovery_quality": {"score": 4.5}},
                         "status": "validation_failed",
@@ -371,10 +371,11 @@ def test_research_dashboard_payload_groups_ideas_by_source_and_links_strategy_fi
     assert payload["total_ideas"] == 2
     assert "candidate" in payload["status_options"]
     assert "validation_failed" in payload["status_options"]
-    assert [source["source"] for source in payload["sources"]] == ["arxiv", "bigquant", "jointquant", "quantocracy"]
+    assert [source["source"] for source in payload["sources"]] == ["bigquant"]
     bigquant = next(source for source in payload["sources"] if source["source"] == "bigquant")
-    assert bigquant["total"] == 1
+    assert bigquant["total"] == 2
     assert bigquant["counts"]["candidate"] == 1
+    assert bigquant["counts"]["validation_failed"] == 1
     assert bigquant["passed"] == 1
     idea = bigquant["ideas"][0]
     assert idea["title"] == "Demo Factor"
@@ -431,9 +432,8 @@ def test_research_dashboard_routes_serve_payload_page_and_strategy_file(tmp_path
     assert page.status_code == 200
     assert b"research dashboard" in page.data
     body = client.get("/api/research/dashboard").get_json()
-    assert [source["source"] for source in body["sources"]] == ["arxiv", "bigquant", "jointquant", "quantocracy"]
+    assert [source["source"] for source in body["sources"]] == ["bigquant"]
     assert next(source for source in body["sources"] if source["source"] == "bigquant")["total"] == 1
-    assert next(source for source in body["sources"] if source["source"] == "arxiv")["total"] == 0
     source_file = client.get("/strategy-files/demo_factor")
     assert source_file.status_code == 200
     assert b"# strategy code" in source_file.data

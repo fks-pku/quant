@@ -1,0 +1,21 @@
+{
+  "sources": [
+    {
+      "name": "bigquant",
+      "kind": "ashare_public_forum",
+      "source_type": "practitioner_community",
+      "quality_score": 1.2,
+      "display_name": "BigQuant",
+      "default_enabled": true,
+      "dashboard_enabled": true,
+      "query_terms": [
+        "行业 轮动",
+        "Alpha101",
+        "景气度 趋势 拥挤度"
+      ],
+      "source_filter": [
+        "bigquant"
+      ]
+    }
+  ]
+}

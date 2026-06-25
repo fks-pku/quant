@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
@@ -18,122 +20,50 @@ class ResearchSourceCatalogEntry:
     source_filter: Tuple[str, ...] = field(default_factory=tuple)
 
 
-RESEARCH_SOURCE_CATALOG: Tuple[ResearchSourceCatalogEntry, ...] = (
-    ResearchSourceCatalogEntry(
-        "arxiv",
-        "arxiv",
-        "academic",
-        1.75,
-        display_name="arXiv",
-        default_enabled=True,
-        dashboard_enabled=True,
-    ),
-    ResearchSourceCatalogEntry(
-        "ssrn",
-        "ssrn",
-        "academic",
-        1.65,
-        display_name="SSRN",
-        query_terms=(
-            "daily trading strategy equity factor",
-            "cross sectional momentum anomaly",
-            "mean reversion equity strategy",
-        ),
-    ),
-    ResearchSourceCatalogEntry("nber", "nber", "institutional", 1.55, display_name="NBER"),
-    ResearchSourceCatalogEntry("blog", "blog", "blog", 0.95, display_name="Blog"),
-    ResearchSourceCatalogEntry(
-        "ashare_public_forum",
-        "ashare_public_forum",
-        "practitioner_community",
-        1.20,
-        display_name="A-Share Forum",
-    ),
-    ResearchSourceCatalogEntry(
-        "bigquant",
-        "ashare_public_forum",
-        "practitioner_community",
-        1.20,
-        display_name="BigQuant",
-        default_enabled=True,
-        dashboard_enabled=True,
-        query_terms=("行业 轮动", "Alpha101", "景气度 趋势 拥挤度"),
-        source_filter=("bigquant",),
-    ),
-    ResearchSourceCatalogEntry(
-        "joinquant",
-        "ashare_public_forum",
-        "practitioner_community",
-        1.15,
-        display_name="JoinQuant",
-        source_filter=("joinquant",),
-    ),
-    ResearchSourceCatalogEntry(
-        "jointquant",
-        "ashare_public_forum",
-        "practitioner_community",
-        1.15,
-        display_name="JointQuant",
-        default_enabled=True,
-        dashboard_enabled=True,
-        query_terms=("小市值", "多因子"),
-        source_filter=("joinquant",),
-    ),
-    ResearchSourceCatalogEntry(
-        "quantocracy",
-        "blog_rss",
-        "curated_blog",
-        1.15,
-        display_name="Quantocracy",
-        default_enabled=True,
-        dashboard_enabled=True,
-        query_terms=("daily factor momentum mean reversion", "quant trading strategy transaction costs"),
-        feed_urls=("https://quantocracy.com/feed/",),
-    ),
-    ResearchSourceCatalogEntry(
-        "hudson_thames",
-        "blog_rss",
-        "practitioner_research",
-        1.30,
-        display_name="Hudson & Thames",
-        query_terms=("daily mean reversion momentum portfolio optimization", "backtesting pitfalls daily equity strategy"),
-        feed_urls=("https://hudsonthames.org/feed/",),
-    ),
-    ResearchSourceCatalogEntry(
-        "portfolio_optimizer",
-        "blog_rss",
-        "practitioner_research",
-        1.25,
-        display_name="Portfolio Optimizer",
-        query_terms=("portfolio optimization daily allocation risk", "risk parity momentum allocation"),
-        feed_urls=("https://portfoliooptimizer.io/feed.xml",),
-    ),
-    ResearchSourceCatalogEntry(
-        "alpha_architect",
-        "blog_rss",
-        "practitioner_research",
-        1.35,
-        display_name="Alpha Architect",
-        query_terms=("factor investing momentum value quality", "daily equity factor strategy"),
-        feed_urls=("https://alphaarchitect.com/feed/",),
-    ),
-    ResearchSourceCatalogEntry(
-        "quantpedia",
-        "blog_rss",
-        "strategy_database",
-        1.40,
-        display_name="Quantpedia",
-        query_terms=("daily equity factor momentum seasonality", "market timing asset allocation strategy"),
-        feed_urls=("https://quantpedia.com/feed/",),
-    ),
-    ResearchSourceCatalogEntry(
-        "ashare_structural",
-        "ashare_structural",
-        "local_structural_research",
-        1.55,
-        display_name="A-Share Structural",
-    ),
-)
+RESEARCH_SOURCE_CATALOG_PATH = Path(__file__).with_name("research_source_catalog.json")
+
+
+def _string_tuple(value) -> Tuple[str, ...]:
+    return tuple(str(item) for item in value or ())
+
+
+def _load_research_source_catalog(path: Path = RESEARCH_SOURCE_CATALOG_PATH) -> Tuple[ResearchSourceCatalogEntry, ...]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    rows = data.get("sources")
+    if not isinstance(rows, list):
+        raise ValueError(f"Research source catalog must define a sources list: {path}")
+
+    entries = []
+    seen = set()
+    for idx, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"Research source catalog entry #{idx} must be an object")
+        name = str(row.get("name", "")).strip()
+        kind = str(row.get("kind", "")).strip()
+        source_type = str(row.get("source_type", "")).strip()
+        if not name or not kind or not source_type:
+            raise ValueError(f"Research source catalog entry #{idx} must include name, kind, and source_type")
+        if name in seen:
+            raise ValueError(f"Duplicate research source name: {name}")
+        seen.add(name)
+        entries.append(
+            ResearchSourceCatalogEntry(
+                name=name,
+                kind=kind,
+                source_type=source_type,
+                quality_score=float(row.get("quality_score", 1.0)),
+                display_name=str(row.get("display_name", "")),
+                default_enabled=bool(row.get("default_enabled", False)),
+                dashboard_enabled=bool(row.get("dashboard_enabled", False)),
+                query_terms=_string_tuple(row.get("query_terms")),
+                feed_urls=_string_tuple(row.get("feed_urls")),
+                source_filter=_string_tuple(row.get("source_filter")),
+            )
+        )
+    return tuple(entries)
+
+
+RESEARCH_SOURCE_CATALOG: Tuple[ResearchSourceCatalogEntry, ...] = _load_research_source_catalog()
 
 
 def research_source_catalog() -> Tuple[ResearchSourceCatalogEntry, ...]:
