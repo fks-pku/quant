@@ -237,8 +237,10 @@ class OrderManager:
             signal_metadata=signal_metadata,
         )
         self._record_strategy(order_id, strategy_name)
-        self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value)
-        self._submit_to_broker(order)
+        self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value, side=side)
+        broker_order_id = self._submit_to_broker(order)
+        if broker_order_id is None:
+            return None
 
         return order_id
 
@@ -317,8 +319,10 @@ class OrderManager:
             self._remember_order_signal_metadata(order_id, signal_metadata)
 
         self._record_strategy(order_id, strategy_name)
-        self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value)
-        self._submit_to_broker(order)
+        self._record_risk_order(risk_engine, symbol=symbol, order_value=order_value, side=side)
+        broker_order_id = self._submit_to_broker(order)
+        if broker_order_id is None:
+            return None
         return order_id
 
     def set_signal_timestamp(self, timestamp: Optional[datetime]) -> None:
@@ -342,7 +346,7 @@ class OrderManager:
     def clear_execution_timestamp(self) -> None:
         self.set_execution_timestamp(None)
 
-    def _submit_to_broker(self, order: Order) -> None:
+    def _submit_to_broker(self, order: Order) -> Optional[str]:
         """Submit order to broker with retry logic."""
         existing_order_id = self._existing_submitted_live_order_id(order)
         if existing_order_id:
@@ -355,13 +359,44 @@ class OrderManager:
                 f"Order submit skipped as already recorded: {existing_order_id} {order.symbol} {order.side} {order.quantity}"
             )
             self._record_strategy(existing_order_id, order.strategy_name)
-            return
+            return existing_order_id
 
         broker = self.get_broker_for_symbol(order.symbol)
 
         for attempt in range(self._max_retries):
             try:
                 broker_order_id = broker.submit_order(order)
+                broker_status = self._broker_order_status(broker, broker_order_id)
+                if self._is_rejected_order_status(broker_status):
+                    metadata = self._metadata_for_order(order.order_id)
+                    reason = self._broker_rejection_reason(broker, broker_order_id) or "broker_rejected"
+                    rejected = replace(order, order_id=broker_order_id, status=OrderStatus.REJECTED)
+                    with self._lock:
+                        if order.order_id:
+                            self._orders[order.order_id] = rejected
+                        self._orders[broker_order_id] = rejected
+
+                    self.logger.warning(
+                        f"Order rejected by broker: {broker_order_id} {order.symbol} {order.side} {order.quantity}"
+                    )
+                    self._record_strategy(broker_order_id, order.strategy_name)
+                    self._remember_order_signal_metadata(broker_order_id, metadata)
+                    self._record_order(rejected, broker_order_id, "rejected", reason=reason, metadata=metadata)
+
+                    self.event_bus.publish_nowait(
+                        EventType.ORDER_REJECTED,
+                        {
+                            "order_id": broker_order_id,
+                            "symbol": order.symbol,
+                            "quantity": order.quantity,
+                            "side": order.side.value if hasattr(order.side, 'value') else order.side,
+                            "reason": reason,
+                        },
+                    )
+                    if hasattr(broker, "flush_trade_callbacks"):
+                        broker.flush_trade_callbacks()
+                    return None
+
                 updated = replace(order, order_id=broker_order_id, status=OrderStatus.SUBMITTED)
                 with self._lock:
                     if order.order_id:
@@ -385,7 +420,7 @@ class OrderManager:
                 )
                 if hasattr(broker, "flush_trade_callbacks"):
                     broker.flush_trade_callbacks()
-                return
+                return broker_order_id
 
             except Exception as e:
                 self.logger.warning(f"Order submission attempt {attempt + 1} failed: {e}")
@@ -403,6 +438,7 @@ class OrderManager:
             metadata=self._metadata_for_order(order.order_id),
         )
         self.logger.error(f"Order rejected after {self._max_retries} attempts: {order.symbol}")
+        return None
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an order."""
@@ -513,11 +549,52 @@ class OrderManager:
         risk_engine = self._risk_engine_resolver(strategy_name)
         return risk_engine or self.risk_engine
 
-    def _record_risk_order(self, risk_engine: Any, symbol: str, order_value: float) -> None:
+    def _record_risk_order(
+        self,
+        risk_engine: Any,
+        symbol: str,
+        order_value: float,
+        side: Optional[str] = None,
+    ) -> None:
+        side_value = side.value if hasattr(side, "value") else str(side or "")
+        if side_value.upper() == "SELL":
+            try:
+                risk_engine.record_order()
+            except TypeError:
+                try:
+                    risk_engine.record_order(symbol=None, order_value=0.0)
+                except TypeError:
+                    pass
+            return
         try:
             risk_engine.record_order(symbol=symbol, order_value=order_value)
         except TypeError:
             risk_engine.record_order()
+
+    def _broker_order_status(self, broker: Any, broker_order_id: str) -> Optional[Any]:
+        getter = getattr(broker, "get_order_status", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(broker_order_id)
+        except Exception:
+            return None
+
+    def _broker_rejection_reason(self, broker: Any, broker_order_id: str) -> str:
+        getter = getattr(broker, "get_order_rejection_reason", None)
+        if not callable(getter):
+            return ""
+        try:
+            reason = getter(broker_order_id)
+        except Exception:
+            return ""
+        return str(reason or "")
+
+    def _is_rejected_order_status(self, status: Optional[Any]) -> bool:
+        if status is None:
+            return False
+        value = status.value if hasattr(status, "value") else str(status)
+        return str(value).lower() == OrderStatus.REJECTED.value
 
     def _record_strategy(self, order_id: str, strategy_name: Optional[str]) -> None:
         if self._strategy_tracker is None:

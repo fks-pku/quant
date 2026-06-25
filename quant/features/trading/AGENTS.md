@@ -29,6 +29,7 @@
 - `portfolio.update_position()` SELL 路径通过 `realized_pnl` 参数跟踪已实现盈亏
 - 实盘策略分账时，OrderManager/FillHandler 必须通过 resolver 使用所属策略的 RiskEngine/SubPortfolio
 - Live/Paper strategy-mode BUY orders must pass an `available_cash` hard risk check against that strategy's shadow portfolio cash, including pending order value; a strategy may reuse returned/earned cash but must not borrow from the shared real account.
+- Live/Paper strategy-mode SELL orders must call `RiskEngine.record_order()` for rate tracking only; they must not add `order_value` into `_pending_order_values` or reduce another same-strategy BUY's available cash.
 - Strategy-mode BUY fills must debit cost plus commission from that strategy's shadow portfolio cash; the master account cash must not be used again after initial allocation.
 - Strategy `Context` must expose only a scoped order surface: no raw broker/execution manager, no global order list, and submitted orders must be attributed to the owning strategy.
 - Current daily `MARKET` execution-cost contract: D-day strategy price or D-day signal-bar close only determines `execution_cost_bps`; actual live/paper `LIMIT` price is anchored to the execution-day open/reference price when the order is submitted. Pending-only D-close generation records the bps budget and must not persist a D-close-derived limit price.
@@ -40,6 +41,8 @@
 - Live/Paper daily `MARKET` target cost bps must prefer strategy D-day price or D-day signal-bar close; `ExecutionReferencePriceResolver` supplies the execution-day open/reference anchor for actual LIMIT submission, and orders without that anchor are dropped unless `record_pending_only=True`.
 - QMT 实盘成交必须把券商佣金传入 FillHandler；缺少费用字段时，A股/ETF 按成交额费率与 5 元起点估算，并摊入策略持仓 `avg_cost`
 - PaperBroker simulated fills must use the shared `quant.runtime.execution_simulator` and `quant.runtime.execution_commission` models used by backtests; marketable LIMIT orders fill at their submitted limit price, while MARKET orders use execution-price slippage/impact; cash, avg_cost, fill callbacks, recorder rows, and dashboard NAV must all reflect the same fill price, quantity, rejection, and commission decisions.
+- PaperBroker strategy-mode simulated fills must use the injected portfolio resolver so the execution simulator checks the owning strategy SubPortfolio for SELL/T+1/cash gates, not the shared master portfolio.
+- OrderManager must inspect broker status after submit; broker-side rejected paper orders are terminal `strategy_orders` rejected facts with the broker order id and rejection reason, not submitted/no-fill rows.
 
 ## 修改守则
 
@@ -71,6 +74,7 @@
 - Post-close live/paper pending generation must use `execution.record_pending_only=True`: record accepted D-day signals for D+1 submission immediately after D-day data/OSS update, write a signal-date strategy snapshot marker even on no-action days, update risk pending state, never require D+1 bars for signal generation, and never call broker `submit_order`.
 - Post-close pending generation must be DB-idempotent by `(strategy_name, mode, signal_date, submit_date, symbol, side, quantity, order_type)` and must reuse the existing pending order id on rerun instead of inserting duplicate accepted pending rows with new random client order ids.
 - QMT real-open live submission must run the submit-only DB path (`--submit-pending-only`) and must not run simulate-daily, daily snapshot signal generation, or strategy hooks while consuming prior-day pending signals.
+- Paper D+1 replay must consume due pending DB signals through the same pending-submit path before falling back to daily hook replay; when due pending exists it restores through the signal day, skips strategy warmup/hooks, writes only execution order/fill facts, then records post-execution checkpoints and snapshots. Submitted, filled, cancelled/canceled, rejected, and failed order rows are terminal for that submit window and must not be retried by replay.
 - Live startup may reconcile broker trade history through the broker port before strategy initialization; recovery must prefer persisted non-default strategy attribution from submitted/order rows when the in-memory order map is empty after restart; when QMT trade history is empty but order history reports filled orders, recovery may synthesize missing fills from filled order history using local order/tracker attribution; unmatched fills must be audited as unresolved/default attribution instead of being silently assigned to another strategy.
 - Strategy dashboard `liquidate_stop` creates a mode-scoped liquidation plan from tracked positions and marks the control state; it must not directly submit broker orders.
 - Strategy dashboard payloads must expose per-mode operations ledger, recovery status, and top-level operations health so interrupted runs are visible before the next D-close/D+1 action cycle.

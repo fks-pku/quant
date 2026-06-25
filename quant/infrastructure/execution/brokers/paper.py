@@ -32,6 +32,7 @@ class PaperBroker(BrokerAdapter):
         market_impact_factor: float = 0.0,
         lot_sizes: Optional[Dict[str, int]] = None,
         ipo_dates: Optional[Dict[str, date]] = None,
+        portfolio_resolver: Optional[Callable[[Optional[str]], Any]] = None,
     ):
         super().__init__("paper")
         self.initial_cash = initial_cash
@@ -44,8 +45,10 @@ class PaperBroker(BrokerAdapter):
         self.lot_sizes = lot_sizes or {}
         self.ipo_dates = ipo_dates or {}
         self._portfolio_ref: Any = None
+        self._portfolio_resolver = portfolio_resolver
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
+        self._rejection_reasons: Dict[str, str] = {}
         self._lock = threading.RLock()
         self._next_order_id = 1
         self._latest_prices: Dict[str, float] = {}
@@ -57,6 +60,9 @@ class PaperBroker(BrokerAdapter):
 
     def set_portfolio(self, portfolio: Any) -> None:
         self._portfolio_ref = portfolio
+
+    def set_portfolio_resolver(self, resolver: Optional[Callable[[Optional[str]], Any]]) -> None:
+        self._portfolio_resolver = resolver
 
     @property
     def cash(self) -> float:
@@ -181,6 +187,9 @@ class PaperBroker(BrokerAdapter):
     def _simulate_fill(self, order: Order) -> Order:
         side_value = order.side.value if isinstance(order.side, OrderSide) else order.side
         order_type = order.order_type.value if isinstance(order.order_type, OrderType) else str(order.order_type)
+        portfolio = self._portfolio_for_order(order)
+        if order.order_id:
+            self._rejection_reasons.pop(str(order.order_id), None)
         runtime_order = RuntimeOrder(
             symbol=order.symbol,
             quantity=order.quantity,
@@ -193,7 +202,7 @@ class PaperBroker(BrokerAdapter):
         try:
             simulation = simulate_order_execution(
                 runtime_order,
-                self._portfolio_ref,
+                portfolio,
                 order.symbol,
                 self._execution_bar_for_order(order.symbol),
                 lot_sizes=self.lot_sizes,
@@ -207,6 +216,8 @@ class PaperBroker(BrokerAdapter):
             )
         except OrderRejectedError as exc:
             self.logger.warning(f"Paper order rejected: {exc}")
+            if order.order_id:
+                self._rejection_reasons[str(order.order_id)] = str(exc)
             return self._set_order_attrs(order, {'status': OrderStatus.REJECTED})
 
         status = OrderStatus.FILLED
@@ -226,6 +237,18 @@ class PaperBroker(BrokerAdapter):
             timestamp=simulation.fill_time,
         )
         return filled
+
+    def _portfolio_for_order(self, order: Order) -> Any:
+        resolver = self._portfolio_resolver
+        if resolver is not None:
+            try:
+                resolved = resolver(order.strategy_name)
+            except Exception as exc:
+                self.logger.warning(f"Paper portfolio resolver failed: {exc}")
+            else:
+                if resolved is not None:
+                    return resolved
+        return self._portfolio_ref
 
     def _get_current_price(self, symbol: str) -> float:
         bar = self._execution_bars.get(symbol)
@@ -492,3 +515,7 @@ class PaperBroker(BrokerAdapter):
             if order_id in self.orders:
                 return self.orders[order_id].status
             return OrderStatus.REJECTED
+
+    def get_order_rejection_reason(self, order_id: str) -> str:
+        with self._lock:
+            return self._rejection_reasons.get(str(order_id), "")

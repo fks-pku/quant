@@ -957,7 +957,7 @@ class StrategyStateStore:
                                 and abs(o.quantity - s.quantity) < 0.01
                             )
                         )
-                        and lower(o.status) in ('submitted', 'partial', 'filled', 'cancelled')
+                        and lower(o.status) in ('submitted', 'partial', 'filled', 'cancelled', 'canceled', 'rejected', 'failed')
                   )
                   and not exists (
                       select 1 from strategy_fills f

@@ -52,6 +52,18 @@ class DummyBroker:
         return True
 
 
+class RejectingBroker(DummyBroker):
+    def submit_order(self, order):
+        self.submitted.append(order)
+        return "BRK-REJECTED"
+
+    def get_order_status(self, order_id):
+        return OrderStatus.REJECTED
+
+    def get_order_rejection_reason(self, order_id):
+        return "NO_POSITION"
+
+
 class DummyPortfolio:
     def __init__(self):
         self.updated = []
@@ -1015,6 +1027,56 @@ def test_order_manager_submit_existing_signal_rejection_writes_order_not_signal(
     assert orders[0]["reason"] == "risk_check_failed"
 
 
+def test_order_manager_submit_existing_signal_records_broker_rejection(tmp_path):
+    recorder = LiveTradingRecorder(tmp_path / "live")
+    recorder.record_signal(
+        timestamp=datetime(2026, 6, 22, 15, 0),
+        strategy_name="DemoStrategy",
+        symbol="510880",
+        side="SELL",
+        quantity=200,
+        order_type="LIMIT",
+        price=3.16,
+        status="accepted",
+        metadata={"submit_date": "2026-06-23"},
+    )
+    signal = recorder.read_day("signals", "2026-06-22", strategy_name="DemoStrategy")[0]
+    broker = RejectingBroker()
+    manager = OrderManager(
+        portfolio=DummyPortfolio(),
+        risk_engine=ApprovingRisk(True),
+        event_bus=EventBus(),
+        config={"execution": {"max_retries": 1}},
+        live_recorder=recorder,
+    )
+    manager.register_broker("paper", broker)
+    manager.set_execution_timestamp(datetime(2026, 6, 23, 9, 30))
+
+    order_id = manager.submit_existing_signal(
+        symbol="510880",
+        quantity=200,
+        side="SELL",
+        order_type="LIMIT",
+        price=3.155,
+        strategy_name="DemoStrategy",
+        signal_metadata={
+            "signal_id": signal["signal_id"],
+            "submit_date": "2026-06-23",
+        },
+        client_order_id=signal.get("order_id"),
+    )
+
+    assert order_id is None
+    assert len(broker.submitted) == 1
+    assert recorder.read_day("signals", "2026-06-23", strategy_name="DemoStrategy") == []
+    orders = recorder.read_day("orders", "2026-06-23", strategy_name="DemoStrategy")
+    assert len(orders) == 1
+    assert orders[0]["signal_id"] == signal["signal_id"]
+    assert orders[0]["status"] == "rejected"
+    assert orders[0]["broker_order_id"] == "BRK-REJECTED"
+    assert orders[0]["reason"] == "NO_POSITION"
+
+
 def test_live_execution_manager_pending_only_records_cost_bps_without_execution_limit(tmp_path):
     recorder = LiveTradingRecorder(tmp_path / "live")
     broker = DummyBroker()
@@ -1070,6 +1132,48 @@ def test_order_manager_passes_side_and_pending_value_to_risk_engine(tmp_path):
     assert risk.last_check["side"] == "BUY"
     assert risk.last_record["kwargs"]["symbol"] == "600519"
     assert risk.last_record["kwargs"]["order_value"] == pytest.approx(1000.0)
+
+
+def test_order_manager_does_not_reserve_cash_for_sell_orders():
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.risk import RiskEngine
+
+    portfolio = Portfolio(initial_cash=1000.0, currency="CNY")
+    portfolio.update_position(
+        "510880",
+        100,
+        3.0,
+        300.0,
+        trade_date=date(2026, 6, 20),
+        lot_price=3.0,
+    )
+    risk = RiskEngine(
+        {
+            "risk": {
+                "max_position_pct": 1.0,
+                "max_daily_loss_pct": 1.0,
+                "max_leverage": 10.0,
+                "max_orders_minute": 100,
+            }
+        },
+        portfolio,
+        EventBus(),
+    )
+    broker = DummyBroker()
+    manager = OrderManager(
+        portfolio=portfolio,
+        risk_engine=risk,
+        event_bus=EventBus(),
+        config={"execution": {"max_retries": 1}},
+    )
+    manager.register_broker("paper", broker)
+
+    sell_id = manager.submit_order("510880", 100, "SELL", "LIMIT", 3.0, "DemoStrategy")
+    buy_id = manager.submit_order("510050", 300, "BUY", "LIMIT", 3.0, "DemoStrategy")
+
+    assert sell_id is not None
+    assert buy_id is not None
+    assert len(broker.submitted) == 2
 
 
 def test_order_manager_maps_broker_order_id_to_strategy_tracker(tmp_path):
@@ -1566,6 +1670,56 @@ def test_paper_broker_rejects_cn_limit_up_buy_like_backtest():
         )
     assert exc.value.reason == OrderRejectionReason.PRICE_AT_LIMIT
     assert diag.limit_rejected_orders == 1
+
+
+def test_paper_broker_uses_strategy_portfolio_for_simulated_sell():
+    from quant.features.trading.portfolio import Portfolio
+    from quant.features.trading.sub_portfolio import SubPortfolio
+
+    master = Portfolio(initial_cash=100000.0, currency="CNY")
+    strategy_portfolio = SubPortfolio("DemoStrategy", 10000.0, master)
+    strategy_portfolio.update_position(
+        "510880",
+        200,
+        3.0,
+        600.0,
+        trade_date=date(2026, 6, 20),
+        lot_price=3.0,
+    )
+    broker = PaperBroker(slippage_bps=0, commission_config={"CN": {"type": "cn_realistic"}})
+    broker.set_portfolio(master)
+    broker.set_portfolio_resolver(
+        lambda strategy_name: strategy_portfolio if strategy_name == "DemoStrategy" else master
+    )
+    broker.connect()
+    broker.set_previous_execution_bars([
+        {"symbol": "510880", "timestamp": datetime(2026, 6, 22), "close": 3.0},
+    ])
+    broker.set_execution_bars([
+        {
+            "symbol": "510880",
+            "timestamp": datetime(2026, 6, 23, 9, 31),
+            "open": 3.12,
+            "high": 3.13,
+            "low": 3.10,
+            "close": 3.11,
+            "volume": 1_000_000,
+        },
+    ], trading_date=date(2026, 6, 23))
+
+    order_id = broker.submit_order(Order(
+        symbol="510880",
+        quantity=200,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=3.115,
+        strategy_name="DemoStrategy",
+        timestamp=datetime(2026, 6, 23, 9, 30),
+    ))
+
+    assert broker.get_order_status(order_id) == OrderStatus.FILLED
+    assert broker.get_order(order_id).filled_quantity == pytest.approx(200)
+    assert broker.get_order(order_id).avg_fill_price == pytest.approx(3.115)
 
 
 def test_strategy_tracker_calibration_updates_live_market_values(tmp_path):
@@ -2074,6 +2228,124 @@ def test_quant_system_paper_daily_snapshot_sets_execution_timestamp_for_replay()
     assert results["DemoStrategy"].ran is True
     assert quant.engine.order_manager.cleared is True
     assert snapshots == [datetime(2026, 6, 4, 15, 0)]
+
+
+def test_quant_system_paper_daily_snapshot_submits_due_pending_signals_without_hooks(tmp_path):
+    from quant.quant_system import QuantSystem
+
+    store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")
+    pending = store.upsert_signal(signal={
+        "signal_id": "sig:paper:demo",
+        "strategy_name": "DemoStrategy",
+        "mode": "paper",
+        "timestamp": "2026-06-22T15:00:00",
+        "signal_date": "2026-06-22",
+        "record_date": "2026-06-22",
+        "submit_date": "2026-06-23",
+        "symbol": "510050",
+        "side": "BUY",
+        "quantity": 100,
+        "order_type": "LIMIT",
+        "reference_price": 3.05,
+        "status": "accepted",
+        "cost_bps": 20.0,
+    })
+
+    class FakeOrderManager:
+        def __init__(self):
+            self.execution_timestamp = None
+            self.cleared = False
+            self.submitted = []
+
+        def set_execution_timestamp(self, timestamp):
+            self.execution_timestamp = timestamp
+
+        def clear_execution_timestamp(self):
+            self.cleared = True
+            self.execution_timestamp = None
+
+        def submit_existing_signal(self, **kwargs):
+            self.submitted.append(kwargs)
+            return "PAPER-ORDER-1"
+
+    class FakeExecutionManager:
+        @staticmethod
+        def _execution_limit_price(side, execution_reference_price, cost_bps):
+            return execution_reference_price * (1 + cost_bps / 10000.0)
+
+    class FakeResolver:
+        @staticmethod
+        def resolve(symbol, side):
+            return SimpleNamespace(price=3.08)
+
+    class FakeEngine:
+        def __init__(self):
+            self.order_manager = FakeOrderManager()
+            self.execution_manager = FakeExecutionManager()
+            self.strategies = [SimpleNamespace(name="DemoStrategy", symbols=["510050"])]
+            self.inject_called = False
+
+        @staticmethod
+        def _make_execution_reference_resolver():
+            return FakeResolver()
+
+        def inject_daily_snapshot(self, signal_day, bars, execution_day):
+            self.inject_called = True
+            pytest.fail("paper due-pending replay must not regenerate strategy hooks")
+
+    snapshots = []
+    restore_calls = []
+    execution_context_days = []
+    quant = QuantSystem.__new__(QuantSystem)
+    quant.engine = FakeEngine()
+    quant.config = {
+        "system": {"mode": "paper", "market": "CN"},
+        "markets": {"CN": {"open_hour": 9, "open_minute": 30}},
+        "execution": {},
+        "live_trading": {},
+    }
+    quant._strategy_state_store = lambda: store
+    quant._assert_current_broker_safe_for_paper = lambda: None
+    quant._select_snapshot_provider = lambda provider_name: object()
+    quant._strategy_symbols = lambda: ["510050"]
+    quant._load_snapshot_bars = (
+        lambda provider, symbols, start_day, end_day=None: [
+            {"symbol": "510050", "timestamp": str(start_day), "open": 3.08, "close": 3.05}
+        ]
+    )
+    quant._warmup_daily_strategies = (
+        lambda provider, symbols, signal_day, warmup_days: pytest.fail("paper due-pending replay must not warm up strategy hooks")
+    )
+    quant._prepare_paper_execution_context = (
+        lambda provider, symbols, execution_day: execution_context_days.append(execution_day)
+    )
+    quant._restore_strategy_runtime_checkpoints_for_daily = (
+        lambda signal_day, *, include_signal_day: restore_calls.append((signal_day, include_signal_day))
+    )
+    quant._record_live_strategy_snapshots = lambda timestamp=None: snapshots.append(timestamp)
+    quant._record_strategy_runtime_checkpoints = lambda as_of_date, *, stage: None
+    quant._strategy_accepts_live_signals = lambda strategy_name: True
+    quant.logger = SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None)
+
+    results = QuantSystem.run_daily_snapshot_once(
+        quant,
+        "2026-06-22",
+        execution_date="2026-06-23",
+        warmup_days=3,
+        provider_name="duckdb",
+    )
+
+    submitted = quant.engine.order_manager.submitted
+    assert quant.engine.inject_called is False
+    assert restore_calls == [(date(2026, 6, 22), True)]
+    assert execution_context_days == [date(2026, 6, 23)]
+    assert len(submitted) == 1
+    assert submitted[0]["signal_metadata"]["signal_id"] == pending["signal_id"]
+    assert submitted[0]["strategy_name"] == "DemoStrategy"
+    assert submitted[0]["price"] == pytest.approx(3.08 * (1 + 20.0 / 10000.0))
+    assert quant.engine.order_manager.cleared is True
+    assert snapshots == [datetime(2026, 6, 23, 15, 0)]
+    assert results["DemoStrategy"].ran is True
 
 
 def test_quant_system_records_cash_only_subportfolio_snapshots(tmp_path):

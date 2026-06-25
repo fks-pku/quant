@@ -114,6 +114,50 @@ def test_strategy_state_store_persists_flexible_runtime_checkpoint(tmp_path):
     assert restored["run_id"] == "run-a"
 
 
+def test_strategy_state_store_rejected_submit_attempt_is_not_due_pending(tmp_path):
+    store = StrategyStateStore(tmp_path / "strategy_dashboard.duckdb")
+    store.upsert_signal(signal={
+        "signal_id": "sig:paper:rejected",
+        "strategy_name": "DemoStrategy",
+        "mode": "paper",
+        "timestamp": "2026-06-22T15:00:00",
+        "signal_date": "2026-06-22",
+        "record_date": "2026-06-22",
+        "submit_date": "2026-06-23",
+        "symbol": "518880",
+        "side": "BUY",
+        "quantity": 1100,
+        "order_type": "LIMIT",
+        "reference_price": 8.65,
+        "status": "accepted",
+    })
+    store.upsert_order(order={
+        "signal_id": "sig:paper:rejected",
+        "strategy_name": "DemoStrategy",
+        "mode": "paper",
+        "timestamp": "2026-06-23T09:30:00",
+        "signal_date": "2026-06-22",
+        "submit_date": "2026-06-23",
+        "record_date": "2026-06-23",
+        "symbol": "518880",
+        "side": "BUY",
+        "quantity": 1100,
+        "order_type": "LIMIT",
+        "price": 8.67,
+        "status": "rejected",
+        "order_id": "REJ-1",
+        "failure_reason": "available_cash",
+    })
+
+    rows = store.get_pending_signals_for_submit(
+        mode="paper",
+        signal_date="2026-06-22",
+        submit_date="2026-06-23",
+    )
+
+    assert rows == []
+
+
 @pytest.mark.skip(reason="JSONL mode_records removed in simplified state store")
 def test_strategy_control_action_writes_mode_operation(tmp_path):
     control_file = tmp_path / "var" / "strategy_controls.json"

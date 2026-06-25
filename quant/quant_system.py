@@ -39,6 +39,7 @@ from quant.infrastructure.execution.strategy_ledger import sync_broker_trade_his
 from quant.infrastructure.execution.strategy_controls import get_strategy_control
 from quant.features.portfolio.tracker import StrategyPositionTracker, get_tracker
 from quant.features.strategies.registry import StrategyRegistry
+from quant.runtime.daily_strategy_runner import DailyRunResult
 from quant.runtime.strategy_cycle import feed_strategy_bars, start_strategy
 from quant.shared.utils.config_loader import ConfigLoader
 from quant.shared.utils.logger import setup_logger
@@ -185,6 +186,7 @@ class QuantSystem:
                 market_impact_factor=market_impact_factor,
             )
             broker.set_portfolio(self.engine.portfolio)
+            broker.set_portfolio_resolver(self._portfolio_for_strategy)
             broker.connect()
             self.engine.set_broker(broker)
             self.logger.info("Paper broker initialized")
@@ -919,13 +921,21 @@ class QuantSystem:
             else self.config.get("live_trading", {}).get("daily_snapshot_warmup_days", 0)
         )
         pending_only = bool(self.config.get("execution", {}).get("record_pending_only", False))
+        system_mode = self._system_mode_text()
+        due_pending_signals = []
+        if not pending_only and system_mode == "paper":
+            due_pending_signals = self._due_pending_signals_for_submit(
+                mode="paper",
+                signal_day=signal_day,
+                execution_day=execution_day,
+            )
         for strategy in self.engine.strategies:
             start_strategy(strategy)
         self._restore_strategy_runtime_checkpoints_for_daily(
             signal_day,
-            include_signal_day=pending_only,
+            include_signal_day=pending_only or bool(due_pending_signals),
         )
-        if warmup_count > 0:
+        if warmup_count > 0 and not due_pending_signals:
             self._warmup_daily_strategies(provider, symbols, signal_day, warmup_count)
         bars = self._load_snapshot_bars(provider, symbols, signal_day)
         if not bars:
@@ -933,6 +943,30 @@ class QuantSystem:
         order_manager = getattr(self.engine, "order_manager", None)
         if not pending_only:
             self._prepare_paper_execution_context(provider, symbols, execution_day)
+        if due_pending_signals:
+            submit_result = self._submit_due_pending_signals_for_mode(
+                mode="paper",
+                signal_day=signal_day,
+                execution_day=execution_day,
+                signals=due_pending_signals,
+            )
+            self.logger.info(
+                "Paper pending submit result signal_date=%s execution_date=%s pending=%s submitted=%s rejected=%s skipped=%s",
+                submit_result["signal_date"],
+                submit_result["execution_date"],
+                submit_result["pending_count"],
+                submit_result["submitted_count"],
+                submit_result["rejected_count"],
+                submit_result["skipped_count"],
+            )
+            self._record_live_strategy_snapshots(
+                timestamp=datetime.combine(execution_day, datetime.min.time()).replace(hour=15),
+            )
+            self._record_strategy_runtime_checkpoints(
+                execution_day,
+                stage="post_execution",
+            )
+            return self._pending_signal_daily_results(signal_day, bars, due_pending_signals)
         signal_timestamp_set = False
         signal_submit_date_set = False
         execution_timestamp_set = False
@@ -994,6 +1028,34 @@ class QuantSystem:
         execution_day = self._coerce_date(execution_date)
         if signal_day is None or execution_day is None:
             raise ValueError("signal_date and execution_date are required")
+        return self._submit_due_pending_signals_for_mode(
+            mode="live",
+            signal_day=signal_day,
+            execution_day=execution_day,
+        )
+
+    def _due_pending_signals_for_submit(
+        self,
+        *,
+        mode: str,
+        signal_day: date,
+        execution_day: date,
+    ) -> list:
+        store = self._strategy_state_store()
+        return store.get_pending_signals_for_submit(
+            mode=mode,
+            signal_date=signal_day.isoformat(),
+            submit_date=execution_day.isoformat(),
+        )
+
+    def _submit_due_pending_signals_for_mode(
+        self,
+        *,
+        mode: str,
+        signal_day: date,
+        execution_day: date,
+        signals: Optional[list] = None,
+    ) -> dict:
         order_manager = getattr(self.engine, "order_manager", None)
         if order_manager is None:
             raise RuntimeError("OrderManager is required to submit pending signals")
@@ -1001,12 +1063,12 @@ class QuantSystem:
         if execution_manager is None:
             raise RuntimeError("LiveExecutionManager is required to submit pending signals")
 
-        store = self._strategy_state_store()
-        signals = store.get_pending_signals_for_submit(
-            mode="live",
-            signal_date=signal_day.isoformat(),
-            submit_date=execution_day.isoformat(),
-        )
+        if signals is None:
+            signals = self._due_pending_signals_for_submit(
+                mode=mode,
+                signal_day=signal_day,
+                execution_day=execution_day,
+            )
         market = str(self.config.get("system", {}).get("market", "CN") or "CN")
         market_config = self.config.get("markets", {}).get(market, {})
         execution_timestamp = datetime.combine(execution_day, datetime.min.time()).replace(
@@ -1080,6 +1142,19 @@ class QuantSystem:
             "rejected_count": rejected,
             "skipped_count": skipped,
         }
+
+    def _pending_signal_daily_results(self, signal_day: date, bars: list, signals: list) -> dict:
+        results = {}
+        for signal in signals:
+            strategy_name = str(signal.get("strategy_name") or "default")
+            if strategy_name in results:
+                continue
+            results[strategy_name] = DailyRunResult(
+                trading_date=signal_day,
+                ran=True,
+                bar_count=len(bars),
+            )
+        return results
 
     def _pending_signal_cost_bps(self, signal: dict) -> float:
         for key in ("cost_bps", "execution_cost_bps"):
