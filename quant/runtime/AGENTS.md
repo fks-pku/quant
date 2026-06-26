@@ -31,6 +31,7 @@ Current daily target execution-cost contract: D-day strategy price or signal-bar
 
 - 回测和实盘都通过 `feed_strategy_bars()` 喂 bar，避免 batch 策略在不同模式下走不同入口
 - 回测、模拟盘、实盘的收盘信号触发必须通过 `run_daily_snapshots()`；只允许 D+1 下单价格、撮合、成交结果按模式分化
+- `run_daily_snapshots()` validates strategy `required_fields` before calling `on_data_batch` or `on_after_trading`; missing fields are a data-contract failure and must be visible in `DailyRunResult.missing_fields`.
 - Runtime helper 不保存跨事件状态，不生成订单，不改变策略调仓 gate
 - 日线策略的完整性检查必须以策略 `symbols` 为 required symbols；strict 模式遇到缺失或跨日 bar 必须跳过策略 hook
 - Daily `MARKET` target generation must separate D-day cost bps estimation from execution-day LIMIT anchoring: strategy price/signal close is the cost reference, while resolver open/reference is the D+1 execution anchor.

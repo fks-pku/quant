@@ -10,7 +10,18 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from quant.domain.ports.data_feed import DataFeed
-from quant.infrastructure.data.storage_duckdb import DuckDBStorage, _DEFAULT_DB, _DEFAULT_STATUS_DB
+from quant.infrastructure.data.storage_duckdb import (
+    DuckDBStorage,
+    _DEFAULT_CORPORATE_ACTIONS_DB,
+    _DEFAULT_DAILY_BASIC_DB,
+    _DEFAULT_DB,
+    _DEFAULT_ETF_DB,
+    _DEFAULT_FINANCIAL_INDICATOR_DB,
+    _DEFAULT_FUND_META_DB,
+    _DEFAULT_FUND_NAV_DB,
+    _DEFAULT_INDEX_DB,
+    _DEFAULT_STATUS_DB,
+)
 from quant.shared.utils.logger import setup_logger
 
 
@@ -20,15 +31,31 @@ class DuckDBProvider(DataFeed):
         db_path: str = _DEFAULT_DB,
         use_security_status: bool = True,
         status_db_path: str = _DEFAULT_STATUS_DB,
+        daily_basic_db_path: str = _DEFAULT_DAILY_BASIC_DB,
+        financial_indicator_db_path: str = _DEFAULT_FINANCIAL_INDICATOR_DB,
+        etf_db_path: str = _DEFAULT_ETF_DB,
+        index_db_path: str = _DEFAULT_INDEX_DB,
+        corporate_actions_db_path: str = _DEFAULT_CORPORATE_ACTIONS_DB,
+        fund_meta_db_path: str = _DEFAULT_FUND_META_DB,
+        fund_nav_db_path: str = _DEFAULT_FUND_NAV_DB,
         parquet_lake_root: Optional[str] = None,
         prefer_parquet_lake: Optional[bool] = None,
+        include_financial_indicators: bool = True,
     ):
         self._connected = False
         self._db_path = db_path
         self._use_security_status = use_security_status
         self._status_db_path = status_db_path
+        self._daily_basic_db_path = daily_basic_db_path
+        self._financial_indicator_db_path = financial_indicator_db_path
+        self._etf_db_path = etf_db_path
+        self._index_db_path = index_db_path
+        self._corporate_actions_db_path = corporate_actions_db_path
+        self._fund_meta_db_path = fund_meta_db_path
+        self._fund_nav_db_path = fund_nav_db_path
         self._parquet_lake_root = parquet_lake_root
         self._prefer_parquet_lake = prefer_parquet_lake
+        self._include_financial_indicators = bool(include_financial_indicators)
         self._storage: Optional[DuckDBStorage] = None
         self.logger = setup_logger("DuckDBProvider")
 
@@ -42,8 +69,16 @@ class DuckDBProvider(DataFeed):
             read_only=True,
             use_security_status=self._use_security_status,
             status_db_path=self._status_db_path,
+            daily_basic_db_path=self._daily_basic_db_path,
+            financial_indicator_db_path=self._financial_indicator_db_path,
+            etf_db_path=self._etf_db_path,
+            index_db_path=self._index_db_path,
+            corporate_actions_db_path=self._corporate_actions_db_path,
+            fund_meta_db_path=self._fund_meta_db_path,
+            fund_nav_db_path=self._fund_nav_db_path,
             parquet_lake_root=self._parquet_lake_root,
             prefer_parquet_lake=self._prefer_parquet_lake,
+            include_financial_indicators=self._include_financial_indicators,
         )
         self._connected = True
         tables = self._storage.list_tables()

@@ -53,6 +53,7 @@ Implements domain ports (adapters). Contains EventBus, data providers, storage i
 - Cost-bounded live execution must preserve explicit LIMIT prices; only strategy `MARKET + reference price` signals are converted to bounded LIMIT orders.
 - Bare 6-digit CN codes can be ambiguous between stocks and indices (for example `000001`, `000016`, `000905`). Default provider/storage routing treats them as stocks; index ingestion must use `TushareProvider.fetch_index_daily_with_hfq()` and `DuckDBStorage.save_cn_index_bars()`.
 - Tushare dividend rows can contain repeated lifecycle records for the same `(symbol, ex_date)`. `DuckDBStorage.save_cn_dividends()` must coalesce them before writing because `cn_dividends` is keyed by `(symbol, ex_date)`.
+- CN daily `DuckDBProvider` reads must expose the same `daily_basic` valuation/capacity and PIT `financial_indicators` fields used by strict research backtests. Promoted strategies declare their runtime data contract through `required_fields`; provider/storage changes must satisfy that declaration or the shared runner must mark the strategy not runnable instead of silently producing no signals.
 
 ## Research Adapters
 

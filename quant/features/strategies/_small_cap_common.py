@@ -111,6 +111,35 @@ class AShareSmallCapRotationBase(Strategy):
     def symbols(self) -> List[str]:
         return self._symbols
 
+    @property
+    def required_fields(self) -> List[str]:
+        return [
+            "close",
+            "volume",
+            "turnover",
+            "adj_close",
+            "total_mv",
+            "circ_mv",
+            "pe",
+            "pe_ttm",
+            "pb",
+            "ps",
+            "ps_ttm",
+            "turnover_rate",
+            "turnover_rate_f",
+            "volume_ratio",
+            "is_st",
+            "_suspended",
+            "tradable",
+            "has_daily_bar",
+            "is_listed",
+            "list_status",
+        ]
+
+    def required_field_symbols(self) -> List[str]:
+        excluded = {self.market_timing_symbol, *self.broad_index_symbols}
+        return [symbol for symbol in self._symbols if symbol not in excluded]
+
     def on_data(self, context: "Context", data: Any) -> None:
         symbol = str(self._value(data, "symbol", "") or "")
         if not symbol or (self._symbol_set and symbol not in self._symbol_set):

@@ -106,6 +106,14 @@ _OPTIONAL_READ_BAR_COLUMNS = (
     "total_share",
     "float_share",
     "free_share",
+    "volume_ratio",
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "dv_ttm",
 )
 
 
@@ -125,6 +133,7 @@ class DuckDBStorage(Storage):
         fund_nav_db_path: str = _DEFAULT_FUND_NAV_DB,
         parquet_lake_root: Optional[str] = None,
         prefer_parquet_lake: Optional[bool] = None,
+        include_financial_indicators: bool = False,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +147,7 @@ class DuckDBStorage(Storage):
         self._daily_basic_db_path = Path(daily_basic_db_path)
         self._daily_basic_attach_failed = False
         self._financial_indicator_db_path = Path(financial_indicator_db_path)
+        self._include_financial_indicators = bool(include_financial_indicators)
         self._etf_db_path = Path(etf_db_path)
         self._index_db_path = Path(index_db_path)
         self._corporate_actions_db_path = Path(corporate_actions_db_path)
@@ -613,10 +623,10 @@ class DuckDBStorage(Storage):
         if table_name == _CN_DAILY_TABLE and self._is_daily_timeframe(timeframe):
             status_frame = self._get_status_enriched_cn_bars([symbol], start, end)
             if status_frame is not None:
-                return status_frame
+                return self._add_financial_indicators(status_frame)
             sidecar_frame = self._get_daily_basic_enriched_cn_bars([symbol], start, end)
             if sidecar_frame is not None:
-                return sidecar_frame
+                return self._add_financial_indicators(sidecar_frame)
         if table_name == f"{_ETF_SCHEMA}.{_CN_DAILY_TABLE}" and self._is_daily_timeframe(timeframe):
             fund_frame = self._get_fund_enriched_bars([symbol], start, end)
             if fund_frame is not None:
@@ -641,7 +651,10 @@ class DuckDBStorage(Storage):
 
         query += " ORDER BY timestamp ASC"
         with self._lock:
-            return self.conn.execute(query, params).fetchdf()
+            frame = self.conn.execute(query, params).fetchdf()
+        if table_name == _CN_DAILY_TABLE and self._is_daily_timeframe(timeframe):
+            return self._add_financial_indicators(frame)
+        return frame
 
     def get_bars_for_symbols(
         self,
@@ -672,11 +685,13 @@ class DuckDBStorage(Storage):
                 if table_name == _CN_DAILY_TABLE and self._is_daily_timeframe(timeframe):
                     frame = self._get_status_enriched_cn_bars(table_symbols, start, end)
                     if frame is not None:
+                        frame = self._add_financial_indicators(frame)
                         if not frame.empty:
                             frames.append(frame)
                         continue
                     frame = self._get_daily_basic_enriched_cn_bars(table_symbols, start, end)
                     if frame is not None:
+                        frame = self._add_financial_indicators(frame)
                         if not frame.empty:
                             frames.append(frame)
                         continue
@@ -698,6 +713,8 @@ class DuckDBStorage(Storage):
                     params.append(end)
                 query += " ORDER BY symbol ASC, timestamp ASC"
                 frame = self.conn.execute(query, params).fetchdf()
+                if table_name == _CN_DAILY_TABLE and self._is_daily_timeframe(timeframe):
+                    frame = self._add_financial_indicators(frame)
                 if not frame.empty:
                     frames.append(frame)
 
@@ -910,10 +927,12 @@ class DuckDBStorage(Storage):
     def _daily_basic_sidecar_columns(self, existing_bar_columns: List[str]) -> List[str]:
         existing = set(existing_bar_columns)
         daily_basic_columns = self._daily_basic_columns()
+        key_columns = {"trade_date", "symbol", "ts_code", "updated_at"}
         return [
             col
-            for col in _OPTIONAL_READ_BAR_COLUMNS
+            for col in sorted(daily_basic_columns)
             if col in daily_basic_columns and col not in existing
+            and col not in key_columns
         ]
 
     def _get_daily_basic_enriched_cn_bars(
@@ -958,6 +977,113 @@ class DuckDBStorage(Storage):
         except Exception as e:
             self.logger.warning(f"Daily basic sidecar join failed, falling back to OHLC bars: {e}")
             return None
+
+    def _financial_indicator_available(self) -> bool:
+        if not self._include_financial_indicators:
+            return False
+        if self._using_parquet_lake:
+            return self._table_exists(f"{_FINANCIAL_INDICATOR_SCHEMA}.{_FINANCIAL_INDICATOR_TABLE}")
+        if not self._financial_indicator_db_path.exists():
+            return False
+        if not self._ensure_sidecar_attached(_FINANCIAL_INDICATOR_SCHEMA, self._financial_indicator_db_path):
+            return False
+        return self._table_exists(f"{_FINANCIAL_INDICATOR_SCHEMA}.{_FINANCIAL_INDICATOR_TABLE}")
+
+    def _financial_indicator_columns(self) -> List[str]:
+        if not self._financial_indicator_available():
+            return []
+        try:
+            if self._using_parquet_lake:
+                rows = self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = ?
+                      AND table_name = ?
+                    ORDER BY ordinal_position
+                    """,
+                    [_FINANCIAL_INDICATOR_SCHEMA, _FINANCIAL_INDICATOR_TABLE],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_catalog = ?
+                      AND table_name = ?
+                    ORDER BY ordinal_position
+                    """,
+                    [_FINANCIAL_INDICATOR_SCHEMA, _FINANCIAL_INDICATOR_TABLE],
+                ).fetchall()
+        except Exception:
+            return []
+        keys = {"symbol", "ts_code", "ann_date", "end_date", "updated_at"}
+        return [str(row[0]) for row in rows if str(row[0]) not in keys]
+
+    def _add_financial_indicators(self, frame: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        if frame is None or frame.empty:
+            return frame
+        columns = self._financial_indicator_columns()
+        if not columns:
+            return frame
+
+        result = frame.copy()
+        result["_finance_order"] = range(len(result))
+        result["_trade_ts"] = pd.to_datetime(result["timestamp"], errors="coerce")
+        symbols = [str(symbol) for symbol in result["symbol"].dropna().astype(str).unique().tolist()]
+        if not symbols:
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+
+        end_day = result["_trade_ts"].dt.date.max()
+        placeholders = ", ".join("?" for _ in symbols)
+        select_cols = ", ".join(["symbol", "ann_date", "end_date", *columns])
+        try:
+            financial = self.conn.execute(
+                f"""
+                SELECT {select_cols}
+                FROM {_FINANCIAL_INDICATOR_SCHEMA}.{_FINANCIAL_INDICATOR_TABLE}
+                WHERE symbol IN ({placeholders})
+                  AND ann_date <= ?
+                ORDER BY symbol, ann_date, end_date
+                """,
+                [*symbols, end_day],
+            ).fetchdf()
+        except Exception as e:
+            self.logger.warning(f"Financial indicator PIT join failed: {e}")
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+
+        if financial.empty:
+            for column in columns:
+                if column not in result.columns:
+                    result[column] = pd.NA
+            return result.drop(columns=["_finance_order", "_trade_ts"])
+
+        financial["_ann_ts"] = pd.to_datetime(financial["ann_date"], errors="coerce")
+        pieces = []
+        finance_columns = ["_ann_ts", *columns]
+        for symbol, group in result.groupby("symbol", sort=False):
+            symbol_financial = financial[financial["symbol"].astype(str) == str(symbol)].sort_values(
+                ["_ann_ts", "end_date"]
+            )
+            ordered_group = group.sort_values("_trade_ts")
+            if symbol_financial.empty:
+                merged = ordered_group.copy()
+                for column in columns:
+                    if column not in merged.columns:
+                        merged[column] = pd.NA
+            else:
+                merged = pd.merge_asof(
+                    ordered_group,
+                    symbol_financial[finance_columns],
+                    left_on="_trade_ts",
+                    right_on="_ann_ts",
+                    direction="backward",
+                )
+            pieces.append(merged)
+        merged_frame = pd.concat(pieces, ignore_index=True).sort_values("_finance_order")
+        return merged_frame.drop(
+            columns=[column for column in ("_finance_order", "_trade_ts", "_ann_ts") if column in merged_frame.columns]
+        )
 
     def _status_available(self) -> bool:
         if not self._use_security_status or self._status_attach_failed:

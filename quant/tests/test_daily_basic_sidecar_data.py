@@ -3,6 +3,7 @@ from datetime import datetime
 import pytest
 
 from quant.infrastructure.data.storage_duckdb import DuckDBStorage
+from quant.infrastructure.data.providers.duckdb_provider import DuckDBProvider
 from quant.infrastructure.research.market_data.duckdb_research_market_data import DuckDBResearchMarketData
 
 
@@ -148,6 +149,106 @@ def test_storage_reads_cn_market_cap_from_sidecar_without_ochl_columns(tmp_path)
     assert bars["total_mv"].iloc[0] == pytest.approx(12345)
     assert bars["circ_mv"].iloc[0] == pytest.approx(6789)
     assert bars["turnover_rate_f"].iloc[0] == pytest.approx(2.5)
+    assert bars["pe"].iloc[0] == pytest.approx(10)
+    assert bars["pe_ttm"].iloc[0] == pytest.approx(11)
+    assert bars["pb"].iloc[0] == pytest.approx(1.2)
+    assert bars["ps"].iloc[0] == pytest.approx(2.1)
+    assert bars["ps_ttm"].iloc[0] == pytest.approx(2.2)
+    assert bars["dv_ratio"].iloc[0] == pytest.approx(0.3)
+    assert bars["dv_ttm"].iloc[0] == pytest.approx(0.4)
+
+
+def test_duckdb_provider_reads_daily_snapshot_sidecar_fields(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    basic_db = tmp_path / "cn_daily_basic.duckdb"
+    status_db = tmp_path / "security_status.duckdb"
+    _create_market_db(duckdb, market_db)
+    _create_basic_db(duckdb, basic_db)
+    _create_status_db(duckdb, status_db)
+
+    provider = DuckDBProvider(
+        db_path=str(market_db),
+        use_security_status=True,
+        status_db_path=str(status_db),
+        daily_basic_db_path=str(basic_db),
+    )
+    provider.connect()
+    try:
+        bars = provider.get_bars_for_symbols(
+            ["600001"],
+            datetime(2024, 1, 2),
+            datetime(2024, 1, 2),
+            "1d",
+        )
+    finally:
+        provider.disconnect()
+
+    record = bars.iloc[0].to_dict()
+    assert record["total_mv"] == pytest.approx(12345)
+    assert record["circ_mv"] == pytest.approx(6789)
+    assert record["pe_ttm"] == pytest.approx(11)
+    assert record["ps_ttm"] == pytest.approx(2.2)
+    assert bool(record["is_st"]) is False
+    assert bool(record["tradable"]) is True
+    assert record["list_status"] == "L"
+
+
+def test_duckdb_provider_reads_financial_indicators_pit(tmp_path):
+    duckdb = pytest.importorskip("duckdb")
+    market_db = tmp_path / "quant.duckdb"
+    financial_db = tmp_path / "cn_financial_indicators.duckdb"
+    conn = duckdb.connect(str(market_db))
+    conn.execute(
+        """
+        CREATE TABLE daily_cn_ochl (
+            timestamp TIMESTAMP,
+            symbol VARCHAR,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            turnover DOUBLE,
+            adj_open DOUBLE,
+            adj_high DOUBLE,
+            adj_low DOUBLE,
+            adj_close DOUBLE,
+            adj_factor DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO daily_cn_ochl VALUES
+        ('2024-04-10', '600001', 10, 11, 9, 10.5, 1000, 10500, 10, 11, 9, 10.5, 1),
+        ('2024-05-02', '600001', 11, 12, 10, 11.5, 1000, 11500, 11, 12, 10, 11.5, 1)
+        """
+    )
+    conn.close()
+    _create_financial_db(duckdb, financial_db)
+
+    provider = DuckDBProvider(
+        db_path=str(market_db),
+        use_security_status=False,
+        status_db_path=str(tmp_path / "missing_status.duckdb"),
+        daily_basic_db_path=str(tmp_path / "missing_basic.duckdb"),
+        financial_indicator_db_path=str(financial_db),
+        include_financial_indicators=True,
+    )
+    provider.connect()
+    try:
+        bars = provider.get_bars_for_symbols(
+            ["600001"],
+            datetime(2024, 4, 10),
+            datetime(2024, 5, 2),
+            "1d",
+        )
+    finally:
+        provider.disconnect()
+
+    assert bars["roe"].tolist() == pytest.approx([5.0, 10.0])
+    assert bars["netprofit_yoy"].tolist() == pytest.approx([4.0, 12.0])
 
 
 def test_research_market_data_reads_sidecar_fields_without_ochl_pollution(tmp_path):

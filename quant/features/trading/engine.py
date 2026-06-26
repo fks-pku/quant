@@ -289,11 +289,12 @@ class Engine:
             self._daily_snapshot_results[(trading_date, self._strategy_name(strategy))] = result
             if not result.ran:
                 self.logger.warning(
-                    "Skipped daily snapshot for %s on %s: missing=%s stale=%s",
+                    "Skipped daily snapshot for %s on %s: missing=%s stale=%s missing_fields=%s",
                     self._strategy_name(strategy),
                     trading_date,
                     result.missing_symbols,
                     result.stale_symbols,
+                    result.missing_fields,
                 )
         self._completed_daily_snapshots.discard(trading_date)
         self._daily_bar_buffer.pop(trading_date, None)

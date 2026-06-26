@@ -14,6 +14,8 @@ Allowed live-only differences are DB-backed state bridging and QMT real order su
 
 No other strategy lifecycle, risk gate, signal filtering, cost-budget, cash attribution, or dashboard status semantics may diverge between live and backtest. If the same strategy, data snapshot, configuration, initial cash, and restored holdings are supplied, any difference outside DB persistence and QMT external execution facts is a bug.
 
+The same boundary applies to daily bar data. Strategies declare `required_fields`; paper/live DuckDB providers must load those PIT sidecar fields from the same configured data roots used by strict backtests. The shared `run_daily_snapshots()` runner validates required field presence before `on_data_batch` or `on_after_trading`; missing fields are a not-runnable data contract failure, not a silent no-signal day. DB checkpoint storage may restore strategy runtime state, but it must not alter universe selection, bar fields, strategy filters, or lifecycle order.
+
 ## 通用约定
 
 | 组件 | 职责 |

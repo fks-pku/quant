@@ -14,7 +14,7 @@
 | `commission.py` | Shared commission compatibility entrypoint; re-exports `quant.runtime.execution_commission` so backtest and paper use one fee model |
 | `quant/runtime/execution_market_rules.py` | Shared implementation behind `market_rules.py`; backtest keeps compatibility imports only |
 | `quant/runtime/execution_simulator.py` | Shared pre-fill matching kernel used by backtest `order_executor.py` and infrastructure `PaperBroker` |
-| `order_executor.py` | 订单执行管线：成交价解析（MARKET/LIMIT）→手数→成交量→冲击成本→佣金→资金校验→成交 |
+| `order_executor.py` | 订单执行适配层：调用共享 simulator 获得成交事实，再生成 Trade 并更新 Portfolio |
 | `dividend_processor.py` | 除权除息：现金/送股、CN 红利税 |
 | `portfolio_factory.py` | 组合/风控创建：单 Portfolio 和 SubPortfolio 模式 |
 | `nav_calculator.py` | NAV 计算 + 未平仓提取 |
@@ -103,12 +103,12 @@ while current_date ≤ end:
 ## Known Pitfalls
 
 - Backtest signal generation after daily order-manager prep must call runtime `run_daily_snapshots()`; do not split D-close feed, portfolio close-price marking, and `after_trading` into a separate backtest-only path.
-- Backtest `execute_order()` must delegate deterministic pre-fill matching to `quant.runtime.execution_simulator`; keep Trade construction and Portfolio mutation in backtest, but do not fork price-limit, marketability, lot, volume, impact, cash, settlement, or commission decisions from PaperBroker.
+- Backtest `execute_order()` must delegate deterministic pre-fill matching to `quant.runtime.execution_simulator`; keep Trade construction and Portfolio mutation in backtest, but consume simulator `quantity/fill_price/commission/cost_breakdown` as authoritative and do not fork price-limit, marketability, lot, volume, impact, cash, settlement, or commission decisions from PaperBroker.
 - CN commission routing is security-type aware: stock-like 6-digit CN symbols keep stamp duty, while ETF/LOF/fund code prefixes use the CN fund commission path with no stock stamp duty. The default backtest/paper CN config is `{"type": "cn_realistic"}` with the realistic minimum; research scripts may explicitly override fund rates/minimums, but PaperBroker and backtest must consume the same shared runtime commission model for the same config.
 - BUY liquidity control is a global execution invariant: after market impact is applied, final BUY notional must still be `<= max_participation_rate * ADV value` (default research gate 5% ADV). Do not implement per-strategy sizing that assumes this cap can be bypassed.
 - `prev_close_bars` 在 Step ② 中必须在 `prev_bars` 更新之前捕获，否则涨跌停检查会用今日数据
 - `portfolio.reset_daily()` 和 `risk_engine.reset_daily()` 在每个日循环末尾调用，勿遗漏
-- `order_executor` 中 SELL 路径的 settled_quantity 检查：CN T+1 用 `pos.settled_quantity()`，其他市场用 `pos.quantity`
+- `order_executor` 中 SELL 路径不得重新检查 settled quantity；CN T+1/T+0 数量截断由共享 simulator 决定，回测只按 simulator 返回的成交数量切 FIFO lots。
 - 未成交订单不重试：策略应自行在 `on_after_trading` 中基于最新数据重新判断
 - `_BacktestContext` 和 `_BacktestOrderManager` 定义在 `entities.py`，策略只能看到 scoped `order_manager` 代理；不要把 raw `_BacktestOrderManager` 暴露给策略
 - Engine 通过 `_BacktestContext.prepare_for_trading_day()` 和 `drain_orders()` 公开方法与 Context 交互，不要直接访问 `_pending_orders`、`_current_date`、`_last_prices` 等私有属性

@@ -29,6 +29,7 @@ class DailyRunResult:
     missing_symbols: tuple[str, ...] = ()
     stale_symbols: tuple[str, ...] = ()
     duplicate_symbols: tuple[str, ...] = ()
+    missing_fields: tuple[str, ...] = ()
 
 
 def extract_bar_symbol(bar: Any) -> Optional[str]:
@@ -131,12 +132,13 @@ def run_daily_snapshots(
         raise ValueError(f"Cannot coerce trading_date to date: {trading_date!r}")
 
     full_snapshot = build_daily_snapshot(materialized_bars, normalized_date)
-    runnable: list[tuple[int, Any, DailySnapshot]] = []
+    runnable: list[tuple[int, Any, DailySnapshot, tuple[str, ...]]] = []
     results: list[Optional[tuple[Any, DailyRunResult]]] = [None] * len(strategies)
 
     for index, strategy in enumerate(strategies):
         snapshot = _build_strategy_snapshot(strategy, normalized_date, materialized_bars)
-        if strict and (snapshot.missing_symbols or snapshot.stale_symbols):
+        missing_fields = _missing_required_fields(strategy, snapshot)
+        if strict and (snapshot.missing_symbols or snapshot.stale_symbols or missing_fields):
             results[index] = (
                 strategy,
                 DailyRunResult(
@@ -146,12 +148,13 @@ def run_daily_snapshots(
                     missing_symbols=snapshot.missing_symbols,
                     stale_symbols=snapshot.stale_symbols,
                     duplicate_symbols=snapshot.duplicate_symbols,
+                    missing_fields=missing_fields,
                 ),
             )
             continue
-        runnable.append((index, strategy, snapshot))
+        runnable.append((index, strategy, snapshot, missing_fields))
 
-    for _, strategy, snapshot in runnable:
+    for _, strategy, snapshot, _ in runnable:
         if call_before:
             before_trading(strategy, snapshot.trading_date)
         feed_strategy_bars(strategy, _ordered_bars(snapshot))
@@ -159,7 +162,7 @@ def run_daily_snapshots(
     if runnable and after_feed is not None:
         after_feed(full_snapshot)
 
-    for index, strategy, snapshot in runnable:
+    for index, strategy, snapshot, missing_fields in runnable:
         after_trading(strategy, snapshot.trading_date)
         results[index] = (
             strategy,
@@ -170,6 +173,7 @@ def run_daily_snapshots(
                 missing_symbols=snapshot.missing_symbols,
                 stale_symbols=snapshot.stale_symbols,
                 duplicate_symbols=snapshot.duplicate_symbols,
+                missing_fields=missing_fields,
             ),
         )
 
@@ -205,6 +209,68 @@ def _ordered_bars(snapshot: DailySnapshot) -> list[Any]:
         if symbol not in seen:
             ordered.append(bar)
     return ordered
+
+
+def _strategy_required_fields(strategy: Any) -> tuple[str, ...]:
+    fields = getattr(strategy, "required_fields", None)
+    if callable(fields):
+        fields = fields()
+    if fields is None:
+        return ()
+    if isinstance(fields, str):
+        fields = (fields,)
+    normalized = []
+    seen = set()
+    for field in fields:
+        text = str(field).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return tuple(normalized)
+
+
+def _missing_required_fields(strategy: Any, snapshot: DailySnapshot) -> tuple[str, ...]:
+    required_fields = _strategy_required_fields(strategy)
+    if not required_fields:
+        return ()
+    bars = _required_field_bars(strategy, snapshot)
+    missing = set()
+    for field in required_fields:
+        for bar in bars:
+            if not _has_field(bar, field):
+                missing.add(field)
+                break
+    return tuple(field for field in required_fields if field in missing)
+
+
+def _required_field_bars(strategy: Any, snapshot: DailySnapshot) -> tuple[Any, ...]:
+    symbols = getattr(strategy, "required_field_symbols", None)
+    if callable(symbols):
+        symbols = symbols()
+    if symbols is None:
+        return tuple(snapshot.bars.values())
+    if isinstance(symbols, str):
+        symbols = (symbols,)
+    requested = tuple(str(symbol) for symbol in symbols if symbol)
+    if not requested:
+        return tuple(snapshot.bars.values())
+    return tuple(snapshot.bars[symbol] for symbol in requested if symbol in snapshot.bars)
+
+
+def _has_field(item: Any, field: str) -> bool:
+    if isinstance(item, Mapping):
+        return field in item
+    if hasattr(item, field):
+        return True
+    getter = getattr(item, "get", None)
+    if callable(getter):
+        try:
+            sentinel = object()
+            return getter(field, sentinel) is not sentinel
+        except Exception:
+            return False
+    return False
 
 
 def _get_value(item: Any, names: tuple[str, ...]) -> Any:

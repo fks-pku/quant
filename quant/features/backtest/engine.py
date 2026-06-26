@@ -508,11 +508,12 @@ class Backtester:
         for strategy, result in results:
             if not result.ran:
                 logger.warning(
-                    "Skipped daily snapshot for %s on %s: missing=%s stale=%s",
+                    "Skipped daily snapshot for %s on %s: missing=%s stale=%s missing_fields=%s",
                     _strategy_name(strategy),
                     trading_date,
                     result.missing_symbols,
                     result.stale_symbols,
+                    result.missing_fields,
                 )
 
     def _record_exposure_snapshot(

@@ -141,8 +141,16 @@ class QuantSystem:
                     "db_path",
                     "use_security_status",
                     "status_db_path",
+                    "daily_basic_db_path",
+                    "financial_indicator_db_path",
+                    "etf_db_path",
+                    "index_db_path",
+                    "corporate_actions_db_path",
+                    "fund_meta_db_path",
+                    "fund_nav_db_path",
                     "parquet_lake_root",
                     "prefer_parquet_lake",
+                    "include_financial_indicators",
                 )
                 if key in duckdb_config
             }

@@ -78,6 +78,15 @@ def test_xueqiu_default_universe_excludes_permission_boards():
         assert strategy._entry_risk(symbol, _bar(symbol)) is True
 
 
+def test_xueqiu_small_cap_declares_financial_and_status_fields():
+    strategy = XueqiuSmallCapFinancialFilterStrategy(symbols=["000001"])
+
+    fields = set(strategy.required_fields)
+
+    assert {"total_mv", "circ_mv", "pe_ttm", "pe", "ps_ttm", "ps"}.issubset(fields)
+    assert {"is_st", "tradable", "has_daily_bar", "is_listed", "list_status"}.issubset(fields)
+
+
 def test_xueqiu_permission_board_exclusion_can_be_overridden():
     strategy = XueqiuSmallCapFinancialFilterStrategy(
         symbols=["300001", "688001"],

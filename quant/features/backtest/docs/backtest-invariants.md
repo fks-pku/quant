@@ -1571,7 +1571,7 @@ ETF 日线若出现大幅 `adj_factor` 跳变且原始价格按相反方向跳�
 
 ### 配置
 
-CN ETF、零佣金、零滑点、`force_close_on_stop=False`。
+CN ETF、legacy zero-rate commission config、零滑点、`force_close_on_stop=False`；实际 ETF/LOF/fund 佣金仍遵循 CASE-42 live-aligned CNY 5 floor。
 
 ### 行情
 
@@ -1585,7 +1585,7 @@ CN ETF、零佣金、零滑点、`force_close_on_stop=False`。
 ### 断言
 
 ```text
-C38-01  final_nav == initial_cash，adj_factor 跳变不能产生虚假 NAV 利润
+C38-01  final_nav == initial_cash - simulator commissions，adj_factor 跳变不能产生虚假 NAV 利润
 C38-02  synthetic adjustment 同步 strategy._positions，持仓从 10000 调整为 5000
 C38-03  SELL qty == 5000，entry_price == 2.00，realized_pnl == 0
 ```
@@ -1594,7 +1594,7 @@ C38-03  SELL qty == 5000，entry_price == 2.00，realized_pnl == 0
 
 ## CASE-39: Shared daily snapshot signal pipeline
 
-Backtest, paper, and live signal generation must use the same daily close snapshot runner. The shared signal cycle is: validate one same-date D close batch, feed all runnable strategies, mark portfolios with D close prices, then call `on_after_trading` for D signals that execute under each mode's own D+1 fill logic.
+Backtest, paper, and live signal generation must use the same daily close snapshot runner. The shared signal cycle is: validate one same-date D close batch, validate each strategy's declared `required_fields`, feed all runnable strategies, mark portfolios with D close prices, then call `on_after_trading` for D signals that execute under each mode's own D+1 fill logic.
 
 ### Assertions
 
@@ -1732,6 +1732,26 @@ in `test_backtest_invariants.py`.
 
 ---
 
+## CASE-43: Shared execution simulator facts are authoritative
+
+Backtest and paper execution share `quant.runtime.execution_simulator.simulate_order_execution()` as the deterministic pre-fill matching kernel. After the simulator returns an `ExecutionSimulation`, backtest `execute_order()` may convert the fill into `Trade` rows and mutate the in-memory `Portfolio`, but it must not recompute or re-gate simulator-owned facts.
+
+### Assertions
+
+```
+    C43-01  BUY wrappers consume simulator commission/cost_breakdown and do not call a second commission calculator.
+    C43-02  SELL wrappers consume simulator quantity and do not re-run settlement/T+1 gates.
+    C43-03  Backtest diagnostics commission totals are derived from simulator commission facts.
+    C43-04  Simulator rejection reasons remain the only source of cash, position, settlement, limit, lot, volume, impact, and commission decisions.
+```
+
+### Tests
+
+`TestCase43SharedExecutionFactsAreAuthoritative`
+in `test_backtest_invariants.py`.
+
+---
+
 ## CASE索引
 
 |#|市场|核心验证|
@@ -1772,6 +1792,7 @@ in `test_backtest_invariants.py`.
 |39|N/A|Backtest/paper/live use one D-close daily snapshot signal runner before mode-specific D+1 execution|
 |40|CN|Enabled execution_cost_model freezes D-close cost bps, then anchors LIMIT to D+1 execution reference|
 |41|US/CN|Order-level SAME_CLOSE uses D close fill price while generated exits keep D+1 open semantics|
+|43|Backtest/Paper|Backtest consumes shared execution simulator facts without duplicate commission or settlement gates|
 |B1|US|结束日 deferred order 过期|
 |W1|N/A|Walk-forward aggregate_max_dd uses worst negative drawdown|
 |R2|N/A|Data/execution guardrails for malformed input, close-out, dates, and benchmark significance|

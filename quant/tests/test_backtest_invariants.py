@@ -2755,7 +2755,8 @@ def case38_result():
 
 class TestCase38EtfAdjFactorShareAdjustment:
     def test_c38_01_adj_factor_jump_does_not_create_nav_profit(self, case38_result):
-        assert case38_result.final_nav == pytest.approx(20_000, rel=1e-6)
+        total_commission = sum(trade.commission for trade in case38_result.trades)
+        assert case38_result.final_nav == pytest.approx(20_000 - total_commission, rel=1e-6)
 
     def test_c38_02_strategy_position_syncs_reverse_split_delta(self, case38_result):
         assert 5_000 in case38_result._strategy_position_history
@@ -3655,3 +3656,102 @@ class TestCase42CNEtfLiveCommissionMinimum:
         assert case42_result.diagnostics.total_commission == pytest.approx(
             sum(trade.commission for trade in case42_result.trades)
         )
+
+
+# ============================================================================
+# CASE-43: Shared execution simulator facts are authoritative
+# ============================================================================
+
+
+class TestCase43SharedExecutionFactsAreAuthoritative:
+    def test_c43_01_buy_wrapper_does_not_recompute_commission_after_simulator(self, monkeypatch):
+        from quant.features.backtest import order_executor as oe
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        def fail_if_recomputed(*args, **kwargs):
+            raise AssertionError("backtest wrapper recomputed commission after simulator")
+
+        monkeypatch.setattr(oe, "calculate_commission", fail_if_recomputed, raising=False)
+
+        portfolio = Portfolio(initial_cash=100_000, currency="CNY")
+        order = DeferredOrder(
+            symbol="600519",
+            quantity=100,
+            side="BUY",
+            order_type="MARKET",
+            price=None,
+            strategy="Case43Buy",
+            signal_date=datetime(2024, 6, 3),
+            risk_check_price=10.0,
+        )
+
+        trades, diag = _execute_direct_order(
+            order,
+            "600519",
+            {
+                "symbol": "600519",
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.1,
+                "volume": 1_000_000,
+                "timestamp": datetime(2024, 6, 4),
+            },
+            portfolio,
+            prev_bar={"close": 10.0},
+        )
+
+        assert len(trades) == 1
+        assert trades[0].commission > 0
+        assert diag.total_commission == pytest.approx(trades[0].commission)
+
+    def test_c43_02_sell_wrapper_does_not_recheck_settlement_after_simulator(self, monkeypatch):
+        from quant.features.backtest import order_executor as oe
+        from quant.features.backtest.schemas import DeferredOrder
+        from quant.features.trading.portfolio import Portfolio
+
+        def fail_if_rechecked(*args, **kwargs):
+            raise AssertionError("backtest wrapper rechecked settlement after simulator")
+
+        monkeypatch.setattr(oe, "get_settled_quantity", fail_if_rechecked, raising=False)
+
+        portfolio = Portfolio(initial_cash=100_000, currency="CNY")
+        portfolio.update_position(
+            "600519",
+            quantity=100,
+            price=10.0,
+            cost=1_000.0,
+            trade_date=date(2024, 6, 1),
+        )
+        portfolio.cash -= 1_000.0
+        order = DeferredOrder(
+            symbol="600519",
+            quantity=100,
+            side="SELL",
+            order_type="MARKET",
+            price=None,
+            strategy="Case43Sell",
+            signal_date=datetime(2024, 6, 3),
+            risk_check_price=10.0,
+        )
+
+        trades, diag = _execute_direct_order(
+            order,
+            "600519",
+            {
+                "symbol": "600519",
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.1,
+                "volume": 1_000_000,
+                "timestamp": datetime(2024, 6, 4),
+            },
+            portfolio,
+            prev_bar={"close": 10.0},
+        )
+
+        assert sum(trade.quantity for trade in trades) == pytest.approx(100.0)
+        assert diag.t1_rejected_sells == 0
+        assert diag.truncated_sells == 0

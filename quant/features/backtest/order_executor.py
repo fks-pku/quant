@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 import logging
-import math
-from dataclasses import replace
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
-
-import pandas as pd
+from typing import TYPE_CHECKING, Dict, List, Any, Optional
 
 if TYPE_CHECKING:
     from quant.features.backtest.schemas import BacktestBar, DeferredOrder
@@ -15,15 +11,10 @@ if TYPE_CHECKING:
 from quant.domain.models.trade import Trade
 from quant.features.backtest.entities import BacktestDiagnostics
 from quant.features.backtest.exceptions import OrderRejectedError, OrderRejectionReason
-from quant.features.backtest.commission import calculate_commission, VOLUME_PARTICIPATION_LIMIT
 from quant.features.backtest.market_rules import (
     get_market,
-    get_lot_size,
-    get_price_limit_direction,
-    get_settled_quantity,
     fifo_lot_slices,
 )
-from quant.features.backtest.schemas import EXECUTION_TIMING_SAME_CLOSE
 from quant.runtime.execution_cost import (
     cost_model_enabled as _shared_cost_model_enabled,
     execution_adv_quantity as _shared_execution_adv_quantity,
@@ -39,28 +30,6 @@ from quant.runtime.execution_simulator import RuntimeOrder, simulate_order_execu
 logger = logging.getLogger(__name__)
 
 DEFAULT_RISK_PRICE_DEVIATION_LIMIT = 0.15
-
-
-def _positive_finite_float(value: Any, symbol: str, label: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
-                                 f"{label}={value!r}")
-    if not math.isfinite(number) or number <= 0:
-        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
-                                 f"{label}={value!r}")
-    return number
-
-
-def _non_negative_volume(value: Any) -> float:
-    try:
-        volume = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(volume) or volume <= 0:
-        return 0.0
-    return volume
 
 
 def compute_market_impact(quantity: float, daily_volume: float, impact_factor: float) -> float:
@@ -192,46 +161,6 @@ def apply_market_impact(fill_price: float, side: str, impact_bps: float) -> floa
     return fill_price - adjustment
 
 
-def execution_price_field(order: "DeferredOrder") -> str:
-    return "close" if order.execution_timing == EXECUTION_TIMING_SAME_CLOSE else "open"
-
-
-def _optional_non_negative_float(value: Any, symbol: str, label: str) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
-                                 f"{label}={value!r}")
-    if not math.isfinite(number) or number < 0:
-        raise OrderRejectedError(OrderRejectionReason.PRICE_INVALID, symbol,
-                                 f"{label}={value!r}")
-    return number
-
-
-def _execution_day_cost_limit_price(
-    order: "DeferredOrder",
-    reference_price: float,
-    order_type: str,
-) -> Optional[float]:
-    if order_type != "LIMIT" or order.price is not None:
-        return None
-    cost_bps = _optional_non_negative_float(
-        getattr(order, "execution_cost_bps", None),
-        order.symbol,
-        "execution_cost_bps",
-    )
-    if cost_bps is None:
-        return None
-    if order.side == "BUY":
-        return float(reference_price) * (1 + cost_bps / 10000.0)
-    if order.side == "SELL":
-        return float(reference_price) * (1 - cost_bps / 10000.0)
-    raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, order.symbol,
-                             f"side={order.side!r}")
-
-
 def execute_order(
     order: "DeferredOrder",
     portfolio: Any,
@@ -298,13 +227,14 @@ def execute_order(
     if order.side == 'BUY':
         trades = _execute_buy(
             order, portfolio, symbol, simulation.fill_time, simulation.fill_price, simulation.quantity,
-            order.signal_date, simulation.market, entry_times, entry_prices, diag, commission_config,
+            order.signal_date, simulation.market, entry_times, entry_prices, diag,
+            simulation.cost_breakdown, simulation.commission,
         )
     elif order.side == 'SELL':
         trades = _execute_sell(
             order, portfolio, symbol, simulation.fill_time, simulation.fill_price, simulation.quantity,
-            order.signal_date, simulation.market, entry_times, entry_prices, diag, commission_config,
-            ignore_settlement,
+            order.signal_date, simulation.market, entry_times, entry_prices, diag,
+            simulation.cost_breakdown, simulation.commission,
         )
     else:
         raise OrderRejectedError(OrderRejectionReason.UNKNOWN_SIDE, symbol,
@@ -312,71 +242,6 @@ def execute_order(
 
     diag.record_execution_observation(simulation.observation)
     return trades
-
-
-def apply_slippage(price: float, side: str, bps: float) -> float:
-    if price <= 0:
-        return price
-    slippage = price * (bps / 10000)
-    if side == 'BUY':
-        return price + slippage
-    return price - slippage
-
-
-def resolve_base_fill_price(
-    order: "DeferredOrder",
-    raw_price: float,
-    order_type: str,
-    slippage_bps: float,
-    price_field: str = "open",
-) -> float:
-    if order_type != "LIMIT":
-        return apply_slippage(raw_price, order.side, slippage_bps)
-    limit_price = order.price
-    limit_price = _positive_finite_float(limit_price, order.symbol, "limit price")
-    if order.side == "BUY" and raw_price > limit_price:
-        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
-                                 f"{price_field}={raw_price} > limit={limit_price}")
-    if order.side == "SELL" and raw_price < limit_price:
-        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
-                                 f"{price_field}={raw_price} < limit={limit_price}")
-    return float(limit_price)
-
-
-def enforce_limit_after_impact(order: "DeferredOrder", fill_price: float, order_type: str) -> None:
-    if order_type != "LIMIT":
-        return
-    limit_price = order.price
-    if order.side == "BUY" and fill_price > limit_price:
-        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
-                                 f"impacted fill={fill_price} > limit={limit_price}")
-    if order.side == "SELL" and fill_price < limit_price:
-        raise OrderRejectedError(OrderRejectionReason.LIMIT_NOT_MARKETABLE, order.symbol,
-                                 f"impacted fill={fill_price} < limit={limit_price}")
-
-
-def apply_lot_rounding(quantity: float, lot_size: int, side: str, market: str) -> Tuple[Optional[float], bool]:
-    if market not in ("HK", "CN"):
-        return float(quantity), False
-    if side == 'BUY':
-        lot_qty = (int(quantity) // lot_size) * lot_size
-        if lot_qty < lot_size:
-            return None, False
-        if lot_qty != int(quantity):
-            return float(lot_qty), True
-        return float(lot_qty), False
-    if market == "HK":
-        lot_qty = (int(quantity) // lot_size) * lot_size
-        if lot_qty < lot_size:
-            return None, False
-        if lot_qty != int(quantity):
-            return float(lot_qty), True
-        return float(lot_qty), False
-    if market == "CN":
-        if int(quantity) < 1:
-            return None, False
-        return float(quantity), False
-    return float(quantity), False
 
 
 def _execute_buy(
@@ -391,18 +256,11 @@ def _execute_buy(
     entry_times: Dict[Any, datetime],
     entry_prices: Dict[Any, float],
     diag: BacktestDiagnostics,
-    commission_config: Any,
+    cost_breakdown: Dict[str, float],
+    commission: float,
 ) -> List[Trade]:
     fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-    cost_breakdown = calculate_commission(symbol, fill_price, quantity, order.side, commission_config, fill_date_val)
-    commission = sum(cost_breakdown.values())
-
     total_cost = fill_price * quantity + commission
-    if hasattr(portfolio, 'can_afford'):
-        if not portfolio.can_afford(total_cost):
-            raise OrderRejectedError(OrderRejectionReason.INSUFFICIENT_CASH, symbol)
-    elif portfolio.cash < total_cost:
-        raise OrderRejectedError(OrderRejectionReason.INSUFFICIENT_CASH, symbol)
 
     diag.total_commission += commission
 
@@ -452,28 +310,14 @@ def _execute_sell(
     entry_times: Dict[Any, datetime],
     entry_prices: Dict[Any, float],
     diag: BacktestDiagnostics,
-    commission_config: Any,
-    ignore_settlement: bool = False,
+    cost_breakdown: Dict[str, float],
+    commission: float,
 ) -> List[Trade]:
     pos = portfolio.get_position(symbol)
     if not pos or pos.quantity <= 0:
-        raise OrderRejectedError(OrderRejectionReason.NO_POSITION, symbol,
-                                 "no position to sell (short not supported)")
+        raise RuntimeError("execution simulator returned SELL fill but portfolio has no position")
 
-    fill_date_val = fill_ts.date() if hasattr(fill_ts, 'date') else date.today()
-    settled_qty = pos.quantity if ignore_settlement else get_settled_quantity(symbol, pos, fill_date_val, market)
-    if settled_qty <= 0:
-        if market == "CN":
-            diag.t1_rejected_sells += 1
-        raise OrderRejectedError(OrderRejectionReason.T1_SETTLEMENT, symbol)
-
-    sell_qty = min(quantity, settled_qty)
-    if sell_qty < quantity:
-        diag.truncated_sells += 1
-        logger.warning("SELL %s truncated: requested %d, settled %d", symbol, quantity, sell_qty)
-
-    cost_breakdown = calculate_commission(symbol, fill_price, sell_qty, order.side, commission_config, fill_date_val)
-    commission = sum(cost_breakdown.values())
+    sell_qty = quantity
 
     diag.total_commission += commission
 

@@ -27,6 +27,15 @@ class Strategy(ABC):
         """List of symbols this strategy trades."""
         return []
 
+    @property
+    def required_fields(self) -> List[str]:
+        """Daily bar fields required for the strategy's state transition."""
+        return []
+
+    def required_field_symbols(self) -> List[str]:
+        """Symbols whose daily bars must carry required_fields."""
+        return self.symbols
+
     def on_start(self, context: "Context") -> None:
         """Called when strategy starts."""
         self.context = context

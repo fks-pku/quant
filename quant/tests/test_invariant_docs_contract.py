@@ -100,6 +100,10 @@ def test_trading_invariants_describe_live_backtest_equivalence_boundary():
         "Allowed live-only differences are DB-backed state bridging and QMT real order submission/fill reports",
         "QMT fill price, quantity, commission, rejection, partial fill, and broker order IDs are external facts",
         "No other strategy lifecycle, risk gate, signal filtering, cost-budget, cash attribution, or dashboard status semantics may diverge",
+        "Strategies declare `required_fields`",
+        "paper/live DuckDB providers must load those PIT sidecar fields",
+        "The shared `run_daily_snapshots()` runner validates required field presence",
+        "DB checkpoint storage may restore strategy runtime state, but it must not alter universe selection, bar fields, strategy filters, or lifecycle order",
     ]
 
     missing = [fragment for fragment in expected_fragments if fragment not in text]
